@@ -1,5 +1,30 @@
 # Changelog
 
+## [3.0.0] - 2026-03-25
+### Added — Phase 2: Semantic/Episodic Memory
+- **fact_type column**: `semantic` (durable, slow decay 30-90 days) vs `episodic` (dated, fast decay 7-14 days)
+- **Extraction prompt rewritten**: explicit STOCKER/NE PAS STOCKER rules, LLM now classifies fact type
+- **TODO/action filter**: blocks transient facts ("il faut X", "en préparation", "prochaine étape")
+- Auto-migration adds `fact_type` column to existing DBs
+
+### Added — Phase 3: Observations (Living Syntheses)
+- **Observation layer**: inspired by Hindsight, multi-fact synthesis that evolves
+- Observations are **created** when 3+ facts share a topic (auto-emergence via LLM topic extraction)
+- Observations are **updated** (re-synthesized) when new related facts arrive
+- **Recall priority**: Observations injected FIRST, individual facts as complement
+- Each observation tracks `evidence_ids`, `revision` count, `access_count`, embedding
+- Matching via embedding cosine similarity + keyword fallback
+- Configurable: `emergenceThreshold`, `matchThreshold`, `maxRecallObservations`, `maxEvidencePerObservation`
+
+### Added — Phase 4: Recall Adaptatif
+- Observations count adjusts to context window (recallLimit / 3, min 2)
+- Individual facts fill remaining budget after observations
+- Format splits into "Observations (synthèses vivantes)" + "Faits individuels"
+
+### Fixed
+- **CRITICAL: `api.config` vs `api.pluginConfig`** — all custom settings were silently ignored since v0.1.0
+- Fallback `provider` vs `type` normalization in parseConfig
+
 ## [2.7.0] - 2026-03-25
 ### Added
 - **Interactive wizard in install.sh** — 2-question guided install: "Local or Cloud?" → "Fallback or strict?". Detects environment (Ollama, LM Studio, OpenAI key), shows summary, asks confirmation.

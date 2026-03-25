@@ -618,7 +618,8 @@ export function register(api: OpenClawPluginApi): void {
 
         const hotNote = hotLimit > 0 ? `, ${hotLimit} hot` : "";
         const graphNote = graphFacts.length > 0 ? `, +${graphFacts.length} graph` : "";
-        api.logger.info?.(`memoria: recall injected ${finalFacts.length} facts (${hotNote}${graphNote}, tree+hybrid) for "${prompt.slice(0, 50)}..."`);
+        const obsNote = observationContext ? ", +obs" : "";
+        api.logger.info?.(`memoria: recall injected ${finalFacts.length} facts${obsNote} (${hotNote}${graphNote}, tree+hybrid) for "${prompt.slice(0, 50)}..."`);
         return { prependContext: context };
       } catch (err) {
         api.logger.warn?.(`memoria: recall failed: ${String(err)}`);
