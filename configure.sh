@@ -68,8 +68,8 @@ print(f"EMBED_DIMS={embed.get('dimensions', 768)}")
 
 # Fallback
 fb = pcfg.get("fallback", [])
-providers = " → ".join([f"{f.get('provider','?')}/{f.get('model','?')}" for f in fb]) if fb else "aucun"
-print(f"FALLBACK_CHAIN={providers}")
+providers = " > ".join([f"{f.get('provider','?')}/{f.get('model','?')}" for f in fb]) if fb else "aucun"
+print(f"FALLBACK_CHAIN='{providers}'")
 print(f"FALLBACK_COUNT={len(fb)}")
 
 # Limits
