@@ -1,6 +1,6 @@
 {
   "name": "memoria",
-  "version": "2.6.0",
+  "version": "2.6.1",
   "description": "Multi-layer brain-inspired memory plugin for OpenClaw",
   "main": "index.ts",
   "type": "module",

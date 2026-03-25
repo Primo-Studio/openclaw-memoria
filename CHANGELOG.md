@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.6.1] - 2026-03-25
+### Added
+- **Auto-config in install.sh** — The installer now auto-edits `openclaw.json`: adds memoria to `plugins.entries` and `plugins.allow` with a backup of the original file. Users keep full control to customize after.
+- **Existing data detection** — install.sh detects cortex.db, memoria.db, or facts.json and shows migration status (fact count, file size).
+- **Summary panel** — install.sh now displays version, location, config path, LLM/embed info at the end.
+- **Node.js/npm version display** — Shows detected versions during prerequisite check.
+
+### Fixed
+- **WAL-mode migration** — `VACUUM INTO` used instead of `cp` for cortex.db→memoria.db migration. Plain `cp` on WAL-mode SQLite DBs resulted in empty copies (0 facts). Fallback copies WAL+SHM files if VACUUM fails.
+- **Empty DB override** — Migration now triggers if memoria.db exists but is < 8KB (empty schema-only DB from a failed previous attempt).
+
+### Changed
+- install.sh rewritten: auto-config replaces manual "copy-paste this JSON" step.
+- INSTALL.md updated to document auto-config, WAL migration, and data detection.
+
 ## [2.6.0] - 2026-03-25
 ### Added
 - **`install.sh`** — One-line installer: checks prerequisites, pulls Ollama models, clones repo, installs deps. Usage: `curl -fsSL https://raw.githubusercontent.com/Primo-Studio/openclaw-memoria/main/install.sh | bash`

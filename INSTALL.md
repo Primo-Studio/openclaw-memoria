@@ -6,7 +6,14 @@
 curl -fsSL https://raw.githubusercontent.com/Primo-Studio/openclaw-memoria/main/install.sh | bash
 ```
 
-Le script vérifie les prérequis, installe les modèles Ollama, clone le repo et installe les dépendances.
+Le script :
+1. Vérifie les prérequis (Node.js, npm, Ollama)
+2. Pull les modèles Ollama (gemma3:4b + nomic-embed-text-v2-moe)
+3. Clone le repo et installe les dépendances
+4. **Auto-configure `openclaw.json`** (ajoute memoria aux plugins avec backup)
+5. Détecte les données existantes (cortex.db, memoria.db, facts.json)
+
+Le client garde le contrôle total : toute config peut être modifiée après dans `openclaw.json`.
 
 ## Option B : Installation manuelle
 
@@ -88,14 +95,14 @@ openclaw status          # Vérifier le chargement
 
 Vous devez voir :
 ```
-[plugins] memoria: v2.6.0 registered (X facts, ...)
+[plugins] memoria: v2.6.1 registered (X facts, ...)
 ```
 
-### 5. (Optionnel) Migrer depuis cortex.db
+### 5. Migration automatique
 
-Si vous avez un ancien `cortex.db`, Memoria le détecte automatiquement et le copie en `memoria.db` au premier démarrage. Aucune action nécessaire.
+**Depuis cortex.db** : Memoria détecte automatiquement un ancien `cortex.db` et migre les données en `memoria.db` au premier démarrage. Zéro action nécessaire. Utilise `VACUUM INTO` pour gérer les DB en mode WAL.
 
-Pour migrer depuis `memory-convex` ou un `facts.json` :
+**Depuis facts.json** (memory-convex) :
 
 ```bash
 cd ~/.openclaw/extensions/memoria
