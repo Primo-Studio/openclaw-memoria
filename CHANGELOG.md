@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.7.0] - 2026-03-25
+### Added
+- **Interactive wizard in install.sh** — 2-question guided install: "Local or Cloud?" → "Fallback or strict?". Detects environment (Ollama, LM Studio, OpenAI key), shows summary, asks confirmation.
+- **Presets for silent install** — `--preset local-only|cloud-first|paranoid` for CI/scripting. Also `--yes` to skip confirmation.
+- **Post-install validation** — Tests LLM provider after install (quick Ollama smoke test).
+- **Bilingual installer** — French interface for better UX (target market).
+
+### Fixed
+- **CRITICAL: `api.config` vs `api.pluginConfig`** — Plugin was reading global OpenClaw config instead of plugin-specific config. ALL custom settings (fallback, llm, embed, limits) were silently ignored since v0.1.0. Fixed to use `api.pluginConfig`.
+- **Fallback `provider` vs `type` mapping** — User config uses `provider` field but internal code expected `type`. Added normalization in parseConfig.
+
+### Changed
+- install.sh rewritten as interactive wizard with environment detection and guided choices.
+- Config generated based on user choices (not hardcoded defaults).
+
 ## [2.6.1] - 2026-03-25
 ### Added
 - **Auto-config in install.sh** — The installer now auto-edits `openclaw.json`: adds memoria to `plugins.entries` and `plugins.allow` with a backup of the original file. Users keep full control to customize after.

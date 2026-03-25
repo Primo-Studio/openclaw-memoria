@@ -1,4 +1,4 @@
-# 🧠 Memoria v2.6.1 — Multi-layer Memory Plugin for OpenClaw
+# 🧠 Memoria v2.7.0 — Multi-layer Memory Plugin for OpenClaw
 
 Brain-inspired persistent memory for AI agents. SQLite-backed, fully local, zero cloud dependency.
 
