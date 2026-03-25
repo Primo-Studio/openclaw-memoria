@@ -90,7 +90,12 @@ function parseConfig(raw: Record<string, unknown> | undefined): MemoriaConfig {
     contextWindow: (raw?.contextWindow as number) || 200000,
     workspacePath: (raw?.workspacePath as string) || process.env.HOME + "/.openclaw/workspace",
     syncMd: raw?.syncMd !== false,
-    fallback: (raw?.fallback as FallbackProviderConfig[]) || [],
+    fallback: ((raw?.fallback as any[]) || []).map((f: any) => ({
+      ...f,
+      // Normalize: user config uses "provider", internal uses "type"
+      type: f.type || f.provider || "ollama",
+      name: f.name || f.provider || f.type || "ollama",
+    })) as FallbackProviderConfig[],
     embed: {
       provider: (embed.provider as MemoriaConfig["embed"]["provider"]) || "ollama",
       baseUrl: embed.baseUrl as string | undefined,
