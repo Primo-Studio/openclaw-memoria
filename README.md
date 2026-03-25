@@ -1,11 +1,16 @@
-# 🧠 Memoria v2.7.0 — Multi-layer Memory Plugin for OpenClaw
+# 🧠 Memoria v3.0.0 — Multi-layer Memory Plugin for OpenClaw
 
 Brain-inspired persistent memory for AI agents. SQLite-backed, fully local, zero cloud dependency.
+
+**v3.0.0 — What's new:**
+- **Semantic vs Episodic** — facts classified by durability, different decay rates
+- **Observations** — living multi-fact syntheses that evolve (Hindsight-inspired)
+- **Procedural Memory** — tricks, patterns, "what worked" are preserved, not filtered
+- **Smart TODO Filter** — blocks disposable tasks, keeps learned processes
 
 ## Quick Install
 
 ```bash
-# One-line install (pulls models, clones repo, installs deps)
 curl -fsSL https://raw.githubusercontent.com/Primo-Studio/openclaw-memoria/main/install.sh | bash
 ```
 
@@ -21,255 +26,267 @@ curl -fsSL https://raw.githubusercontent.com/Primo-Studio/openclaw-memoria/main/
 }
 ```
 
-That's it. Smart defaults: Ollama + gemma3:4b + nomic-embed-text-v2-moe.
+Smart defaults: Ollama + gemma3:4b + nomic-embed-text-v2-moe.
 See [INSTALL.md](INSTALL.md) for advanced config and troubleshooting.
+
+---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      MEMORIA v2.5.0                          │
-│                                                             │
-│  Hooks: before_prompt_build │ agent_end │ after_compaction  │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  RECALL PIPELINE (before_prompt_build):                     │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐   │
-│  │🔥 Hot   │→│ Hybrid   │→│ Graph    │→│ Topics   │   │
-│  │ Tier     │  │ Search   │  │ Enrich   │  │ Enrich   │   │
-│  │ access≥5 │  │ FTS5+cos │  │ BFS 2hop │  │ keyword  │   │
-│  │ always   │  │ +scoring │  │ hebbian  │  │ +cosine  │   │
-│  └──────────┘  └──────────┘  └──────────┘  └──────────┘   │
-│       ↓                                         ↓           │
-│  ┌──────────┐                              ┌──────────┐    │
-│  │ Context  │ ← merge all ─────────────── │ Adaptive │    │
-│  │ Tree     │                              │ Budget   │    │
-│  │ heuristic│                              │ 2-12     │    │
-│  │ NO LLM   │                              │ facts    │    │
-│  └──────────┘                              └──────────┘    │
-│       ↓                                                     │
-│  formatRecall() → inject into system prompt                 │
-│                                                             │
-│  CAPTURE PIPELINE (agent_end / after_compaction):           │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐   │
-│  │ Extract  │→│ Selective│→│ Store    │→│ Post-    │   │
-│  │ via LLM  │  │ Filter   │  │ to DB    │  │ process  │   │
-│  │(extract  │  │ dedup+   │  │          │  │ embed+   │   │
-│  │ Chain)   │  │contradict│  │          │  │ graph+   │   │
-│  │          │  │(contradict│  │          │  │ topics+  │   │
-│  │          │  │  Chain)  │  │          │  │ sync .md │   │
-│  └──────────┘  └──────────┘  └──────────┘  └──────────┘   │
-│                                                             │
-├─────────────────────────────────────────────────────────────┤
-│  Per-layer LLM: extract │ contradiction │ graph │ topics    │
-│  Default: FallbackChain (Ollama → OpenAI → LM Studio)      │
-│  Override: llm.overrides.{layer} → provider/model au choix  │
-├─────────────────────────────────────────────────────────────┤
-│            SQLite memoria.db (FTS5 + vectors)                │
-│  Tables: facts, facts_fts, embeddings, entities,            │
-│          relations, topics, fact_topics                      │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                       MEMORIA v3.0.0                          │
+│                                                              │
+│  Hooks: before_prompt_build │ agent_end │ after_compaction   │
+├──────────────────────────────────────────────────────────────┤
+│                                                              │
+│  RECALL PIPELINE (before_prompt_build):                      │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐    │
+│  │🔮 Obser- │  │🔥 Hot   │  │ Hybrid   │  │ Graph    │    │
+│  │ vations  │  │ Tier     │  │ Search   │  │ Enrich   │    │
+│  │ living   │  │ access≥5 │  │ FTS5+cos │  │ BFS 2hop │    │
+│  │ syntheses│  │ always   │  │ +scoring │  │ hebbian  │    │
+│  └──────────┘  └──────────┘  └──────────┘  └──────────┘    │
+│       ↓              ↓              ↓              ↓         │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐                   │
+│  │ Topics   │  │ Context  │  │ Adaptive │                   │
+│  │ keyword  │  │ Tree     │  │ Budget   │                   │
+│  │ +cosine  │  │ heuristic│  │ 2-12     │                   │
+│  └──────────┘  │ NO LLM   │  │ facts    │                   │
+│                └──────────┘  └──────────┘                   │
+│       ↓                                                      │
+│  formatRecall():                                             │
+│    1. Observations (synthèses vivantes) — PRIORITY           │
+│    2. Faits individuels (hot + search + graph + topic)        │
+│                                                              │
+│  CAPTURE PIPELINE (agent_end / after_compaction):            │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐    │
+│  │ Extract  │→│ Classify │→│ Selective│→│ Store    │    │
+│  │ via LLM  │  │ semantic │  │ Filter   │  │ to DB    │    │
+│  │(Chain)   │  │ episodic │  │ dedup+   │  │          │    │
+│  │          │  │ type     │  │TODO filt │  │          │    │
+│  │          │  │          │  │contradict│  │          │    │
+│  └──────────┘  └──────────┘  └──────────┘  └──────────┘    │
+│       ↓                                                      │
+│  POST-PROCESS:                                               │
+│  embed → graph → topics → observations → sync .md → regen   │
+│                                                              │
+├──────────────────────────────────────────────────────────────┤
+│  Per-layer LLM: extract │ contradiction │ graph │ topics     │
+│  Default: FallbackChain (Ollama → OpenAI → LM Studio)       │
+├──────────────────────────────────────────────────────────────┤
+│              SQLite memoria.db (FTS5 + vectors)               │
+│  Tables: facts, facts_fts, embeddings, entities, relations,  │
+│          topics, fact_topics, observations                    │
+└──────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Layers — Détail par couche
+## Memory Types (v3.0.0)
 
-### Layer 1: SQLite Core + FTS5 (`db.ts` ~446 lignes)
+Memoria classifies every captured fact into one of two types, inspired by how human memory works:
+
+| Type | Description | Decay | Examples |
+|------|-------------|-------|---------|
+| **semantic** | Durable truths, patterns, learned processes | Slow (30-90 days by category) | "Memoria uses SQLite + FTS5", "Use VACUUM INTO for WAL" |
+| **episodic** | Dated events, milestones | Fast (7-14 days by category) | "25/03 — deployed v3.0.0", "Bug found in pluginConfig" |
+
+### Decay half-lives by category × type
+
+| Category | Semantic | Episodic |
+|----------|----------|----------|
+| erreur | **∞ (immune)** | 30 days |
+| savoir | 90 days | 14 days |
+| preference | 90 days | 14 days |
+| rh | 60 days | 14 days |
+| client | 60 days | 14 days |
+| outil | 30 days | 7 days |
+| chronologie | 14 days | 7 days |
+
+### Procedural Memory
+
+Like learning to ride a bike — tricks and processes are **always preserved**:
+- ❌ "Il faut pull nomic" → **skip** (disposable TODO, no learning value)
+- ✅ "Il faut utiliser VACUUM INTO pour SQLite WAL, sinon les -shm manquent" → **keep** (learned trick)
+- ✅ "Le fallback chain a résolu les crashes quand Ollama est off" → **keep** (what worked)
+
+**Filter rules:**
+- Short fact (<60 chars) + TODO/transient pattern → skip
+- Long fact (≥60 chars) → always keep (usually contains knowledge)
+- Contains explanation markers (car, sinon, pour, because, →) → always keep
+
+---
+
+## Observations (v3.0.0) — Living Syntheses
+
+Inspired by [Hindsight](https://github.com/joshka/hindsight) Observations: instead of 10 scattered facts about "Sol infrastructure", Memoria creates **ONE living observation** that evolves.
+
+### Lifecycle
+1. New fact captured → search for matching observation (embedding similarity or keywords)
+2. **Match found** → re-synthesize observation with new evidence (LLM update prompt)
+3. **No match** → accumulate; when **3+ facts** share a topic → create observation (LLM synthesis)
+4. Recall injects observations **FIRST** (priority over individual facts)
+
+### Observation schema
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | `obs_<timestamp>_<random>` |
+| `topic` | string | 2-4 word topic label (LLM-extracted) |
+| `summary` | text | Synthesized paragraph (2-4 sentences) |
+| `evidence_ids` | JSON array | Fact IDs that support this observation |
+| `revision` | integer | Increments on each update |
+| `confidence` | float | Average evidence confidence |
+| `embedding` | BLOB | For cosine similarity matching |
+| `access_count` | integer | How often recalled |
+
+### Configuration
+```json
+{
+  "observations": {
+    "emergenceThreshold": 3,
+    "matchThreshold": 0.6,
+    "maxRecallObservations": 5,
+    "maxEvidencePerObservation": 15
+  }
+}
+```
+
+---
+
+## Layers — Detail
+
+### Layer 1: SQLite Core + FTS5 (`db.ts` ~497 lines)
 - **DB**: `~/.openclaw/workspace/memory/memoria.db` (WAL mode)
-- **Tables**: `facts` (main), `facts_fts` (FTS5 virtual table), `embeddings`, `entities`, `relations`, `topics`, `fact_topics`
+- **Tables**: `facts` (main + `fact_type` column), `facts_fts` (FTS5), `embeddings`, `entities`, `relations`, `topics`, `fact_topics`, `observations`
 - **CRUD**: `storeFact()`, `getFact()`, `searchFacts()`, `recentFacts()`, `hotFacts()`, `supersedeFact()`, `enrichFact()`, `trackAccess()`
-- **FTS5**: Index via triggers (INSERT/UPDATE/DELETE). Queries sanitisées (hyphens, unicode-safe)
-- **LLM**: Aucun
-- **Provider**: Aucun
-- **Fallback**: N/A
+- **FTS5**: Index via triggers. Queries sanitized (hyphens, unicode-safe)
+- **Migration**: Auto `ALTER TABLE` adds `fact_type` column to existing DBs
 
-### Layer 2: Temporal Scoring + Hot Tier (`scoring.ts`)
-- **Rôle**: Score chaque fait par fraîcheur + catégorie + fréquence d'accès
-- **Formule**: `score = confidence × decayFactor × recencyBoost × accessBoost × freshnessBoost × stalePenalty`
-  - Decay exponentiel: demi-vie par catégorie (erreur=∞, savoir/preference=90j, outil=30j, chronologie=14j)
-  - Access boost: **`0.3 × log(accessCount + 1)`** — un fait accédé 50x score 2.2x plus (v2.5.0: 3x plus fort qu'avant)
-  - Recency boost: <24h = ×1.3, <7j = ×1.1
-  - Freshness bonus: mis à jour <48h = ×1.2
-  - Stale penalty: >90j + faible confiance = ×0.7
-- **Hot Tier** (NEW v2.5.0): faits accédés ≥5x = **toujours injectés** en recall, comme un numéro de téléphone appris par cœur
-  - `getHotFacts()` → top 3 par access_count (configurable: `minAccessCount`, `maxHotFacts`, `staleAfterDays`)
-  - Hot facts exclus du search normal pour éviter les doublons
-  - Slots réservés : `searchLimit = recallLimit - hotCount`
-- **API**: `scoreAndRank(facts)`, `scoreFact(fact)`, `getHotFacts(facts, config)`
-- **LLM**: Aucun
-- **Provider**: Aucun
-- **Fallback**: N/A
+### Layer 2: Temporal Scoring + Hot Tier (`scoring.ts` ~147 lines)
+- **Formula**: `score = confidence × decayFactor × recencyBoost × accessBoost × freshnessBoost × stalePenalty`
+- **Semantic vs Episodic decay**: Different half-lives per category × type (see table above)
+- **Access boost**: `0.3 × log(accessCount + 1)` — facts used 50x score 2.2x more
+- **Hot Tier**: facts accessed ≥5x = always injected, like a phone number learned by heart
 
-### Layer 3: Selective Memory (`selective.ts` ~361 lignes)
-- **Rôle**: Filtre avant stockage — dedup, contradiction, enrichment
-- **Pipeline**:
-  1. Longueur < 10 chars → skip (too_short)
-  2. Noise patterns (salutations, confirmations) → skip
-  3. Importance scoring (mots-clés techniques, catégorie) → threshold
-  4. FTS5 candidates → Levenshtein > 0.85 → skip (duplicate)
-  5. FTS5 candidates → Jaccard keyword overlap → skip (duplicate)
-  6. Si similaire mais pas identique → **LLM contradiction check** → supersede/enrich
-- **API**: `process(fact, category, confidence)`, `processAndApply(...)`
-- **LLM**: ✅ Contradiction check uniquement
-- **Provider**: `this.llm` = `contradictionLlm` (configurable via `llm.overrides.contradiction`)
-- **Fallback**: Override provider → puis chain par défaut (Ollama → OpenAI → LM Studio)
-- **Safety**: try/catch → si LLM fail, le fait est stocké quand même (conservative)
+### Layer 3: Selective Memory (`selective.ts` ~406 lines)
+- **Pipeline**: length check → noise filter → **TODO filter** → **transient filter** → importance → FTS dedup → Levenshtein → Jaccard → LLM contradiction
+- **TODO filter** (v3.0.0): Blocks disposable tasks. Preserves learned processes (length + explanation heuristics)
+- **Transient filter** (v3.0.0): "en préparation", "en cours", "pas encore" → skip if short
+- **fact_type passthrough**: `processAndApply()` accepts and stores `factType` param
+- **Safety**: try/catch → if LLM fails, fact stored anyway (conservative)
 
-### Layer 4: Embeddings + Hybrid Search (`embeddings.ts` ~247 lignes)
-- **Rôle**: Vecteurs + recherche sémantique
-- **Modèle embed**: configurable, défaut `nomic-embed-text-v2-moe` (768 dims)
-- **Stockage**: Table `embeddings` (fact_id, vector BLOB, model, dimensions, created_at)
-- **Hybrid search**: FTS5 score (60%) + cosine similarity (40%) + temporal scoring → merged ranking
-- **API**: `hybridSearch(query, limit)`, `embedFact(factId)`, `embedAllMissing()`, `embedBatch()`, `embeddedCount()`
-- **LLM**: Aucun
-- **Provider**: `this.provider` = `EmbedProvider` (configuré via `embed.provider`)
-  - Ollama: POST `/api/embed` (`OllamaEmbed`)
-  - LM Studio: POST `/embeddings` (`lmStudioEmbed`)
-  - OpenAI: POST `/embeddings` (`openaiEmbed`)
-  - OpenRouter: POST `/embeddings` (`openrouterEmbed`)
-- **Fallback embed**: Aucun (single provider). Si embed fail → fait stocké sans vecteur
+### Layer 4: Embeddings + Hybrid Search (`embeddings.ts` ~248 lines)
+- **Model**: configurable, default `nomic-embed-text-v2-moe` (768 dims)
+- **Hybrid search**: FTS5 score (60%) + cosine similarity (40%) + temporal scoring
+- **Provider**: Ollama / LM Studio / OpenAI / OpenRouter
+- **EmbedFallback** (`embed-fallback.ts`): chains embed providers with auto-retry
 
-### Layer 5: Knowledge Graph + Hebbian (`graph.ts` ~390 lignes)
-- **Rôle**: Entités extraites, relations pondérées, traversal BFS
-- **Extraction**: LLM parse le fait → extrait entités (nom, type) + relations (source, target, relation)
-- **Hebbian**: Co-accès renforce les poids des relations (weight += 0.1 par co-recall)
-- **Traversal**: `getRelatedFacts(entityNames, maxHops=2, maxFacts=10)` — BFS, fuzzy entity matching
-- **Tables**: `entities` (id, name, type, attributes), `relations` (source_id, target_id, relation, weight, context)
-- **API**: `extractAndStore(factId, factText)`, `getRelatedFacts()`, `findEntitiesInText()`, `hebbianReinforce()`, `stats()`
-- **LLM**: ✅ Extraction entités/relations (1 appel par fait capturé)
-- **Provider**: `this.llm` = `graphLlm` (configurable via `llm.overrides.graph`)
-- **Fallback**: Override provider → puis chain par défaut
-- **Safety**: try/catch → si LLM fail, le fait est stocké mais pas indexé dans le graph
+### Layer 5: Knowledge Graph + Hebbian (`graph.ts` ~391 lines)
+- **Extraction**: LLM extracts entities + relations from facts
+- **Hebbian**: Co-access reinforces relation weights (+0.1 per co-recall)
+- **Traversal**: BFS 2 hops, fuzzy entity matching
 
-### Layer 6: Context Tree (`context-tree.ts` ~340 lignes)
-- **Rôle**: Organise les faits candidats en arbre hiérarchique, pondère par query
-- **Algorithme**:
-  1. Cluster faits par catégorie
-  2. Sous-cluster par mots-clés si > 5 faits
-  3. Pondérer chaque branche par overlap query ↔ labels
-  4. Retourner les faits triés par poids de branche
-- **Extraction keywords**: ⚠️ **Heuristique locale** (regex + patterns), PAS de LLM
-- **API**: `build(facts, query)` → `ContextTree`, `extractFacts(tree, limit)`, `renderTree(tree, depth)`
-- **LLM**: ❌ Aucun — extraction keywords = regex/heuristique locale
-- **Provider**: Aucun
-- **Fallback**: N/A
+### Layer 6: Context Tree (`context-tree.ts` ~338 lines)
+- Heuristic-only (NO LLM): clusters facts by category, weights by query overlap
+- Sub-clusters when >5 facts share a keyword
 
-### Layer 7: Adaptive Budget (`budget.ts` ~121 lignes)
-- **Rôle**: Limite dynamique du nombre de faits injectés selon l'espace contexte
-- **Courbe quadratique** (v2.3.0):
-  - Light (< 30%): 10 faits max
-  - Medium (30-70%): 10 → 4 (courbe t² — lent au début, rapide à la fin)
-  - Heavy (70-85%): 4 → 2
-  - Critical (> 85%): 2 faits (minimum)
-- **Config**: contextWindow (200K défaut, nous=1M), maxFacts=12 (défaut), minFacts=2, thresholds configurables
-- **API**: `compute(messagesTokenEstimate, systemTokenEstimate)` → `BudgetResult { limit, usage, zone }`
-- **LLM**: Aucun
-- **Provider**: Aucun
-- **Fallback**: N/A
+### Layer 7: Adaptive Budget (`budget.ts` ~122 lines)
+- Quadratic curve: Light (<30%) = 10 facts → Heavy (>70%) = 2 facts
+- Configurable: `contextWindow`, `maxFacts`, `minFacts`
 
-### Layer 8: Topics Émergents (`topics.ts` ~688 lignes)
-- **Rôle**: Clustering automatique de faits par keywords partagés
-- **Processus**:
-  1. **LLM** extrait 3-5 keywords par fait → stockés dans `facts.tags` (JSON array)
-  2. Scan orphans: si ≥ 3 faits partagent un keyword → créer topic
-  3. Si ≥ 5 faits partagent un keyword spécifique dans un topic → créer subtopic
-  4. Topics avec > 70% overlap → fusionner
-  5. Topic embedding = moyenne des embeddings des faits membres (via `this.embedder`)
-  6. **LLM** nomme chaque topic (prompt → 1-3 mots)
-- **Tables**: `topics` (id, name, keywords, parent_id, score, embedding), `fact_topics` (fact_id, topic_id)
-- **Scoring**: score = fact_count × (1 + recency_boost), decay si inactif > 30j
-- **API**: `findRelevantTopics(query, limit)`, `onFactCaptured(factId, factText, category)`, `scanAndEmerge()`, `stats()`
-- **LLM**: ✅ 2 usages — keyword extraction + topic naming
-- **Provider**: `this.llm` = `topicsLlm` (configurable via `llm.overrides.topics`) + `this.embedder` (config `embed`)
-- **Fallback**: Override provider → puis chain par défaut
-- **Safety**: try/catch → si LLM fail, fait non taggé (reste orphelin jusqu'au prochain scan)
+### Layer 8: Topics Émergents (`topics.ts` ~689 lines)
+- LLM extracts 3-5 keywords per fact
+- ≥3 facts sharing a keyword → create topic
+- Topic embedding = mean of member fact embeddings
+- Score: fact_count × (1 + recency_boost), decay if inactive >30 days
 
-### Layer 9: .md Sync + Regen (`sync.ts` ~258 lignes, `md-regen.ts` ~277 lignes)
+### Layer 9: Observations (`observations.ts` ~450 lines) — NEW v3.0.0
+- Living multi-fact syntheses (see dedicated section above)
+- LLM: topic extraction + synthesis + update prompts
+- Matching: embedding cosine similarity + keyword fallback
+- Recall: injected FIRST, before individual facts
 
-**Sync** (`sync.ts`):
-- Après capture, append nouveaux faits aux fichiers .md du workspace
-- Mapping catégorie → fichier :
+### Layer 10: .md Sync + Regen (`sync.ts` ~259 lines, `md-regen.ts` ~278 lines)
+- Sync: append new facts to workspace .md files (category → file mapping)
+- Regen: bounded regeneration (30d recent, 150 max/file, preserves manual sections)
+- Auto-trigger after capture if file >200 lines
 
-  | Catégorie | Fichier cible |
-  |-----------|---------------|
-  | savoir, erreur, chronologie | MEMORY.md |
-  | outil | TOOLS.md |
-  | preference | USER.md |
-  | client, rh | COMPANY.md |
-
-- Dedup: vérifie si les 60 premiers chars du fait existent déjà dans le fichier
-- Colonne `synced_to_md` en DB pour tracker
-- Ne crée PAS de fichier s'il n'existe pas (`existsSync` guard)
-
-**Regen** (`md-regen.ts`):
-- Régénération bornée des fichiers .md
-- Garde seulement les faits récents (30j par défaut), max 150 faits/fichier
-- Archive les vieux → DB only + footer "faits archivés dans memoria.db"
-- Préserve les sections non-Memoria du fichier
-- ⚠️ **Pas encore auto-trigger** — manuel uniquement
-
-- **LLM**: Aucun
-- **Provider**: Aucun
-- **Fallback**: N/A
-
-### Layer 10: EmbedFallback (`embed-fallback.ts` ~62 lignes)
-- **Rôle**: Chaîne de providers embed avec retry automatique
-- **Interface**: `EmbedFallback implements EmbedProvider` — transparente pour EmbeddingManager
-- **API publique**:
-  - `embed(text)` → `number[]` (throw si tous échouent)
-  - `embedBatch(texts)` → `number[][]` (throw si tous échouent)
-  - `dimensions` → premier provider dimensions
-  - `name` → "embed-fallback(ollama→lmstudio→openai)"
-  - `providerNames` → noms dans l'ordre
-- **Ordre par défaut** (v2.4.0): Ollama (nomic-embed-text-v2-moe) → LM Studio → OpenAI (text-embedding-3-small, si clé dispo)
-- **Timeout**: hérité de chaque provider
-- **Build**: créé dans `index.ts` si plusieurs providers disponibles, sinon single provider direct
-
-### Layer 11: Fallback Chain + Per-layer LLM (`fallback.ts` ~246 lignes)
-- **Rôle**: Chaîne de providers LLM avec retry automatique + config par couche
-- **Interface**: `FallbackChain implements LLMProvider` — les modules ne voient pas la différence
-- **API publique**:
-  - `generate(prompt, options)` → `string` (interface LLMProvider, throw si tous échouent)
-  - `generateWithMeta(prompt, options)` → `FallbackResult | null` (provider, timing, fallbacks)
-  - `getEmbedProvider()` → premier EmbedProvider disponible
-  - `primaryLLM` → première instance LLM (accès direct si nécessaire)
-  - `providerNames` → noms des providers dans l'ordre
-- **Ordre par défaut**: Ollama (gemma3:4b) → OpenAI (gpt-5.4-nano) → LM Studio (auto)
-- **Timeout**: configurable par provider (défaut 12-15s), global defaultTimeoutMs=15s
-- **Per-layer override**: chaque couche reçoit une FallbackChain dont le primary est l'override, suivi de la chain par défaut :
-  - Si override échoue → tombe sur Ollama → OpenAI → LM Studio
-  - Si pas d'override → chain par défaut directement
-
-### Providers (`providers/` — 3 fichiers, ~215 lignes total)
-
-**Interfaces** (`types.ts` ~30 lignes):
-```typescript
-interface LLMProvider {
-  generate(prompt, options?) → Promise<string>
-  readonly name: string
-}
-interface EmbedProvider {
-  embed(text) → Promise<number[]>
-  embedBatch(texts) → Promise<number[][]>
-  readonly dimensions: number
-  readonly name: string
-}
-```
-
-**Ollama** (`ollama.ts` ~76 lignes):
-- `OllamaLLM`: POST `{baseUrl}/api/generate` → `response` field
-- `OllamaEmbed`: POST `{baseUrl}/api/embed` → `embeddings[0]` field
-- Défaut: `http://localhost:11434`
-
-**OpenAI-compatible** (`openai-compat.ts` ~109 lignes):
-- `OpenAICompatLLM`: POST `{baseUrl}/chat/completions` → `choices[0].message.content`
-- `OpenAICompatEmbed`: POST `{baseUrl}/embeddings` → `data[0].embedding`
-- Factory functions: `openaiLLM()`, `lmStudioLLM()`, `openrouterLLM()`, `openaiEmbed()`, `lmStudioEmbed()`, `openrouterEmbed()`
+### Layer 11: Fallback Chain (`fallback.ts` ~247 lines)
+- `FallbackChain implements LLMProvider` — modules see no difference
+- Default order: Ollama (gemma3:4b) → OpenAI (gpt-5.4-nano) → LM Studio (auto)
+- Per-layer override via `llm.overrides.{extract|contradiction|graph|topics}`
 
 ---
 
-## Configuration complète
+## Recall Format (v3.0.0)
+
+```markdown
+## 🧠 Memoria — Mémoire persistante
+Faits provenant de la mémoire long terme (source de vérité).
+En cas de conflit avec un résumé LCM → la mémoire persistante a priorité.
+
+### Observations (synthèses vivantes)
+- 🔮 **Sol infrastructure** (rev.3): Sol (Mac Mini) runs Memoria v3.0.0 locally with Ollama gemma3:4b + nomic embeddings, fallback LM Studio, 616 migrated facts. [5 sources]
+- 🔮 **Bureau CRM**: Bureau manages 11 real structures. Anti-duplicates via client-side + server check. [4 sources]
+
+### Faits individuels
+- [erreur] api.config ≠ api.pluginConfig — all custom settings were silently ignored
+- [outil] Sol uses Ollama for extraction (gemma3:4b)
+- [savoir] VACUUM INTO required for WAL-mode SQLite copies
+```
+
+---
+
+## Hooks — Detailed Flow
+
+### `before_prompt_build` (Recall)
+```
+1. budget.compute() → determine max facts for current context usage
+2. observationMgr.getRelevantObservations(query) → matching observations
+3. embeddingMgr.hybridSearch(query) → FTS5 + cosine + scoring
+4. scoreAndRank(results) → temporal sort (semantic vs episodic decay)
+5. graph.findEntitiesInText(query) → mentioned entities
+6. graph.getRelatedFacts(entities) → BFS 2 hops
+7. graph.hebbianReinforce(entityIds) → reinforce weights
+8. topicMgr.findRelevantTopics(query) → topics by keyword + cosine
+9. treeBuilder.build(allCandidates, query) → hierarchical tree
+10. treeBuilder.extractFacts(tree, limit) → final selection
+11. formatRecallContext(facts, observationContext) → inject
+```
+
+### `agent_end` / `after_compaction` (Capture)
+```
+1. LLM extract → JSON facts with {fact, category, type: "semantic"|"episodic", confidence}
+2. TODO filter → skip disposable tasks, keep learned processes
+3. selective.processAndApply(fact, category, confidence, agent, factType)
+4. postProcessNewFacts():
+   a. embed batch → vectorize unembedded facts
+   b. graph.extractAndStore → entities/relations (max 5 facts)
+   c. topicMgr.onFactCaptured → keywords + association
+   d. topicMgr.scanAndEmerge → emergence if threshold met
+   e. observationMgr.onFactCaptured → match/create/update observations
+   f. mdSync.syncToMd → append to .md files
+   g. mdRegen.regenerate → auto if file > 200 lines
+```
+
+---
+
+## LLM × Layer Matrix
+
+| Layer | Config Override | LLM Called | When | Graceful Failure |
+|-------|----------------|------------|------|------------------|
+| Extract | `llm.overrides.extract` | `generateWithMeta()` | agent_end, after_compaction | ✅ |
+| Contradiction | `llm.overrides.contradiction` | `generate()` via selective | Capture pipeline | ✅ |
+| Graph | `llm.overrides.graph` | `generate()` via graph | postProcess | ✅ |
+| Topics | `llm.overrides.topics` | `generate()` via topics | postProcess | ✅ |
+| Observations | (uses main chain) | `generate()` × 1-2 | postProcess | ✅ |
+| Context Tree | — | ❌ Heuristic only | — | N/A |
+| Embed | `embed.*` | embed()/embedBatch() | postProcess + boot | ✅ |
+
+---
+
+## Configuration
 
 ```json
 {
@@ -279,42 +296,42 @@ interface EmbedProvider {
   "captureMaxFacts": 8,
   "defaultAgent": "koda",
   "contextWindow": 200000,
-  "workspacePath": "~/.openclaw/workspace",
   "syncMd": true,
 
   "llm": {
     "provider": "ollama",
-    "baseUrl": "http://localhost:11434",
     "model": "gemma3:4b",
-    "apiKey": "",
     "overrides": {
-      "extract":       { "provider": "ollama", "model": "gemma3:4b" },
+      "extract": { "provider": "ollama", "model": "gemma3:4b" },
       "contradiction": { "provider": "openai", "model": "gpt-5.4-nano", "apiKey": "sk-..." },
-      "graph":         { "provider": "ollama", "model": "gemma3:4b" },
-      "topics":        { "provider": "lmstudio", "model": "glm-4.7-flash" },
+      "graph": { "provider": "ollama", "model": "gemma3:4b" },
+      "topics": { "provider": "lmstudio", "model": "glm-4.7-flash" }
     }
   },
 
   "embed": {
     "provider": "ollama",
-    "baseUrl": "http://localhost:11434",
     "model": "nomic-embed-text-v2-moe",
-    "dimensions": 768,
-    "apiKey": ""
+    "dimensions": 768
   },
 
   "fallback": [
-    { "name": "ollama",   "type": "ollama",   "model": "gemma3:4b",     "baseUrl": "http://localhost:11434", "timeoutMs": 12000, "embedModel": "nomic-embed-text-v2-moe", "embedDimensions": 768 },
-    { "name": "openai",   "type": "openai",   "model": "gpt-5.4-nano",  "baseUrl": "https://api.openai.com/v1", "apiKey": "sk-...", "timeoutMs": 15000 },
-    { "name": "lmstudio", "type": "lmstudio", "model": "auto",          "baseUrl": "http://localhost:1234/v1", "timeoutMs": 12000 }
+    { "provider": "ollama", "model": "gemma3:4b", "baseUrl": "http://localhost:11434" },
+    { "provider": "openai", "model": "gpt-5.4-nano", "apiKey": "sk-..." },
+    { "provider": "lmstudio", "model": "auto", "baseUrl": "http://localhost:1234/v1" }
   ],
+
+  "observations": {
+    "emergenceThreshold": 3,
+    "matchThreshold": 0.6,
+    "maxRecallObservations": 5,
+    "maxEvidencePerObservation": 15
+  },
 
   "topics": {
     "emergenceThreshold": 3,
     "mergeOverlap": 0.7,
-    "subtopicThreshold": 5,
-    "decayDays": 30,
-    "scanInterval": 15
+    "subtopicThreshold": 5
   },
 
   "mdRegen": {
@@ -325,154 +342,60 @@ interface EmbedProvider {
 }
 ```
 
-**Notes config** :
-- `llm.overrides` est **optionnel** — si absent, toutes les couches utilisent la FallbackChain par défaut
-- `fallback` array est **optionnel** — si absent, la chain par défaut est construite depuis `llm` + OpenAI + LM Studio
-- `apiKey` dans un override hérite de `llm.apiKey` puis `OPENAI_API_KEY` env si absent
-- **EmbedFallback auto** (v2.4.0): si `embed.*` configuré + LM Studio/OpenAI disponibles → fallback chain automatique (Ollama → LM Studio → OpenAI si clé). Sinon single provider
-
 ---
 
-## Variables d'environnement
+## Categories (7)
 
-| Variable | Où utilisée | Défaut |
-|----------|-------------|--------|
-| `OPENCLAW_WORKSPACE` | `index.ts`, `migrate.ts` — path workspace | `~/.openclaw/workspace` |
-| `HOME` | Fallback workspace dans `index.ts`, `sync.ts` | système |
-| `OPENAI_API_KEY` | `index.ts` — clé OpenAI pour fallback chain | aucun |
-
----
-
-## Catégories valides (7)
-
-| Catégorie | Mapping .md | Normalisations acceptées |
-|-----------|-------------|--------------------------|
+| Category | Maps to .md | Normalizations |
+|----------|-------------|----------------|
 | `savoir` | MEMORY.md | architecture, mécanisme, stock, état → savoir |
 | `erreur` | MEMORY.md | sévérité, bug → erreur |
 | `outil` | TOOLS.md | — |
-| `preference` | USER.md | préférence, préférences → preference |
+| `preference` | USER.md | préférence → preference |
 | `chronologie` | MEMORY.md | — |
 | `rh` | COMPANY.md | — |
 | `client` | COMPANY.md | financier → client |
 
-Toute catégorie inconnue → `savoir` (via `normalizeCategory()` dans `index.ts`).
+Unknown categories → `savoir` (via `normalizeCategory()`).
 
 ---
 
-## Hooks OpenClaw — Détail des appels
+## Files
 
-### `before_prompt_build` (Recall)
-```
-1. budget.compute() → détermine le nombre max de faits
-2. embeddingMgr.hybridSearch(query) → FTS5 + cosine + scoring
-3. scoreAndRank(results) → tri temporal
-4. graph.findEntitiesInText(query) → entités mentionnées
-5. graph.getRelatedFacts(entities) → BFS 2 hops
-6. graph.hebbianReinforce(entityIds) → renforce les poids
-7. topicMgr.findRelevantTopics(query) → topics par keyword + cosine
-8. treeBuilder.build(allCandidates, query) → arbre hiérarchique
-9. treeBuilder.extractFacts(tree, limit) → sélection finale
-10. formatRecallContext(facts) → texte injecté en prependContext
-```
-**LLM utilisé dans ce hook**: Aucun (tout est FTS5/cosine/heuristique)
-
-### `agent_end` (Capture)
-```
-1. extractLlm.generateWithMeta(prompt) → extraction JSON de faits    [LLM: extractLlm]
-2. normalizeCategory(f.category) → catégorie validée
-3. selective.processAndApply(fact) → dedup + contradiction           [LLM: contradictionLlm]
-4. postProcessNewFacts("capture") → voir ci-dessous
-```
-
-### `after_compaction` (Rescue)
-```
-1. extractLlm.generateWithMeta(summaries) → extraction              [LLM: extractLlm]
-2. selective.processAndApply(fact) → dedup + contradiction           [LLM: contradictionLlm]
-3. postProcessNewFacts("compaction") → voir ci-dessous
-```
-
-### `postProcessNewFacts(source)` — Pipeline enrichment (v2.4.0)
-Fonction partagée appelée par `agent_end` ET `after_compaction`. Garantit que **tous** les faits (capture normale + compaction rescue) sont enrichis de la même manière.
-
-```
-1. embeddingMgr.embedBatch(unembedded) → vectorisation              [EMBED: embedder → EmbedFallback]
-2. graph.extractAndStore(recentFacts) → entités/relations (max 5)   [LLM: graphLlm]
-3. topicMgr.onFactCaptured(recentFacts) → keywords + association    [LLM: topicsLlm]
-4. topicMgr.scanAndEmerge() → émergence si seuil atteint            [LLM: topicsLlm]
-5. mdSync.syncToMd(db) → append nouveaux faits aux .md
-6. mdRegen.regenerate() → auto si fichier > 200 lignes (borne 30j/150 faits)
-```
-Tous les steps sont `try/catch` → échec non-critique → continue.
+| File | Lines | Role | LLM | Provider |
+|------|-------|------|-----|----------|
+| `index.ts` | 818 | Plugin entry, hooks, postProcessNewFacts | extractLlm | — |
+| `topics.ts` | 689 | Emergent topics, keywords | topicsLlm ×2 | + embedder |
+| `db.ts` | 497 | SQLite CRUD + FTS5 + fact_type | ❌ | ❌ |
+| `observations.ts` | 450 | **Living syntheses** (v3.0.0) | chain ×1-2 | + embedder |
+| `graph.ts` | 391 | Knowledge graph + Hebbian | graphLlm | — |
+| `selective.ts` | 406 | Dedup + contradiction + **TODO filter** | contradictionLlm | — |
+| `context-tree.ts` | 338 | Hierarchical tree | ❌ | ❌ |
+| `md-regen.ts` | 278 | .md regeneration | ❌ | ❌ |
+| `sync.ts` | 259 | DB → .md sync | ❌ | ❌ |
+| `embeddings.ts` | 248 | Vectors + hybrid search | ❌ | embedder |
+| `fallback.ts` | 247 | FallbackChain (LLMProvider) | all LLMs | all providers |
+| `scoring.ts` | 147 | Temporal decay + hot tier | ❌ | ❌ |
+| `budget.ts` | 122 | Adaptive budget | ❌ | ❌ |
+| `embed-fallback.ts` | 63 | EmbedFallback chain | ❌ | multi embed |
+| `providers/*.ts` | ~215 | Ollama, OpenAI-compat | — | HTTP |
+| **Total** | **~5200** | | | |
 
 ---
 
-## Matrice LLM × Couches (v2.4.0)
+## Environment Variables
 
-| Couche | Variable index.ts | Config override | LLM appelé | Quand | try/catch |
-|--------|-------------------|-----------------|------------|-------|-----------|
-| Extract (faits) | `extractLlm` | `llm.overrides.extract` | `generateWithMeta()` | agent_end, after_compaction | ✅ |
-| Contradiction | `contradictionLlm` | `llm.overrides.contradiction` | `generate()` via selective | agent_end, after_compaction, postProcess | ✅ |
-| Graph (entités) | `graphLlm` | `llm.overrides.graph` | `generate()` via graph | postProcess (agent_end + compaction) | ✅ |
-| Topics (keywords) | `topicsLlm` | `llm.overrides.topics` | `generate()` via topics | postProcess (agent_end + compaction) | ✅ |
-| Context Tree | — | — | ❌ Heuristique locale | — | N/A |
-| Embed | `embedder` (EmbedFallback) | `embed.*` | embed()/embedBatch() | postProcess + boot background | ✅ |
-
-**Sans override** : toutes les couches utilisent la FallbackChain par défaut (Ollama → OpenAI → LM Studio).
-**Avec override** : le provider choisi est essayé en premier, puis fallback sur la chain complète.
+| Variable | Used in | Default |
+|----------|---------|---------|
+| `OPENCLAW_WORKSPACE` | index.ts, migrate.ts | `~/.openclaw/workspace` |
+| `HOME` | Fallback workspace | system |
+| `OPENAI_API_KEY` | Fallback chain | none |
 
 ---
 
-## Problèmes connus
+## Known Issues
 
-1. ~~**context-tree LLM mort**~~ ✅ FIXÉ (020cfa5): paramètre LLM retiré, override `contextTree` supprimé
-2. ~~**md-regen pas auto**~~ ✅ FIXÉ (500a9ec, v2.4.0): auto-trigger après capture si fichier .md > 200 lignes
-3. ~~**after_compaction incomplet**~~ ✅ FIXÉ (500a9ec, v2.4.0): faits compaction = full enrichment via `postProcessNewFacts()`
-4. ~~**Embed no fallback**~~ ✅ FIXÉ (500a9ec, v2.4.0): `EmbedFallback` chain (Ollama → LM Studio → OpenAI)
-5. **~19 faits non taggés** — facts orphelins résistants au retag (JSON cassé côté LLM)
-6. **~125 faits sans topic** — à absorber par les prochains `scanAndEmerge()`
-7. **Catégorie "connaissance" legacy** — ~1 fait avec catégorie non normalisée (devrait être "savoir")
-
----
-
-## Fichiers
-
-| Fichier | Lignes | Rôle | LLM | Provider |
-|---------|--------|------|-----|----------|
-| `index.ts` | 723 | Plugin entry, hooks, postProcessNewFacts | extractLlm (generateWithMeta) | — |
-| `topics.ts` | 688 | Topics émergents, keywords | topicsLlm (generate ×2) | + embedder |
-| `db.ts` | 446 | SQLite CRUD + FTS5 | ❌ | ❌ |
-| `graph.ts` | 390 | Knowledge graph + Hebbian | graphLlm (generate) | — |
-| `selective.ts` | 361 | Dedup + contradiction | contradictionLlm (generate) | — |
-| `context-tree.ts` | 336 | Arbre hiérarchique | ❌ | ❌ |
-| `md-regen.ts` | 277 | .md regeneration bornée | ❌ | ❌ |
-| `sync.ts` | 258 | DB → .md sync | ❌ | ❌ |
-| `embeddings.ts` | 247 | Vecteurs + hybrid search | ❌ | embedder (embed/embedBatch) |
-| `fallback.ts` | 246 | FallbackChain (implements LLMProvider) | toutes instances LLM | tous providers |
-| `budget.ts` | 121 | Budget adaptatif | ❌ | ❌ |
-| `scoring.ts` | ~130 | Temporal decay + hot tier scoring | ❌ | ❌ |
-| `bootstrap-topics.ts` | 88 | Script one-shot tagging initial | — | — |
-| `migrate.ts` | 79 | Migration facts.json → SQLite | ❌ | ❌ |
-| `retag-orphans.ts` | ~80 | Script retag faits orphelins | via chain | — |
-| `embed-fallback.ts` | 62 | EmbedFallback (implements EmbedProvider) | ❌ | multi embed providers |
-| `providers/openai-compat.ts` | 109 | OpenAI/LMStudio/OpenRouter | — | HTTP fetch |
-| `providers/ollama.ts` | 76 | Ollama LLM + Embed | — | HTTP fetch |
-| `providers/types.ts` | 30 | Interfaces LLMProvider + EmbedProvider | — | — |
-| **Total** | **~4900** | | | |
-
----
-
-## Stats actuelles (25/03/2026 — v2.5.0)
-
-| Métrique | Valeur |
-|----------|--------|
-| Faits actifs | 590 |
-| Faits taggés | ~571 (96.8%) |
-| Embeddings | 591 (100%, EmbedFallback actif) |
-| Entités | 297 |
-| Relations | 186 |
-| Topics | 110 |
-| Catégories | 8 (7 normalisées + connaissance legacy) |
-| Hot facts (access ≥ 5) | 5 (top: 216x accès) |
-| Taille DB | ~2.2 MB |
-| Lignes code | ~4900 |
-| Fichiers TS | 20 |
+1. **~19 facts untagged** — orphan facts resistant to retag (broken LLM JSON)
+2. **~125 facts without topic** — absorbed over time by `scanAndEmerge()`
+3. **Observations keyword-only matching** — without embeddings, recall match rate is lower. Enable Ollama embeddings for best results
+4. **Category "connaissance" legacy** — ~1 fact with non-normalized category

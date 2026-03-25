@@ -95,7 +95,7 @@ openclaw status          # Vérifier le chargement
 
 Vous devez voir :
 ```
-[plugins] memoria: v2.6.1 registered (X facts, ...)
+[plugins] memoria: v3.0.0 registered (X facts, Y observations, ...)
 ```
 
 ### 5. Migration automatique

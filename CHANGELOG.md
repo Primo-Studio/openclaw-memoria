@@ -21,6 +21,12 @@
 - Individual facts fill remaining budget after observations
 - Format splits into "Observations (synthèses vivantes)" + "Faits individuels"
 
+### Added — Procedural Memory Preservation
+- **Procedural memory** (procedural): like learning bike tricks — processes, tips, "what worked" are preserved as durable knowledge
+- **Smart TODO filter**: distinguishes disposable TODOs ("pull X") from learned processes ("use VACUUM INTO because WAL copies lose -shm")
+- Heuristics: length >60 chars usually = knowledge → keep; explanation markers (car/sinon/pour/because/→) → always keep
+- Transient patterns (en préparation, en cours, pas encore) only skip short facts
+
 ### Fixed
 - **CRITICAL: `api.config` vs `api.pluginConfig`** — all custom settings were silently ignored since v0.1.0
 - Fallback `provider` vs `type` normalization in parseConfig

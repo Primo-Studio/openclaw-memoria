@@ -76,6 +76,16 @@
           "maxFactsPerFile": { "type": "number", "minimum": 10, "maximum": 500 },
           "archiveNotice": { "type": "boolean" }
         }
+      },
+      "observations": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "emergenceThreshold": { "type": "number", "minimum": 2, "maximum": 10, "default": 3 },
+          "matchThreshold": { "type": "number", "minimum": 0.2, "maximum": 0.9, "default": 0.6 },
+          "maxRecallObservations": { "type": "number", "minimum": 1, "maximum": 10, "default": 5 },
+          "maxEvidencePerObservation": { "type": "number", "minimum": 5, "maximum": 50, "default": 15 }
+        }
       }
     },
     "$defs": {
@@ -101,6 +111,7 @@
     "llm": { "label": "LLM Provider", "help": "Default: Ollama + gemma3:4b. Per-layer overrides available for extract/contradiction/graph/topics.", "advanced": true },
     "fallback": { "label": "LLM Fallback Chain", "help": "Providers tried in order if primary fails. Default: Ollama → OpenAI → LM Studio.", "advanced": true },
     "topics": { "label": "Topic Emergence", "help": "Auto-clustering settings", "advanced": true },
-    "mdRegen": { "label": ".md Regeneration", "help": "Bounded .md file regeneration settings", "advanced": true }
+    "mdRegen": { "label": ".md Regeneration", "help": "Bounded .md file regeneration settings", "advanced": true },
+    "observations": { "label": "Observations", "help": "Living multi-fact syntheses. emergenceThreshold=min facts to create, matchThreshold=cosine sim to update", "advanced": true }
   }
 }
