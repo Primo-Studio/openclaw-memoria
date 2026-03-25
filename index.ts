@@ -219,11 +219,15 @@ function normalizeCategory(raw: string): string {
 // ─── Plugin Registration ───
 
 export function register(api: OpenClawPluginApi): void {
-  const cfg = parseConfig(api.config as Record<string, unknown>);
+  // api.pluginConfig = plugin-specific config from openclaw.json plugins.entries.memoria.config
+  // api.config = global OpenClaw config (NOT what we want)
+  const rawPluginConfig = (api as any).pluginConfig as Record<string, unknown> | undefined;
+  const cfg = parseConfig(rawPluginConfig);
 
   const db = new MemoriaDB(WORKSPACE);
 
   // Build fallback chain: config providers → default chain
+  api.logger.info?.(`[memoria] Config loaded: fallback=${cfg.fallback.length} providers, llm=${cfg.llm.provider}/${cfg.llm.model}, embed=${cfg.embed.provider}/${cfg.embed.model}`);
   const fallbackProviders: FallbackProviderConfig[] = cfg.fallback.length > 0
     ? cfg.fallback
     : [
