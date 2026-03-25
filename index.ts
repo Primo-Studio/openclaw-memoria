@@ -38,6 +38,7 @@ import { OllamaEmbed, OllamaLLM } from "./providers/ollama.js";
 import { OpenAICompatLLM, OpenAICompatEmbed, lmStudioLLM, lmStudioEmbed, openaiLLM, openaiEmbed, openrouterLLM, openrouterEmbed } from "./providers/openai-compat.js";
 import type { EmbedProvider, LLMProvider } from "./providers/types.js";
 import { EmbedFallback } from "./embed-fallback.js";
+import { ObservationManager } from "./observations.js";
 
 // ─── Config ───
 
@@ -189,20 +190,34 @@ JSON valide uniquement:
 
 // ─── Formatting ───
 
-function formatRecallContext(facts: Array<{ fact: string; category: string; confidence: number; temporalScore: number }>): string {
-  if (facts.length === 0) return "";
-  const lines = facts.map(f => {
-    const conf = f.confidence >= 0.9 ? "" : ` (${Math.round(f.confidence * 100)}%)`;
-    return `- [${f.category}] ${f.fact}${conf}`;
-  });
-  return [
+function formatRecallContext(facts: Array<{ fact: string; category: string; confidence: number; temporalScore: number }>, observationContext = ""): string {
+  if (facts.length === 0 && !observationContext) return "";
+  const parts: string[] = [
     "## 🧠 Memoria — Mémoire persistante",
     "Faits provenant de la mémoire long terme (source de vérité).",
     "En cas de conflit avec un résumé LCM → la mémoire persistante a priorité.",
     "",
-    ...lines,
-    "",
-  ].join("\n");
+  ];
+
+  // Observations first (synthesized, higher quality)
+  if (observationContext) {
+    parts.push("### Observations (synthèses vivantes)");
+    parts.push(observationContext);
+    parts.push("");
+  }
+
+  // Individual facts
+  if (facts.length > 0) {
+    if (observationContext) parts.push("### Faits individuels");
+    const lines = facts.map(f => {
+      const conf = f.confidence >= 0.9 ? "" : ` (${Math.round(f.confidence * 100)}%)`;
+      return `- [${f.category}] ${f.fact}${conf}`;
+    });
+    parts.push(...lines);
+    parts.push("");
+  }
+
+  return parts.join("\n");
 }
 
 // ─── JSON Parse Helper ───
@@ -360,6 +375,13 @@ export function register(api: OpenClawPluginApi): void {
     archiveNotice: true,
   });
 
+  const observationMgr = new ObservationManager(db, chain, embedder, {
+    emergenceThreshold: 3,
+    matchThreshold: 0.6,
+    maxRecallObservations: Math.max(Math.floor(cfg.recallLimit / 3), 2),
+    maxEvidencePerObservation: 15,
+  });
+
   // Ensure sync column exists
   mdSync.ensureSchema(db);
 
@@ -367,7 +389,8 @@ export function register(api: OpenClawPluginApi): void {
   const embCount = embeddingMgr.embeddedCount();
   const gStats = graph.stats();
   const tStats = topicMgr.stats();
-  api.logger.info?.(`memoria: v2.5.0 registered (${stats.active} facts, ${embCount} embedded, ${gStats.entities} entities, ${gStats.relations} relations, ${tStats.totalTopics} topics, fallback: ${chain.providerNames.join(" → ")})`);
+  const oStats = observationMgr.stats();
+  api.logger.info?.(`memoria: v3.0.0 registered (${stats.active} facts, ${oStats.total} observations, ${embCount} embedded, ${gStats.entities} entities, ${gStats.relations} relations, ${tStats.totalTopics} topics, fallback: ${chain.providerNames.join(" → ")})`);
   
   // Log .md file sizes
   const fileSizes = mdRegen.fileSizes();
@@ -431,7 +454,21 @@ export function register(api: OpenClawPluginApi): void {
       api.logger.debug?.(`memoria: [${source}] topic tagging non-critical error: ${String(topicErr)}`);
     }
 
-    // 4. Sync new facts to .md files
+    // 4. Observations: check if new facts match or trigger new observations
+    try {
+      const recentForObs = db.recentFacts(3);
+      let obsUpdated = 0, obsCreated = 0;
+      for (const f of recentForObs) {
+        const result = await observationMgr.onFactCaptured(f.id, f.fact, f.category);
+        if (result.action === "updated_observation") obsUpdated++;
+        if (result.action === "created_observation") obsCreated++;
+      }
+      if (obsUpdated > 0 || obsCreated > 0) {
+        api.logger.info?.(`memoria: [${source}] observations — ${obsCreated} created, ${obsUpdated} updated`);
+      }
+    } catch { /* non-critical */ }
+
+    // 6. Sync new facts to .md files
     try {
       const syncResult = mdSync.syncToMd(db);
       if (syncResult.synced > 0) {
@@ -439,7 +476,7 @@ export function register(api: OpenClawPluginApi): void {
       }
     } catch { /* non-critical */ }
 
-    // 5. Auto md-regen: check if .md files are getting too large
+    // 7. Auto md-regen: check if .md files are getting too large
     try {
       const sizes = mdRegen.fileSizes();
       const needsRegen = Object.values(sizes).some(s => s.lines > 200);
@@ -541,6 +578,16 @@ export function register(api: OpenClawPluginApi): void {
           }
         } catch { /* topic enrichment non-critical */ }
 
+        // Observations: synthesized multi-fact summaries (PRIORITY over individual facts)
+        let observationContext = "";
+        try {
+          const relevantObs = await observationMgr.getRelevantObservations(prompt);
+          if (relevantObs.length > 0) {
+            observationContext = observationMgr.formatForRecall(relevantObs);
+            api.logger.debug?.(`memoria: ${relevantObs.length} observations matched`);
+          }
+        } catch { /* non-critical */ }
+
         // Context tree: organize facts hierarchically, weight by query
         // Merge: hot tier (always first) + search + graph + topic
         let finalFacts: Fact[] = [];
@@ -561,9 +608,9 @@ export function register(api: OpenClawPluginApi): void {
           finalFacts = [...topFacts, ...graphFacts, ...topicFacts].slice(0, recallLimit);
         }
 
-        if (finalFacts.length === 0) return undefined;
+        if (finalFacts.length === 0 && !observationContext) return undefined;
 
-        const context = formatRecallContext(finalFacts);
+        const context = formatRecallContext(finalFacts, observationContext);
 
         // Track access
         const ids = finalFacts.map(f => f.id);
