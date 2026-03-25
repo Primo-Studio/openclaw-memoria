@@ -65,6 +65,24 @@ const TEMPORAL_NOISE_KEYWORDS = [
   "une seconde", "un moment", "working on", "processing",
 ];
 
+// TODO / action patterns — these are tasks, not durable facts
+const TODO_PATTERNS = [
+  /^il faut\b/i,
+  /^on doit\b/i,
+  /^(à|a) faire\b/i,
+  /\bà faire$/i,
+  /^todo\b/i,
+  /^faut\b/i,
+  /^need(s)? to\b/i,
+  /^should\b/i,
+  /\ben préparation\b/i,
+  /\ben cours\b/i,
+  /\bnot yet\b/i,
+  /\bpas encore\b/i,
+  /\bprochaine étape\b/i,
+  /\bnext step\b/i,
+];
+
 // ─── Levenshtein ───
 
 function levenshtein(a: string, b: string): number {
@@ -198,6 +216,13 @@ export class SelectiveMemory {
       }
     }
 
+    // TODO/action filter — not durable facts, skip
+    for (const pattern of TODO_PATTERNS) {
+      if (pattern.test(fact.trim())) {
+        return { action: "skip", reason: "noise" };
+      }
+    }
+
     // Importance check
     const importance = computeImportance(fact, category);
     if (importance < this.cfg.importanceThreshold) {
@@ -255,7 +280,7 @@ export class SelectiveMemory {
    * Process and apply: run the selective filter and execute the result.
    * Returns the stored/updated fact or null if skipped.
    */
-  async processAndApply(fact: string, category: string, confidence: number, agent = "koda"): Promise<{ stored: boolean; action: string; factId?: string; reason?: string }> {
+  async processAndApply(fact: string, category: string, confidence: number, agent = "koda", factType: "semantic" | "episodic" = "semantic"): Promise<{ stored: boolean; action: string; factId?: string; reason?: string }> {
     const result = await this.process(fact, category, confidence);
 
     switch (result.action) {
@@ -273,6 +298,7 @@ export class SelectiveMemory {
           agent,
           created_at: Date.now(),
           updated_at: Date.now(),
+          fact_type: factType,
         });
         return { stored: true, action: "store", factId: stored.id };
       }
@@ -289,6 +315,7 @@ export class SelectiveMemory {
           agent,
           created_at: Date.now(),
           updated_at: Date.now(),
+          fact_type: factType,
         });
         // Mark old as superseded
         this.db.supersedeFact(result.oldFactId, newFact.id);

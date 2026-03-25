@@ -29,6 +29,7 @@ export interface Fact {
   md_file: string | null;
   md_line: number | null;
   entity_ids: string;     // JSON array
+  fact_type: "semantic" | "episodic"; // semantic = durable, episodic = dated/contextual
 }
 
 export interface Entity {
@@ -95,7 +96,21 @@ export class MemoriaDB {
   private migrate(): void {
     const version = this.getSchemaVersion();
     if (version < 1) this.migrateV1();
+    // V2: add fact_type column for semantic/episodic distinction
+    this.migrateAddFactType();
     this.setSchemaVersion(SCHEMA_VERSION);
+  }
+
+  private migrateAddFactType(): void {
+    try {
+      // Check if column exists
+      const cols = this.db.prepare("PRAGMA table_info(facts)").all() as Array<{ name: string }>;
+      if (!cols.some(c => c.name === "fact_type")) {
+        this.db.exec("ALTER TABLE facts ADD COLUMN fact_type TEXT DEFAULT 'semantic'");
+        // Index for filtering
+        this.db.exec("CREATE INDEX IF NOT EXISTS idx_facts_type ON facts(fact_type)");
+      }
+    } catch { /* column already exists or table not yet created */ }
   }
 
   private getSchemaVersion(): number {
@@ -137,7 +152,8 @@ export class MemoriaDB {
         superseded_at INTEGER,
         md_file TEXT,
         md_line INTEGER,
-        entity_ids TEXT DEFAULT '[]'
+        entity_ids TEXT DEFAULT '[]',
+        fact_type TEXT DEFAULT 'semantic'
       );
 
       -- FTS5 full-text search on facts
@@ -242,6 +258,7 @@ export class MemoriaDB {
       CREATE INDEX IF NOT EXISTS idx_facts_superseded ON facts(superseded);
       CREATE INDEX IF NOT EXISTS idx_facts_created ON facts(created_at);
       CREATE INDEX IF NOT EXISTS idx_facts_agent ON facts(agent);
+      CREATE INDEX IF NOT EXISTS idx_facts_type ON facts(fact_type);
     `);
   }
 
@@ -267,19 +284,20 @@ export class MemoriaDB {
       md_file: fact.md_file ?? null,
       md_line: fact.md_line ?? null,
       entity_ids: fact.entity_ids || "[]",
+      fact_type: fact.fact_type || "semantic",
     };
 
     this.db.prepare(`
       INSERT OR REPLACE INTO facts
       (id, fact, category, confidence, source, tags, agent, created_at, updated_at,
        access_count, last_accessed_at, superseded, superseded_by, superseded_at,
-       md_file, md_line, entity_ids)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       md_file, md_line, entity_ids, fact_type)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       row.id, row.fact, row.category, row.confidence, row.source, row.tags, row.agent,
       row.created_at, row.updated_at, row.access_count, row.last_accessed_at,
       row.superseded, row.superseded_by, row.superseded_at,
-      row.md_file, row.md_line, row.entity_ids
+      row.md_file, row.md_line, row.entity_ids, row.fact_type
     );
 
     return row;

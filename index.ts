@@ -150,21 +150,42 @@ function createLLMProvider(cfg: MemoriaConfig["llm"]): LLMProvider {
 const WORKSPACE = process.env.OPENCLAW_WORKSPACE || `${process.env.HOME}/.openclaw/workspace`;
 
 const LLM_EXTRACT_PROMPT = `Tu es un extracteur de faits pour un système de mémoire AI.
-Analyse le texte ci-dessous et extrais UNIQUEMENT les faits DURABLES (vrais demain).
+Analyse le texte et extrais les faits qui méritent d'être retenus à long terme.
 
-Règles strictes:
-- Chaque fait = UNE phrase complète et autonome
+DEUX TYPES de faits:
+- "semantic" = vérité durable, vraie dans 6 mois (décisions, configs, architectures, erreurs/leçons, préférences)
+- "episodic" = événement daté important (déploiement, bug trouvé, milestone atteint)
+
+STOCKER:
+✅ Décisions techniques ("on utilise Ollama pour l'extraction")
+✅ Configurations ("fallback: ollama → lmstudio, zéro cloud")
+✅ Architectures ("Memoria utilise SQLite + FTS5 + embeddings")
+✅ Erreurs/leçons ("api.config ≠ api.pluginConfig — toutes les configs étaient ignorées")
+✅ Préférences utilisateur ("Neto veut du step-by-step")
+✅ États durables ("Sol tourne Memoria v2.7.0 en local")
+✅ Événements importants avec date ("25/03 — bug api.pluginConfig corrigé")
+
+NE PAS STOCKER:
+❌ TODOs / actions en cours ("il faut pull X", "je vais faire Y")
+❌ États transitoires ("en cours", "en préparation", "en train de")
+❌ Confirmations ("ok", "merci", "compris", "c'est fait")
+❌ Descriptions de ce qu'on fait maintenant ("je lis le fichier", "je lance le test")
+❌ Évidences ("Node.js est installé") sauf si c'était un problème résolu
+❌ Duplicatas de faits déjà connus (vérifier la formulation)
+
+Règles:
+- Chaque fait = UNE phrase complète et autonome (compréhensible sans contexte)
 - Catégories: savoir, erreur, preference, outil, chronologie, rh, client
+- type: "semantic" ou "episodic"
 - confidence: 0.7 minimum
-- Maximum {MAX_FACTS} faits par message
-- Ignore: salutations, confirmations ("ok","merci"), actions temporaires
-- Si rien de durable → retourne {"facts": []}
+- Maximum {MAX_FACTS} faits
+- Si rien de durable → {"facts": []}
 
 Texte:
 "{TEXT}"
 
-Réponds UNIQUEMENT en JSON valide:
-{"facts": [{"fact": "phrase complète", "category": "...", "confidence": 0.X}]}`;
+JSON valide uniquement:
+{"facts": [{"fact": "phrase", "category": "...", "type": "semantic|episodic", "confidence": 0.X}]}`;
 
 // ─── Formatting ───
 
@@ -609,7 +630,7 @@ export function register(api: OpenClawPluginApi): void {
           return;
         }
 
-        const parsed = parseJSON(result.response) as { facts?: Array<{ fact: string; category: string; confidence: number }> };
+        const parsed = parseJSON(result.response) as { facts?: Array<{ fact: string; category: string; type?: string; confidence: number }> };
         if (!parsed?.facts || parsed.facts.length === 0) return;
 
         let stored = 0;
@@ -620,12 +641,15 @@ export function register(api: OpenClawPluginApi): void {
           if (!f.fact || f.fact.length < 5) continue;
           if (f.confidence < 0.7) continue;
 
+          const factType = (f.type === "episodic") ? "episodic" : "semantic";
+
           try {
             const result = await selective.processAndApply(
               f.fact,
               normalizeCategory(f.category),
               f.confidence,
-              cfg.defaultAgent
+              cfg.defaultAgent,
+              factType
             );
             if (result.stored) {
               if (result.action === "enrich") enriched++;
@@ -646,6 +670,7 @@ export function register(api: OpenClawPluginApi): void {
               agent: cfg.defaultAgent,
               created_at: Date.now(),
               updated_at: Date.now(),
+              fact_type: factType,
             });
             stored++;
           }
@@ -695,16 +720,17 @@ export function register(api: OpenClawPluginApi): void {
         return;
       }
 
-      const parsed = parseJSON(result.response) as { facts?: Array<{ fact: string; category: string; confidence: number }> };
+      const parsed = parseJSON(result.response) as { facts?: Array<{ fact: string; category: string; type?: string; confidence: number }> };
       if (!parsed?.facts || parsed.facts.length === 0) return;
 
       let stored = 0;
       let skipped = 0;
       for (const f of parsed.facts) {
         if (!f.fact || f.fact.length < 5 || f.confidence < 0.7) continue;
+        const factType = (f.type === "episodic") ? "episodic" : "semantic";
         try {
           const result = await selective.processAndApply(
-            f.fact, normalizeCategory(f.category), f.confidence, cfg.defaultAgent
+            f.fact, normalizeCategory(f.category), f.confidence, cfg.defaultAgent, factType
           );
           if (result.stored) stored++;
           else skipped++;
@@ -719,6 +745,7 @@ export function register(api: OpenClawPluginApi): void {
             agent: cfg.defaultAgent,
             created_at: Date.now(),
             updated_at: Date.now(),
+            fact_type: factType,
           });
           stored++;
         }

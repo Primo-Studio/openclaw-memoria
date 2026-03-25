@@ -10,7 +10,7 @@ import type { Fact } from "./db.js";
 // ─── Config ───
 
 export const DECAY_CONFIG = {
-  // Half-lives by category (in days)
+  // Half-lives by category (in days) — for SEMANTIC facts
   halfLife: {
     erreur: Infinity,     // IMMUNE — never decays
     savoir: 90,
@@ -21,8 +21,20 @@ export const DECAY_CONFIG = {
     chronologie: 14,
   } as Record<string, number>,
 
+  // Episodic facts decay faster (contextual, dated)
+  episodicHalfLife: {
+    erreur: 30,           // Even episodic errors eventually fade
+    savoir: 14,
+    preference: 14,
+    rh: 14,
+    client: 14,
+    outil: 7,
+    chronologie: 7,
+  } as Record<string, number>,
+
   // Default for unknown categories
   defaultHalfLife: 30,
+  defaultEpisodicHalfLife: 14,
 
   // Recency boost
   recentBoostHours: 24,
@@ -61,8 +73,14 @@ export function scoreFact(fact: Fact, now = Date.now()): ScoredFact {
   let score = fact.confidence;
   let decayFactor = 1.0;
 
-  // 1. Category decay
-  const halfLife = DECAY_CONFIG.halfLife[fact.category] ?? DECAY_CONFIG.defaultHalfLife;
+  // 1. Category decay — semantic vs episodic
+  const factType = (fact as any).fact_type || "semantic";
+  let halfLife: number;
+  if (factType === "episodic") {
+    halfLife = DECAY_CONFIG.episodicHalfLife[fact.category] ?? DECAY_CONFIG.defaultEpisodicHalfLife;
+  } else {
+    halfLife = DECAY_CONFIG.halfLife[fact.category] ?? DECAY_CONFIG.defaultHalfLife;
+  }
   if (halfLife === Infinity) {
     decayFactor = 1.0; // Immune
   } else {
