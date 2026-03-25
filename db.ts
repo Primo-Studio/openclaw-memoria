@@ -67,7 +67,19 @@ export class MemoriaDB {
       const needsMigration = !fs.existsSync(dbPath) || fs.statSync(dbPath).size < 8192;
       const legacySize = fs.statSync(legacyPath).size;
       if (needsMigration && legacySize > 8192) {
-        fs.copyFileSync(legacyPath, dbPath);
+        // Use VACUUM INTO to safely copy WAL-mode DBs (plain cp can lose data)
+        try {
+          const legacyDb = new Database(legacyPath, { readonly: true });
+          legacyDb.exec(`VACUUM INTO '${dbPath.replace(/'/g, "''")}'`);
+          legacyDb.close();
+        } catch {
+          // Fallback: copy file + WAL + SHM
+          fs.copyFileSync(legacyPath, dbPath);
+          const walPath = legacyPath + "-wal";
+          const shmPath = legacyPath + "-shm";
+          if (fs.existsSync(walPath)) fs.copyFileSync(walPath, dbPath + "-wal");
+          if (fs.existsSync(shmPath)) fs.copyFileSync(shmPath, dbPath + "-shm");
+        }
       }
     }
 
