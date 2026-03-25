@@ -61,6 +61,12 @@ export class MemoriaDB {
     const dir = path.dirname(dbPath);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
+    // Auto-migrate from cortex.db if memoria.db doesn't exist yet
+    const legacyPath = path.join(workspaceRoot, "memory", "cortex.db");
+    if (!fs.existsSync(dbPath) && fs.existsSync(legacyPath)) {
+      fs.copyFileSync(legacyPath, dbPath);
+    }
+
     this.db = new Database(dbPath);
     this.raw = this.db;
     this.db.pragma("journal_mode = WAL");    // Better concurrent read perf

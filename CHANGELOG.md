@@ -1,5 +1,23 @@
 # Changelog
 
+## [2.6.0] - 2026-03-25
+### Added
+- **`install.sh`** — One-line installer: checks prerequisites, pulls Ollama models, clones repo, installs deps. Usage: `curl -fsSL https://raw.githubusercontent.com/Primo-Studio/openclaw-memoria/main/install.sh | bash`
+- **Auto-migration cortex→memoria** — If `memoria.db` doesn't exist but `cortex.db` does, auto-copies it. Zero manual migration needed.
+
+### Fixed
+- **Schema too strict** — `additionalProperties` changed from `false` to `true` everywhere. Unknown config keys no longer crash the gateway.
+- **`syncMd` type** — Was rejecting `{ enabled: true }` objects. Now only accepts boolean as documented, and schema makes it clear.
+- **`embed.dims` vs `embed.dimensions`** — Schema now documents `dimensions` clearly with defaults shown.
+- **`fallback[].type` vs `fallback[].provider`** — Schema field is `provider`, not `type`.
+- **`llm.default` doesn't exist** — Schema clearly shows `llm.provider` + `llm.model` at top level.
+- **DB constructor confusion** — `MemoriaDB()` takes workspace root, not DB path. Documented + auto-migration handles legacy DB name.
+
+### Changed
+- **Smart defaults everywhere** — `{ "memoria": { "enabled": true } }` is now a valid minimal config. Defaults: Ollama + gemma3:4b + nomic-embed-text-v2-moe + 768 dims + recall 12 + capture 8.
+- Schema defaults added to all fields for documentation.
+- INSTALL.md rewritten with config minimale, bugs connus, et providers table.
+
 ## [2.5.0] - 2026-03-25
 ### Added
 - **Hot Tier**: facts accessed ≥5 times = always injected in recall, like a phone number you know by heart. New `getHotFacts()` in scoring, `hotFacts()` in DB.

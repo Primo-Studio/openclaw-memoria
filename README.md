@@ -1,6 +1,28 @@
-# 🧠 Memoria v2.5.0 — Multi-layer Memory Plugin for OpenClaw
+# 🧠 Memoria v2.6.0 — Multi-layer Memory Plugin for OpenClaw
 
 Brain-inspired persistent memory for AI agents. SQLite-backed, fully local, zero cloud dependency.
+
+## Quick Install
+
+```bash
+# One-line install (pulls models, clones repo, installs deps)
+curl -fsSL https://raw.githubusercontent.com/Primo-Studio/openclaw-memoria/main/install.sh | bash
+```
+
+**Minimal config** — add to your `openclaw.json`:
+```json
+{
+  "plugins": {
+    "allow": ["memoria"],
+    "entries": {
+      "memoria": { "enabled": true }
+    }
+  }
+}
+```
+
+That's it. Smart defaults: Ollama + gemma3:4b + nomic-embed-text-v2-moe.
+See [INSTALL.md](INSTALL.md) for advanced config and troubleshooting.
 
 ## Architecture
 

@@ -1,38 +1,56 @@
 # Installation Memoria
 
-## Prérequis
-
-- **OpenClaw** installé et fonctionnel (gateway running)
-- **Ollama** installé et démarré (`ollama serve` ou app Ollama)
-- **Node.js** ≥ 20 avec `npm` dans le PATH
-
-## 1. Installer les modèles Ollama
+## Option A : Installation automatique (recommandé)
 
 ```bash
-# LLM extraction (3.3 GB)
-ollama pull gemma3:4b
-
-# Embeddings (957 MB)
-ollama pull nomic-embed-text-v2-moe
+curl -fsSL https://raw.githubusercontent.com/Primo-Studio/openclaw-memoria/main/install.sh | bash
 ```
 
-⚠️ **Vérifier que les modèles sont bien listés** : `ollama list`
+Le script vérifie les prérequis, installe les modèles Ollama, clone le repo et installe les dépendances.
 
-## 2. Copier le plugin
+## Option B : Installation manuelle
+
+### Prérequis
+
+- **OpenClaw** installé et fonctionnel
+- **Node.js** ≥ 20 avec `npm` dans le PATH
+- **Ollama** installé ([ollama.ai](https://ollama.ai))
+
+### 1. Installer les modèles Ollama
 
 ```bash
-# Cloner le repo
+ollama pull gemma3:4b              # LLM extraction (3.3 GB)
+ollama pull nomic-embed-text-v2-moe  # Embeddings (957 MB)
+```
+
+Vérifier : `ollama list` doit afficher les deux modèles.
+
+### 2. Installer le plugin
+
+```bash
 git clone https://github.com/Primo-Studio/openclaw-memoria.git \
   ~/.openclaw/extensions/memoria
 
-# Installer les dépendances
 cd ~/.openclaw/extensions/memoria
 npm install
 ```
 
-## 3. Configurer openclaw.json
+### 3. Configurer openclaw.json
 
-Ajouter dans `plugins.entries` :
+**Config minimale** — tout le reste a des defaults intelligents :
+
+```json
+{
+  "plugins": {
+    "allow": ["memoria"],
+    "entries": {
+      "memoria": { "enabled": true }
+    }
+  }
+}
+```
+
+**Config complète** (si vous voulez personnaliser) :
 
 ```json
 {
@@ -54,46 +72,30 @@ Ajouter dans `plugins.entries` :
         "provider": "ollama",
         "model": "nomic-embed-text-v2-moe",
         "dimensions": 768
-      },
-      "fallback": [
-        { "provider": "ollama", "model": "gemma3:4b" }
-      ]
+      }
     }
   }
 }
 ```
 
-Ajouter `"memoria"` dans `plugins.allow` :
-
-```json
-{
-  "plugins": {
-    "allow": ["memoria", "...vos autres plugins"]
-  }
-}
-```
-
-## 4. Vérifier et démarrer
+### 4. Vérifier et démarrer
 
 ```bash
-# Vérifier la config
-openclaw doctor
-
-# Restart le gateway
-openclaw gateway restart
-
-# Vérifier que Memoria charge
-openclaw status
+openclaw doctor          # Vérifier la config
+openclaw gateway restart # Redémarrer
+openclaw status          # Vérifier le chargement
 ```
 
 Vous devez voir :
 ```
-[plugins] memoria: v2.5.0 registered (X facts, ...)
+[plugins] memoria: v2.6.0 registered (X facts, ...)
 ```
 
-## 5. (Optionnel) Migrer des faits existants
+### 5. (Optionnel) Migrer depuis cortex.db
 
-Si vous avez des faits dans `memory-convex` ou un `facts.json` :
+Si vous avez un ancien `cortex.db`, Memoria le détecte automatiquement et le copie en `memoria.db` au premier démarrage. Aucune action nécessaire.
+
+Pour migrer depuis `memory-convex` ou un `facts.json` :
 
 ```bash
 cd ~/.openclaw/extensions/memoria

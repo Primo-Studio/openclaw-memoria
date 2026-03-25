@@ -1,7 +1,7 @@
 /**
  * 🧠 Memoria — Multi-layer memory plugin for OpenClaw
  * 
- * v2.5.0 — Hot tier + access-based learning + configurable limits
+ * v2.6.0 — Easy install: smart defaults, auto-migration cortex→memoria, relaxed schema
  * 
  * Layers:
  *   1. Perception (capture) — agent_end + after_compaction hooks
