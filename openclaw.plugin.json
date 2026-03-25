@@ -1,0 +1,101 @@
+{
+  "id": "memoria",
+  "version": "2.5.0",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "autoRecall": { "type": "boolean" },
+      "autoCapture": { "type": "boolean" },
+      "recallLimit": { "type": "number", "minimum": 1, "maximum": 20 },
+      "captureMaxFacts": { "type": "number", "minimum": 1, "maximum": 10 },
+      "defaultAgent": { "type": "string" },
+      "contextWindow": { "type": "number", "minimum": 4096 },
+      "workspacePath": { "type": "string" },
+      "syncMd": { "type": "boolean" },
+      "embed": {
+        "type": "object",
+        "properties": {
+          "provider": { "type": "string", "enum": ["ollama", "lmstudio", "openai", "openrouter"] },
+          "baseUrl": { "type": "string" },
+          "model": { "type": "string" },
+          "dimensions": { "type": "number" },
+          "apiKey": { "type": "string" }
+        }
+      },
+      "llm": {
+        "type": "object",
+        "properties": {
+          "provider": { "type": "string", "enum": ["ollama", "lmstudio", "openai", "openrouter"] },
+          "baseUrl": { "type": "string" },
+          "model": { "type": "string" },
+          "apiKey": { "type": "string" },
+          "overrides": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "extract": { "$ref": "#/$defs/layerLlm" },
+              "contradiction": { "$ref": "#/$defs/layerLlm" },
+              "graph": { "$ref": "#/$defs/layerLlm" },
+              "topics": { "$ref": "#/$defs/layerLlm" }
+            }
+          }
+        }
+      },
+      "fallback": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "provider": { "type": "string" },
+            "baseUrl": { "type": "string" },
+            "model": { "type": "string" },
+            "apiKey": { "type": "string" }
+          }
+        }
+      },
+      "topics": {
+        "type": "object",
+        "properties": {
+          "emergenceThreshold": { "type": "number", "minimum": 2, "maximum": 20 },
+          "mergeOverlap": { "type": "number", "minimum": 0.3, "maximum": 1.0 },
+          "subtopicThreshold": { "type": "number", "minimum": 3, "maximum": 50 },
+          "decayDays": { "type": "number", "minimum": 7, "maximum": 365 },
+          "scanInterval": { "type": "number", "minimum": 5, "maximum": 100 }
+        }
+      },
+      "mdRegen": {
+        "type": "object",
+        "properties": {
+          "recentDays": { "type": "number", "minimum": 7, "maximum": 365 },
+          "maxFactsPerFile": { "type": "number", "minimum": 10, "maximum": 500 },
+          "archiveNotice": { "type": "boolean" }
+        }
+      }
+    },
+    "$defs": {
+      "layerLlm": {
+        "type": "object",
+        "properties": {
+          "provider": { "type": "string", "enum": ["ollama", "lmstudio", "openai", "openrouter"] },
+          "baseUrl": { "type": "string" },
+          "model": { "type": "string" },
+          "apiKey": { "type": "string" }
+        },
+        "required": ["provider", "model"]
+      }
+    }
+  },
+  "uiHints": {
+    "autoRecall": { "label": "Auto-Recall", "help": "Inject relevant memories before each response" },
+    "autoCapture": { "label": "Auto-Capture", "help": "Extract facts after each agent turn" },
+    "recallLimit": { "label": "Recall Limit", "help": "Max facts (overridden by adaptive budget)", "advanced": true },
+    "contextWindow": { "label": "Context Window", "help": "Total tokens available (for budget calculation)", "advanced": true },
+    "syncMd": { "label": "Sync to .md", "help": "Auto-sync new facts to workspace .md files" },
+    "embed": { "label": "Embedding Provider", "help": "Provider for vector embeddings", "advanced": true },
+    "llm": { "label": "LLM Provider", "help": "Default LLM + per-layer overrides (extract, contradiction, graph, topics, contextTree)", "advanced": true },
+    "fallback": { "label": "LLM Fallback Chain", "help": "Providers tried in order if primary fails", "advanced": true },
+    "topics": { "label": "Topic Emergence", "help": "Auto-clustering settings", "advanced": true },
+    "mdRegen": { "label": ".md Regeneration", "help": "Bounded .md file regeneration settings", "advanced": true }
+  }
+}
