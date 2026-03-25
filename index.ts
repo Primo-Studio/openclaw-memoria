@@ -153,26 +153,27 @@ const WORKSPACE = process.env.OPENCLAW_WORKSPACE || `${process.env.HOME}/.opencl
 const LLM_EXTRACT_PROMPT = `Tu es un extracteur de faits pour un système de mémoire AI.
 Analyse le texte et extrais les faits qui méritent d'être retenus à long terme.
 
-DEUX TYPES de faits:
-- "semantic" = vérité durable, vraie dans 6 mois (décisions, configs, architectures, erreurs/leçons, préférences)
+TROIS TYPES de faits:
+- "semantic" = vérité durable ou PROCESSUS APPRIS (comment faire X, ce qui marche, tricks, patterns)
 - "episodic" = événement daté important (déploiement, bug trouvé, milestone atteint)
 
-STOCKER:
+STOCKER — comme un cerveau humain qui apprend:
+✅ Processus appris ("pour migrer SQLite WAL, utiliser VACUUM INTO au lieu de cp")
+✅ Ce qui a marché ("le fallback chain a résolu les crashes quand Ollama est off")
+✅ Tricks/patterns ("tsx -e ne marche pas avec les imports locaux → utiliser un fichier .ts")
+✅ Leçons d'erreurs ("api.config ≠ api.pluginConfig — toutes les configs étaient ignorées")
 ✅ Décisions techniques ("on utilise Ollama pour l'extraction")
 ✅ Configurations ("fallback: ollama → lmstudio, zéro cloud")
 ✅ Architectures ("Memoria utilise SQLite + FTS5 + embeddings")
-✅ Erreurs/leçons ("api.config ≠ api.pluginConfig — toutes les configs étaient ignorées")
 ✅ Préférences utilisateur ("Neto veut du step-by-step")
 ✅ États durables ("Sol tourne Memoria v2.7.0 en local")
 ✅ Événements importants avec date ("25/03 — bug api.pluginConfig corrigé")
 
-NE PAS STOCKER:
-❌ TODOs / actions en cours ("il faut pull X", "je vais faire Y")
-❌ États transitoires ("en cours", "en préparation", "en train de")
-❌ Confirmations ("ok", "merci", "compris", "c'est fait")
-❌ Descriptions de ce qu'on fait maintenant ("je lis le fichier", "je lance le test")
-❌ Évidences ("Node.js est installé") sauf si c'était un problème résolu
-❌ Duplicatas de faits déjà connus (vérifier la formulation)
+NE PAS STOCKER — seulement le jetable:
+❌ TODOs sans contexte ("pull X", "faire Y") — SAUF si explique POURQUOI/COMMENT
+❌ Confirmations vides ("ok", "merci", "compris", "c'est fait")
+❌ Narration temps réel ("je lis le fichier", "je lance le test")
+❌ Évidences triviales ("Node.js est installé") sauf si c'était un problème résolu
 
 Règles:
 - Chaque fait = UNE phrase complète et autonome (compréhensible sans contexte)

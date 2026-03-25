@@ -65,23 +65,33 @@ const TEMPORAL_NOISE_KEYWORDS = [
   "une seconde", "un moment", "working on", "processing",
 ];
 
-// TODO / action patterns — these are tasks, not durable facts
+// DISPOSABLE TODO patterns — short tasks with no learning value
+// ⚠️ Keep ONLY shallow "go do X" patterns. Never filter:
+//   - Process knowledge ("pour X il faut Y" = learned trick)
+//   - What worked ("X a résolu Y" = experience)
+//   - Explanations with "because/car/parce que"
+//   - Anything with technical detail (>60 chars usually = knowledge)
 const TODO_PATTERNS = [
-  /^il faut\b/i,
-  /^on doit\b/i,
-  /^(à|a) faire\b/i,
-  /\bà faire$/i,
-  /^todo\b/i,
-  /^faut\b/i,
-  /^need(s)? to\b/i,
-  /^should\b/i,
+  /^il faut\b(?!.*(?:car |parce|pour |sinon|→|cause|résou))/i,
+  /^on doit\b(?!.*(?:car |parce|pour |sinon|→|cause|résou))/i,
+  /^(à|a) faire\s*:/i,
+  /^todo\s*:/i,
+  /^faut\b(?!.*(?:car |parce|pour |sinon|→))/i,
+  /^need(s)? to\b(?!.*(?:because|otherwise|since))/i,
+];
+
+// These are ALWAYS disposable — pure transitional state, no knowledge
+const TRANSIENT_PATTERNS = [
   /\ben préparation\b/i,
-  /\ben cours\b/i,
-  /\bnot yet\b/i,
+  /\ben cours de\b/i,
   /\bpas encore\b/i,
+  /\bnot yet\b/i,
   /\bprochaine étape\b/i,
   /\bnext step\b/i,
 ];
+
+// Length heuristic: longer facts usually contain knowledge
+const MIN_LENGTH_FOR_TRANSIENT = 60;
 
 // ─── Levenshtein ───
 
@@ -216,9 +226,16 @@ export class SelectiveMemory {
       }
     }
 
-    // TODO/action filter — not durable facts, skip
+    // TODO filter — disposable tasks only (preserve process knowledge)
+    const trimmed = fact.trim();
     for (const pattern of TODO_PATTERNS) {
-      if (pattern.test(fact.trim())) {
+      if (pattern.test(trimmed) && trimmed.length < MIN_LENGTH_FOR_TRANSIENT) {
+        return { action: "skip", reason: "noise" };
+      }
+    }
+    // Transient state — only skip if short (long = probably explains WHY)
+    for (const pattern of TRANSIENT_PATTERNS) {
+      if (pattern.test(trimmed) && trimmed.length < MIN_LENGTH_FOR_TRANSIENT) {
         return { action: "skip", reason: "noise" };
       }
     }
