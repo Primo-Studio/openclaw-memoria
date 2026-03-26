@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.4.1] - 2026-03-26
+### Improved — Install Wizard UX
+- **Clearer prompts**: "Tapez 1, 2 ou 3" on all choices (not just "Choix [1]")
+- **Cloud providers**: choose between OpenAI, OpenRouter, or Anthropic (was OpenAI-only)
+- **Modifiable after install**: all prompts now mention `configure.sh` for post-install changes
+- **Update mode**: `--update` flag for quick silent updates; auto-detection of existing install
+- **Existing install detection**: if Memoria is already installed, proposes Update / Reinstall / Cancel
+- **Thank-you message**: links to @Nitix_ (X), GitHub star, Primo Studio credit
+- **Auto-cleanup**: `memory-convex` entry automatically removed from `openclaw.json` if present
+- **Fallback info**: warns user that crash notifications appear in logs
+- **Embeddings note**: displayed during install with "changeable later" mention
+
 ## [3.4.0] - 2026-03-26
 ### Added — Fact Clusters
 - **Entity-grouped "dossier" summaries**: groups 3+ facts sharing the same entity into one dense paragraph

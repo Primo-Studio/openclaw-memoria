@@ -23,7 +23,28 @@ Brain-inspired persistent memory for AI agents. SQLite-backed, fully local, zero
 curl -fsSL https://raw.githubusercontent.com/Primo-Studio/openclaw-memoria/main/install.sh | bash
 ```
 
-**Minimal config** — add to your `openclaw.json`:
+The interactive wizard guides you through:
+1. **LLM provider** — Local (Ollama), Cloud (OpenAI, OpenRouter, Anthropic), or manual
+2. **Fallback strategy** — automatic failover or strict single-provider
+3. **Model download** — auto-pulls required Ollama models if missing
+
+> 💡 You can change the LLM, embeddings, and all settings at any time:
+> `bash ~/.openclaw/extensions/memoria/configure.sh`
+
+### Update
+
+Already installed? Just run the same command — it detects the existing install and offers a quick update:
+```bash
+# Interactive (proposes update/reinstall/cancel)
+curl -fsSL https://raw.githubusercontent.com/Primo-Studio/openclaw-memoria/main/install.sh | bash
+
+# Or quick silent update
+curl -fsSL https://raw.githubusercontent.com/Primo-Studio/openclaw-memoria/main/install.sh | bash -s -- --update
+```
+
+### Minimal manual config
+
+If you prefer to skip the wizard, add to your `openclaw.json`:
 ```json
 {
   "plugins": {
