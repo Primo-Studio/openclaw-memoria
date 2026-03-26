@@ -22,11 +22,13 @@ h1()   { echo -e "\n${BOLD}$1${NC}"; }
 
 PRESET=""
 SILENT=false
+UPDATE_ONLY=false
 for arg in "$@"; do
   case "$arg" in
     --preset=*) PRESET="${arg#*=}" ;;
     --preset) shift; PRESET="$1" ;;
     --yes|-y) SILENT=true ;;
+    --update|-u) UPDATE_ONLY=true ;;
     local-only|cloud-first|paranoid) PRESET="$arg" ;;
   esac
 done
@@ -35,6 +37,97 @@ echo ""
 echo -e "${BOLD}🧠 Memoria — Mémoire persistante pour OpenClaw${NC}"
 echo "================================================="
 echo ""
+
+# ─── Update mode ───
+
+DEST="$HOME/.openclaw/extensions/memoria"
+
+if [ "$UPDATE_ONLY" = true ]; then
+  if [ ! -d "$DEST/.git" ]; then
+    fail "Memoria non installé. Lancez d'abord l'installation complète."
+  fi
+
+  OLD_V=$(node -e "try{console.log(require('$DEST/package.json').version)}catch{console.log('?')}" 2>/dev/null)
+  echo -e "  Version actuelle : ${BOLD}v$OLD_V${NC}"
+  echo ""
+
+  cd "$DEST"
+  git fetch origin main --quiet 2>/dev/null
+  LOCAL_SHA=$(git rev-parse HEAD 2>/dev/null)
+  REMOTE_SHA=$(git rev-parse origin/main 2>/dev/null)
+
+  if [ "$LOCAL_SHA" = "$REMOTE_SHA" ]; then
+    log "Déjà à jour (v$OLD_V)"
+    exit 0
+  fi
+
+  echo "  → Mise à jour disponible..."
+  git pull --ff-only origin main 2>/dev/null || fail "Git pull échoué"
+  npm install --production 2>&1 | tail -1
+
+  NEW_V=$(node -e "try{console.log(require('$DEST/package.json').version)}catch{console.log('?')}" 2>/dev/null)
+  log "Mis à jour : v$OLD_V → v$NEW_V"
+  echo ""
+  echo -e "  ${BOLD}🚀${NC} Appliquer : openclaw gateway restart"
+  echo ""
+
+  # Afficher le changelog si dispo
+  if [ -f "$DEST/CHANGELOG.md" ]; then
+    echo -e "  ${DIM}📋 Changelog : cat $DEST/CHANGELOG.md${NC}"
+  fi
+  echo ""
+  exit 0
+fi
+
+# Detect if already installed → propose update
+if [ -d "$DEST/.git" ]; then
+  OLD_V=$(node -e "try{console.log(require('$DEST/package.json').version)}catch{console.log('?')}" 2>/dev/null)
+  cd "$DEST"
+  git fetch origin main --quiet 2>/dev/null
+  LOCAL_SHA=$(git rev-parse HEAD 2>/dev/null)
+  REMOTE_SHA=$(git rev-parse origin/main 2>/dev/null)
+
+  if [ "$LOCAL_SHA" != "$REMOTE_SHA" ]; then
+    echo -e "  ${YELLOW}⚡ Memoria v$OLD_V est installé — une mise à jour est disponible !${NC}"
+    echo ""
+    echo -e "  ${BOLD}1)${NC} 🔄 Mettre à jour ${DIM}(garder la config actuelle)${NC}"
+    echo -e "  ${BOLD}2)${NC} 🔧 Réinstaller ${DIM}(wizard complet)${NC}"
+    echo -e "  ${BOLD}3)${NC} ❌ Annuler"
+    echo ""
+    read -r -p "  Tapez 1, 2 ou 3 [1] : " UPD_CHOICE </dev/tty 2>/dev/null || UPD_CHOICE="1"
+    UPD_CHOICE=${UPD_CHOICE:-1}
+
+    case "$UPD_CHOICE" in
+      2) ;; # continue with full wizard
+      3) echo "  Annulé."; exit 0 ;;
+      *)
+        # Quick update
+        git pull --ff-only origin main 2>/dev/null || fail "Git pull échoué"
+        npm install --production 2>&1 | tail -1
+        NEW_V=$(node -e "try{console.log(require('$DEST/package.json').version)}catch{console.log('?')}" 2>/dev/null)
+        log "Mis à jour : v$OLD_V → v$NEW_V"
+        echo ""
+        echo -e "  ${BOLD}🚀${NC} Appliquer : openclaw gateway restart"
+        echo ""
+        exit 0
+        ;;
+    esac
+  else
+    echo -e "  ${GREEN}✅ Memoria v$OLD_V est déjà installé et à jour${NC}"
+    echo ""
+    echo -e "  ${BOLD}1)${NC} 🔧 Reconfigurer ${DIM}(wizard complet)${NC}"
+    echo -e "  ${BOLD}2)${NC} ❌ Quitter"
+    echo ""
+    read -r -p "  Tapez 1 ou 2 [2] : " REINSTALL_CHOICE </dev/tty 2>/dev/null || REINSTALL_CHOICE="2"
+    REINSTALL_CHOICE=${REINSTALL_CHOICE:-2}
+
+    case "$REINSTALL_CHOICE" in
+      1) ;; # continue with full wizard
+      *) echo "  OK 👋"; exit 0 ;;
+    esac
+  fi
+  cd - >/dev/null 2>&1
+fi
 
 # ─── Step 1: Detect environment ───
 
@@ -338,7 +431,6 @@ echo ""
 h1 "📦 Installation du plugin..."
 echo ""
 
-DEST="$HOME/.openclaw/extensions/memoria"
 if [ -d "$DEST/.git" ]; then
   echo "  Mise à jour..."
   cd "$DEST" && git pull --ff-only origin main 2>/dev/null || warn "Git pull échoué. Version existante conservée."
@@ -538,7 +630,6 @@ echo ""
 echo -e "  N'hésitez pas à nous faire un retour :"
 echo -e "  🐦 X/Twitter : ${CYAN}@Nitix_${NC}"
 echo -e "  ⭐ GitHub    : ${CYAN}https://github.com/Primo-Studio/openclaw-memoria${NC}"
-echo -e "  💬 Discord   : ${CYAN}https://discord.com/invite/clawd${NC}"
 echo ""
 echo -e "  ${DIM}Fait avec ❤️  par Primo Studio — Guyane française${NC}"
 echo ""
