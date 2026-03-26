@@ -169,6 +169,11 @@ STOCKER — comme un cerveau humain qui apprend:
 ✅ États durables ("Sol tourne Memoria v2.7.0 en local")
 ✅ Événements importants avec date ("25/03 — bug api.pluginConfig corrigé")
 
+GÉNÉRALISER — quand un pattern se répète:
+🔄 Si le même type de problème arrive 2+ fois → stocker la RÈGLE GÉNÉRALE, pas juste le cas
+   Exemple: "npm introuvable en SSH" + "ollama introuvable en SSH" → "Les commandes installées via brew/nvm ne sont pas dans le PATH en SSH non-interactif — utiliser source ~/.zprofile ou le chemin complet"
+🔄 Si une commande marche pour un cas → généraliser: "lms server start démarre LM Studio sans GUI" (pas juste "j'ai démarré LM Studio")
+
 NE PAS STOCKER — seulement le jetable:
 ❌ TODOs sans contexte ("pull X", "faire Y") — SAUF si explique POURQUOI/COMMENT
 ❌ Confirmations vides ("ok", "merci", "compris", "c'est fait")
@@ -332,13 +337,8 @@ export function register(api: OpenClawPluginApi): void {
     api.logger.info?.(`memoria: per-layer LLM overrides: ${activeOverrides.map(k => `${k}=${overrides[k as MemoriaLayer]!.provider}/${overrides[k as MemoriaLayer]!.model}`).join(", ")}`);
   }
 
-  const selective = new SelectiveMemory(db, contradictionLlm, {
-    dupThreshold: 0.85,
-    contradictionCheck: true,
-    enrichEnabled: true,
-  });
-
   // Build embed fallback chain: configured provider → LM Studio → OpenAI (if keys available)
+  // NOTE: moved BEFORE selective so we can pass embeddingMgr for semantic contradiction detection
   const primaryEmbed = createEmbedProvider(cfg.embed);
   const embedProviders: EmbedProvider[] = [primaryEmbed];
   // Add fallback embed providers (only if different from primary)
@@ -352,6 +352,14 @@ export function register(api: OpenClawPluginApi): void {
     ? new EmbedFallback(embedProviders, { info: api.logger.info?.bind(api.logger), warn: api.logger.warn?.bind(api.logger) })
     : primaryEmbed;
   const embeddingMgr = new EmbeddingManager(db, embedder);
+
+  // Selective memory — now with embedder for semantic contradiction detection
+  const selective = new SelectiveMemory(db, contradictionLlm, {
+    dupThreshold: 0.85,
+    contradictionCheck: true,
+    enrichEnabled: true,
+  }, embeddingMgr);
+
   const graph = new KnowledgeGraph(db, graphLlm);
   const treeBuilder = new ContextTreeBuilder(db);
   const topicMgr = new TopicManager(db, topicsLlm, embedder, {

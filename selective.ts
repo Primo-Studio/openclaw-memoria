@@ -13,6 +13,7 @@
 
 import type { MemoriaDB, Fact } from "./db.js";
 import type { LLMProvider } from "./providers/types.js";
+import type { EmbeddingManager } from "./embeddings.js";
 
 // ─── Config ───
 
@@ -31,6 +32,8 @@ export interface SelectiveConfig {
   enrichEnabled: boolean;
   /** Similarity threshold for enrichment (higher than dedup). Default 0.7 */
   enrichThreshold: number;
+  /** Cosine similarity threshold for semantic contradiction check. Default 0.55 */
+  semanticContradictionThreshold: number;
 }
 
 export const DEFAULT_SELECTIVE_CONFIG: SelectiveConfig = {
@@ -41,6 +44,7 @@ export const DEFAULT_SELECTIVE_CONFIG: SelectiveConfig = {
   importanceThreshold: 0.3,
   enrichEnabled: true,
   enrichThreshold: 0.7,
+  semanticContradictionThreshold: 0.40,
 };
 
 // ─── Result type ───
@@ -147,6 +151,27 @@ function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
   return union === 0 ? 0 : intersection / union;
 }
 
+// ─── Entity extraction for semantic contradiction detection ───
+
+/** Extract named entities (proper nouns, tech terms, versions) from a fact */
+function extractSubjectEntities(fact: string): Set<string> {
+  const entities = new Set<string>();
+  const patterns = [
+    /\b(Sol|Koda|Luna|Neto)\b/gi,
+    /\b(Memoria|Cortex|Ollama|LM Studio|Convex|Bureau|OpenClaw|ClawHub)\b/gi,
+    /\b(gemma3[:\w]*|nomic[\w-]*|gpt[\w-]*|qwen[\w.]*|glm[\w.]*)\b/gi,
+    /\b(Mac (?:Mini|Studio|Book ?Pro?)|iPhone|iPad)\b/gi,
+    /\b(SQLite|FTS5|PostgreSQL|Vercel|GitHub|Cloudflare)\b/gi,
+    /\b(SSH|npm|node|brew|Homebrew|Xcode|Docker)\b/gi,
+  ];
+  for (const p of patterns) {
+    for (const m of fact.matchAll(p)) {
+      entities.add(m[0].toLowerCase().trim());
+    }
+  }
+  return entities;
+}
+
 // ─── Importance scoring ───
 
 function computeImportance(fact: string, category: string): number {
@@ -202,11 +227,13 @@ export class SelectiveMemory {
   private db: MemoriaDB;
   private llm: LLMProvider;
   private cfg: SelectiveConfig;
+  private embedder: EmbeddingManager | null;
 
-  constructor(db: MemoriaDB, llm: LLMProvider, config?: Partial<SelectiveConfig>) {
+  constructor(db: MemoriaDB, llm: LLMProvider, config?: Partial<SelectiveConfig>, embedder?: EmbeddingManager) {
     this.db = db;
     this.llm = llm;
     this.cfg = { ...DEFAULT_SELECTIVE_CONFIG, ...config };
+    this.embedder = embedder ?? null;
   }
 
   /**
@@ -289,7 +316,48 @@ export class SelectiveMemory {
       }
     }
 
-    // 3. No issues — store as new
+    // 3. Entity-based contradiction check
+    // When text is very different but same entities are mentioned (e.g. "no models on Sol" vs "gemma3 installed on Sol"),
+    // Levenshtein/Jaccard miss it. Entity overlap triggers LLM contradiction check.
+    if (this.cfg.contradictionCheck) {
+      try {
+        const newEntities = extractSubjectEntities(fact);
+        if (newEntities.size > 0) {
+          // Search for facts sharing at least one entity
+          const entityCandidates = this.findFactsBySharedEntities(fact, newEntities, candidates);
+          for (const candidate of entityCandidates) {
+            const relation = await this.checkRelation(candidate, fact);
+
+            if (relation.type === "contradiction") {
+              return {
+                action: "supersede",
+                oldFactId: candidate.id,
+                fact,
+                category,
+                confidence: Math.max(confidence, candidate.confidence),
+              };
+            }
+
+            if (relation.type === "enrichment" && relation.merged) {
+              return {
+                action: "enrich",
+                existingFactId: candidate.id,
+                mergedFact: relation.merged,
+                confidence: Math.max(confidence, candidate.confidence),
+              };
+            }
+
+            if (relation.type === "duplicate") {
+              return { action: "skip", reason: "duplicate" };
+            }
+          }
+        }
+      } catch {
+        // Entity check failed → continue with store (fail-safe)
+      }
+    }
+
+    // 4. No issues — store as new
     return { action: "store", fact, category, confidence };
   }
 
@@ -348,6 +416,36 @@ export class SelectiveMemory {
   }
 
   // ─── Private ───
+
+  /**
+   * Find existing facts that share at least one entity with the new fact.
+   * Excludes facts already checked in the textual dedup pass.
+   * Limited to MAX_ENTITY_CANDIDATES to avoid excessive LLM calls.
+   */
+  private findFactsBySharedEntities(newFact: string, newEntities: Set<string>, alreadyChecked: Fact[]): Fact[] {
+    const MAX_ENTITY_CANDIDATES = 5;
+    const checkedIds = new Set(alreadyChecked.map(c => c.id));
+    const candidates: Fact[] = [];
+
+    // Search for each entity via FTS (wider search to catch all related facts)
+    for (const entity of newEntities) {
+      if (candidates.length >= MAX_ENTITY_CANDIDATES) break;
+      const ftsResults = this.db.searchFacts(entity, 20);
+      for (const result of ftsResults) {
+        if (candidates.length >= MAX_ENTITY_CANDIDATES) break;
+        if (checkedIds.has(result.id)) continue;
+        // Verify entity overlap
+        const resultEntities = extractSubjectEntities(result.fact);
+        const shared = [...newEntities].filter(e => resultEntities.has(e));
+        if (shared.length > 0) {
+          candidates.push(result);
+          checkedIds.add(result.id);
+        }
+      }
+    }
+
+    return candidates;
+  }
 
   private async checkRelation(existing: Fact, newFact: string): Promise<{
     type: "contradiction" | "enrichment" | "duplicate" | "independent";

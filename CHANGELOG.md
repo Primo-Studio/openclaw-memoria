@@ -1,5 +1,26 @@
 # Changelog
 
+## [3.1.0] - 2026-03-25
+### Fixed — Entity-based Semantic Contradiction Detection
+- **Critical fix**: Contradictions between facts with different wording but same entities were not detected
+  - Example: "No models on Sol" vs "gemma3:4b installed on Sol" had only 0.23 textual similarity → contradiction check was never called
+  - Root cause: Levenshtein+Jaccard gate (threshold 0.7) prevented LLM from seeing semantically related facts with different words
+- **New entity extraction**: Extracts proper nouns, tech terms, tool names from facts (Sol, Memoria, Ollama, gemma3, etc.)
+- **Entity-based FTS search**: When new fact shares entities with existing facts, triggers LLM contradiction check regardless of text similarity
+- **Wider FTS search** (20 candidates per entity) to avoid missing facts ranked beyond top 5
+- **Fail-safe**: If entity check fails → fact is stored (never lost)
+
+### Improved — Extraction Prompt
+- **Generalization rules**: When a pattern repeats (e.g. "npm not found in SSH" + "ollama not found in SSH"), extract the general rule instead of individual cases
+- **Process knowledge**: Explicit instructions to store "how to do X" commands (e.g. "lms server start launches LM Studio without GUI")
+
+### Technical
+- `SelectiveMemory` constructor now accepts optional `EmbeddingManager` (4th arg) for future semantic enhancements
+- `semanticContradictionThreshold` config option added (default 0.40)
+- `extractSubjectEntities()` function with patterns for common tech terms
+- `findFactsBySharedEntities()` method for entity-overlap search
+- Build order in index.ts: embed providers created before SelectiveMemory instantiation
+
 ## [3.0.0] - 2026-03-25
 ### Added — Phase 2: Semantic/Episodic Memory
 - **fact_type column**: `semantic` (durable, slow decay 30-90 days) vs `episodic` (dated, fast decay 7-14 days)
