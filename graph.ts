@@ -279,6 +279,43 @@ export class KnowledgeGraph {
 
   // ─── Stats ───
 
+  /** 
+   * Called when a fact is superseded — weaken relations that depended on it.
+   * Removes factId from relation context arrays; if no facts left → prune relation.
+   */
+  onFactSuperseded(factId: string): number {
+    let affected = 0;
+    try {
+      // 1. Remove from relation context arrays
+      const relations = this.rawDb.prepare(
+        "SELECT id, context FROM relations WHERE context LIKE ?"
+      ).all(`%${factId}%`) as Array<{ id: string; context: string }>;
+
+      for (const rel of relations) {
+        try {
+          const ctx = JSON.parse(rel.context || "[]") as string[];
+          const updated = ctx.filter(id => id !== factId);
+          if (updated.length === 0) {
+            // No facts support this relation anymore → delete it
+            this.rawDb.prepare("DELETE FROM relations WHERE id = ?").run(rel.id);
+          } else {
+            // Weaken the relation (lost a supporting fact)
+            this.rawDb.prepare(
+              "UPDATE relations SET context = ?, weight = MAX(weight - 0.15, 0.1) WHERE id = ?"
+            ).run(JSON.stringify(updated), rel.id);
+          }
+          affected++;
+        } catch { /* parse error, skip */ }
+      }
+
+      // 2. Clean entity_ids from the superseded fact (clear the link)
+      this.rawDb.prepare(
+        "UPDATE facts SET entity_ids = NULL WHERE id = ? AND superseded = 1"
+      ).run(factId);
+    } catch { /* non-critical */ }
+    return affected;
+  }
+
   stats(): { entities: number; relations: number; avgWeight: number } {
     const entities = (this.rawDb.prepare("SELECT COUNT(*) as c FROM entities").get() as { c: number }).c;
     const relStats = this.rawDb.prepare("SELECT COUNT(*) as c, AVG(weight) as avg FROM relations").get() as { c: number; avg: number | null };

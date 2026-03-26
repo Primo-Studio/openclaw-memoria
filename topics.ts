@@ -572,6 +572,40 @@ export class TopicManager {
 
   // ─── 9. Should scan? ───
 
+  /**
+   * Called when a fact is superseded — remove fact↔topic links
+   * and update topic fact_count. Delete empty topics.
+   */
+  onFactSuperseded(factId: string): number {
+    let affected = 0;
+    try {
+      const raw = this.db.raw;
+      // Find topics linked to this fact
+      const linked = raw.prepare(
+        "SELECT topic_id FROM fact_topics WHERE fact_id = ?"
+      ).all(factId) as Array<{ topic_id: string }>;
+
+      // Remove the links
+      raw.prepare("DELETE FROM fact_topics WHERE fact_id = ?").run(factId);
+
+      // Update fact_count and clean up empty topics
+      for (const { topic_id } of linked) {
+        const count = (raw.prepare(
+          "SELECT COUNT(*) as c FROM fact_topics WHERE topic_id = ?"
+        ).get(topic_id) as { c: number }).c;
+
+        if (count === 0) {
+          // No facts left → delete topic
+          raw.prepare("DELETE FROM topics WHERE id = ?").run(topic_id);
+        } else {
+          raw.prepare("UPDATE topics SET fact_count = ? WHERE id = ?").run(count, topic_id);
+        }
+        affected++;
+      }
+    } catch { /* non-critical */ }
+    return affected;
+  }
+
   shouldScan(): boolean {
     return this.capturesSinceLastScan >= this.cfg.scanInterval;
   }

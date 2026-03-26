@@ -319,6 +319,17 @@ export class EmbeddingManager {
   // ─── Stats ───
 
   /** Count of embedded facts */
+  /**
+   * Called when a fact is superseded — remove its embedding to prevent
+   * stale results in semantic search.
+   */
+  onFactSuperseded(factId: string): boolean {
+    try {
+      const result = this.db.raw.prepare("DELETE FROM embeddings WHERE fact_id = ?").run(factId);
+      return (result.changes ?? 0) > 0;
+    } catch { return false; }
+  }
+
   embeddedCount(): number {
     return (this.rawDb.prepare("SELECT COUNT(*) as c FROM embeddings").get() as { c: number }).c;
   }

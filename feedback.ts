@@ -177,6 +177,115 @@ export class FeedbackManager {
   }
 }
 
+  // ═══════════════════════════════════════════════════
+  // USER CORRECTION DETECTION
+  // When the user says "non c'est X" → the last recalled
+  // facts that mentioned the wrong thing should be penalized
+  // and potentially superseded.
+  // ═══════════════════════════════════════════════════
+
+  /** Correction patterns (FR + EN) */
+  private static readonly CORRECTION_PATTERNS = [
+    // French
+    /\bnon[,.]?\s+(c'est|c est)\b/i,
+    /\ben fait[,.]?\s+(c'est|c est|il|elle|on)\b/i,
+    /\bpas\s+\w+[,.]?\s+(c'est|c est)\b/i,
+    /\bje (te |t'|t )?dis que\b/i,
+    /\bc'est (pas|plus)\b/i,
+    /\bt'as tort\b/i,
+    /\bje (te |t')?corrige\b/i,
+    /\bt(u|')\s*(as)?\s*oubli(é|e)\b/i,
+    /\bje (te |t')?rappelle que\b/i,
+    /\bmais non\b/i,
+    // English
+    /\bno[,.]?\s+(it's|it is|that's|that is)\b/i,
+    /\bactually[,.]?\s+(it's|it is|that|the)\b/i,
+    /\bthat's (wrong|incorrect|not right|not true)\b/i,
+    /\byou('re| are) wrong\b/i,
+    /\bi (just )?told you\b/i,
+    /\bi said\b/i,
+  ];
+
+  /** Frustration patterns */
+  private static readonly FRUSTRATION_PATTERNS = [
+    /\bputain\b/i,
+    /\bbordel\b/i,
+    /\bmerde\b/i,
+    /\bserieux\b/i,
+    /\bsérieux\b/i,
+    /\bc'est pas possible\b/i,
+    /\bfuck\b/i,
+    /\bdamn\b/i,
+    /\bwhat the\b/i,
+    /\bwtf\b/i,
+    /\bnon mais\b/i,
+    /\bencore\s*[!?]/i,
+    /\bpourquoi (tu|t')\b.*\?/i,  // "pourquoi tu fais ça ?"
+    /\bje (te |t'|t )?(l')?ai (déjà|deja) dit\b/i,
+  ];
+
+  /**
+   * Analyze user message for correction signals.
+   * Returns penalty to apply to last-recalled facts + the corrected topic if found.
+   */
+  analyzeUserMessage(userMessage: string): {
+    isCorrection: boolean;
+    isFrustration: boolean;
+    penalty: number;
+    correctionText: string | null;
+  } {
+    const isCorrection = FeedbackManager.CORRECTION_PATTERNS.some(p => p.test(userMessage));
+    const isFrustration = FeedbackManager.FRUSTRATION_PATTERNS.some(p => p.test(userMessage));
+
+    let penalty = 0;
+    if (isCorrection) penalty += -1.5;   // Strong signal: facts were wrong
+    if (isFrustration) penalty += -0.5;  // Mild signal: facts may have been unhelpful
+
+    // Extract what was corrected (text after the correction pattern)
+    let correctionText: string | null = null;
+    if (isCorrection) {
+      for (const pattern of FeedbackManager.CORRECTION_PATTERNS) {
+        const match = userMessage.match(pattern);
+        if (match) {
+          const idx = match.index! + match[0].length;
+          const rest = userMessage.slice(idx).trim();
+          if (rest.length > 5) {
+            correctionText = rest.slice(0, 200); // Cap at 200 chars
+            break;
+          }
+        }
+      }
+    }
+
+    return { isCorrection, isFrustration, penalty, correctionText };
+  }
+
+  /**
+   * Apply correction/frustration penalty to the last recalled facts.
+   * Returns the facts that were penalized.
+   */
+  applyUserSignal(penalty: number): string[] {
+    if (!this.lastRecall || this.lastRecall.factIds.length === 0 || penalty >= 0) {
+      return [];
+    }
+
+    const penalized: string[] = [];
+    for (const factId of this.lastRecall.factIds) {
+      try {
+        this.updateUsefulness(factId, penalty);
+        penalized.push(factId);
+      } catch { /* non-critical */ }
+    }
+    return penalized;
+  }
+
+  /**
+   * Get IDs of facts from last recall (for external use — e.g., contradiction check).
+   */
+  getLastRecalledIds(): string[] {
+    return this.lastRecall?.factIds ?? [];
+  }
+
 // ─── Helpers ───
 
 /** Extract meaningful keywords from text */

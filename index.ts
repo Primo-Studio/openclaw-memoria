@@ -437,12 +437,20 @@ export function register(api: OpenClawPluginApi): void {
   const clusterMgr = new FactClusterManager(db, chain);
   const feedbackMgr = new FeedbackManager(db);
 
-  // Cross-layer: when selective supersedes a fact, notify observations
+  // Cross-layer: when selective supersedes a fact, cascade to ALL layers
   selective.onSupersede = (supersededId, _newId) => {
     try {
-      const affected = observationMgr.onFactSuperseded(supersededId);
-      if (affected > 0) {
-        api.logger.debug?.(`memoria: supersede cascade — ${affected} observations updated for ${supersededId}`);
+      const parts: string[] = [];
+      const obsAffected = observationMgr.onFactSuperseded(supersededId);
+      if (obsAffected > 0) parts.push(`${obsAffected} obs`);
+      const graphAffected = graph.onFactSuperseded(supersededId);
+      if (graphAffected > 0) parts.push(`${graphAffected} graph`);
+      const topicAffected = topicMgr.onFactSuperseded(supersededId);
+      if (topicAffected > 0) parts.push(`${topicAffected} topics`);
+      const embRemoved = embeddingMgr.onFactSuperseded(supersededId);
+      if (embRemoved) parts.push("1 embed");
+      if (parts.length > 0) {
+        api.logger.debug?.(`memoria: supersede cascade for ${supersededId} — ${parts.join(", ")}`);
       }
     } catch { /* non-critical */ }
   };
@@ -584,6 +592,22 @@ export function register(api: OpenClawPluginApi): void {
       try {
         const prompt = typeof event.prompt === "string" ? event.prompt : "";
         if (!prompt || prompt.length < 3) return undefined;
+
+        // ── User signal detection (correction / frustration) ──
+        // Analyze the user message BEFORE recall so we can penalize
+        // facts from the PREVIOUS recall that led to a bad response.
+        try {
+          const signal = feedbackMgr.analyzeUserMessage(prompt);
+          if (signal.isCorrection || signal.isFrustration) {
+            const penalized = feedbackMgr.applyUserSignal(signal.penalty);
+            const parts: string[] = [];
+            if (signal.isCorrection) parts.push("correction detected");
+            if (signal.isFrustration) parts.push("frustration detected");
+            if (penalized.length > 0) {
+              api.logger.info?.(`memoria: user signal (${parts.join(" + ")}) → ${penalized.length} facts penalized by ${signal.penalty}`);
+            }
+          }
+        } catch { /* non-critical — don't block recall */ }
 
         // Adaptive budget: compute how many facts to inject based on context usage
         const messageCount = (event as any).messageCount || (event as any).messages?.length || 0;
