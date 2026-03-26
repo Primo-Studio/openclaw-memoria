@@ -176,31 +176,22 @@ export class EmbeddingManager {
     const variants = [query];
     const lower = query.toLowerCase().trim();
 
-    // Concept expansions: domain-specific synonym/concept maps
+    // Concept expansions: STRICT synonym pairs only (avoid noise from loose associations)
     const conceptMap: Record<string, string[]> = {
-      // Money/salary
-      "taux horaire": ["salaire", "rémunération", "€/h", "paie"],
-      "salaire": ["taux horaire", "rémunération", "€/h", "paie"],
-      "rémunération": ["taux horaire", "salaire", "€/h"],
-      "ca": ["chiffre d'affaires", "revenu", "facturation"],
-      "chiffre d'affaires": ["CA", "revenu", "facturation"],
-      // Tech
-      "modèle": ["model", "LLM", "modèle IA"],
-      "modèles": ["models", "LLM", "modèles IA"],
-      "deploy": ["déploiement", "deployer", "mise en production"],
-      "déploiement": ["deploy", "deployer", "mise en production"],
-      "base de données": ["database", "DB", "SQLite"],
-      "serveur": ["server", "machine", "infra"],
-      // People/org
-      "employé": ["salarié", "collaborateur", "équipe"],
-      "équipe": ["employés", "salariés", "collaborateurs"],
-      "projet": ["app", "application", "MVP"],
-      "projets": ["apps", "applications", "MVPs"],
-      "client": ["structure", "entreprise", "prestataire"],
-      // Config/tools
-      "config": ["configuration", "paramètre", "réglage"],
-      "fallback": ["fallback chain", "alternative", "secours"],
-      "benchmark": ["test", "bench", "évaluation", "performance"],
+      // Money/salary — bidirectional synonyms
+      "taux horaire": ["€/h", "salaire"],
+      "salaire": ["taux horaire", "€/h"],
+      "rémunération": ["salaire", "€/h"],
+      "ca": ["chiffre d'affaires"],
+      "chiffre d'affaires": ["CA"],
+      // Tech — FR↔EN translations only
+      "deploy": ["déploiement"],
+      "déploiement": ["deploy"],
+      "modèle": ["model"],
+      "modèles": ["models"],
+      // Config
+      "config": ["configuration"],
+      "configuration": ["config"],
     };
 
     // Check each concept key against the query
