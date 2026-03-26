@@ -391,10 +391,13 @@ fi
 echo ""
 
 if [ "$SILENT" != true ] && [ "$LLM_MODE" != "advanced" ]; then
-  read -r -p "  Installer ? [O/n] : " CONFIRM </dev/tty 2>/dev/null || CONFIRM="o"
+  echo -e "  ${DIM}💡 Appuyez sur Entrée pour valider. Tout est modifiable après l'installation${NC}"
+  echo -e "  ${DIM}   via : bash ~/.openclaw/extensions/memoria/configure.sh${NC}"
+  echo ""
+  read -r -p "  ✅ On installe ? [O/n] : " CONFIRM </dev/tty 2>/dev/null || CONFIRM="o"
   CONFIRM=${CONFIRM:-o}
   case "$CONFIRM" in
-    [nN]*) echo "Annulé."; exit 0 ;;
+    [nN]*) echo "  Annulé. Relancez quand vous êtes prêt 👋"; exit 0 ;;
   esac
 fi
 
