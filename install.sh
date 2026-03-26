@@ -153,31 +153,63 @@ if [ -z "$PRESET" ]; then
     echo -e "  ${BOLD}2)${NC} ☁️  Cloud + fallback local — OpenAI + Ollama"
     echo -e "     Haute précision, coût ~\$0.50/mois"
   else
-    echo -e "  ${BOLD}2)${NC} ☁️  ${DIM}Cloud + fallback local — nécessite clé OpenAI${NC}"
-    echo -e "     ${DIM}(OPENAI_API_KEY non trouvée dans l'environnement)${NC}"
+    echo -e "  ${BOLD}2)${NC} ☁️  Cloud + fallback local — OpenAI, OpenRouter ou Anthropic"
+    echo -e "     ${DIM}(nécessite une clé API)${NC}"
   fi
   echo ""
   echo -e "  ${BOLD}3)${NC} 🔧 Configuration manuelle (éditer openclaw.json après)"
   echo ""
+  echo -e "  ${DIM}💡 Vous pourrez changer le LLM et les embeddings à tout moment${NC}"
+  echo -e "  ${DIM}   via : bash ~/.openclaw/extensions/memoria/configure.sh${NC}"
+  echo ""
 
-  read -r -p "  Choix [1] : " LLM_CHOICE </dev/tty 2>/dev/null || LLM_CHOICE="1"
+  read -r -p "  Tapez 1, 2 ou 3 [1] : " LLM_CHOICE </dev/tty 2>/dev/null || LLM_CHOICE="1"
   LLM_CHOICE=${LLM_CHOICE:-1}
 
   case "$LLM_CHOICE" in
     2)
-      if [ "$HAS_OPENAI" = true ]; then
+      echo ""
+      h1 "☁️  Quel provider cloud ?"
+      echo ""
+      echo -e "  ${BOLD}a)${NC} OpenAI — GPT-5.4-nano ${DIM}(rapide, ~\$0.50/mois)${NC}"
+      echo -e "  ${BOLD}b)${NC} OpenRouter — accès multi-modèles ${DIM}(flexible)${NC}"
+      echo -e "  ${BOLD}c)${NC} Anthropic — Claude ${DIM}(haute qualité)${NC}"
+      echo ""
+      read -r -p "  Tapez a, b ou c [a] : " CLOUD_CHOICE </dev/tty 2>/dev/null || CLOUD_CHOICE="a"
+      CLOUD_CHOICE=${CLOUD_CHOICE:-a}
+
+      case "$CLOUD_CHOICE" in
+        b|B)
+          CLOUD_PROVIDER="openrouter"; CLOUD_MODEL="auto"
+          if [ -z "$OPENROUTER_API_KEY" ]; then
+            read -r -p "  Clé OpenRouter : " CLOUD_KEY </dev/tty 2>/dev/null || CLOUD_KEY=""
+            [ -n "$CLOUD_KEY" ] && export OPENROUTER_API_KEY="$CLOUD_KEY"
+          fi
+          ;;
+        c|C)
+          CLOUD_PROVIDER="anthropic"; CLOUD_MODEL="claude-sonnet-4-5"
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            read -r -p "  Clé Anthropic : " CLOUD_KEY </dev/tty 2>/dev/null || CLOUD_KEY=""
+            [ -n "$CLOUD_KEY" ] && export ANTHROPIC_API_KEY="$CLOUD_KEY"
+          fi
+          ;;
+        *)
+          CLOUD_PROVIDER="openai"; CLOUD_MODEL="gpt-5.4-nano"
+          if [ "$HAS_OPENAI" != true ]; then
+            read -r -p "  Clé OpenAI : " OPENAI_INPUT </dev/tty 2>/dev/null || OPENAI_INPUT=""
+            if [ -n "$OPENAI_INPUT" ]; then
+              export OPENAI_API_KEY="$OPENAI_INPUT"
+              HAS_OPENAI=true
+            fi
+          fi
+          ;;
+      esac
+
+      if [ -n "$CLOUD_PROVIDER" ]; then
         LLM_MODE="cloud"
       else
-        echo ""
-        read -r -p "  Entrez votre clé OpenAI (ou Entrée pour annuler) : " OPENAI_INPUT </dev/tty 2>/dev/null || OPENAI_INPUT=""
-        if [ -n "$OPENAI_INPUT" ]; then
-          export OPENAI_API_KEY="$OPENAI_INPUT"
-          HAS_OPENAI=true
-          LLM_MODE="cloud"
-        else
-          warn "Pas de clé → mode local par défaut"
-          LLM_MODE="local"
-        fi
+        warn "Pas de clé → mode local par défaut"
+        LLM_MODE="local"
       fi
       ;;
     3)
@@ -205,9 +237,10 @@ if [ -z "$PRESET" ]; then
     echo ""
     echo -e "  ${BOLD}2)${NC} 🔒 Mode strict (un seul provider)"
     echo "     Plus simple, mais si le provider crash → capture en pause"
+    echo -e "     ${DIM}⚠️  Vous serez averti dans les logs si un crash survient${NC}"
     echo ""
 
-    read -r -p "  Choix [1] : " FB_CHOICE </dev/tty 2>/dev/null || FB_CHOICE="1"
+    read -r -p "  Tapez 1 ou 2 [1] : " FB_CHOICE </dev/tty 2>/dev/null || FB_CHOICE="1"
     FB_CHOICE=${FB_CHOICE:-1}
 
     case "$FB_CHOICE" in
@@ -218,6 +251,11 @@ if [ -z "$PRESET" ]; then
 fi
 
 # ─── Step 3: Show summary before install ───
+
+# ─── Step 2b: Embeddings note ───
+echo ""
+echo -e "  ${DIM}📊 Embeddings : nomic-embed-text-v2-moe (768d) via Ollama${NC}"
+echo -e "  ${DIM}   Modifiable après via : bash ~/.openclaw/extensions/memoria/configure.sh${NC}"
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -237,10 +275,10 @@ case "$LLM_MODE" in
     ;;
   cloud)
     echo -e "  Mode :       ☁️  Cloud + Local"
-    echo "  LLM :        OpenAI GPT-5.4-nano (~\$0.50/mois)"
+    echo "  LLM :        ${CLOUD_PROVIDER:-openai} / ${CLOUD_MODEL:-gpt-5.4-nano}"
     echo "  Embeddings : Ollama + nomic-embed-text-v2-moe (local)"
     if [ "$FALLBACK_MODE" = "recommended" ]; then
-      echo -e "  Fallback :   ${GREEN}OpenAI → Ollama${NC}"
+      echo -e "  Fallback :   ${GREEN}${CLOUD_PROVIDER:-openai} → Ollama${NC}"
     else
       echo "  Fallback :   aucun (strict)"
     fi
@@ -361,16 +399,18 @@ if llm_mode == "local":
         ]
 
 elif llm_mode == "cloud":
-    plugin_cfg["llm"] = {"provider": "openai", "model": "gpt-5.4-nano"}
+    cloud_prov = "$CLOUD_PROVIDER" or "openai"
+    cloud_mod = "$CLOUD_MODEL" or "gpt-5.4-nano"
+    plugin_cfg["llm"] = {"provider": cloud_prov, "model": cloud_mod}
     plugin_cfg["embed"] = {"provider": "ollama", "model": "nomic-embed-text-v2-moe", "dimensions": 768}
     if fallback_mode == "recommended":
         plugin_cfg["fallback"] = [
-            {"provider": "openai", "model": "gpt-5.4-nano"},
+            {"provider": cloud_prov, "model": cloud_mod},
             {"provider": "ollama", "model": "gemma3:4b"}
         ]
     else:
         plugin_cfg["fallback"] = [
-            {"provider": "openai", "model": "gpt-5.4-nano"}
+            {"provider": cloud_prov, "model": cloud_mod}
         ]
 
 # else advanced: minimal config, user edits later
@@ -404,6 +444,13 @@ else:
 if "memoria" not in cfg["plugins"]["allow"]:
     cfg["plugins"]["allow"].append("memoria")
     changed = True
+
+# Disable memory-convex if present (conflicts with Memoria)
+mc = cfg.get("plugins", {}).get("entries", {}).get("memory-convex", None)
+if mc is not None:
+    del cfg["plugins"]["entries"]["memory-convex"]
+    changed = True
+    print("  🧹 memory-convex désactivé (remplacé par Memoria)")
 
 if changed:
     backup = config_path + ".backup"
@@ -458,10 +505,10 @@ case "$LLM_MODE" in
     fi
     ;;
   cloud)
-    echo -e "  ${BOLD}LLM${NC}          OpenAI GPT-5.4-nano ${DIM}(~\$0.50/mois)${NC}"
+    echo -e "  ${BOLD}LLM${NC}          ${CLOUD_PROVIDER:-openai} / ${CLOUD_MODEL:-gpt-5.4-nano}"
     echo -e "  ${BOLD}Embeddings${NC}   Ollama + nomic-embed-text-v2-moe ${DIM}(local, 0€)${NC}"
     if [ "$FALLBACK_MODE" = "recommended" ]; then
-      echo -e "  ${BOLD}Fallback${NC}     OpenAI → Ollama"
+      echo -e "  ${BOLD}Fallback${NC}     ${CLOUD_PROVIDER:-openai} → Ollama"
     else
       echo -e "  ${BOLD}Fallback${NC}     Aucun (strict)"
     fi
@@ -481,6 +528,17 @@ echo ""
 echo "     openclaw doctor && openclaw gateway restart"
 echo ""
 echo -e "  ${DIM}📖 Docs      $DEST/INSTALL.md${NC}"
-echo -e "  ${DIM}🔧 Modifier  ~/.openclaw/openclaw.json (section memoria)${NC}"
+echo -e "  ${DIM}🔧 Modifier  bash ~/.openclaw/extensions/memoria/configure.sh${NC}"
 echo -e "  ${DIM}🆘 Support   https://github.com/Primo-Studio/openclaw-memoria/issues${NC}"
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+echo -e "  ${BOLD}🙏 Merci d'avoir installé Memoria !${NC}"
+echo ""
+echo -e "  N'hésitez pas à nous faire un retour :"
+echo -e "  🐦 X/Twitter : ${CYAN}@Nitix_${NC}"
+echo -e "  ⭐ GitHub    : ${CYAN}https://github.com/Primo-Studio/openclaw-memoria${NC}"
+echo -e "  💬 Discord   : ${CYAN}https://discord.com/invite/clawd${NC}"
+echo ""
+echo -e "  ${DIM}Fait avec ❤️  par Primo Studio — Guyane française${NC}"
 echo ""
