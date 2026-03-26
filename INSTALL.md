@@ -95,7 +95,7 @@ openclaw status          # Vérifier le chargement
 
 Vous devez voir :
 ```
-[plugins] memoria: v3.0.0 registered (X facts, Y observations, ...)
+[plugins] memoria: v3.2.0 registered (X facts, Y observations, ...)
 ```
 
 ### 5. Migration automatique
@@ -202,3 +202,25 @@ Pour une installation rapide avec Ollama local :
 | `lmstudio` | ✅ | ✅ | LM Studio avec serveur local |
 | `openai` | ✅ | ✅ | Clé API OpenAI |
 | `openrouter` | ✅ | ❌ | Clé API OpenRouter |
+| `anthropic` | ✅ | ❌ | Clé API Anthropic (Claude) |
+
+### Anthropic (Claude API)
+
+Config avec Claude comme LLM d'extraction :
+```json
+"llm": {
+  "provider": "anthropic",
+  "model": "claude-haiku-3-5",
+  "apiKey": "sk-ant-..."
+}
+```
+
+Ou en fallback :
+```json
+"fallback": [
+  { "provider": "ollama", "model": "gemma3:4b" },
+  { "provider": "anthropic", "model": "claude-haiku-3-5", "apiKey": "sk-ant-..." }
+]
+```
+
+Note : Anthropic ne supporte pas les embeddings. Utilisez Ollama ou OpenAI pour les embeddings.

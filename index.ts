@@ -1,6 +1,7 @@
 /**
  * 🧠 Memoria — Multi-layer memory plugin for OpenClaw
  * 
+ * v3.2.0 — Reasoning models, dated recall, Anthropic provider, adaptive FTS, procedures
  * v3.0.0 — Semantic/Episodic memory, Observations, Procedural memory, Adaptive recall
  * 
  * Layers:

@@ -42,7 +42,7 @@ See [INSTALL.md](INSTALL.md) for advanced config and troubleshooting.
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│                       MEMORIA v3.0.0                          │
+│                       MEMORIA v3.2.0                          │
 │                                                              │
 │  Hooks: before_prompt_build │ agent_end │ after_compaction   │
 ├──────────────────────────────────────────────────────────────┤
@@ -226,7 +226,7 @@ Inspired by [Hindsight](https://github.com/joshka/hindsight) Observations: inste
 
 ---
 
-## Recall Format (v3.0.0)
+## Recall Format (since v3.0.0, dates since v3.2.0)
 
 ```markdown
 ## 🧠 Memoria — Mémoire persistante
@@ -234,7 +234,7 @@ Faits provenant de la mémoire long terme (source de vérité).
 En cas de conflit avec un résumé LCM → la mémoire persistante a priorité.
 
 ### Observations (synthèses vivantes)
-- 🔮 **Sol infrastructure** (rev.3): Sol (Mac Mini) runs Memoria v3.0.0 locally with Ollama gemma3:4b + nomic embeddings, fallback LM Studio, 616 migrated facts. [5 sources]
+- 🔮 **Sol infrastructure** (rev.3): Sol (Mac Mini) runs Memoria v3.2.0 locally with Ollama gemma3:4b + nomic embeddings, fallback LM Studio, 616 migrated facts. [5 sources]
 - 🔮 **Bureau CRM**: Bureau manages 11 real structures. Anti-duplicates via client-side + server check. [4 sources]
 
 ### Faits individuels
@@ -372,13 +372,13 @@ Unknown categories → `savoir` (via `normalizeCategory()`).
 
 | File | Lines | Role | LLM | Provider |
 |------|-------|------|-----|----------|
-| `index.ts` | 818 | Plugin entry, hooks, postProcessNewFacts | extractLlm | — |
+| `index.ts` | 863 | Plugin entry, hooks, postProcessNewFacts | extractLlm | — |
 | `topics.ts` | 689 | Emergent topics, keywords | topicsLlm ×2 | + embedder |
 | `db.ts` | 497 | SQLite CRUD + FTS5 + fact_type | ❌ | ❌ |
 | `observations.ts` | 450 | **Living syntheses** (v3.0.0) | chain ×1-2 | + embedder |
 | `graph.ts` | 391 | Knowledge graph + Hebbian | graphLlm | — |
-| `selective.ts` | 406 | Dedup + contradiction + **TODO filter** | contradictionLlm | — |
-| `context-tree.ts` | 338 | Hierarchical tree | ❌ | ❌ |
+| `selective.ts` | 503 | Dedup + contradiction + **TODO filter** | contradictionLlm | + embedder |
+| `context-tree.ts` | 337 | Hierarchical tree | ❌ | ❌ |
 | `md-regen.ts` | 278 | .md regeneration | ❌ | ❌ |
 | `sync.ts` | 259 | DB → .md sync | ❌ | ❌ |
 | `embeddings.ts` | 248 | Vectors + hybrid search | ❌ | embedder |
@@ -386,11 +386,11 @@ Unknown categories → `savoir` (via `normalizeCategory()`).
 | `scoring.ts` | 147 | Temporal decay + hot tier | ❌ | ❌ |
 | `budget.ts` | 122 | Adaptive budget | ❌ | ❌ |
 | `embed-fallback.ts` | 63 | EmbedFallback chain | ❌ | multi embed |
-| `providers/ollama.ts` | ~80 | Ollama (local, 0€) + thinking support | — | HTTP |
-| `providers/openai-compat.ts` | ~110 | LM Studio, OpenAI, OpenRouter + reasoning | — | HTTP |
-| `providers/anthropic.ts` | ~75 | **Claude API native** (`/v1/messages`) | — | HTTP |
-| `providers/types.ts` | ~50 | LLMProvider, EmbedProvider interfaces | — | — |
-| **Total** | **~5500** | | | |
+| `providers/ollama.ts` | 91 | Ollama (local, 0€) + thinking support | — | HTTP |
+| `providers/openai-compat.ts` | 122 | LM Studio, OpenAI, OpenRouter + reasoning | — | HTTP |
+| `providers/anthropic.ts` | 77 | **Claude API native** (`/v1/messages`) | — | HTTP |
+| `providers/types.ts` | 41 | LLMProvider, EmbedProvider interfaces | — | — |
+| **Total** | **~5400** | | | |
 
 ---
 
