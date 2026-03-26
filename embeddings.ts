@@ -165,12 +165,77 @@ export class EmbeddingManager {
     return results.slice(0, limit);
   }
 
-  /** Hybrid search: FTS5 + cosine, merge and rank */
+  // ─── Query Expansion ───
+
+  /**
+   * Expand a query into multiple variants for better recall.
+   * Uses the embedding model to find semantically similar terms.
+   * No LLM needed — pure heuristic expansion with synonym/concept maps.
+   */
+  expandQuery(query: string): string[] {
+    const variants = [query];
+    const lower = query.toLowerCase().trim();
+
+    // Concept expansions: domain-specific synonym/concept maps
+    const conceptMap: Record<string, string[]> = {
+      // Money/salary
+      "taux horaire": ["salaire", "rémunération", "€/h", "paie"],
+      "salaire": ["taux horaire", "rémunération", "€/h", "paie"],
+      "rémunération": ["taux horaire", "salaire", "€/h"],
+      "ca": ["chiffre d'affaires", "revenu", "facturation"],
+      "chiffre d'affaires": ["CA", "revenu", "facturation"],
+      // Tech
+      "modèle": ["model", "LLM", "modèle IA"],
+      "modèles": ["models", "LLM", "modèles IA"],
+      "deploy": ["déploiement", "deployer", "mise en production"],
+      "déploiement": ["deploy", "deployer", "mise en production"],
+      "base de données": ["database", "DB", "SQLite"],
+      "serveur": ["server", "machine", "infra"],
+      // People/org
+      "employé": ["salarié", "collaborateur", "équipe"],
+      "équipe": ["employés", "salariés", "collaborateurs"],
+      "projet": ["app", "application", "MVP"],
+      "projets": ["apps", "applications", "MVPs"],
+      "client": ["structure", "entreprise", "prestataire"],
+      // Config/tools
+      "config": ["configuration", "paramètre", "réglage"],
+      "fallback": ["fallback chain", "alternative", "secours"],
+      "benchmark": ["test", "bench", "évaluation", "performance"],
+    };
+
+    // Check each concept key against the query
+    for (const [key, synonyms] of Object.entries(conceptMap)) {
+      if (lower.includes(key)) {
+        // Add 1-2 best synonym variants
+        for (const syn of synonyms.slice(0, 2)) {
+          const variant = query.replace(new RegExp(key, "gi"), syn);
+          if (variant !== query && !variants.includes(variant)) {
+            variants.push(variant);
+          }
+        }
+      }
+    }
+
+    // Entity extraction: if query contains a proper noun, add it standalone
+    const properNouns = query.match(/\b[A-Z][a-z]+(?:\s[A-Z][a-z]+)*/g);
+    if (properNouns) {
+      for (const noun of properNouns) {
+        if (noun.length > 2 && !variants.includes(noun)) {
+          variants.push(noun);
+        }
+      }
+    }
+
+    return variants.slice(0, 4); // Max 4 variants
+  }
+
+  /** Hybrid search: FTS5 + cosine, merge and rank — with query expansion */
   async hybridSearch(query: string, limit = 10, options?: {
     ftsWeight?: number;    // Weight for FTS5 results (default 0.4)
     cosineWeight?: number; // Weight for cosine results (default 0.4)
     temporalWeight?: number; // Weight for temporal score (default 0.2)
     minSimilarity?: number;
+    expandQueries?: boolean; // Enable query expansion (default true)
   }): Promise<EmbeddedFact[]> {
     // Adaptive weights: short/generic queries → favor semantic over FTS
     // because FTS on a 1-word query like "Bureau" matches too many facts
@@ -181,24 +246,53 @@ export class EmbeddingManager {
     const tempW = options?.temporalWeight ?? (isShortQuery ? 0.25 : 0.20);
     const minSim = options?.minSimilarity ?? 0.25;
 
-    // 1. FTS5 search
-    const ftsResults = this.db.searchFacts(query, limit * 2);
+    // Query expansion: generate variants for better recall
+    const doExpand = options?.expandQueries !== false;
+    const queries = doExpand ? this.expandQuery(query) : [query];
 
-    // 2. Semantic search
-    let cosResults: EmbeddedFact[] = [];
-    try {
-      cosResults = await this.semanticSearch(query, limit * 2, minSim);
-    } catch {
-      // Embedding not available → FTS only
+    // 1. FTS5 search — across all query variants
+    const allFtsResults: Fact[] = [];
+    const seenFtsIds = new Set<string>();
+    for (const q of queries) {
+      const results = this.db.searchFacts(q, limit * 2);
+      for (const f of results) {
+        if (!seenFtsIds.has(f.id)) {
+          seenFtsIds.add(f.id);
+          allFtsResults.push(f);
+        }
+      }
+    }
+
+    // 2. Semantic search — across all query variants
+    let allCosResults: EmbeddedFact[] = [];
+    const seenCosIds = new Set<string>();
+    for (const q of queries) {
+      try {
+        const results = await this.semanticSearch(q, limit * 2, minSim);
+        for (const f of results) {
+          if (!seenCosIds.has(f.id)) {
+            seenCosIds.add(f.id);
+            allCosResults.push(f);
+          } else {
+            // Keep highest similarity
+            const existing = allCosResults.find(r => r.id === f.id);
+            if (existing && f.similarity > existing.similarity) {
+              existing.similarity = f.similarity;
+            }
+          }
+        }
+      } catch {
+        // Embedding not available → FTS only
+      }
     }
 
     // 3. Merge by fact ID
     const merged = new Map<string, EmbeddedFact>();
 
     // Add FTS results with rank-based score
-    for (let i = 0; i < ftsResults.length; i++) {
-      const f = ftsResults[i];
-      const ftsScore = 1 - i / ftsResults.length; // 1.0 for best, decreasing
+    for (let i = 0; i < allFtsResults.length; i++) {
+      const f = allFtsResults[i];
+      const ftsScore = 1 - i / Math.max(allFtsResults.length, 1); // 1.0 for best, decreasing
       const sf = scoreFact(f);
       merged.set(f.id, {
         ...f,
@@ -209,7 +303,7 @@ export class EmbeddingManager {
     }
 
     // Merge cosine results
-    for (const cr of cosResults) {
+    for (const cr of allCosResults) {
       const existing = merged.get(cr.id);
       if (existing) {
         // Boost: fact found by BOTH methods

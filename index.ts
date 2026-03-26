@@ -200,6 +200,9 @@ Règles:
 - Pour les PROCÉDURES (comment faire X): garder les étapes ensemble en UN SEUL fait (2-4 phrases OK)
   Exemple bon: "Pour migrer SQLite WAL: 1) ouvrir en readonly, 2) VACUUM INTO target, 3) fermer. Ne pas utiliser cp car ça perd les données WAL."
   Exemple mauvais: "Étape 1: ouvrir en readonly" (inutile seul)
+- UN FAIT PAR ENTITÉ DISTINCTE — si le texte parle de 3 personnes/outils/projets, créer 3 faits séparés
+  Exemple bon: "Alexandre gagne 6.50€/h" + "Pierre a quitté l'entreprise, son taux était 7.39€/h"
+  Exemple mauvais: "Alexandre et Pierre travaillent chez Primo Studio" (trop vague, mélange les infos)
 - Catégories: savoir, erreur, preference, outil, chronologie, rh, client
 - type: "semantic" ou "episodic"
 - confidence: 0.7 minimum
@@ -603,9 +606,11 @@ export function register(api: OpenClawPluginApi): void {
         } catch { /* graph enrichment is non-critical */ }
 
         // Topic enrichment: find relevant topics and add their facts
+        // Pass expanded queries for broader topic matching
+        const expandedQueries = embeddingMgr.expandQuery(prompt);
         let topicFacts: Fact[] = [];
         try {
-          const relevantTopics = await topicMgr.findRelevantTopics(prompt, 3);
+          const relevantTopics = await topicMgr.findRelevantTopics(prompt, 3, expandedQueries);
           if (relevantTopics.length > 0) {
             const existingIds = new Set([...topFacts.map(f => f.id), ...graphFacts.map(f => f.id)]);
             for (const rt of relevantTopics) {

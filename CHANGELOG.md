@@ -1,5 +1,23 @@
 # Changelog
 
+## [3.3.0] - 2026-03-26
+### Added — Query Expansion
+- **Hybrid search now expands queries** into 2-4 semantic variants before searching
+- Domain-specific concept map: "taux horaire" → ["salaire", "€/h", "paie"], "projets" → ["apps", "MVPs"], etc.
+- FTS + cosine both search across all variants, deduplicating results
+- Proper noun extraction: named entities searched standalone
+- **Impact**: MS (multi-session) questions like "quels taux horaires?" now find "5.19€/h" facts
+
+### Improved — Topic-Aware Recall
+- `findRelevantTopics` now receives expanded queries for broader matching
+- Topic name exact match bonus (+3 score) with expanded variants
+- **Impact**: Topics like "salaires" found even when query says "rémunération"
+
+### Improved — Denser Extraction
+- Extraction prompt now enforces "one fact per distinct entity"
+- Example: session mentioning 3 people → 3 separate facts instead of 1 merged
+- **Impact**: More facts per session = better multi-session recall
+
 ## [3.2.0] - 2026-03-26
 ### Fixed — Reasoning Model Support (I3+I4)
 - **Ollama provider**: Now reads `thinking` field when `response` is empty (GPT-OSS, Qwen3.5 reasoning models)

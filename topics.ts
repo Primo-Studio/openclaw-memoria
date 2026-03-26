@@ -468,12 +468,18 @@ export class TopicManager {
 
   // ─── 7. Recall: find relevant topics for a query ───
 
-  async findRelevantTopics(query: string, limit = 5): Promise<Array<{ topic: Topic; score: number; facts: string[] }>> {
+  async findRelevantTopics(query: string, limit = 5, expandedQueries?: string[]): Promise<Array<{ topic: Topic; score: number; facts: string[] }>> {
     const raw = this.db.raw;
     const results: Array<{ topic: Topic; score: number; facts: string[] }> = [];
 
-    // Strategy 1: Keyword matching
-    const queryWords = query.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+    // Strategy 1: Keyword matching — use expanded queries if available
+    const allQueries = expandedQueries && expandedQueries.length > 0 ? expandedQueries : [query];
+    const queryWords = new Set<string>();
+    for (const q of allQueries) {
+      for (const w of q.toLowerCase().split(/\s+/).filter(w => w.length > 2)) {
+        queryWords.add(w);
+      }
+    }
     const allTopics = raw.prepare("SELECT * FROM topics ORDER BY importance_score DESC").all() as Topic[];
 
     for (const topic of allTopics) {
@@ -483,6 +489,14 @@ export class TopicManager {
       for (const qw of queryWords) {
         if (kw.some(k => k.includes(qw) || qw.includes(k))) keywordScore += 1;
         if (topic.name.toLowerCase().includes(qw)) keywordScore += 2;
+      }
+      // Bonus: topic name exact match with any expanded query
+      const topicLower = topic.name.toLowerCase();
+      for (const q of allQueries) {
+        if (q.toLowerCase().includes(topicLower) || topicLower.includes(q.toLowerCase())) {
+          keywordScore += 3;
+          break;
+        }
       }
 
       if (keywordScore > 0) {
