@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.1.1] - 2026-03-25
+### Improved — Extraction Quality (Results over Status)
+- **Problem**: Extraction captured "test passed ✅" but lost actual results like "Retrieval 92%, bottleneck = local model"
+- **New ✅ categories**: benchmark results with metrics, conclusions from experiments, measured comparisons, machine/infra specs
+- **Smarter filtering**: block narration WITHOUT results (not all narration); block binary status without info ("test OK")
+- **Extraction priority**: 🥇 learnings > 🥈 measured results > 🥉 durable facts
+
 ## [3.1.0] - 2026-03-25
 ### Fixed — Entity-based Semantic Contradiction Detection
 - **Critical fix**: Contradictions between facts with different wording but same entities were not detected
