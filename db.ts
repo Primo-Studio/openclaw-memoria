@@ -431,6 +431,23 @@ export class MemoriaDB {
     ).get(name) as Entity | undefined;
   }
 
+  /** Return all entity names (lowercased) for fast in-text matching */
+  allEntityNames(): string[] {
+    const rows = this.db.prepare("SELECT DISTINCT LOWER(name) as name FROM entities").all() as { name: string }[];
+    return rows.map(r => r.name);
+  }
+
+  /** Find facts linked to any of the given entity IDs */
+  findFactsByEntityIds(entityIds: string[], limit = 10): Fact[] {
+    if (entityIds.length === 0) return [];
+    // entity_ids is stored as JSON array string, e.g. '["ent_123","ent_456"]'
+    const placeholders = entityIds.map(() => "entity_ids LIKE ?").join(" OR ");
+    const params = entityIds.map(id => `%${id}%`);
+    return this.db.prepare(
+      `SELECT * FROM facts WHERE status = 'active' AND (${placeholders}) ORDER BY updated_at DESC LIMIT ?`
+    ).all(...params, limit) as Fact[];
+  }
+
   // ─── Relations CRUD ───
 
   storeRelation(rel: Omit<Relation, "created_at" | "last_accessed_at"> & Partial<Relation>): Relation {

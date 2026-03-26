@@ -190,11 +190,18 @@ NE PAS STOCKER — seulement le jetable:
 ❌ Narration sans résultat ("je lis le fichier", "je regarde") — MAIS stocker si un RÉSULTAT suit ("j'ai testé X → résultat Y")
 ❌ Évidences triviales ("Node.js est installé") sauf si c'était un problème résolu
 ❌ Statuts binaires sans info ("test passé ✅", "ça marche") — stocker plutôt les CHIFFRES et CONCLUSIONS
+❌ MÉTA-FAITS qui parlent DU PROCESSUS de stockage lui-même ("le nouveau fait complète l'info précédente", "ce fait a été ajouté", "la migration vers Memoria inclut des liens") — stocker le CONTENU, pas le commentaire sur le contenu
+❌ Faits VAGUES sans nom propre, chiffre, commande ou date concrète ("des informations supplémentaires ont été fournies", "la configuration a été mise à jour") — ÊTRE SPÉCIFIQUE : quel outil, quelle version, quelle commande, quel chiffre ?
 
 PRIORITÉ D'EXTRACTION — ce qui compte le plus:
 🥇 Apprentissages = ce qu'on a APPRIS en faisant (conclusions, règles découvertes)
 🥈 Résultats mesurés = chiffres, métriques, comparaisons avant/après
 🥉 Faits durables = configs, architectures, états des systèmes
+
+QUALITÉ OBLIGATOIRE — chaque fait DOIT respecter ces critères:
+⚠️ Contenir au moins UN élément concret: nom propre (Ollama, Sol, Neto), OU chiffre (2.8s, 616 faits), OU commande (clawhub install), OU version (v3.4.1), OU date (26/03)
+⚠️ Être AUTONOME = compréhensible par quelqu'un qui lit ce fait seul, sans contexte
+⚠️ Ne JAMAIS commencer par "Le nouveau fait..." ou "Ce fait..." ou "L'information..." — commencer par le SUJET réel
 
 Règles:
 - Chaque fait = phrase(s) complète(s) et autonome(s) (compréhensible sans contexte)

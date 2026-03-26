@@ -62,6 +62,14 @@ export class OllamaLLM implements LLMProvider {
   }
 
   async generate(prompt: string, options?: GenerateOptions): Promise<string> {
+    // Use chat API for models that support think parameter (e.g., qwen3.5)
+    // This allows disabling thinking mode which consumes all tokens
+    const isThinkingModel = this.model.includes("qwen3.5");
+
+    if (isThinkingModel) {
+      return this.generateViaChat(prompt, options);
+    }
+
     const body: Record<string, unknown> = {
       model: this.model,
       prompt,
@@ -87,5 +95,30 @@ export class OllamaLLM implements LLMProvider {
     // If response is empty but thinking has content, use thinking
     // If both exist, prefer response (it's the final answer)
     return response || thinking;
+  }
+
+  /** Chat API path — required for qwen3.5 models to disable thinking mode */
+  private async generateViaChat(prompt: string, options?: GenerateOptions): Promise<string> {
+    const body: Record<string, unknown> = {
+      model: this.model,
+      messages: [{ role: "user", content: prompt }],
+      stream: false,
+      think: false,
+      options: {
+        num_predict: options?.maxTokens ?? 1024,
+        temperature: options?.temperature ?? 0.1,
+      },
+    };
+    if (options?.format === "json") body.format = "json";
+
+    const res = await fetch(`${this.baseUrl}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(options?.timeoutMs ?? 30000),
+    });
+    if (!res.ok) throw new Error(`Ollama chat LLM error: ${res.status}`);
+    const data = await res.json() as { message?: { content?: string } };
+    return data.message?.content || "";
   }
 }

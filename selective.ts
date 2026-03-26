@@ -37,14 +37,14 @@ export interface SelectiveConfig {
 }
 
 export const DEFAULT_SELECTIVE_CONFIG: SelectiveConfig = {
-  dupThreshold: 0.85,
+  dupThreshold: 0.75,
   dupCandidates: 5,
   contradictionCheck: true,
   minFactLength: 10,
   importanceThreshold: 0.3,
   enrichEnabled: true,
-  enrichThreshold: 0.7,
-  semanticContradictionThreshold: 0.40,
+  enrichThreshold: 0.60,
+  semanticContradictionThreshold: 0.30,
 };
 
 // ─── Result type ───
@@ -134,6 +134,11 @@ function levenshteinSimilarity(a: string, b: string): number {
 
 // ─── Keyword overlap (Jaccard) ───
 
+/** Extract first N words, lowercased and normalized, for prefix dedup */
+function extractPrefix(text: string, n: number): string {
+  return text.toLowerCase().trim().split(/\s+/).slice(0, n).join(" ");
+}
+
 function extractKeywords(text: string): Set<string> {
   return new Set(
     text.toLowerCase()
@@ -153,22 +158,39 @@ function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
 
 // ─── Entity extraction for semantic contradiction detection ───
 
-/** Extract named entities (proper nouns, tech terms, versions) from a fact */
-function extractSubjectEntities(fact: string): Set<string> {
+/** 
+ * Extract entities from text by matching against the knowledge graph.
+ * Dynamic: uses entities learned by the graph (225+ in DB), not a hardcoded list.
+ * Falls back to basic regex patterns for bootstrap (empty graph).
+ */
+function extractSubjectEntities(fact: string, knownEntities?: string[]): Set<string> {
   const entities = new Set<string>();
-  const patterns = [
+  const factLower = fact.toLowerCase();
+
+  // 1. Dynamic: match against all known graph entities
+  if (knownEntities && knownEntities.length > 0) {
+    for (const entity of knownEntities) {
+      // Only match entities with 3+ chars to avoid false positives
+      if (entity.length >= 3 && factLower.includes(entity)) {
+        entities.add(entity);
+      }
+    }
+  }
+
+  // 2. Fallback regex for bootstrap (when graph is empty or for entities not yet in graph)
+  const fallbackPatterns = [
     /\b(Sol|Koda|Luna|Neto)\b/gi,
-    /\b(Memoria|Cortex|Ollama|LM Studio|Convex|Bureau|OpenClaw|ClawHub)\b/gi,
-    /\b(gemma3[:\w]*|nomic[\w-]*|gpt[\w-]*|qwen[\w.]*|glm[\w.]*)\b/gi,
-    /\b(Mac (?:Mini|Studio|Book ?Pro?)|iPhone|iPad)\b/gi,
-    /\b(SQLite|FTS5|PostgreSQL|Vercel|GitHub|Cloudflare)\b/gi,
-    /\b(SSH|npm|node|brew|Homebrew|Xcode|Docker)\b/gi,
+    /\b(Memoria|Cortex|Ollama|Convex|Bureau|OpenClaw|ClawHub)\b/gi,
+    /\b(gemma3[:\w]*|qwen[\w.:]*|gpt[\w-]*|glm[\w.]*|nemotron[\w-]*)\b/gi,
+    /\b(openclaw\.json|memoria\.db|cortex\.db)\b/gi,
+    /\b(memory-convex|lossless-claw)\b/gi,
   ];
-  for (const p of patterns) {
+  for (const p of fallbackPatterns) {
     for (const m of fact.matchAll(p)) {
       entities.add(m[0].toLowerCase().trim());
     }
   }
+
   return entities;
 }
 
@@ -228,12 +250,31 @@ export class SelectiveMemory {
   private llm: LLMProvider;
   private cfg: SelectiveConfig;
   private embedder: EmbeddingManager | null;
+  private knownEntities: string[] = [];
+  private entitiesLoadedAt = 0;
+  private static ENTITY_CACHE_TTL = 5 * 60 * 1000; // Refresh every 5 min
 
   constructor(db: MemoriaDB, llm: LLMProvider, config?: Partial<SelectiveConfig>, embedder?: EmbeddingManager) {
     this.db = db;
     this.llm = llm;
     this.cfg = { ...DEFAULT_SELECTIVE_CONFIG, ...config };
     this.embedder = embedder ?? null;
+    this.refreshEntities();
+  }
+
+  /** Load entity names from graph DB (cached, refreshes every 5 min) */
+  private refreshEntities(): void {
+    try {
+      this.knownEntities = this.db.allEntityNames();
+      this.entitiesLoadedAt = Date.now();
+    } catch { /* graph table might not exist yet */ }
+  }
+
+  private getEntities(): string[] {
+    if (Date.now() - this.entitiesLoadedAt > SelectiveMemory.ENTITY_CACHE_TTL) {
+      this.refreshEntities();
+    }
+    return this.knownEntities;
   }
 
   /**
@@ -273,11 +314,17 @@ export class SelectiveMemory {
       return { action: "skip", reason: "noise" };
     }
 
-    // 2. Dedup check (FTS5 + Levenshtein + Jaccard)
+    // 2. Dedup check (FTS5 + Levenshtein + Jaccard + prefix check)
     const candidates = this.db.searchFacts(fact, this.cfg.dupCandidates);
     const newKeywords = extractKeywords(fact);
+    const newPrefix = extractPrefix(fact, 8);
 
     for (const candidate of candidates) {
+      // Fast prefix check: if first 8 words are identical → duplicate
+      if (newPrefix.length >= 6 && newPrefix === extractPrefix(candidate.fact, 8)) {
+        return { action: "skip", reason: "duplicate" };
+      }
+
       const levSim = levenshteinSimilarity(fact, candidate.fact);
       const jacSim = jaccardSimilarity(newKeywords, extractKeywords(candidate.fact));
       const combined = levSim * 0.6 + jacSim * 0.4; // weighted average
@@ -321,9 +368,9 @@ export class SelectiveMemory {
     // Levenshtein/Jaccard miss it. Entity overlap triggers LLM contradiction check.
     if (this.cfg.contradictionCheck) {
       try {
-        const newEntities = extractSubjectEntities(fact);
+        const newEntities = extractSubjectEntities(fact, this.getEntities());
         if (newEntities.size > 0) {
-          // Search for facts sharing at least one entity
+          // Search for facts sharing at least one entity (using graph DB when available)
           const entityCandidates = this.findFactsBySharedEntities(fact, newEntities, candidates);
           for (const candidate of entityCandidates) {
             const relation = await this.checkRelation(candidate, fact);
@@ -435,7 +482,7 @@ export class SelectiveMemory {
         if (candidates.length >= MAX_ENTITY_CANDIDATES) break;
         if (checkedIds.has(result.id)) continue;
         // Verify entity overlap
-        const resultEntities = extractSubjectEntities(result.fact);
+        const resultEntities = extractSubjectEntities(result.fact, this.getEntities());
         const shared = [...newEntities].filter(e => resultEntities.has(e));
         if (shared.length > 0) {
           candidates.push(result);
