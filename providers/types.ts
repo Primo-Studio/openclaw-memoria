@@ -11,13 +11,24 @@ export interface EmbedProvider {
   readonly name: string;
 }
 
+export interface GenerateOptions {
+  maxTokens?: number;
+  temperature?: number;
+  format?: "json" | "text";
+  timeoutMs?: number;
+}
+
+export interface GenerateResult {
+  response: string;
+  provider: string;
+  attemptMs: number;
+  fallbacksUsed: number;
+}
+
 export interface LLMProvider {
-  generate(prompt: string, options?: {
-    maxTokens?: number;
-    temperature?: number;
-    format?: "json" | "text";
-    timeoutMs?: number;
-  }): Promise<string>;
+  generate(prompt: string, options?: GenerateOptions): Promise<string>;
+  /** Extended generate with metadata. Default implementation wraps generate(). */
+  generateWithMeta?(prompt: string, options?: GenerateOptions): Promise<GenerateResult | null>;
   readonly name: string;
 }
 

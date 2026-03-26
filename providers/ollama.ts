@@ -2,7 +2,7 @@
  * Ollama Provider — local, free, default for Koda
  */
 
-import type { EmbedProvider, LLMProvider } from "./types.js";
+import type { EmbedProvider, LLMProvider, GenerateOptions, GenerateResult } from "./types.js";
 
 export class OllamaEmbed implements EmbedProvider {
   readonly name = "ollama";
@@ -51,7 +51,17 @@ export class OllamaLLM implements LLMProvider {
     this.model = model;
   }
 
-  async generate(prompt: string, options?: { maxTokens?: number; temperature?: number; format?: "json" | "text"; timeoutMs?: number }): Promise<string> {
+  async generateWithMeta(prompt: string, options?: GenerateOptions): Promise<GenerateResult | null> {
+    const start = Date.now();
+    try {
+      const response = await this.generate(prompt, options);
+      return { response, provider: this.name, attemptMs: Date.now() - start, fallbacksUsed: 0 };
+    } catch {
+      return null;
+    }
+  }
+
+  async generate(prompt: string, options?: GenerateOptions): Promise<string> {
     const body: Record<string, unknown> = {
       model: this.model,
       prompt,
@@ -70,7 +80,12 @@ export class OllamaLLM implements LLMProvider {
       signal: AbortSignal.timeout(options?.timeoutMs ?? 30000),
     });
     if (!res.ok) throw new Error(`Ollama LLM error: ${res.status}`);
-    const data = await res.json() as { response: string };
-    return data.response;
+    const data = await res.json() as { response?: string; thinking?: string };
+    // Reasoning models (GPT-OSS, Qwen3.5) put content in "thinking", not "response"
+    const response = data.response || "";
+    const thinking = data.thinking || "";
+    // If response is empty but thinking has content, use thinking
+    // If both exist, prefer response (it's the final answer)
+    return response || thinking;
   }
 }

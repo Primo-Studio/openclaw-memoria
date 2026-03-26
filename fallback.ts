@@ -11,7 +11,7 @@
  *   4. null → FTS-only / skip
  */
 
-import type { LLMProvider, EmbedProvider, GenerateOptions } from "./providers/types.js";
+import type { LLMProvider, EmbedProvider, GenerateOptions, GenerateResult } from "./providers/types.js";
 import { OllamaLLM, OllamaEmbed } from "./providers/ollama.js";
 import {
   OpenAICompatLLM,
@@ -19,12 +19,13 @@ import {
   lmStudioLLM,
   lmStudioEmbed,
 } from "./providers/openai-compat.js";
+import { AnthropicLLM } from "./providers/anthropic.js";
 
 // ─── Config ───
 
 export interface FallbackProviderConfig {
   name: string;
-  type: "ollama" | "lmstudio" | "openai" | "openrouter";
+  type: "ollama" | "lmstudio" | "openai" | "openrouter" | "anthropic";
   model: string;
   baseUrl?: string;
   apiKey?: string;
@@ -91,6 +92,8 @@ function createLLM(cfg: FallbackProviderConfig): LLMProvider {
         cfg.model,
         cfg.apiKey || "",
       );
+    case "anthropic":
+      return new AnthropicLLM(cfg.model, cfg.apiKey || "", cfg.baseUrl);
     default:
       throw new Error(`Unknown provider type: ${cfg.type}`);
   }

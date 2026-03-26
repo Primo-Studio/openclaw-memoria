@@ -39,6 +39,7 @@ import { OpenAICompatLLM, OpenAICompatEmbed, lmStudioLLM, lmStudioEmbed, openaiL
 import type { EmbedProvider, LLMProvider } from "./providers/types.js";
 import { EmbedFallback } from "./embed-fallback.js";
 import { ObservationManager } from "./observations.js";
+import { AnthropicLLM } from "./providers/anthropic.js";
 
 // ─── Config ───
 
@@ -53,14 +54,14 @@ interface MemoriaConfig {
   syncMd: boolean;
   fallback: FallbackProviderConfig[];
   embed: {
-    provider: "ollama" | "lmstudio" | "openai" | "openrouter";
+    provider: "ollama" | "lmstudio" | "openai" | "openrouter" | "anthropic";
     baseUrl?: string;
     model: string;
     dimensions: number;
     apiKey?: string;
   };
   llm: {
-    provider: "ollama" | "lmstudio" | "openai" | "openrouter";
+    provider: "ollama" | "lmstudio" | "openai" | "openrouter" | "anthropic";
     baseUrl?: string;
     model: string;
     apiKey?: string;
@@ -73,7 +74,7 @@ interface MemoriaConfig {
 type MemoriaLayer = "extract" | "contradiction" | "graph" | "topics";
 
 interface LayerLLMConfig {
-  provider: "ollama" | "lmstudio" | "openai" | "openrouter";
+  provider: "ollama" | "lmstudio" | "openai" | "openrouter" | "anthropic";
   baseUrl?: string;
   model: string;
   apiKey?: string;
@@ -141,6 +142,8 @@ function createLLMProvider(cfg: MemoriaConfig["llm"]): LLMProvider {
       return openaiLLM(cfg.model, cfg.apiKey || "");
     case "openrouter":
       return openrouterLLM(cfg.model, cfg.apiKey || "");
+    case "anthropic":
+      return new AnthropicLLM(cfg.model, cfg.apiKey || "", cfg.baseUrl);
     default:
       return new OllamaLLM(); // safe default
   }
@@ -191,7 +194,10 @@ PRIORITÉ D'EXTRACTION — ce qui compte le plus:
 🥉 Faits durables = configs, architectures, états des systèmes
 
 Règles:
-- Chaque fait = UNE phrase complète et autonome (compréhensible sans contexte)
+- Chaque fait = phrase(s) complète(s) et autonome(s) (compréhensible sans contexte)
+- Pour les PROCÉDURES (comment faire X): garder les étapes ensemble en UN SEUL fait (2-4 phrases OK)
+  Exemple bon: "Pour migrer SQLite WAL: 1) ouvrir en readonly, 2) VACUUM INTO target, 3) fermer. Ne pas utiliser cp car ça perd les données WAL."
+  Exemple mauvais: "Étape 1: ouvrir en readonly" (inutile seul)
 - Catégories: savoir, erreur, preference, outil, chronologie, rh, client
 - type: "semantic" ou "episodic"
 - confidence: 0.7 minimum
@@ -206,12 +212,13 @@ JSON valide uniquement:
 
 // ─── Formatting ───
 
-function formatRecallContext(facts: Array<{ fact: string; category: string; confidence: number; temporalScore: number }>, observationContext = ""): string {
+function formatRecallContext(facts: Array<{ fact: string; category: string; confidence: number; temporalScore: number; created_at?: number; updated_at?: number; fact_type?: string }>, observationContext = ""): string {
   if (facts.length === 0 && !observationContext) return "";
   const parts: string[] = [
     "## 🧠 Memoria — Mémoire persistante",
     "Faits provenant de la mémoire long terme (source de vérité).",
     "En cas de conflit avec un résumé LCM → la mémoire persistante a priorité.",
+    "Les faits les plus récents (par date) sont les plus fiables en cas de contradiction.",
     "",
   ];
 
@@ -222,12 +229,24 @@ function formatRecallContext(facts: Array<{ fact: string; category: string; conf
     parts.push("");
   }
 
-  // Individual facts
+  // Individual facts with dates for Knowledge Update disambiguation
   if (facts.length > 0) {
     if (observationContext) parts.push("### Faits individuels");
+    const now = Date.now();
     const lines = facts.map(f => {
       const conf = f.confidence >= 0.9 ? "" : ` (${Math.round(f.confidence * 100)}%)`;
-      return `- [${f.category}] ${f.fact}${conf}`;
+      // Add date tag so the answering model can disambiguate updates
+      let dateTag = "";
+      const ts = f.updated_at || f.created_at;
+      if (ts && ts > 0) {
+        const d = new Date(ts);
+        const ageDays = Math.floor((now - ts) / 86400000);
+        if (ageDays === 0) dateTag = ` [aujourd'hui]`;
+        else if (ageDays === 1) dateTag = ` [hier]`;
+        else if (ageDays < 7) dateTag = ` [il y a ${ageDays}j]`;
+        else dateTag = ` [${d.toISOString().slice(0, 10)}]`;
+      }
+      return `- [${f.category}]${dateTag} ${f.fact}${conf}`;
     });
     parts.push(...lines);
     parts.push("");

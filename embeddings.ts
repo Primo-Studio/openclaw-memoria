@@ -172,9 +172,13 @@ export class EmbeddingManager {
     temporalWeight?: number; // Weight for temporal score (default 0.2)
     minSimilarity?: number;
   }): Promise<EmbeddedFact[]> {
-    const ftsW = options?.ftsWeight ?? 0.4;
-    const cosW = options?.cosineWeight ?? 0.4;
-    const tempW = options?.temporalWeight ?? 0.2;
+    // Adaptive weights: short/generic queries → favor semantic over FTS
+    // because FTS on a 1-word query like "Bureau" matches too many facts
+    const queryWords = query.trim().split(/\s+/).filter(w => w.length > 2);
+    const isShortQuery = queryWords.length <= 2;
+    const ftsW = options?.ftsWeight ?? (isShortQuery ? 0.20 : 0.40);
+    const cosW = options?.cosineWeight ?? (isShortQuery ? 0.55 : 0.40);
+    const tempW = options?.temporalWeight ?? (isShortQuery ? 0.25 : 0.20);
     const minSim = options?.minSimilarity ?? 0.25;
 
     // 1. FTS5 search

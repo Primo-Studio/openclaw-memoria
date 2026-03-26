@@ -1,5 +1,40 @@
 # Changelog
 
+## [3.2.0] - 2026-03-26
+### Fixed — Reasoning Model Support (I3+I4)
+- **Ollama provider**: Now reads `thinking` field when `response` is empty (GPT-OSS, Qwen3.5 reasoning models)
+- **OpenAI-compat provider**: Now reads `reasoning_content` and `reasoning` fields (LM Studio GPT-OSS)
+- **Impact**: Clients using reasoning models no longer get empty extractions/answers
+
+### Fixed — Knowledge Update Recall (I1+I2)
+- **Recall now shows dates**: Each fact displays age (`[aujourd'hui]`, `[il y a 3j]`, `[2026-03-20]`)
+- **Header instructs**: "Les faits les plus récents sont les plus fiables en cas de contradiction"
+- **Impact**: Answering model can now disambiguate when old and new versions of a fact coexist
+
+### Improved — Procedure Extraction (I5)
+- **Multi-sentence facts allowed**: Procedures can now be captured as 2-4 sentences in a single fact
+- **Prompt guidance**: Examples show good vs bad procedure capture
+- **Impact**: Workflows and how-to knowledge preserved as coherent units
+
+### Improved — Short Query Handling (I6)
+- **Adaptive FTS/cosine weights**: Short queries (<3 words) now favor semantic search (55%) over FTS (20%)
+- **Impact**: Generic queries like "Bureau" return semantically relevant facts instead of keyword noise
+
+### Added — Provider Interface Cleanup (I7)
+- **`generateWithMeta`** added to LLMProvider interface (optional, with default implementation)
+- **All providers** (Ollama, OpenAI-compat) now implement generateWithMeta
+- **Impact**: Providers are fully interchangeable with FallbackChain
+
+### Added — Anthropic Provider (I8+A3)
+- **New `providers/anthropic.ts`**: Native Claude API support (`/v1/messages` format)
+- **Supported in**: LLM config, fallback chain, per-layer overrides
+- **Models**: Any Claude model (Haiku, Sonnet, Opus) via API key
+- **Impact**: Clients can use Claude directly without routing through OpenRouter
+
+### Added — Config Schema Update
+- **`anthropic`** added to `llm.provider` enum in plugin schema
+- **Fallback chain** supports `type: "anthropic"` entries
+
 ## [3.1.1] - 2026-03-25
 ### Improved — Extraction Quality (Results over Status)
 - **Problem**: Extraction captured "test passed ✅" but lost actual results like "Retrieval 92%, bottleneck = local model"

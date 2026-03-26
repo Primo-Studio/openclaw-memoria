@@ -5,7 +5,7 @@
  * Only the baseUrl and apiKey differ.
  */
 
-import type { EmbedProvider, LLMProvider } from "./types.js";
+import type { EmbedProvider, LLMProvider, GenerateOptions, GenerateResult } from "./types.js";
 
 export class OpenAICompatEmbed implements EmbedProvider {
   readonly name: string;
@@ -56,7 +56,17 @@ export class OpenAICompatLLM implements LLMProvider {
     this.apiKey = apiKey;
   }
 
-  async generate(prompt: string, options?: { maxTokens?: number; temperature?: number; format?: "json" | "text"; timeoutMs?: number }): Promise<string> {
+  async generateWithMeta(prompt: string, options?: GenerateOptions): Promise<GenerateResult | null> {
+    const start = Date.now();
+    try {
+      const response = await this.generate(prompt, options);
+      return { response, provider: this.name, attemptMs: Date.now() - start, fallbacksUsed: 0 };
+    } catch {
+      return null;
+    }
+  }
+
+  async generate(prompt: string, options?: GenerateOptions): Promise<string> {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (this.apiKey) headers["Authorization"] = `Bearer ${this.apiKey}`;
 
@@ -77,8 +87,11 @@ export class OpenAICompatLLM implements LLMProvider {
       signal: AbortSignal.timeout(options?.timeoutMs ?? 30000),
     });
     if (!res.ok) throw new Error(`${this.name} LLM error: ${res.status} ${await res.text()}`);
-    const data = await res.json() as { choices: Array<{ message: { content: string } }> };
-    return data.choices[0]?.message?.content || "";
+    const data = await res.json() as { choices: Array<{ message: { content?: string; reasoning_content?: string; reasoning?: string } }> };
+    const msg = data.choices[0]?.message;
+    if (!msg) return "";
+    // Reasoning models (GPT-OSS via LM Studio) put output in reasoning/reasoning_content
+    return msg.content || msg.reasoning_content || msg.reasoning || "";
   }
 }
 
