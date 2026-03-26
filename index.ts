@@ -41,6 +41,7 @@ import { OpenAICompatLLM, OpenAICompatEmbed, lmStudioLLM, lmStudioEmbed, openaiL
 import type { EmbedProvider, LLMProvider } from "./providers/types.js";
 import { EmbedFallback } from "./embed-fallback.js";
 import { ObservationManager } from "./observations.js";
+import { FactClusterManager } from "./fact-clusters.js";
 import { AnthropicLLM } from "./providers/anthropic.js";
 
 // ─── Config ───
@@ -425,6 +426,8 @@ export function register(api: OpenClawPluginApi): void {
     maxEvidencePerObservation: 15,
   });
 
+  const clusterMgr = new FactClusterManager(db, chain);
+
   // Ensure sync column exists
   mdSync.ensureSchema(db);
 
@@ -433,6 +436,7 @@ export function register(api: OpenClawPluginApi): void {
   const gStats = graph.stats();
   const tStats = topicMgr.stats();
   const oStats = observationMgr.stats();
+  const cStats = clusterMgr.stats();
   // Read version from package.json (avoid hardcoding)
   let pluginVersion = "3.2.0";
   try {
@@ -440,7 +444,7 @@ export function register(api: OpenClawPluginApi): void {
     const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
     pluginVersion = pkg.version || pluginVersion;
   } catch { /* fallback to hardcoded */ }
-  api.logger.info?.(`memoria: v${pluginVersion} registered (${stats.active} facts, ${oStats.total} observations, ${embCount} embedded, ${gStats.entities} entities, ${gStats.relations} relations, ${tStats.totalTopics} topics, fallback: ${chain.providerNames.join(" → ")})`);
+  api.logger.info?.(`memoria: v${pluginVersion} registered (${stats.active} facts, ${cStats.total} clusters, ${oStats.total} observations, ${embCount} embedded, ${gStats.entities} entities, ${gStats.relations} relations, ${tStats.totalTopics} topics, fallback: ${chain.providerNames.join(" → ")})`);
   
   // Log .md file sizes
   const fileSizes = mdRegen.fileSizes();
@@ -515,6 +519,19 @@ export function register(api: OpenClawPluginApi): void {
       }
       if (obsUpdated > 0 || obsCreated > 0) {
         api.logger.info?.(`memoria: [${source}] observations — ${obsCreated} created, ${obsUpdated} updated`);
+      }
+    } catch { /* non-critical */ }
+
+    // 5. Fact Clusters: generate/refresh thematic summaries
+    try {
+      const clusterResult = await clusterMgr.generateClusters();
+      if (clusterResult.created > 0 || clusterResult.updated > 0) {
+        api.logger.info?.(`memoria: [${source}] clusters — ${clusterResult.created} created, ${clusterResult.updated} updated, ${clusterResult.stale} stale`);
+        // Embed new clusters
+        const toEmbed = embeddingMgr.unembeddedFacts(5);
+        if (toEmbed.length > 0) {
+          await embeddingMgr.embedBatch(toEmbed.map(f => ({ id: f.id, text: f.fact })));
+        }
       }
     } catch { /* non-critical */ }
 

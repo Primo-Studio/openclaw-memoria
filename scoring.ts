@@ -111,6 +111,11 @@ export function scoreFact(fact: Fact, now = Date.now()): ScoredFact {
     score *= DECAY_CONFIG.stalePenalty;
   }
 
+  // 6. Cluster boost — clusters are aggregated "dossiers", more info-dense
+  if (factType === "cluster") {
+    score *= 1.15; // 15% boost: clusters contain multiple facts = higher recall value
+  }
+
   return { ...fact, temporalScore: score, ageHours, decayFactor };
 }
 
