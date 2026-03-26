@@ -21,6 +21,7 @@
  *   after_compaction → extract durable facts from summaries
  */
 
+import fs from "fs";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { MemoriaDB } from "./db.js";
 import { scoreAndRank, getHotFacts, HOT_TIER_CONFIG } from "./scoring.js";
@@ -428,7 +429,14 @@ export function register(api: OpenClawPluginApi): void {
   const gStats = graph.stats();
   const tStats = topicMgr.stats();
   const oStats = observationMgr.stats();
-  api.logger.info?.(`memoria: v3.0.0 registered (${stats.active} facts, ${oStats.total} observations, ${embCount} embedded, ${gStats.entities} entities, ${gStats.relations} relations, ${tStats.totalTopics} topics, fallback: ${chain.providerNames.join(" → ")})`);
+  // Read version from package.json (avoid hardcoding)
+  let pluginVersion = "3.2.0";
+  try {
+    const pkgPath = new URL("./package.json", import.meta.url);
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
+    pluginVersion = pkg.version || pluginVersion;
+  } catch { /* fallback to hardcoded */ }
+  api.logger.info?.(`memoria: v${pluginVersion} registered (${stats.active} facts, ${oStats.total} observations, ${embCount} embedded, ${gStats.entities} entities, ${gStats.relations} relations, ${tStats.totalTopics} topics, fallback: ${chain.providerNames.join(" → ")})`);
   
   // Log .md file sizes
   const fileSizes = mdRegen.fileSizes();
@@ -792,7 +800,7 @@ export function register(api: OpenClawPluginApi): void {
 
       const prompt = LLM_EXTRACT_PROMPT
         .replace("{TEXT}", summary.slice(0, 4000))
-        .replace("{MAX_FACTS}", "5"); // Allow more from compaction summaries
+        .replace("{MAX_FACTS}", String(cfg.captureMaxFacts)); // Same limit as agent_end
 
       const result = await extractLlm.generateWithMeta(prompt, {
         maxTokens: 1024,

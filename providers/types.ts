@@ -33,7 +33,7 @@ export interface LLMProvider {
 }
 
 export interface ProviderConfig {
-  type: "ollama" | "lmstudio" | "openai" | "openrouter";
+  type: "ollama" | "lmstudio" | "openai" | "openrouter" | "anthropic";
   baseUrl: string;
   model: string;
   apiKey?: string;

@@ -1,8 +1,15 @@
-# 🧠 Memoria v3.0.0 — Multi-layer Memory Plugin for OpenClaw
+# 🧠 Memoria v3.2.0 — Multi-layer Memory Plugin for OpenClaw
 
 Brain-inspired persistent memory for AI agents. SQLite-backed, fully local, zero cloud dependency.
 
-**v3.0.0 — What's new:**
+**v3.2.0 — What's new:**
+- **Reasoning Model Support** — Ollama `thinking` field + LM Studio `reasoning_content` now captured (GPT-OSS, Qwen3.5)
+- **Dated Recall** — facts show age (`[today]`, `[3d ago]`, `[2026-03-20]`) for Knowledge Update disambiguation
+- **Anthropic Provider** — native Claude API support (`/v1/messages`) alongside Ollama, LM Studio, OpenAI, OpenRouter
+- **Adaptive FTS** — short queries favor semantic search; long queries balance FTS + cosine
+- **Multi-sentence Procedures** — extraction preserves multi-step processes as single coherent facts
+
+**v3.0.0:**
 - **Semantic vs Episodic** — facts classified by durability, different decay rates
 - **Observations** — living multi-fact syntheses that evolve (Hindsight-inspired)
 - **Procedural Memory** — tricks, patterns, "what worked" are preserved, not filtered
@@ -317,6 +324,7 @@ En cas de conflit avec un résumé LCM → la mémoire persistante a priorité.
 
   "fallback": [
     { "provider": "ollama", "model": "gemma3:4b", "baseUrl": "http://localhost:11434" },
+    { "provider": "anthropic", "model": "claude-haiku-3-5", "apiKey": "sk-ant-..." },
     { "provider": "openai", "model": "gpt-5.4-nano", "apiKey": "sk-..." },
     { "provider": "lmstudio", "model": "auto", "baseUrl": "http://localhost:1234/v1" }
   ],
@@ -378,8 +386,11 @@ Unknown categories → `savoir` (via `normalizeCategory()`).
 | `scoring.ts` | 147 | Temporal decay + hot tier | ❌ | ❌ |
 | `budget.ts` | 122 | Adaptive budget | ❌ | ❌ |
 | `embed-fallback.ts` | 63 | EmbedFallback chain | ❌ | multi embed |
-| `providers/*.ts` | ~215 | Ollama, OpenAI-compat | — | HTTP |
-| **Total** | **~5200** | | | |
+| `providers/ollama.ts` | ~80 | Ollama (local, 0€) + thinking support | — | HTTP |
+| `providers/openai-compat.ts` | ~110 | LM Studio, OpenAI, OpenRouter + reasoning | — | HTTP |
+| `providers/anthropic.ts` | ~75 | **Claude API native** (`/v1/messages`) | — | HTTP |
+| `providers/types.ts` | ~50 | LLMProvider, EmbedProvider interfaces | — | — |
+| **Total** | **~5500** | | | |
 
 ---
 
