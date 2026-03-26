@@ -42,6 +42,7 @@ import type { EmbedProvider, LLMProvider } from "./providers/types.js";
 import { EmbedFallback } from "./embed-fallback.js";
 import { ObservationManager } from "./observations.js";
 import { FactClusterManager } from "./fact-clusters.js";
+import { FeedbackManager } from "./feedback.js";
 import { AnthropicLLM } from "./providers/anthropic.js";
 
 // ─── Config ───
@@ -434,6 +435,7 @@ export function register(api: OpenClawPluginApi): void {
   });
 
   const clusterMgr = new FactClusterManager(db, chain);
+  const feedbackMgr = new FeedbackManager(db);
 
   // Ensure sync column exists
   mdSync.ensureSchema(db);
@@ -451,7 +453,9 @@ export function register(api: OpenClawPluginApi): void {
     const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
     pluginVersion = pkg.version || pluginVersion;
   } catch { /* fallback to hardcoded */ }
-  api.logger.info?.(`memoria: v${pluginVersion} registered (${stats.active} facts, ${cStats.total} clusters, ${oStats.total} observations, ${embCount} embedded, ${gStats.entities} entities, ${gStats.relations} relations, ${tStats.totalTopics} topics, fallback: ${chain.providerNames.join(" → ")})`);
+  const fbStats = feedbackMgr.getStats();
+  const fbNote = fbStats.totalWithFeedback > 0 ? `, feedback: ${fbStats.totalWithFeedback} tracked (avg ${fbStats.avgUsefulness.toFixed(1)})` : "";
+  api.logger.info?.(`memoria: v${pluginVersion} registered (${stats.active} facts, ${cStats.total} clusters, ${oStats.total} observations, ${embCount} embedded, ${gStats.entities} entities, ${gStats.relations} relations, ${tStats.totalTopics} topics${fbNote}, fallback: ${chain.providerNames.join(" → ")})`);
   
   // Log .md file sizes
   const fileSizes = mdRegen.fileSizes();
@@ -688,9 +692,10 @@ export function register(api: OpenClawPluginApi): void {
 
         const context = formatRecallContext(finalFacts, observationContext);
 
-        // Track access
+        // Track access + feedback loop
         const ids = finalFacts.map(f => f.id);
         try { db.trackAccess(ids); } catch { /* non-critical */ }
+        try { feedbackMgr.recordRecall(ids, prompt); } catch { /* non-critical */ }
 
         const hotNote = hotLimit > 0 ? `, ${hotLimit} hot` : "";
         const graphNote = graphFacts.length > 0 ? `, +${graphFacts.length} graph` : "";
@@ -713,6 +718,33 @@ export function register(api: OpenClawPluginApi): void {
       if (!event.success || !event.messages || event.messages.length === 0) return;
 
       try {
+        // ── Feedback loop: measure if recalled facts were used in responses ──
+        try {
+          const assistantTexts: string[] = [];
+          for (const msg of event.messages) {
+            if (!msg || typeof msg !== "object") continue;
+            const m = msg as Record<string, unknown>;
+            if (m.role !== "assistant") continue;
+            const c = m.content;
+            if (typeof c === "string" && c.length > 10) assistantTexts.push(c);
+            else if (Array.isArray(c)) {
+              for (const part of c) {
+                if (part && typeof part === "object" && (part as any).type === "text") {
+                  const t = (part as any).text;
+                  if (typeof t === "string" && t.length > 10) assistantTexts.push(t);
+                }
+              }
+            }
+          }
+          if (assistantTexts.length > 0) {
+            const responseText = assistantTexts.slice(-3).join("\n");
+            const fb = await feedbackMgr.processResponse(responseText);
+            if (fb.used + fb.ignored > 0) {
+              api.logger.debug?.(`memoria: feedback — ${fb.used} used, ${fb.ignored} ignored (${fb.details.length} total)`);
+            }
+          }
+        } catch { /* feedback is non-critical */ }
+
         // Collect user + assistant texts
         const texts: string[] = [];
         for (const msg of event.messages) {

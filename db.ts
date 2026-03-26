@@ -98,6 +98,7 @@ export class MemoriaDB {
     if (version < 1) this.migrateV1();
     // V2: add fact_type column for semantic/episodic distinction
     this.migrateAddFactType();
+    this.migrateAddFeedbackColumns();
     this.setSchemaVersion(SCHEMA_VERSION);
   }
 
@@ -111,6 +112,23 @@ export class MemoriaDB {
         this.db.exec("CREATE INDEX IF NOT EXISTS idx_facts_type ON facts(fact_type)");
       }
     } catch { /* column already exists or table not yet created */ }
+  }
+
+  /** Migration: add feedback loop columns (usefulness, recall_count, used_count) */
+  private migrateAddFeedbackColumns(): void {
+    try {
+      const cols = this.db.prepare("PRAGMA table_info(facts)").all() as Array<{ name: string }>;
+      const colNames = new Set(cols.map(c => c.name));
+      if (!colNames.has("usefulness")) {
+        this.db.exec("ALTER TABLE facts ADD COLUMN usefulness REAL DEFAULT 0");
+      }
+      if (!colNames.has("recall_count")) {
+        this.db.exec("ALTER TABLE facts ADD COLUMN recall_count INTEGER DEFAULT 0");
+      }
+      if (!colNames.has("used_count")) {
+        this.db.exec("ALTER TABLE facts ADD COLUMN used_count INTEGER DEFAULT 0");
+      }
+    } catch { /* columns already exist or table not yet created */ }
   }
 
   private getSchemaVersion(): number {

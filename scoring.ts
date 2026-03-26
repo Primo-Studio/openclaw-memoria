@@ -116,6 +116,31 @@ export function scoreFact(fact: Fact, now = Date.now()): ScoredFact {
     score *= 1.15; // 15% boost: clusters contain multiple facts = higher recall value
   }
 
+  // 7. Feedback loop: usefulness from actual usage in responses
+  const usefulness = (fact as any).usefulness ?? 0;
+  const recallCount = (fact as any).recall_count ?? 0;
+  if (recallCount > 0) {
+    // Useful facts get boosted, consistently ignored facts get penalized
+    // Use ratio: used_count / recall_count → 0-1 scale
+    const usedCount = (fact as any).used_count ?? 0;
+    const usageRatio = usedCount / recallCount;
+    
+    if (usageRatio > 0.5) {
+      // Used more than half the time → boost proportional to usage
+      score *= (1 + 0.2 * usageRatio); // Up to +20%
+    } else if (recallCount >= 5 && usageRatio < 0.1) {
+      // Recalled 5+ times but almost never used → deprioritize
+      score *= 0.8; // -20%
+    }
+    
+    // Direct usefulness score influence (capped)
+    if (usefulness > 3) {
+      score *= 1.1; // Proven useful: +10%
+    } else if (usefulness < -2) {
+      score *= 0.85; // Proven useless: -15%
+    }
+  }
+
   return { ...fact, temporalScore: score, ageHours, decayFactor };
 }
 
