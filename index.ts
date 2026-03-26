@@ -168,6 +168,10 @@ STOCKER — comme un cerveau humain qui apprend:
 ✅ Préférences utilisateur ("Neto veut du step-by-step")
 ✅ États durables ("Sol tourne Memoria v2.7.0 en local")
 ✅ Événements importants avec date ("25/03 — bug api.pluginConfig corrigé")
+✅ RÉSULTATS DE TESTS/BENCHMARKS avec chiffres ("Benchmark LongMemEval-S: Retrieval 92% (11/12), RAG 25%, bottleneck = modèle local pas le retrieval")
+✅ CONCLUSIONS tirées d'expériences ("GPT-OSS 20B est 4x plus rapide que Qwen 35B mais accuracy 0% → le problème est l'absence de RAG, pas le modèle")
+✅ COMPARAISONS mesurées ("AMT retrieval 100% en 291s vs ByteRover 50% en 2297s — AMT plus rapide et plus précis")
+✅ CARACTÉRISTIQUES machine/infra ("Mac Mini Sol = 64 Go RAM, Ollama + LM Studio installés")
 
 GÉNÉRALISER — quand un pattern se répète:
 🔄 Si le même type de problème arrive 2+ fois → stocker la RÈGLE GÉNÉRALE, pas juste le cas
@@ -177,8 +181,14 @@ GÉNÉRALISER — quand un pattern se répète:
 NE PAS STOCKER — seulement le jetable:
 ❌ TODOs sans contexte ("pull X", "faire Y") — SAUF si explique POURQUOI/COMMENT
 ❌ Confirmations vides ("ok", "merci", "compris", "c'est fait")
-❌ Narration temps réel ("je lis le fichier", "je lance le test")
+❌ Narration sans résultat ("je lis le fichier", "je regarde") — MAIS stocker si un RÉSULTAT suit ("j'ai testé X → résultat Y")
 ❌ Évidences triviales ("Node.js est installé") sauf si c'était un problème résolu
+❌ Statuts binaires sans info ("test passé ✅", "ça marche") — stocker plutôt les CHIFFRES et CONCLUSIONS
+
+PRIORITÉ D'EXTRACTION — ce qui compte le plus:
+🥇 Apprentissages = ce qu'on a APPRIS en faisant (conclusions, règles découvertes)
+🥈 Résultats mesurés = chiffres, métriques, comparaisons avant/après
+🥉 Faits durables = configs, architectures, états des systèmes
 
 Règles:
 - Chaque fait = UNE phrase complète et autonome (compréhensible sans contexte)
