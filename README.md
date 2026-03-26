@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="assets/logo.png" alt="Memoria" width="200" />
-</p>
-
 # 🧠 Memoria v3.4.1 — Multi-layer Memory Plugin for OpenClaw
 
 Brain-inspired persistent memory for AI agents. SQLite-backed, fully local, zero cloud dependency.
