@@ -1,6 +1,10 @@
 ---
 name: openclaw-memoria
 description: Persistent memory plugin for OpenClaw — 12 layers of brain-inspired memory (semantic/episodic facts, observations, knowledge graph, fact clusters, adaptive recall). SQLite-backed, fully local, zero cloud dependency. Works with Ollama, LM Studio, OpenAI, OpenRouter, Anthropic.
+license: Apache-2.0
+homepage: https://github.com/Primo-Studio/openclaw-memoria
+repository: https://github.com/Primo-Studio/openclaw-memoria
+author: Primo-Studio by Neto Pompeu
 metadata:
   openclaw:
     kind: plugin
@@ -11,6 +15,8 @@ metadata:
           description: "Optional — only needed if using OpenAI as fallback provider"
         - name: ANTHROPIC_API_KEY
           description: "Optional — only needed if using Anthropic as provider"
+        - name: OPENROUTER_API_KEY
+          description: "Optional — only needed if using OpenRouter as fallback provider"
     install:
       - id: memoria
         kind: script
@@ -68,3 +74,7 @@ curl -fsSL https://raw.githubusercontent.com/Primo-Studio/openclaw-memoria/main/
 - Fallback chain for resilience
 - Zero config needed — smart defaults
 - 82% accuracy on LongMemEval-S benchmark
+
+## Feedback
+
+Found a bug? Have a suggestion? Open an issue on [GitHub](https://github.com/Primo-Studio/openclaw-memoria/issues) or reach us on [X @Nitix_](https://x.com/Nitix_).
