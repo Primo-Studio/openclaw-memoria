@@ -1,4 +1,8 @@
-# 🧠 Memoria v3.4.0 — Multi-layer Memory Plugin for OpenClaw
+<p align="center">
+  <img src="assets/logo.png" alt="Memoria" width="200" />
+</p>
+
+# 🧠 Memoria v3.4.1 — Multi-layer Memory Plugin for OpenClaw
 
 Brain-inspired persistent memory for AI agents. SQLite-backed, fully local, zero cloud dependency.
 
@@ -435,6 +439,16 @@ Unknown categories → `savoir` (via `normalizeCategory()`).
 | `OPENCLAW_WORKSPACE` | index.ts, migrate.ts | `~/.openclaw/workspace` |
 | `HOME` | Fallback workspace | system |
 | `OPENAI_API_KEY` | Fallback chain | none |
+
+---
+
+## Roadmap
+
+| Version | Feature | Status |
+|---------|---------|--------|
+| v3.5.0 | **Image Memory Layer** — vision model describes images, extracts important details (passwords, preferences, design refs, locations), stores as durable facts with contextual importance scoring | 🔜 Planned |
+| v3.5.0 | **Smart Scorer** — cross-encoder reranker for precision recall | 🔜 Planned |
+| v3.6.0 | **Topic Dossiers** — auto-generated topic summaries with evidence links | 💡 Design |
 
 ---
 
