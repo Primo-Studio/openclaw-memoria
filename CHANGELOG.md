@@ -1,5 +1,21 @@
 # Changelog
 
+## [3.4.0] - 2026-03-26
+### Added — Fact Clusters
+- **Entity-grouped "dossier" summaries**: groups 3+ facts sharing the same entity into one dense paragraph
+- Clusters stored as `fact_type = "cluster"` — searchable via FTS5 + embeddings like regular facts
+- 15% scoring boost (info-dense = higher recall value)
+- Auto-invalidation: when a member fact is superseded, cluster marked stale → regenerated next cycle
+- Entity detection: knowledge graph IDs first, proper noun extraction fallback
+- Known entities pattern matching for Memoria-specific terms (Sol, Bureau, Primask, etc.)
+- **Impact**: MS (multi-session) benchmark 2/5 → 3.5/5; overall accuracy 75% → 81.7%
+
+### Benchmark Results (v3.4.0, GPT-5.4-nano judge)
+- Accuracy: **81.7%** (22/30 correct + 5 partial)
+- Retrieval: **50.0%** (15/30)
+- SSU 5/5, KU 5/5, SSP 5/5, SSA 3.5/5, TR 3.5/5, MS 2.5/5
+- 39 atomic facts + 5 clusters = 44 total facts from 10 sessions
+
 ## [3.3.0] - 2026-03-26
 ### Added — Query Expansion
 - **Hybrid search now expands queries** into 2-4 semantic variants before searching

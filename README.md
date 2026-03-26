@@ -1,19 +1,21 @@
-# 🧠 Memoria v3.2.0 — Multi-layer Memory Plugin for OpenClaw
+# 🧠 Memoria v3.4.0 — Multi-layer Memory Plugin for OpenClaw
 
 Brain-inspired persistent memory for AI agents. SQLite-backed, fully local, zero cloud dependency.
 
-**v3.2.0 — What's new:**
-- **Reasoning Model Support** — Ollama `thinking` field + LM Studio `reasoning_content` now captured (GPT-OSS, Qwen3.5)
-- **Dated Recall** — facts show age (`[today]`, `[3d ago]`, `[2026-03-20]`) for Knowledge Update disambiguation
-- **Anthropic Provider** — native Claude API support (`/v1/messages`) alongside Ollama, LM Studio, OpenAI, OpenRouter
-- **Adaptive FTS** — short queries favor semantic search; long queries balance FTS + cosine
-- **Multi-sentence Procedures** — extraction preserves multi-step processes as single coherent facts
+**v3.4.0 — What's new:**
+- **Fact Clusters** — entity-grouped "dossier" summaries. Like looking up a client folder: one search returns the complete file. Solves multi-session recall (MS +75% improvement)
+- **Query Expansion** — searches 2-4 semantic variants (synonyms, FR↔EN, abbreviations) for broader matching
+- **Topic-Aware Recall** — topics searched with expanded queries for cross-cutting retrieval
+
+**v3.2.0:**
+- **Reasoning Model Support** — Ollama `thinking` field + LM Studio `reasoning_content` (GPT-OSS, Qwen3.5)
+- **Dated Recall** — facts show age for Knowledge Update disambiguation
+- **Anthropic Provider** — native Claude API support alongside Ollama, LM Studio, OpenAI, OpenRouter
 
 **v3.0.0:**
 - **Semantic vs Episodic** — facts classified by durability, different decay rates
 - **Observations** — living multi-fact syntheses that evolve (Hindsight-inspired)
 - **Procedural Memory** — tricks, patterns, "what worked" are preserved, not filtered
-- **Smart TODO Filter** — blocks disposable tasks, keeps learned processes
 
 ## Quick Install
 
@@ -42,7 +44,7 @@ See [INSTALL.md](INSTALL.md) for advanced config and troubleshooting.
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│                       MEMORIA v3.2.0                          │
+│                       MEMORIA v3.4.0                          │
 │                                                              │
 │  Hooks: before_prompt_build │ agent_end │ after_compaction   │
 ├──────────────────────────────────────────────────────────────┤
@@ -76,7 +78,7 @@ See [INSTALL.md](INSTALL.md) for advanced config and troubleshooting.
 │  └──────────┘  └──────────┘  └──────────┘  └──────────┘    │
 │       ↓                                                      │
 │  POST-PROCESS:                                               │
-│  embed → graph → topics → observations → sync .md → regen   │
+│  embed → graph → topics → observations → clusters → .md     │
 │                                                              │
 ├──────────────────────────────────────────────────────────────┤
 │  Per-layer LLM: extract │ contradiction │ graph │ topics     │
@@ -214,12 +216,21 @@ Inspired by [Hindsight](https://github.com/joshka/hindsight) Observations: inste
 - Matching: embedding cosine similarity + keyword fallback
 - Recall: injected FIRST, before individual facts
 
-### Layer 10: .md Sync + Regen (`sync.ts` ~259 lines, `md-regen.ts` ~278 lines)
+### Layer 10: Fact Clusters (`fact-clusters.ts` ~340 lines) — NEW v3.4.0
+- **Entity grouping**: groups active facts by shared entity (via knowledge graph IDs or proper noun extraction)
+- **Cluster generation**: LLM synthesizes a dense "dossier" paragraph from 3-12 related facts
+- **Auto-invalidation**: when a member fact is superseded, cluster marked stale → regenerated next cycle
+- **Scoring boost**: clusters get 15% weight boost (info-dense = higher recall value)
+- **Stored as regular facts** (`fact_type = "cluster"`) → searchable via FTS5 + embeddings
+- Like a "client folder": one search hit returns the complete picture instead of scattered notes
+- **Impact**: MS (multi-session) benchmark from 2/5 → 3.5/5
+
+### Layer 11: .md Sync + Regen (`sync.ts` ~259 lines, `md-regen.ts` ~278 lines)
 - Sync: append new facts to workspace .md files (category → file mapping)
 - Regen: bounded regeneration (30d recent, 150 max/file, preserves manual sections)
 - Auto-trigger after capture if file >200 lines
 
-### Layer 11: Fallback Chain (`fallback.ts` ~247 lines)
+### Layer 12: Fallback Chain (`fallback.ts` ~247 lines)
 - `FallbackChain implements LLMProvider` — modules see no difference
 - Default order: Ollama (gemma3:4b) → OpenAI (gpt-5.4-nano) → LM Studio (auto)
 - Per-layer override via `llm.overrides.{extract|contradiction|graph|topics}`
@@ -273,8 +284,9 @@ En cas de conflit avec un résumé LCM → la mémoire persistante a priorité.
    c. topicMgr.onFactCaptured → keywords + association
    d. topicMgr.scanAndEmerge → emergence if threshold met
    e. observationMgr.onFactCaptured → match/create/update observations
-   f. mdSync.syncToMd → append to .md files
-   g. mdRegen.regenerate → auto if file > 200 lines
+   f. clusterMgr.generateClusters → entity-grouped summaries (NEW v3.4.0)
+   g. mdSync.syncToMd → append to .md files
+   h. mdRegen.regenerate → auto if file > 200 lines
 ```
 
 ---
@@ -372,8 +384,9 @@ Unknown categories → `savoir` (via `normalizeCategory()`).
 
 | File | Lines | Role | LLM | Provider |
 |------|-------|------|-----|----------|
-| `index.ts` | 863 | Plugin entry, hooks, postProcessNewFacts | extractLlm | — |
+| `index.ts` | 880 | Plugin entry, hooks, postProcessNewFacts | extractLlm | — |
 | `topics.ts` | 689 | Emergent topics, keywords | topicsLlm ×2 | + embedder |
+| `fact-clusters.ts` | 340 | **Entity-grouped summaries** (v3.4.0) | chain ×1 | — |
 | `db.ts` | 497 | SQLite CRUD + FTS5 + fact_type | ❌ | ❌ |
 | `observations.ts` | 450 | **Living syntheses** (v3.0.0) | chain ×1-2 | + embedder |
 | `graph.ts` | 391 | Knowledge graph + Hebbian | graphLlm | — |
@@ -390,7 +403,7 @@ Unknown categories → `savoir` (via `normalizeCategory()`).
 | `providers/openai-compat.ts` | 122 | LM Studio, OpenAI, OpenRouter + reasoning | — | HTTP |
 | `providers/anthropic.ts` | 77 | **Claude API native** (`/v1/messages`) | — | HTTP |
 | `providers/types.ts` | 41 | LLMProvider, EmbedProvider interfaces | — | — |
-| **Total** | **~5400** | | | |
+| **Total** | **~5750** | | | |
 
 ---
 
