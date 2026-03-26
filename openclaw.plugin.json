@@ -5,41 +5,209 @@
     "type": "object",
     "additionalProperties": true,
     "properties": {
-      "autoRecall": { "type": "boolean", "default": true },
-      "autoCapture": { "type": "boolean", "default": true },
-      "recallLimit": { "type": "number", "minimum": 1, "maximum": 20, "default": 12 },
-      "captureMaxFacts": { "type": "number", "minimum": 1, "maximum": 10, "default": 8 },
-      "defaultAgent": { "type": "string", "default": "koda" },
-      "contextWindow": { "type": "number", "minimum": 4096, "default": 200000 },
-      "workspacePath": { "type": "string" },
-      "syncMd": { "type": "boolean", "default": true },
+      "autoRecall": {
+        "type": "boolean",
+        "default": true
+      },
+      "autoCapture": {
+        "type": "boolean",
+        "default": true
+      },
+      "recallLimit": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 20,
+        "default": 12
+      },
+      "captureMaxFacts": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 10,
+        "default": 8
+      },
+      "defaultAgent": {
+        "type": "string",
+        "default": "koda"
+      },
+      "contextWindow": {
+        "type": "number",
+        "minimum": 4096,
+        "default": 200000
+      },
+      "workspacePath": {
+        "type": "string"
+      },
+      "syncMd": {
+        "type": "boolean",
+        "default": true
+      },
       "embed": {
         "type": "object",
         "additionalProperties": true,
         "properties": {
-          "provider": { "type": "string", "enum": ["ollama", "lmstudio", "openai", "openrouter"], "default": "ollama" },
-          "baseUrl": { "type": "string" },
-          "model": { "type": "string", "default": "nomic-embed-text-v2-moe" },
-          "dimensions": { "type": "number", "default": 768 },
-          "apiKey": { "type": "string" }
+          "provider": {
+            "type": "string",
+            "enum": [
+              "ollama",
+              "lmstudio",
+              "openai",
+              "openrouter"
+            ],
+            "default": "ollama"
+          },
+          "baseUrl": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string",
+            "default": "nomic-embed-text-v2-moe"
+          },
+          "dimensions": {
+            "type": "number",
+            "default": 768
+          },
+          "apiKey": {
+            "type": "string"
+          }
         }
       },
       "llm": {
         "type": "object",
         "additionalProperties": true,
         "properties": {
-          "provider": { "type": "string", "enum": ["ollama", "lmstudio", "openai", "openrouter", "anthropic"], "default": "ollama" },
-          "baseUrl": { "type": "string" },
-          "model": { "type": "string", "default": "gemma3:4b" },
-          "apiKey": { "type": "string" },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "ollama",
+              "lmstudio",
+              "openai",
+              "openrouter",
+              "anthropic"
+            ],
+            "default": "ollama"
+          },
+          "baseUrl": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string",
+            "default": "gemma3:4b"
+          },
+          "apiKey": {
+            "type": "string"
+          },
           "overrides": {
             "type": "object",
             "additionalProperties": true,
             "properties": {
-              "extract": { "$ref": "#/$defs/layerLlm" },
-              "contradiction": { "$ref": "#/$defs/layerLlm" },
-              "graph": { "$ref": "#/$defs/layerLlm" },
-              "topics": { "$ref": "#/$defs/layerLlm" }
+              "extract": {
+                "type": "object",
+                "properties": {
+                  "provider": {
+                    "type": "string",
+                    "enum": [
+                      "ollama",
+                      "lmstudio",
+                      "openai",
+                      "openrouter"
+                    ]
+                  },
+                  "baseUrl": {
+                    "type": "string"
+                  },
+                  "model": {
+                    "type": "string"
+                  },
+                  "apiKey": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "provider",
+                  "model"
+                ]
+              },
+              "contradiction": {
+                "type": "object",
+                "properties": {
+                  "provider": {
+                    "type": "string",
+                    "enum": [
+                      "ollama",
+                      "lmstudio",
+                      "openai",
+                      "openrouter"
+                    ]
+                  },
+                  "baseUrl": {
+                    "type": "string"
+                  },
+                  "model": {
+                    "type": "string"
+                  },
+                  "apiKey": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "provider",
+                  "model"
+                ]
+              },
+              "graph": {
+                "type": "object",
+                "properties": {
+                  "provider": {
+                    "type": "string",
+                    "enum": [
+                      "ollama",
+                      "lmstudio",
+                      "openai",
+                      "openrouter"
+                    ]
+                  },
+                  "baseUrl": {
+                    "type": "string"
+                  },
+                  "model": {
+                    "type": "string"
+                  },
+                  "apiKey": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "provider",
+                  "model"
+                ]
+              },
+              "topics": {
+                "type": "object",
+                "properties": {
+                  "provider": {
+                    "type": "string",
+                    "enum": [
+                      "ollama",
+                      "lmstudio",
+                      "openai",
+                      "openrouter"
+                    ]
+                  },
+                  "baseUrl": {
+                    "type": "string"
+                  },
+                  "model": {
+                    "type": "string"
+                  },
+                  "apiKey": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "provider",
+                  "model"
+                ]
+              }
             }
           }
         }
@@ -50,10 +218,18 @@
           "type": "object",
           "additionalProperties": true,
           "properties": {
-            "provider": { "type": "string" },
-            "baseUrl": { "type": "string" },
-            "model": { "type": "string" },
-            "apiKey": { "type": "string" }
+            "provider": {
+              "type": "string"
+            },
+            "baseUrl": {
+              "type": "string"
+            },
+            "model": {
+              "type": "string"
+            },
+            "apiKey": {
+              "type": "string"
+            }
           }
         }
       },
@@ -61,57 +237,136 @@
         "type": "object",
         "additionalProperties": true,
         "properties": {
-          "emergenceThreshold": { "type": "number", "minimum": 2, "maximum": 20 },
-          "mergeOverlap": { "type": "number", "minimum": 0.3, "maximum": 1.0 },
-          "subtopicThreshold": { "type": "number", "minimum": 3, "maximum": 50 },
-          "decayDays": { "type": "number", "minimum": 7, "maximum": 365 },
-          "scanInterval": { "type": "number", "minimum": 5, "maximum": 100 }
+          "emergenceThreshold": {
+            "type": "number",
+            "minimum": 2,
+            "maximum": 20
+          },
+          "mergeOverlap": {
+            "type": "number",
+            "minimum": 0.3,
+            "maximum": 1.0
+          },
+          "subtopicThreshold": {
+            "type": "number",
+            "minimum": 3,
+            "maximum": 50
+          },
+          "decayDays": {
+            "type": "number",
+            "minimum": 7,
+            "maximum": 365
+          },
+          "scanInterval": {
+            "type": "number",
+            "minimum": 5,
+            "maximum": 100
+          }
         }
       },
       "mdRegen": {
         "type": "object",
         "additionalProperties": true,
         "properties": {
-          "recentDays": { "type": "number", "minimum": 7, "maximum": 365 },
-          "maxFactsPerFile": { "type": "number", "minimum": 10, "maximum": 500 },
-          "archiveNotice": { "type": "boolean" }
+          "recentDays": {
+            "type": "number",
+            "minimum": 7,
+            "maximum": 365
+          },
+          "maxFactsPerFile": {
+            "type": "number",
+            "minimum": 10,
+            "maximum": 500
+          },
+          "archiveNotice": {
+            "type": "boolean"
+          }
         }
       },
       "observations": {
         "type": "object",
         "additionalProperties": true,
         "properties": {
-          "emergenceThreshold": { "type": "number", "minimum": 2, "maximum": 10, "default": 3 },
-          "matchThreshold": { "type": "number", "minimum": 0.2, "maximum": 0.9, "default": 0.6 },
-          "maxRecallObservations": { "type": "number", "minimum": 1, "maximum": 10, "default": 5 },
-          "maxEvidencePerObservation": { "type": "number", "minimum": 5, "maximum": 50, "default": 15 }
+          "emergenceThreshold": {
+            "type": "number",
+            "minimum": 2,
+            "maximum": 10,
+            "default": 3
+          },
+          "matchThreshold": {
+            "type": "number",
+            "minimum": 0.2,
+            "maximum": 0.9,
+            "default": 0.6
+          },
+          "maxRecallObservations": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 10,
+            "default": 5
+          },
+          "maxEvidencePerObservation": {
+            "type": "number",
+            "minimum": 5,
+            "maximum": 50,
+            "default": 15
+          }
         }
-      }
-    },
-    "$defs": {
-      "layerLlm": {
-        "type": "object",
-        "properties": {
-          "provider": { "type": "string", "enum": ["ollama", "lmstudio", "openai", "openrouter"] },
-          "baseUrl": { "type": "string" },
-          "model": { "type": "string" },
-          "apiKey": { "type": "string" }
-        },
-        "required": ["provider", "model"]
       }
     }
   },
   "uiHints": {
-    "autoRecall": { "label": "Auto-Recall", "help": "Inject relevant memories before each response" },
-    "autoCapture": { "label": "Auto-Capture", "help": "Extract facts after each agent turn" },
-    "recallLimit": { "label": "Recall Limit", "help": "Max facts injected (adaptive budget may lower this)", "advanced": true },
-    "contextWindow": { "label": "Context Window", "help": "Total tokens available (for budget calculation)", "advanced": true },
-    "syncMd": { "label": "Sync to .md", "help": "Auto-sync new facts to workspace .md files" },
-    "embed": { "label": "Embedding Provider", "help": "Default: Ollama + nomic-embed-text-v2-moe. Override only if needed.", "advanced": true },
-    "llm": { "label": "LLM Provider", "help": "Default: Ollama + gemma3:4b. Per-layer overrides available for extract/contradiction/graph/topics.", "advanced": true },
-    "fallback": { "label": "LLM Fallback Chain", "help": "Providers tried in order if primary fails. Default: Ollama → OpenAI → LM Studio.", "advanced": true },
-    "topics": { "label": "Topic Emergence", "help": "Auto-clustering settings", "advanced": true },
-    "mdRegen": { "label": ".md Regeneration", "help": "Bounded .md file regeneration settings", "advanced": true },
-    "observations": { "label": "Observations", "help": "Living multi-fact syntheses. emergenceThreshold=min facts to create, matchThreshold=cosine sim to update", "advanced": true }
+    "autoRecall": {
+      "label": "Auto-Recall",
+      "help": "Inject relevant memories before each response"
+    },
+    "autoCapture": {
+      "label": "Auto-Capture",
+      "help": "Extract facts after each agent turn"
+    },
+    "recallLimit": {
+      "label": "Recall Limit",
+      "help": "Max facts injected (adaptive budget may lower this)",
+      "advanced": true
+    },
+    "contextWindow": {
+      "label": "Context Window",
+      "help": "Total tokens available (for budget calculation)",
+      "advanced": true
+    },
+    "syncMd": {
+      "label": "Sync to .md",
+      "help": "Auto-sync new facts to workspace .md files"
+    },
+    "embed": {
+      "label": "Embedding Provider",
+      "help": "Default: Ollama + nomic-embed-text-v2-moe. Override only if needed.",
+      "advanced": true
+    },
+    "llm": {
+      "label": "LLM Provider",
+      "help": "Default: Ollama + gemma3:4b. Per-layer overrides available for extract/contradiction/graph/topics.",
+      "advanced": true
+    },
+    "fallback": {
+      "label": "LLM Fallback Chain",
+      "help": "Providers tried in order if primary fails. Default: Ollama \u2192 OpenAI \u2192 LM Studio.",
+      "advanced": true
+    },
+    "topics": {
+      "label": "Topic Emergence",
+      "help": "Auto-clustering settings",
+      "advanced": true
+    },
+    "mdRegen": {
+      "label": ".md Regeneration",
+      "help": "Bounded .md file regeneration settings",
+      "advanced": true
+    },
+    "observations": {
+      "label": "Observations",
+      "help": "Living multi-fact syntheses. emergenceThreshold=min facts to create, matchThreshold=cosine sim to update",
+      "advanced": true
+    }
   }
 }

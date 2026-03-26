@@ -1,5 +1,45 @@
 # Changelog
 
+## [3.5.0] - 2026-03-26
+### Added — Feedback Loop & Adaptive Learning
+- **Usefulness tracking** — each recalled fact now has `usefulness`, `recall_count`, `used_count` scores
+  - Facts referenced in the assistant's response → usefulness++ (boost)
+  - Facts ignored repeatedly → usefulness-- (sink naturally)
+  - Scoring integrates usefulness: high-use facts rise, never-used facts decay faster
+- **User correction detection** — detects patterns like "non c'est", "en fait", "actually", "that's wrong" (FR+EN)
+  - Penalizes the last-recalled facts that may have caused the error (-1.5 penalty)
+- **User frustration detection** — detects "putain", "bordel", "wtf", repeated questions
+  - Mild penalty (-0.5) on last-recalled facts
+- **Adaptive budget** — budget now learns from compactions:
+  - If recall → compaction within 5 min → penalty increases (injected too many facts)
+  - Penalty reduces limit by 1-3 facts (minimum always respected)
+  - Penalty decays naturally when compactions stop (self-correcting)
+
+### Added — Cross-Layer Supersede Cascade
+- When a fact is superseded, ALL layers are notified:
+  - **Observations**: superseded fact removed from evidence lists; empty observations deleted
+  - **Graph**: fact removed from relation contexts; orphaned relations weakened (-0.15) or pruned
+  - **Topics**: fact↔topic links removed; empty topics deleted; fact_count updated
+  - **Embeddings**: stale embedding vector deleted (no more ghost matches in semantic search)
+- Before: layers were disconnected. A superseded fact's ghost persisted in graph, topics, embeddings.
+
+### Added — Smart md-regen
+- Auto-triggers on 3 conditions (replaces dumb "lines > 200" check):
+  - `captures_since_regen >= 20` — enough new facts accumulated
+  - `last_regen_at > 7 days` — stale files even with few captures
+  - Any `.md file > 200 lines` — backward-compatible safety net
+- Tracks `captures_since_regen` and `last_regen_at` in meta table
+
+### Improved — Extraction Quality
+- **Anti-meta prompt** — blocks vague/meta-facts ("Le nouveau fait fournit des informations...")
+  - Requires at least one proper noun, number, or concrete command per fact
+- **Tighter dedup** — combined threshold lowered to 0.75 + new "8 first words identical" → instant duplicate
+- **Dynamic entity matching** — `SelectiveMemory` now loads entities from the Knowledge Graph DB (373+ entities)
+  instead of a hardcoded regex list. Refreshes every 5 min.
+
+### Fixed
+- DB cleanup: 307→294 active facts (13 superseded, 5 duplicate clusters purged, 3 meta-facts removed)
+
 ## [3.4.1] - 2026-03-26
 ### Improved — Install Wizard UX
 - **Clearer prompts**: "Tapez 1, 2 ou 3" on all choices (not just "Choix [1]")

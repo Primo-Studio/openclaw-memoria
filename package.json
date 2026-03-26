@@ -1,11 +1,19 @@
 {
-  "name": "memoria",
-  "version": "3.4.1",
+  "name": "memoria-plugin",
+  "version": "3.5.0",
   "description": "Multi-layer brain-inspired memory plugin for OpenClaw",
   "license": "Apache-2.0",
   "author": "Primo Studio",
   "main": "index.ts",
   "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "compat": {
+      "pluginApi": "1"
+    }
+  },
   "dependencies": {
     "better-sqlite3": "^11.10.0"
   },
