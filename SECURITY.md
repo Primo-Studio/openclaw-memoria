@@ -12,7 +12,7 @@
 
 If you discover a security vulnerability in Memoria, please **do not open a public issue**.
 
-Instead, email us at: **neto.pompeu@primo-studio.fr**
+Instead, email us at: **contact@primo-studio.fr**
 
 Include:
 - Description of the vulnerability

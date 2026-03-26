@@ -19,7 +19,7 @@ We are committed to providing a friendly, safe and welcoming environment for all
 
 ## Enforcement
 
-Instances of unacceptable behavior may be reported to **neto.pompeu@primo-studio.fr**. All complaints will be reviewed and investigated promptly.
+Instances of unacceptable behavior may be reported to **contact@primo-studio.fr**. All complaints will be reviewed and investigated promptly.
 
 ## Attribution
 
