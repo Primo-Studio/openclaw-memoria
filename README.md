@@ -410,3 +410,11 @@ Unknown categories → `savoir` (via `normalizeCategory()`).
 2. **~125 facts without topic** — absorbed over time by `scanAndEmerge()`
 3. **Observations keyword-only matching** — without embeddings, recall match rate is lower. Enable Ollama embeddings for best results
 4. **Category "connaissance" legacy** — ~1 fact with non-normalized category
+
+---
+
+## License
+
+Apache License 2.0 — see [LICENSE](LICENSE).
+
+Copyright 2026 Primo Studio.
