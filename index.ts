@@ -591,7 +591,8 @@ export function register(api: OpenClawPluginApi): void {
         const budgetResult = budget.compute(tokenEstimate);
         const recallLimit = budgetResult.limit;
 
-        api.logger.debug?.(`memoria: budget ${budgetResult.zone} (${(budgetResult.usage * 100).toFixed(0)}% used) → ${recallLimit} facts`);
+        const penaltyLog = budget.penalty > 0 ? `, penalty -${budget.penalty}` : "";
+        api.logger.debug?.(`memoria: budget ${budgetResult.zone} (${(budgetResult.usage * 100).toFixed(0)}% used${penaltyLog}) → ${recallLimit} facts`);
 
         // Hot tier: always-injected facts (frequently accessed, like a phone number you know by heart)
         const hotFactsRaw = db.hotFacts(HOT_TIER_CONFIG.minAccessCount, HOT_TIER_CONFIG.staleAfterDays, HOT_TIER_CONFIG.maxHotFacts);
@@ -702,10 +703,11 @@ export function register(api: OpenClawPluginApi): void {
 
         const context = formatRecallContext(finalFacts, observationContext);
 
-        // Track access + feedback loop
+        // Track access + feedback loop + budget learning
         const ids = finalFacts.map(f => f.id);
         try { db.trackAccess(ids); } catch { /* non-critical */ }
         try { feedbackMgr.recordRecall(ids, prompt); } catch { /* non-critical */ }
+        try { budget.recordRecall(recallLimit); } catch { /* non-critical */ }
 
         const hotNote = hotLimit > 0 ? `, ${hotLimit} hot` : "";
         const graphNote = graphFacts.length > 0 ? `, +${graphFacts.length} graph` : "";
@@ -866,6 +868,11 @@ export function register(api: OpenClawPluginApi): void {
   // ════════════════════════════════════════════════════════════════
 
   api.on("after_compaction", async (event, _ctx) => {
+    // Budget learning: compaction happened → we may have been too aggressive
+    try { budget.onCompaction(); } catch { /* non-critical */ }
+    const penaltyNote = budget.penalty > 0 ? ` (compaction penalty: -${budget.penalty} facts)` : "";
+    if (penaltyNote) api.logger.debug?.(`memoria: budget adjusted${penaltyNote}`);
+
     try {
       const summary = typeof event.summary === "string" ? event.summary : "";
       if (!summary || summary.length < 50) return;

@@ -59,11 +59,69 @@ export interface BudgetResult {
 export class AdaptiveBudget {
   private cfg: BudgetConfig;
 
+  // ─── Learning from compactions ───
+  // If we inject too many facts and compaction fires right after → we were too aggressive.
+  // Track this to self-correct.
+  private recentRecalls: Array<{ timestamp: number; limit: number }> = [];
+  private compactionPenalty = 0;       // 0-3: reduces limit by this many facts
+  private lastCompactionAt = 0;
+  private static readonly RECALL_WINDOW_MS = 5 * 60 * 1000; // 5 min window
+  private static readonly MAX_PENALTY = 3;
+
   constructor(config?: Partial<BudgetConfig>) {
     this.cfg = { ...DEFAULT_BUDGET_CONFIG, ...config };
     if (config?.thresholds) {
       this.cfg.thresholds = { ...DEFAULT_BUDGET_CONFIG.thresholds, ...config.thresholds };
     }
+  }
+
+  /** 
+   * Called when compaction happens. If a recall happened recently,
+   * we were likely too aggressive → increase penalty.
+   */
+  onCompaction(): void {
+    const now = Date.now();
+    this.lastCompactionAt = now;
+
+    // Was there a recall in the last 5 minutes?
+    const recentRecall = this.recentRecalls.find(
+      r => (now - r.timestamp) < AdaptiveBudget.RECALL_WINDOW_MS
+    );
+
+    if (recentRecall) {
+      // We injected facts and compaction fired soon after → too aggressive
+      this.compactionPenalty = Math.min(
+        this.compactionPenalty + 1,
+        AdaptiveBudget.MAX_PENALTY
+      );
+    }
+
+    // Clean old entries
+    this.recentRecalls = this.recentRecalls.filter(
+      r => (now - r.timestamp) < AdaptiveBudget.RECALL_WINDOW_MS * 2
+    );
+  }
+
+  /**
+   * Called after a successful recall to log timing.
+   */
+  recordRecall(limit: number): void {
+    this.recentRecalls.push({ timestamp: Date.now(), limit });
+    // Keep last 10
+    if (this.recentRecalls.length > 10) this.recentRecalls.shift();
+
+    // Decay penalty over time: if no compaction for 30 min, reduce penalty
+    if (this.compactionPenalty > 0 && this.lastCompactionAt > 0) {
+      const minSinceCompaction = (Date.now() - this.lastCompactionAt) / 60000;
+      if (minSinceCompaction > 30) {
+        this.compactionPenalty = Math.max(0, this.compactionPenalty - 1);
+      }
+    }
+  }
+
+  /** Current compaction penalty (for logging) */
+  get penalty(): number {
+    return this.compactionPenalty;
   }
 
   /**
@@ -99,6 +157,11 @@ export class AdaptiveBudget {
     } else {
       zone = "critical";
       limit = this.cfg.minFacts;
+    }
+
+    // Apply compaction penalty (learned from recent compactions)
+    if (this.compactionPenalty > 0) {
+      limit = Math.max(this.cfg.minFacts, limit - this.compactionPenalty);
     }
 
     // Ensure bounds
