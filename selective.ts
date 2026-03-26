@@ -254,6 +254,9 @@ export class SelectiveMemory {
   private entitiesLoadedAt = 0;
   private static ENTITY_CACHE_TTL = 5 * 60 * 1000; // Refresh every 5 min
 
+  /** Callback when a fact is superseded — lets other layers react (observations, clusters) */
+  onSupersede: ((supersededFactId: string, newFactId: string) => void) | null = null;
+
   constructor(db: MemoriaDB, llm: LLMProvider, config?: Partial<SelectiveConfig>, embedder?: EmbeddingManager) {
     this.db = db;
     this.llm = llm;
@@ -451,6 +454,8 @@ export class SelectiveMemory {
         });
         // Mark old as superseded
         this.db.supersedeFact(result.oldFactId, newFact.id);
+        // Notify other layers (observations, clusters)
+        try { this.onSupersede?.(result.oldFactId, newFact.id); } catch { /* non-critical */ }
         return { stored: true, action: "supersede", factId: newFact.id };
       }
 

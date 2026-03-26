@@ -437,6 +437,16 @@ export function register(api: OpenClawPluginApi): void {
   const clusterMgr = new FactClusterManager(db, chain);
   const feedbackMgr = new FeedbackManager(db);
 
+  // Cross-layer: when selective supersedes a fact, notify observations
+  selective.onSupersede = (supersededId, _newId) => {
+    try {
+      const affected = observationMgr.onFactSuperseded(supersededId);
+      if (affected > 0) {
+        api.logger.debug?.(`memoria: supersede cascade — ${affected} observations updated for ${supersededId}`);
+      }
+    } catch { /* non-critical */ }
+  };
+
   // Ensure sync column exists
   mdSync.ensureSchema(db);
 
@@ -554,13 +564,13 @@ export function register(api: OpenClawPluginApi): void {
       }
     } catch { /* non-critical */ }
 
-    // 7. Auto md-regen: check if .md files are getting too large
+    // 7. Auto md-regen: smart trigger (captures count OR stale OR file size)
     try {
-      const sizes = mdRegen.fileSizes();
-      const needsRegen = Object.values(sizes).some(s => s.lines > 200);
-      if (needsRegen) {
+      mdRegen.recordCapture();
+      const regenReason = mdRegen.shouldAutoRegen();
+      if (regenReason) {
         const regenResult = mdRegen.regenerate();
-        api.logger.info?.(`memoria: [${source}] auto md-regen triggered — ${regenResult.files} files regenerated, ${regenResult.archivedFacts} archived`);
+        api.logger.info?.(`memoria: [${source}] auto md-regen triggered (${regenReason}) — ${regenResult.files} files, ${regenResult.recentFacts} recent, ${regenResult.archivedFacts} archived`);
       }
     } catch { /* non-critical */ }
   }

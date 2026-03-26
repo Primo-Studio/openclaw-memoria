@@ -61,10 +61,78 @@ export class MdRegenManager {
   private cfg: MdRegenConfig;
   private workspacePath: string;
 
+  // Auto-regen thresholds
+  private static readonly CAPTURES_THRESHOLD = 20;     // Regen after N captures
+  private static readonly STALE_DAYS = 7;              // Regen if last regen > N days
+  private static readonly LINES_THRESHOLD = 200;       // Regen if any file > N lines
+
   constructor(db: MemoriaDB, workspacePath: string, config?: Partial<MdRegenConfig>) {
     this.db = db;
     this.workspacePath = workspacePath;
     this.cfg = { ...DEFAULT_CONFIG, ...config };
+  }
+
+  // ─── Auto-trigger logic ───
+
+  /** Increment capture counter. Call after each successful capture. */
+  recordCapture(): void {
+    try {
+      const raw = this.db.raw;
+      const row = raw.prepare("SELECT value FROM meta WHERE key = 'captures_since_regen'").get() as { value: string } | undefined;
+      const current = row ? parseInt(row.value, 10) : 0;
+      raw.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('captures_since_regen', ?)").run(String(current + 1));
+    } catch { /* non-critical */ }
+  }
+
+  /** Check if auto-regen should trigger. Returns reason or null. */
+  shouldAutoRegen(): string | null {
+    try {
+      const raw = this.db.raw;
+
+      // Check captures since last regen
+      const capturesRow = raw.prepare("SELECT value FROM meta WHERE key = 'captures_since_regen'").get() as { value: string } | undefined;
+      const capturesSince = capturesRow ? parseInt(capturesRow.value, 10) : 0;
+      if (capturesSince >= MdRegenManager.CAPTURES_THRESHOLD) {
+        return `captures=${capturesSince} >= ${MdRegenManager.CAPTURES_THRESHOLD}`;
+      }
+
+      // Check time since last regen
+      const lastRegenRow = raw.prepare("SELECT value FROM meta WHERE key = 'last_regen_at'").get() as { value: string } | undefined;
+      if (lastRegenRow) {
+        const lastRegen = parseInt(lastRegenRow.value, 10);
+        const daysSince = (Date.now() - lastRegen) / 86400000;
+        if (daysSince >= MdRegenManager.STALE_DAYS) {
+          return `stale=${Math.floor(daysSince)}d >= ${MdRegenManager.STALE_DAYS}d`;
+        }
+      } else {
+        // Never regenerated → trigger if there are synced facts
+        const syncedCount = raw.prepare("SELECT COUNT(*) as cnt FROM facts WHERE synced_to_md > 0 AND superseded = 0").get() as { cnt: number };
+        if (syncedCount.cnt > 30) {
+          return "never_regenerated";
+        }
+      }
+
+      // Check file sizes
+      const sizes = this.fileSizes();
+      for (const [file, info] of Object.entries(sizes)) {
+        if (info.lines > MdRegenManager.LINES_THRESHOLD) {
+          return `${file}=${info.lines} lines > ${MdRegenManager.LINES_THRESHOLD}`;
+        }
+      }
+
+      return null; // No regen needed
+    } catch {
+      return null;
+    }
+  }
+
+  /** Record that a regen just happened. Reset counter. */
+  private markRegenDone(): void {
+    try {
+      const raw = this.db.raw;
+      raw.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('captures_since_regen', '0')").run();
+      raw.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('last_regen_at', ?)").run(String(Date.now()));
+    } catch { /* non-critical */ }
   }
 
   /**
@@ -187,6 +255,9 @@ export class MdRegenManager {
 
     // Mark all facts as regenerated (synced_to_md = 2)
     this.db.raw.prepare("UPDATE facts SET synced_to_md = 2 WHERE superseded = 0 AND synced_to_md > 0").run();
+
+    // Reset counter + record timestamp
+    this.markRegenDone();
 
     return {
       files: filesRegenerated,

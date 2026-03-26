@@ -424,6 +424,39 @@ export class ObservationManager {
     this.db.raw.prepare("UPDATE observations SET access_count = access_count + 1, last_accessed_at = ? WHERE id = ?").run(now, id);
   }
 
+  /** 
+   * Called when a fact is superseded — remove it from evidence lists
+   * and flag affected observations for re-synthesis on next access.
+   */
+  onFactSuperseded(factId: string): number {
+    let affected = 0;
+    try {
+      const allObs = this.db.raw.prepare(
+        "SELECT id, evidence_ids FROM observations"
+      ).all() as Array<{ id: string; evidence_ids: string }>;
+
+      for (const obs of allObs) {
+        const evidenceIds: string[] = JSON.parse(obs.evidence_ids || "[]");
+        if (evidenceIds.includes(factId)) {
+          // Remove the superseded fact from evidence
+          const updated = evidenceIds.filter(id => id !== factId);
+          
+          if (updated.length === 0) {
+            // No evidence left → delete the observation
+            this.db.raw.prepare("DELETE FROM observations WHERE id = ?").run(obs.id);
+          } else {
+            // Mark as needing re-synthesis (bump revision to signal staleness)
+            this.db.raw.prepare(
+              "UPDATE observations SET evidence_ids = ?, updated_at = ? WHERE id = ?"
+            ).run(JSON.stringify(updated), Date.now(), obs.id);
+          }
+          affected++;
+        }
+      }
+    } catch { /* non-critical */ }
+    return affected;
+  }
+
   stats(): { total: number; avgRevision: number; avgEvidence: number } {
     const total = (this.db.raw.prepare("SELECT COUNT(*) as c FROM observations").get() as any)?.c || 0;
     if (total === 0) return { total: 0, avgRevision: 0, avgEvidence: 0 };
