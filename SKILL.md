@@ -1,6 +1,6 @@
 ---
 name: openclaw-memoria
-version: 3.7.0
+version: 3.7.3
 description: Multi-layer brain-inspired memory plugin for OpenClaw
 author: Primo Studio
 license: Apache-2.0
