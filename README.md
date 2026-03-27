@@ -1,29 +1,56 @@
 # 🧠 Memoria — Persistent Memory for OpenClaw
 
-Brain-inspired memory that learns from every conversation. Your AI assistant remembers what matters — forever.
+**Memory that thinks like you do.** Your AI assistant remembers what matters, forgets what doesn't, and gets better over time.
 
-**SQLite-backed · Fully local · Zero cloud dependency · Provider-agnostic**
+**SQLite-backed · Fully local · Zero cloud · Human-like memory architecture**
 
 ---
 
-## ✨ Features
+## ✨ What's New in v3.6.0
 
-- **14 memory layers** working together — from simple text search to knowledge graphs, feedback loops, and emergent topics
-- **Semantic vs Episodic memory** — durable knowledge decays slowly, dated events fade naturally (like human memory)
-- **Observations** — living syntheses that evolve as new evidence appears (inspired by [Hindsight](https://github.com/joshka/hindsight))
-- **Fact Clusters** — entity-grouped "dossier" summaries for complete recall across sessions
-- **Procedural memory** — tricks, patterns, and "what worked" are preserved, not filtered
-- **Knowledge Graph** — entities and relations with Hebbian-style reinforcement
-- **Adaptive recall** — injects 2-12 facts based on current context load
-- **Hot Tier** — frequently accessed facts are always recalled, like a phone number you know by heart
-- **Query Expansion** — searches synonyms, FR↔EN translations, and abbreviations automatically
-- **Feedback loop** — facts used in responses rise; facts ignored or corrected by the user sink naturally
-- **User signal detection** — corrections ("actually it's X") and frustration penalize bad facts automatically
-- **Self-regulating budget** — learns from compactions: if injecting too many facts triggers compression, next recall injects fewer
-- **Cross-layer cascade** — when a fact is superseded, graph relations, topic links, embeddings, and observations all update
-- **Provider-agnostic** — works with Ollama, LM Studio, OpenAI, OpenRouter, Anthropic
-- **Fallback chain** — if your primary LLM crashes, memory keeps working
-- **Zero config needed** — smart defaults get you started in 60 seconds
+### 🧬 **Identity-Aware Memory**
+Memoria now understands **who you are** and **what you care about**. Facts about your core projects (Bureau, Polymarket, client work) are prioritized over plugin config details.
+
+### 🌱 **Fact Evolution (Lifecycle)**
+Facts evolve through 4 states like human memory:
+- **Fresh** → new facts (< 7 days OR < 3 recalls)
+- **Mature** → proven useful (3+ uses, no corrections)
+- **Aged** → rarely used (90+ days, low usage)
+- **Archived** → forgotten (180+ days, never used)
+
+Archived facts are excluded from recall — **forgotten, not deleted**.
+
+### 🔄 **Proactive Revision**
+Mature facts recalled 10+ times trigger automatic LLM revision. If improved → new version created, old one superseded.
+
+### 🧠 **Hebbian Reinforcement**
+Knowledge graph relations now strengthen when entities co-occur (like neural connections). Weak relations fade over time and are pruned automatically.
+
+### ⭐ **Expertise Specialization**
+Topics gain expertise levels based on interaction frequency:
+- `★` Novice → `★★` Familiar → `★★★` Experienced → `★★★★` Expert
+
+Expert topics boost recall scores (your "specialist" knowledge rises to the top).
+
+---
+
+## ✨ Core Features
+
+- **14 memory layers** — from text search to knowledge graphs, feedback loops, emergent topics
+- **Semantic vs Episodic** — durable knowledge decays slowly, dated events fade (like human memory)
+- **Observations** — living syntheses that evolve as new evidence appears
+- **Fact Clusters** — entity-grouped summaries for complete recall across sessions
+- **Procedural memory** — tricks, patterns, "what worked" preserved, not filtered
+- **Adaptive recall** — injects 2-12 facts based on context load
+- **Hot Tier** — frequently accessed facts always recalled
+- **Query Expansion** — synonyms, FR↔EN, abbreviations auto-expanded
+- **Feedback loop** — facts used rise; ignored/corrected facts sink
+- **User signal detection** — corrections and frustration penalize bad facts
+- **Self-regulating budget** — learns from compactions, auto-adjusts
+- **Cross-layer cascade** — superseded facts update graph, topics, embeddings, observations
+- **Provider-agnostic** — Ollama, LM Studio, OpenAI, OpenRouter, Anthropic
+- **Fallback chain** — if primary LLM crashes, memory keeps working
+- **Zero config** — smart defaults, 60-second setup
 
 ---
 

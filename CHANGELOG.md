@@ -1,5 +1,47 @@
 # Changelog
 
+## [3.6.0] - 2026-03-27
+### Added — Human-Like Memory Architecture
+- **Identity-aware memory** (Phase 0)
+  - New `relevance_weight` column (0.0-1.0, default 0.5) on facts
+  - Parses `USER.md`, `COMPANY.md`, `projects/objectifs.md` to extract identity/priorities
+  - Boosts facts about Bureau, Polymarket, Primask (core work) vs Memoria internals (meta)
+  - Scoring integrates relevance: Bureau facts rise, config/plugin facts sink
+  - New `identity_cache` table stores parsed identity for fast lookup
+
+- **Lifecycle states** (Phase 1.1)
+  - Facts evolve through 4 states: `fresh` → `mature` → `aged` → `archived`
+  - Automatic transitions based on time + usage ratio + recall count
+  - `archived` facts excluded from recall (forgotten, not deleted)
+  - Stats displayed at boot: `338f/0m/0a/0⚰` (fresh/mature/aged/archived)
+
+- **Proactive revision** (Phase 1.2)
+  - Mature facts with 10+ recalls trigger LLM revision proposal
+  - If improved → new fact created + old superseded
+  - Revision runs in background (non-blocking)
+
+- **Hebbian reinforcement** (Phase 2)
+  - Relations now have `weight` (0.0-2.0, default 1.0)
+  - Co-occurrence → weight++ (entities seen together strengthen)
+  - Time decay → weight-- (unused relations fade)
+  - Weak relations pruned automatically (<0.3)
+  - Stats: `21 strong, 0 weak` relations
+
+- **Expertise specialization** (Phase 2)
+  - Topics gain "expertise levels": novice/familiar/experienced/expert
+  - Based on `access_count` (interaction frequency)
+  - Expert topics boost recall score (1.3x for expert, 1.1x for experienced)
+  - Stats: `8★★★/6★★/4★` (expert/experienced/familiar)
+
+### Fixed
+- Added try/catch to lifecycle, hebbian, expertise modules (prevent crash on SQL errors)
+- Expertise module: fixed schema mismatch (`topic` → `name`, `interaction_count` → `access_count`)
+
+## [3.5.1] - 2026-03-26
+### Fixed
+- TypeScript parse error in `feedback.ts` (class closing brace misplaced) — plugin was crashing silently for 7h
+- Plugin now loads correctly after restart
+
 ## [3.5.0] - 2026-03-26
 ### Added — Feedback Loop & Adaptive Learning
 - **Usefulness tracking** — each recalled fact now has `usefulness`, `recall_count`, `used_count` scores
