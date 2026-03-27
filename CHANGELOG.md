@@ -1,5 +1,21 @@
 # Changelog
 
+## [3.8.0] - 2026-03-27
+### Added — Real-time Procedural Learning
+- **`after_tool_call` hook** — captures procedures in real-time, not at end of session
+  - Buffers tool calls during conversation (last 30)
+  - On success signal (Published, ✅, deployed, committed, etc.) → immediately assembles procedure via LLM
+  - If similar procedure exists → reinforces it (success_count++) and adds improvements
+  - If new → creates new procedure with steps, goal, trigger patterns, gotchas
+  - 60s cooldown between assemblies to avoid spam
+  - Fingerprint dedup to avoid duplicate captures
+- `agent_end` remains as safety net for any uncaptured sequences
+
+### Why this change
+- Humans learn on-the-fly, not at the end of the day
+- `agent_end` only fires at conversation end → in long-running sessions, procedures were never captured
+- Real-time learning means knowledge is available immediately for the next similar task
+
 ## [3.7.2] - 2026-03-27
 ### Fixed — 3 Critical Memory Issues
 - **ProceduralMemory DB fix**: was receiving MemoriaDB wrapper instead of raw better-sqlite3 Database, causing `this.db.prepare is not a function` — procedures were "captured" in logs but never persisted (0 in DB)

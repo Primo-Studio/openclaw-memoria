@@ -5,7 +5,7 @@
  * v3.0.0 — Semantic/Episodic memory, Observations, Procedural memory, Adaptive recall
  * 
  * Layers:
- *   1. Perception (capture) — agent_end + after_compaction hooks
+ *   1. Perception (capture) — after_tool_call (real-time) + agent_end + after_compaction hooks
  *   2. Selective Memory — dedup, contradiction, enrichment
  *   3. Embeddings — cosine similarity + hybrid search (FTS5 + cosine + temporal)
  *   4. Knowledge Graph — entity extraction, Hebbian reinforcement, BFS traversal
@@ -18,7 +18,8 @@
  * 
  * Hooks:
  *   before_prompt_build → search facts, inject via prependContext
- *   agent_end → extract facts via LLM, store in SQLite
+ *   after_tool_call → real-time procedural capture (learn on-the-fly, not end-of-session)
+ *   agent_end → extract facts via LLM, store in SQLite + flush remaining procedure buffer
  *   after_compaction → extract durable facts from summaries
  */
 
@@ -831,6 +832,173 @@ export function register(api: OpenClawPluginApi): void {
   }
 
   // ════════════════════════════════════════════════════════════════
+  // ════════════════════════════════════════════════════════════════
+  // HOOK: after_tool_call — Real-time procedural capture (Layer 1b)
+  // Learn on-the-fly, not at end-of-session. Like a human learning
+  // during the task, not when they go home at night.
+  // ════════════════════════════════════════════════════════════════
+
+  // Session buffer: accumulates tool calls until a success pattern triggers assembly
+  const toolCallBuffer: Array<{
+    toolName: string;
+    params: Record<string, unknown>;
+    result?: unknown;
+    error?: string;
+    durationMs?: number;
+    timestamp: number;
+  }> = [];
+  // Track which procedures were already assembled to avoid duplicates
+  const assembledGoals = new Set<string>();
+  // Cooldown to avoid assembling too frequently
+  let lastAssemblyTime = 0;
+  const ASSEMBLY_COOLDOWN_MS = 60_000; // 1 minute between assemblies
+
+  api.on("after_tool_call", async (event, _ctx) => {
+    try {
+      const { toolName, params, result, error, durationMs } = event;
+      
+      // Buffer all tool calls (keep last 30 to avoid memory leak)
+      toolCallBuffer.push({
+        toolName,
+        params: params || {},
+        result: typeof result === 'string' ? result.slice(0, 2000) : result,
+        error,
+        durationMs,
+        timestamp: Date.now(),
+      });
+      if (toolCallBuffer.length > 30) toolCallBuffer.shift();
+
+      // Only trigger assembly on exec-type tools with a successful outcome
+      if (toolName !== 'exec' && toolName !== 'Edit' && toolName !== 'Write') return;
+      if (error) return; // failed step — don't assemble yet
+
+      // Check result for success keywords (publish, deploy, commit, install, etc.)
+      const resultStr = typeof result === 'string' ? result : JSON.stringify(result || '');
+      const successPatterns = [
+        /Published?\s/i, /✔|✅/, /success/i, /deployed/i, /created/i,
+        /\[new tag\]/, /release.*created/i, /installed/i, /committed/i,
+        /pushed/i, /merged/i, /completed/i, /OK\.\s/,
+      ];
+
+      const isSuccess = successPatterns.some(p => p.test(resultStr));
+      if (!isSuccess) return;
+
+      // Cooldown check
+      const now = Date.now();
+      if (now - lastAssemblyTime < ASSEMBLY_COOLDOWN_MS) return;
+
+      // We have a success signal — assemble procedure from recent exec calls
+      const recentExecs = toolCallBuffer
+        .filter(tc => tc.toolName === 'exec' && !tc.error)
+        .slice(-15); // last 15 exec calls
+
+      if (recentExecs.length < 2) return;
+
+      // Extract commands
+      const commands = recentExecs
+        .map(tc => (tc.params as any)?.command as string)
+        .filter(Boolean)
+        .filter(cmd => cmd.length > 5 && cmd.length < 1000);
+
+      if (commands.length < 2) return;
+
+      // Quick fingerprint to avoid duplicate assemblies
+      const fingerprint = commands.slice(-3).join('|').slice(0, 200);
+      if (assembledGoals.has(fingerprint)) return;
+
+      // Assemble the procedure via LLM
+      api.logger.info?.(`memoria: 🔧 real-time procedural capture — ${commands.length} commands, trigger: "${resultStr.slice(0, 80)}..."`);
+
+      const prompt = `Analyze this successful command sequence and extract a reusable procedure.
+
+Commands executed (in order):
+${commands.map((c, i) => `${i + 1}. ${c}`).join('\n')}
+
+Final result (success): ${resultStr.slice(0, 500)}
+
+Output JSON only (no markdown, no explanation):
+{
+  "name": "Short name (e.g., 'Publish Memoria to ClawHub')",
+  "goal": "What this accomplishes in one sentence",
+  "trigger_patterns": ["keyword1", "keyword2"],
+  "key_steps": ["step1 description", "step2 description"],
+  "gotchas": ["pitfall or workaround learned"]
+}`;
+
+      try {
+        const response = await extractLlm.generateWithMeta(prompt, {
+          maxTokens: 512,
+          temperature: 0.1,
+          format: "json",
+          timeoutMs: 15000,
+        });
+
+        if (!response?.response) return;
+
+        const cleaned = response.response.replace(/```json\n?|\n?```/g, '').trim();
+        const meta = JSON.parse(cleaned);
+
+        if (!meta.name || !meta.goal) return;
+
+        // Check if a similar procedure already exists
+        const existing = proceduralMem.search(meta.name, 3);
+        const similar = existing.find(p => 
+          p.name.toLowerCase() === meta.name.toLowerCase() ||
+          p.goal.toLowerCase() === meta.goal.toLowerCase()
+        );
+
+        if (similar) {
+          // Reinforce existing procedure
+          proceduralMem.recordExecution(similar.id, true, 
+            recentExecs.reduce((sum, tc) => sum + (tc.durationMs || 0), 0));
+          
+          // Add improvement if steps changed
+          const newSteps = commands.filter(c => !similar.steps.includes(c));
+          if (newSteps.length > 0) {
+            proceduralMem.addImprovement(
+              similar.id,
+              `Updated steps: ${newSteps.slice(0, 3).join('; ')}`,
+              'Real-time learning from successful execution'
+            );
+          }
+
+          api.logger.info?.(`memoria: procedural ✅ reinforced "${similar.name}" (${similar.success_count + 1} successes)`);
+        } else {
+          // Create new procedure
+          const proc = {
+            id: `proc_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+            name: meta.name,
+            goal: meta.goal,
+            steps: commands,
+            success_count: 1,
+            failure_count: 0,
+            last_success_at: Date.now(),
+            last_updated_at: Date.now(),
+            improvements: [] as any[],
+            context: [...(meta.trigger_patterns || []), ...(meta.gotchas || [])].join(', '),
+            degradation_score: 0,
+          };
+
+          proceduralMem.storeProcedure(proc as any);
+          api.logger.info?.(`memoria: procedural ✅ NEW "${proc.name}" (${proc.steps.length} steps, real-time)`);
+        }
+
+        assembledGoals.add(fingerprint);
+        lastAssemblyTime = now;
+        
+        // Clear old buffer entries (keep last 5 for context)
+        toolCallBuffer.splice(0, Math.max(0, toolCallBuffer.length - 5));
+
+      } catch (llmErr) {
+        api.logger.debug?.(`memoria: procedural LLM failed: ${String(llmErr)}`);
+      }
+
+    } catch (err) {
+      // Non-blocking — never crash the plugin
+      api.logger.debug?.(`memoria: after_tool_call error: ${String(err)}`);
+    }
+  });
+
   // HOOK: agent_end — Capture (Layer 1)
   // ════════════════════════════════════════════════════════════════
 
