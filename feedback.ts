@@ -175,7 +175,6 @@ export class FeedbackManager {
       return { totalWithFeedback: 0, avgUsefulness: 0, mostUseful: [], leastUseful: [] };
     }
   }
-}
 
   // ═══════════════════════════════════════════════════
   // USER CORRECTION DETECTION
@@ -285,6 +284,7 @@ export class FeedbackManager {
   getLastRecalledIds(): string[] {
     return this.lastRecall?.factIds ?? [];
   }
+}
 
 // ─── Helpers ───
 
