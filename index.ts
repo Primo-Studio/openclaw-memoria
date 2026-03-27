@@ -49,6 +49,7 @@ import { LifecycleManager } from "./lifecycle.js";
 import { RevisionManager } from "./revision.js";
 import { HebbianManager } from "./hebbian.js";
 import { ExpertiseManager } from "./expertise.js";
+import { ProceduralMemory } from "./procedural.js";
 
 // ─── Config ───
 
@@ -421,6 +422,7 @@ export function register(api: OpenClawPluginApi): void {
   const revisionMgr = new RevisionManager(db, chain);
   const hebbianMgr = new HebbianManager(db);
   const expertiseMgr = new ExpertiseManager(db);
+  const proceduralMem = new ProceduralMemory(db, chain);
   const budget = new AdaptiveBudget({
     contextWindow: cfg.contextWindow || 200000,
     maxFacts: cfg.recallLimit || 12,
@@ -489,12 +491,16 @@ export function register(api: OpenClawPluginApi): void {
   const hebbianStats = hebbianMgr.getStats();
   const expertiseStats = expertiseMgr.getStats();
 
+  // Procedural memory stats
+  const procStats = proceduralMem.getStats();
+
   const fbStats = feedbackMgr.getStats();
   const fbNote = fbStats.totalWithFeedback > 0 ? `, feedback: ${fbStats.totalWithFeedback} tracked (avg ${fbStats.avgUsefulness.toFixed(1)})` : "";
   const lifecycleNote = ` | lifecycle: ${lifecycleStats.fresh}f/${lifecycleStats.mature}m/${lifecycleStats.aged}a/${lifecycleStats.archived}⚰`;
   const hebbianNote = ` | graph: ${hebbianStats.strong} strong, ${hebbianStats.weak} weak`;
   const expertiseNote = ` | expertise: ${expertiseStats.expert}★★★/${expertiseStats.experienced}★★/${expertiseStats.familiar}★`;
-  api.logger.info?.(`memoria: v${pluginVersion} registered (${stats.active} facts, ${cStats.total} clusters, ${oStats.total} observations, ${embCount} embedded, ${gStats.entities} entities, ${gStats.relations} relations, ${tStats.totalTopics} topics${fbNote}${lifecycleNote}${hebbianNote}${expertiseNote}, fallback: ${chain.providerNames.join(" → ")})`);
+  const procNote = procStats.total > 0 ? ` | procedures: ${procStats.healthy}✓/${procStats.degraded}⚠` : "";
+  api.logger.info?.(`memoria: v${pluginVersion} registered (${stats.active} facts, ${cStats.total} clusters, ${oStats.total} observations, ${embCount} embedded, ${gStats.entities} entities, ${gStats.relations} relations, ${tStats.totalTopics} topics${fbNote}${lifecycleNote}${hebbianNote}${expertiseNote}${procNote}, fallback: ${chain.providerNames.join(" → ")})`);
   
   // Log .md file sizes
   const fileSizes = mdRegen.fileSizes();
@@ -730,6 +736,22 @@ export function register(api: OpenClawPluginApi): void {
           }
         } catch { /* non-critical */ }
 
+        // Procedural memory: search for matching "how-to" procedures
+        let proceduresContext = "";
+        try {
+          const procedures = proceduralMem.search(prompt, 3);
+          if (procedures.length > 0) {
+            const procTexts: string[] = [];
+            for (const proc of procedures) {
+              const successRate = proc.success_count / (proc.success_count + proc.failure_count || 1);
+              const status = proc.degradation_score > 0.5 ? "⚠ degraded" : "✓";
+              procTexts.push(`**${proc.name}** ${status} (${(successRate * 100).toFixed(0)}% success):\n${proc.steps.map((s, i) => `  ${i + 1}. ${s}`).join('\n')}`);
+            }
+            proceduresContext = `\n## 🔧 Known Procedures\n${procTexts.join('\n\n')}\n`;
+            api.logger.debug?.(`memoria: ${procedures.length} procedures matched`);
+          }
+        } catch { /* non-critical */ }
+
         // Context tree: organize facts hierarchically, weight by query
         // Merge: hot tier (always first) + search + graph + topic
         let finalFacts: Fact[] = [];
@@ -750,9 +772,9 @@ export function register(api: OpenClawPluginApi): void {
           finalFacts = [...topFacts, ...graphFacts, ...topicFacts].slice(0, recallLimit);
         }
 
-        if (finalFacts.length === 0 && !observationContext) return undefined;
+        if (finalFacts.length === 0 && !observationContext && !proceduresContext) return undefined;
 
-        const context = formatRecallContext(finalFacts, observationContext);
+        const context = formatRecallContext(finalFacts, observationContext) + proceduresContext;
 
         // Track access + feedback loop + budget learning + lifecycle update
         const ids = finalFacts.map(f => f.id);
@@ -932,6 +954,32 @@ export function register(api: OpenClawPluginApi): void {
         if (stored > 0 || enriched > 0) {
           await postProcessNewFacts("capture");
         }
+
+        // ── Procedural Memory: extract successful command sequences ──
+        try {
+          if (event.toolCalls && event.toolCalls.length >= 2) {
+            // Check if outcome looks successful
+            const lastMessage = event.messages[event.messages.length - 1];
+            const lastText = typeof lastMessage === "object" && (lastMessage as any).content
+              ? String((lastMessage as any).content).toLowerCase()
+              : "";
+            
+            const successKeywords = ["success", "done", "published", "deployed", "completed", "✓", "✅"];
+            const isSuccess = successKeywords.some(kw => lastText.includes(kw));
+
+            if (isSuccess) {
+              const proc = await proceduralMem.extractProcedure(
+                event.toolCalls as any,
+                'success',
+                `Session: ${event.agentId || cfg.defaultAgent}`
+              );
+              if (proc) {
+                api.logger.info?.(`memoria: procedural — captured "${proc.name}"`);
+              }
+            }
+          }
+        } catch { /* procedural extraction is non-critical */ }
+
       } catch (err) {
         api.logger.warn?.(`memoria: capture failed: ${String(err)}`);
       }

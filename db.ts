@@ -104,6 +104,7 @@ export class MemoriaDB {
     this.migrateAddRelevanceWeight();
     this.migrateAddIdentityCache();
     this.migrateAddLifecycleState();
+    this.migrateAddProcedures();
     this.setSchemaVersion(SCHEMA_VERSION);
   }
 
@@ -170,6 +171,33 @@ export class MemoriaDB {
         this.db.exec("CREATE INDEX IF NOT EXISTS idx_facts_lifecycle ON facts(lifecycle_state)");
       }
     } catch { /* column already exists or table not yet created */ }
+  }
+
+  /** Migration: add procedures table for procedural memory (Phase 3) */
+  private migrateAddProcedures(): void {
+    try {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS procedures (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          goal TEXT,
+          steps TEXT NOT NULL,
+          success_count INTEGER DEFAULT 0,
+          failure_count INTEGER DEFAULT 0,
+          last_success_at INTEGER,
+          last_failure_at INTEGER,
+          last_updated_at INTEGER NOT NULL,
+          avg_duration_ms INTEGER,
+          improvements TEXT DEFAULT '[]',
+          context TEXT,
+          degradation_score REAL DEFAULT 0.0,
+          alternative_of TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_procedures_name ON procedures(name);
+        CREATE INDEX IF NOT EXISTS idx_procedures_degradation ON procedures(degradation_score);
+        CREATE INDEX IF NOT EXISTS idx_procedures_success_rate ON procedures(success_count, failure_count);
+      `);
+    } catch { /* table already exists */ }
   }
 
   private getSchemaVersion(): number {
