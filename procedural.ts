@@ -72,11 +72,53 @@ export interface ReflectionResult {
   better_approach?: string; // "try X instead" suggestion
 }
 
+export interface ProceduralConfig {
+  /** Weights for computing overall quality score (must sum to ~1.0) */
+  qualityWeights: {
+    reliability: number;  // default 0.35
+    safety: number;       // default 0.25
+    speed: number;        // default 0.25
+    elegance: number;     // default 0.15
+  };
+  /** How much degradation increases per failure */
+  degradationStep: number;   // default 0.15
+  /** How much degradation heals per success */
+  healingStep: number;       // default 0.20
+  /** Reflect every N executions (0 = never) */
+  reflectEvery: number;      // default 3
+  /** Degradation threshold to mark as degraded */
+  degradedThreshold: number; // default 0.5
+  /** Default safety score for new procedures */
+  defaultSafety: number;     // default 0.8
+}
+
+const DEFAULT_PROCEDURAL_CONFIG: ProceduralConfig = {
+  qualityWeights: {
+    reliability: 0.35,
+    safety: 0.25,
+    speed: 0.25,
+    elegance: 0.15,
+  },
+  degradationStep: 0.15,
+  healingStep: 0.20,
+  reflectEvery: 3,
+  degradedThreshold: 0.5,
+  defaultSafety: 0.8,
+};
+
 export class ProceduralMemory {
+  private cfg: ProceduralConfig;
+
   constructor(
     private db: Database,
-    private llm: LLMProvider
-  ) {}
+    private llm: LLMProvider,
+    config?: Partial<ProceduralConfig>
+  ) {
+    this.cfg = { ...DEFAULT_PROCEDURAL_CONFIG, ...config };
+    if (config?.qualityWeights) {
+      this.cfg.qualityWeights = { ...DEFAULT_PROCEDURAL_CONFIG.qualityWeights, ...config.qualityWeights };
+    }
+  }
 
   // ═══════════════════════════════════════════════════════
   // Migration: add quality columns if missing
@@ -105,8 +147,41 @@ export class ProceduralMemory {
           this.db.prepare(sql).run();
         }
       }
+
+      // FTS5 virtual table for full-text search on procedures
+      try {
+        this.db.prepare(`
+          CREATE VIRTUAL TABLE IF NOT EXISTS procedures_fts USING fts5(
+            name, goal, context, gotchas, steps,
+            content='procedures', content_rowid='rowid'
+          )
+        `).run();
+
+        // Populate FTS if empty
+        const ftsCount = (this.db.prepare(`SELECT COUNT(*) as c FROM procedures_fts`).get() as any)?.c || 0;
+        const procCount = (this.db.prepare(`SELECT COUNT(*) as c FROM procedures`).get() as any)?.c || 0;
+        if (procCount > 0 && ftsCount === 0) {
+          this.rebuildFts();
+        }
+      } catch {
+        // FTS creation can fail if table already exists with different schema — non-critical
+      }
     } catch (err) {
       console.error('[ProceduralMemory] schema migration failed:', err);
+    }
+  }
+
+  /** Rebuild FTS index from procedures table */
+  private rebuildFts(): void {
+    try {
+      this.db.prepare(`DELETE FROM procedures_fts`).run();
+      this.db.prepare(`
+        INSERT INTO procedures_fts(name, goal, context, gotchas, steps)
+        SELECT name, goal, COALESCE(context,''), COALESCE(gotchas,''), steps
+        FROM procedures
+      `).run();
+    } catch {
+      // Non-critical — LIKE fallback will work
     }
   }
 
@@ -460,6 +535,28 @@ Output JSON (no markdown):
         proc.alternative_of ?? null,
         proc.preferred ? 1 : 0
       );
+
+      // Update FTS index
+      try {
+        const row = this.db.prepare(`SELECT rowid FROM procedures WHERE id = ?`).get(proc.id) as any;
+        if (row) {
+          // Delete old FTS entry then insert new
+          this.db.prepare(`DELETE FROM procedures_fts WHERE rowid = ?`).run(row.rowid);
+          this.db.prepare(`
+            INSERT INTO procedures_fts(rowid, name, goal, context, gotchas, steps)
+            VALUES (?, ?, ?, ?, ?, ?)
+          `).run(
+            row.rowid,
+            proc.name,
+            proc.goal,
+            proc.context ?? '',
+            proc.gotchas ?? '',
+            JSON.stringify(proc.steps)
+          );
+        }
+      } catch {
+        // FTS sync is non-critical
+      }
     } catch (err) {
       console.error('[ProceduralMemory] store failed:', err);
     }
@@ -480,15 +577,13 @@ Output JSON (no markdown):
       if (success) {
         proc.success_count++;
         proc.last_success_at = now;
-        // Heal degradation on success
-        proc.degradation_score = Math.max(0, proc.degradation_score - 0.2);
-        // Update reliability
+        proc.degradation_score = Math.max(0, proc.degradation_score - this.cfg.healingStep);
         const total = proc.success_count + proc.failure_count;
         proc.quality.reliability = proc.success_count / total;
       } else {
         proc.failure_count++;
         proc.last_failure_at = now;
-        proc.degradation_score = Math.min(1.0, proc.degradation_score + 0.15);
+        proc.degradation_score = Math.min(1.0, proc.degradation_score + this.cfg.degradationStep);
         const total = proc.success_count + proc.failure_count;
         proc.quality.reliability = proc.success_count / total;
       }
@@ -541,20 +636,54 @@ Output JSON (no markdown):
 
   search(query: string, limit = 5): Procedure[] {
     try {
-      const rows = this.db.prepare(`
-        SELECT * FROM procedures
-        WHERE 
-          name LIKE ? OR
-          goal LIKE ? OR
-          context LIKE ? OR
-          gotchas LIKE ?
-        ORDER BY
-          preferred DESC,
-          quality_overall DESC,
-          degradation_score ASC,
-          last_success_at DESC
-        LIMIT ?
-      `).all(`%${query}%`, `%${query}%`, `%${query}%`, `%${query}%`, limit) as any[];
+      // Strategy 1: FTS5 full-text search (fast, ranked)
+      let rows: any[] = [];
+      try {
+        // Sanitize query for FTS5: remove special chars, keep words
+        const ftsQuery = query
+          .replace(/[^\w\s\-]/g, ' ')
+          .split(/\s+/)
+          .filter(w => w.length > 2)
+          .map(w => `"${w}"`)
+          .join(' OR ');
+
+        if (ftsQuery.length > 0) {
+          rows = this.db.prepare(`
+            SELECT p.*, rank
+            FROM procedures p
+            JOIN procedures_fts fts ON p.rowid = fts.rowid
+            WHERE procedures_fts MATCH ?
+            ORDER BY
+              p.preferred DESC,
+              rank,
+              p.quality_overall DESC,
+              p.degradation_score ASC
+            LIMIT ?
+          `).all(ftsQuery, limit) as any[];
+        }
+      } catch {
+        // FTS not available or query syntax error — fall through to LIKE
+      }
+
+      // Strategy 2: LIKE fallback (always works, slower)
+      if (rows.length === 0) {
+        const likeTerm = `%${query}%`;
+        rows = this.db.prepare(`
+          SELECT * FROM procedures
+          WHERE 
+            name LIKE ? OR
+            goal LIKE ? OR
+            context LIKE ? OR
+            gotchas LIKE ? OR
+            steps LIKE ?
+          ORDER BY
+            preferred DESC,
+            quality_overall DESC,
+            degradation_score ASC,
+            last_success_at DESC
+          LIMIT ?
+        `).all(likeTerm, likeTerm, likeTerm, likeTerm, likeTerm, limit) as any[];
+      }
 
       return rows.map(r => this.rowToProcedure(r));
     } catch (err) {
@@ -591,8 +720,8 @@ Output JSON (no markdown):
       }
       
       const total = (this.db.prepare(`SELECT COUNT(*) as c FROM procedures`).get() as any)?.c || 0;
-      const degraded = (this.db.prepare(`SELECT COUNT(*) as c FROM procedures WHERE degradation_score > 0.5`).get() as any)?.c || 0;
-      const healthy = (this.db.prepare(`SELECT COUNT(*) as c FROM procedures WHERE degradation_score < 0.3`).get() as any)?.c || 0;
+      const degraded = (this.db.prepare(`SELECT COUNT(*) as c FROM procedures WHERE degradation_score > ?`).get(this.cfg.degradedThreshold) as any)?.c || 0;
+      const healthy = (this.db.prepare(`SELECT COUNT(*) as c FROM procedures WHERE degradation_score < ?`).get(this.cfg.degradedThreshold * 0.6) as any)?.c || 0;
       const avgQ = (this.db.prepare(`SELECT AVG(quality_overall) as q FROM procedures`).get() as any)?.q || 0;
       const pref = (this.db.prepare(`SELECT COUNT(*) as c FROM procedures WHERE preferred = 1`).get() as any)?.c || 0;
 
@@ -617,7 +746,7 @@ Output JSON (no markdown):
     const speed = Math.max(0, Math.min(1, Number(raw?.speed) || 0.5));
     const reliability = Math.max(0, Math.min(1, Number(raw?.reliability) || 0.5));
     const elegance = Math.max(0, Math.min(1, Number(raw?.elegance) || 0.5));
-    const safety = Math.max(0, Math.min(1, Number(raw?.safety) || 0.8));
+    const safety = Math.max(0, Math.min(1, Number(raw?.safety) || this.cfg.defaultSafety));
     return {
       speed,
       reliability,
@@ -628,12 +757,12 @@ Output JSON (no markdown):
   }
 
   private computeOverall(q: QualityProfile): number {
-    // Weighted: reliability matters most, then safety, then speed, then elegance
+    const w = this.cfg.qualityWeights;
     return Math.round((
-      q.reliability * 0.35 +
-      q.safety * 0.25 +
-      q.speed * 0.25 +
-      q.elegance * 0.15
+      q.reliability * w.reliability +
+      q.safety * w.safety +
+      q.speed * w.speed +
+      q.elegance * w.elegance
     ) * 100) / 100;
   }
 

@@ -424,7 +424,11 @@ export function register(api: OpenClawPluginApi): void {
   const hebbianMgr = new HebbianManager(db);
   const expertiseMgr = new ExpertiseManager(db);
   const proceduralLlm = layerLLM("procedural");
-  const proceduralMem = new ProceduralMemory(db.raw, proceduralLlm);
+  const proceduralMem = new ProceduralMemory(db.raw, proceduralLlm, {
+    reflectEvery: cfg.procedural?.reflectEvery ?? 3,
+    degradedThreshold: cfg.procedural?.degradedThreshold ?? 0.5,
+    defaultSafety: cfg.procedural?.defaultSafety ?? 0.8,
+  });
   proceduralMem.ensureSchema(); // migrate quality columns if missing
   const budget = new AdaptiveBudget({
     contextWindow: cfg.contextWindow || 200000,
@@ -792,7 +796,7 @@ export function register(api: OpenClawPluginApi): void {
             for (const proc of procedures) {
               matchedProcedureIds.push(proc.id);
               const successRate = proc.success_count / Math.max(proc.success_count + proc.failure_count, 1);
-              const status = proc.degradation_score > 0.5 ? "⚠ degraded" 
+              const status = proc.degradation_score > (cfg.procedural?.degradedThreshold ?? 0.5) ? "⚠ degraded" 
                 : proc.preferred ? "★ preferred" : "✓";
               const qualityStr = `quality: ${(proc.quality.overall * 100).toFixed(0)}%`;
               const versionStr = proc.version > 1 ? ` v${proc.version}` : '';
@@ -1004,7 +1008,8 @@ Output JSON only (no markdown, no explanation):
 
           // ── Reflect: was this the best approach? ──
           // Only reflect every 3rd execution (avoid LLM spam)
-          if ((similar.success_count + 1) % 3 === 0) {
+          const reflectEvery = cfg.procedural?.reflectEvery ?? 3;
+          if (reflectEvery > 0 && (similar.success_count + 1) % reflectEvery === 0) {
             try {
               const errors = recentExecs
                 .filter(tc => tc.error)

@@ -41,6 +41,33 @@
         "type": "boolean",
         "default": true
       },
+      "procedural": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "reflectEvery": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 20,
+            "default": 3,
+            "description": "Reflect on procedure quality every N executions (0 = never)"
+          },
+          "degradedThreshold": {
+            "type": "number",
+            "minimum": 0.1,
+            "maximum": 1.0,
+            "default": 0.5,
+            "description": "Degradation score above which a procedure is flagged as degraded"
+          },
+          "defaultSafety": {
+            "type": "number",
+            "minimum": 0.1,
+            "maximum": 1.0,
+            "default": 0.8,
+            "description": "Default safety score for new procedures"
+          }
+        }
+      },
       "embed": {
         "type": "object",
         "additionalProperties": true,
