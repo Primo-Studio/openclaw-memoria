@@ -957,8 +957,15 @@ export function register(api: OpenClawPluginApi): void {
 
         // ── Procedural Memory: extract successful command sequences ──
         try {
+          // DEBUG: log what we receive
+          const toolCallCount = event.toolCalls?.length || 0;
+          const messageCount = event.messages?.length || 0;
+          api.logger.info?.(`[DEBUG] agent_end — toolCalls: ${toolCallCount}, messages: ${messageCount}`);
+
+          // Strategy A: Try toolCalls first (if available)
+          let proc: any = null;
           if (event.toolCalls && event.toolCalls.length >= 2) {
-            // Check if outcome looks successful
+            api.logger.info?.(`[DEBUG] Trying toolCalls extraction...`);
             const lastMessage = event.messages[event.messages.length - 1];
             const lastText = typeof lastMessage === "object" && (lastMessage as any).content
               ? String((lastMessage as any).content).toLowerCase()
@@ -968,17 +975,31 @@ export function register(api: OpenClawPluginApi): void {
             const isSuccess = successKeywords.some(kw => lastText.includes(kw));
 
             if (isSuccess) {
-              const proc = await proceduralMem.extractProcedure(
+              proc = await proceduralMem.extractProcedure(
                 event.toolCalls as any,
                 'success',
                 `Session: ${event.agentId || cfg.defaultAgent}`
               );
-              if (proc) {
-                api.logger.info?.(`memoria: procedural — captured "${proc.name}"`);
-              }
             }
           }
-        } catch { /* procedural extraction is non-critical */ }
+
+          // Strategy B: Fallback to parsing messages (more robust)
+          if (!proc && event.messages && event.messages.length >= 3) {
+            api.logger.info?.(`[DEBUG] Trying message extraction...`);
+            proc = await proceduralMem.extractFromMessages(
+              event.messages as any,
+              `Session: ${event.agentId || cfg.defaultAgent}`
+            );
+          }
+
+          if (proc) {
+            api.logger.info?.(`memoria: procedural ✅ captured "${proc.name}" (${proc.steps.length} steps)`);
+          } else {
+            api.logger.debug?.(`[DEBUG] No procedure extracted (toolCalls=${toolCallCount}, messages=${messageCount})`);
+          }
+        } catch (err) { 
+          api.logger.warn?.(`[DEBUG] procedural extraction error: ${String(err)}`);
+        }
 
       } catch (err) {
         api.logger.warn?.(`memoria: capture failed: ${String(err)}`);

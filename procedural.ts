@@ -123,6 +123,99 @@ Output JSON (no markdown):
   }
 
   /**
+   * Extract procedure from conversation messages (fallback when toolCalls unavailable)
+   */
+  async extractFromMessages(
+    messages: Array<{ role: string; content: any }>,
+    context?: string
+  ): Promise<Procedure | null> {
+    try {
+      // Find assistant messages with exec/command patterns
+      const commandPatterns = [
+        /```(?:bash|sh|shell)?\n([\s\S]+?)\n```/g,
+        /`([^`]+(?:clawhub|openclaw|npm|git|curl)[^`]+)`/g,
+        /(?:^|\n)\$ (.+?)(?:\n|$)/g,
+      ];
+
+      const commands: string[] = [];
+      let hasSuccess = false;
+
+      for (const msg of messages) {
+        if (msg.role !== 'assistant') continue;
+        
+        const text = typeof msg.content === 'string' 
+          ? msg.content 
+          : JSON.stringify(msg.content);
+
+        // Detect success
+        if (/✅|success|published|deployed|completed|done/i.test(text)) {
+          hasSuccess = true;
+        }
+
+        // Extract commands
+        for (const pattern of commandPatterns) {
+          const matches = [...text.matchAll(pattern)];
+          for (const match of matches) {
+            const cmd = match[1]?.trim();
+            if (cmd && cmd.length > 5 && cmd.length < 500) {
+              commands.push(cmd);
+            }
+          }
+        }
+      }
+
+      if (commands.length < 2 || !hasSuccess) return null;
+
+      // Deduplicate consecutive identical commands
+      const uniqueCommands = commands.filter((cmd, i) => 
+        i === 0 || cmd !== commands[i - 1]
+      );
+
+      if (uniqueCommands.length < 2) return null;
+
+      // Ask LLM to structure the procedure
+      const prompt = `Analyze this command sequence and extract a reusable procedure.
+
+Commands found in conversation:
+${uniqueCommands.map((c, i) => `${i + 1}. ${c}`).join('\n')}
+
+Context: ${context || 'successful task completion'}
+
+Output JSON (no markdown):
+{
+  "name": "Short name (e.g., 'Publish plugin to ClawHub')",
+  "goal": "What this accomplishes",
+  "trigger_patterns": ["when to use", "keywords that suggest this"]
+}`;
+
+      const response = await this.llm.generate(prompt);
+      const cleaned = response.replace(/```json\n?|\n?```/g, '').trim();
+      const meta = JSON.parse(cleaned);
+
+      const proc: Procedure = {
+        id: `proc_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+        name: meta.name,
+        goal: meta.goal,
+        steps: uniqueCommands,
+        success_count: 1,
+        failure_count: 0,
+        last_success_at: Date.now(),
+        last_updated_at: Date.now(),
+        improvements: [],
+        context: meta.trigger_patterns?.join(', '),
+        degradation_score: 0,
+      };
+
+      this.storeProcedure(proc);
+      return proc;
+
+    } catch (err) {
+      console.error('[ProceduralMemory] extractFromMessages failed:', err);
+      return null;
+    }
+  }
+
+  /**
    * Store procedure in DB
    */
   storeProcedure(proc: Procedure): void {
