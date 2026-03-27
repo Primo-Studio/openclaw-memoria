@@ -47,6 +47,8 @@ import { AnthropicLLM } from "./providers/anthropic.js";
 import { IdentityParser } from "./identity-parser.js";
 import { LifecycleManager } from "./lifecycle.js";
 import { RevisionManager } from "./revision.js";
+import { HebbianManager } from "./hebbian.js";
+import { ExpertiseManager } from "./expertise.js";
 
 // ─── Config ───
 
@@ -417,6 +419,8 @@ export function register(api: OpenClawPluginApi): void {
   const identityParser = new IdentityParser(cfg.workspacePath);
   const lifecycleMgr = new LifecycleManager(db);
   const revisionMgr = new RevisionManager(db, chain);
+  const hebbianMgr = new HebbianManager(db);
+  const expertiseMgr = new ExpertiseManager(db);
   const budget = new AdaptiveBudget({
     contextWindow: cfg.contextWindow || 200000,
     maxFacts: cfg.recallLimit || 12,
@@ -481,10 +485,16 @@ export function register(api: OpenClawPluginApi): void {
   const lifecycleRefresh = lifecycleMgr.refreshAll();
   const lifecycleStats = lifecycleMgr.getStats();
 
+  // Hebbian + Expertise stats
+  const hebbianStats = hebbianMgr.getStats();
+  const expertiseStats = expertiseMgr.getStats();
+
   const fbStats = feedbackMgr.getStats();
   const fbNote = fbStats.totalWithFeedback > 0 ? `, feedback: ${fbStats.totalWithFeedback} tracked (avg ${fbStats.avgUsefulness.toFixed(1)})` : "";
   const lifecycleNote = ` | lifecycle: ${lifecycleStats.fresh}f/${lifecycleStats.mature}m/${lifecycleStats.aged}a/${lifecycleStats.archived}⚰`;
-  api.logger.info?.(`memoria: v${pluginVersion} registered (${stats.active} facts, ${cStats.total} clusters, ${oStats.total} observations, ${embCount} embedded, ${gStats.entities} entities, ${gStats.relations} relations, ${tStats.totalTopics} topics${fbNote}${lifecycleNote}, fallback: ${chain.providerNames.join(" → ")})`);
+  const hebbianNote = ` | graph: ${hebbianStats.strong} strong, ${hebbianStats.weak} weak`;
+  const expertiseNote = ` | expertise: ${expertiseStats.expert}★★★/${expertiseStats.experienced}★★/${expertiseStats.familiar}★`;
+  api.logger.info?.(`memoria: v${pluginVersion} registered (${stats.active} facts, ${cStats.total} clusters, ${oStats.total} observations, ${embCount} embedded, ${gStats.entities} entities, ${gStats.relations} relations, ${tStats.totalTopics} topics${fbNote}${lifecycleNote}${hebbianNote}${expertiseNote}, fallback: ${chain.providerNames.join(" → ")})`);
   
   // Log .md file sizes
   const fileSizes = mdRegen.fileSizes();
@@ -522,6 +532,12 @@ export function register(api: OpenClawPluginApi): void {
         const { entities: ne, relations: nr } = await graph.extractAndStore(f.id, f.fact);
         totalEnt += ne;
         totalRel += nr;
+
+        // Hebbian reinforcement: co-occurring entities strengthen relations
+        if (f.entity_ids && f.entity_ids !== "[]") {
+          const entityIds = JSON.parse(f.entity_ids) as string[];
+          hebbianMgr.reinforceFromFact(f.id, entityIds);
+        }
       }
       if (totalEnt > 0 || totalRel > 0) {
         api.logger.info?.(`memoria: [${source}] graph extracted ${totalEnt} entities, ${totalRel} relations`);
