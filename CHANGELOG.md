@@ -1,5 +1,21 @@
 # Changelog
 
+## [3.7.1] - 2026-03-27
+### Fixed — Phase 3 Procedural Capture
+- **Dual-strategy extraction** for better reliability:
+  - Strategy A: extract from `event.toolCalls` when available (original path)
+  - Strategy B: parse assistant messages for command patterns (fallback)
+  - Patterns detected: bash code blocks, inline commands, shell prompts (`$ ...`)
+  - Success detection: ✅|success|published|deployed|completed keywords
+  - Deduplication of consecutive identical commands
+- **Debug logging** added to diagnose capture behavior in production
+- New method: `ProceduralMemory.extractFromMessages(messages, context)`
+
+### Why this fix
+- v3.7.0 captured 0 procedures because `event.toolCalls` was empty/unavailable
+- Message parsing ensures capture works even when toolCalls not exposed by OpenClaw
+- Enables real-world validation of Phase 3 procedural learning
+
 ## [3.7.0] - 2026-03-27
 ### Added — Procedural Memory (Phase 3)
 - **How-to knowledge that improves with repetition**
