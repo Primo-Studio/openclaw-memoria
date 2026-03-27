@@ -1,3 +1,21 @@
+## 3.12.0 — Capture Quality & Contradiction Detection
+
+### Fix 1: Capture Filter
+- Only store **reusable** procedures (≥3 meaningful steps + at least one "action" command)
+- Skip noise: health checks, diagnostics, log inspections, status checks
+- Double-check LLM-assigned names against noise patterns
+
+### Fix 2: Duplicate Detection
+- `findSimilarProcedure()` — word-overlap matching on name + goal (threshold 50%)
+- Before creating a new procedure, check if a similar one exists → reinforce instead of duplicate
+- Applied at both `extractProcedure()` and `after_tool_call` hook levels
+
+### Fix 3: Contradiction Check on Facts
+- Widened entity search from 5 to 10 candidates
+- Version-containing facts prioritized in contradiction search
+- Enhanced contradiction prompt: version changes, status changes, quantity changes = explicit contradictions
+- Prevents stale facts (e.g., "Sol = v2.7.0") from persisting when newer facts arrive ("Sol = v3.11.0")
+
 ## 3.10.0 (2026-03-27)
 
 ### Features

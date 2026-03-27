@@ -237,6 +237,12 @@ const CONTRADICTION_PROMPT = `Compare ces deux faits et détermine leur relation
 Fait existant: "{OLD}"
 Nouveau fait: "{NEW}"
 
+RÈGLES IMPORTANTES:
+- Un changement de VERSION (v2.7.0 → v3.11.0) est une CONTRADICTION (l'ancien est obsolète)
+- Un changement de STATUS (offline → online, installé → désinstallé) est une CONTRADICTION
+- Un changement de QUANTITÉ (9 facts → 450 facts) est une CONTRADICTION
+- Si les deux parlent du MÊME sujet mais avec des valeurs différentes = CONTRADICTION
+
 Réponds UNIQUEMENT en JSON:
 - Si le nouveau CONTREDIT l'ancien: {"relation": "contradiction", "reason": "explication courte"}
 - Si le nouveau COMPLÈTE l'ancien: {"relation": "enrichment", "merged": "fait fusionné en une phrase"}
@@ -477,14 +483,19 @@ export class SelectiveMemory {
    * Limited to MAX_ENTITY_CANDIDATES to avoid excessive LLM calls.
    */
   private findFactsBySharedEntities(newFact: string, newEntities: Set<string>, alreadyChecked: Fact[]): Fact[] {
-    const MAX_ENTITY_CANDIDATES = 5;
+    // FIX 3: Increased from 5 to 10 — version contradictions need wider search
+    // (e.g., "Sol = v2.7.0" stored 6 times won't all be caught with limit 5)
+    const MAX_ENTITY_CANDIDATES = 10;
     const checkedIds = new Set(alreadyChecked.map(c => c.id));
     const candidates: Fact[] = [];
+
+    // FIX 3: Prioritize version-containing facts when new fact has a version
+    const hasVersion = /v\d+\.\d+/i.test(newFact);
 
     // Search for each entity via FTS (wider search to catch all related facts)
     for (const entity of newEntities) {
       if (candidates.length >= MAX_ENTITY_CANDIDATES) break;
-      const ftsResults = this.db.searchFacts(entity, 20);
+      const ftsResults = this.db.searchFacts(entity, 30);
       for (const result of ftsResults) {
         if (candidates.length >= MAX_ENTITY_CANDIDATES) break;
         if (checkedIds.has(result.id)) continue;
@@ -492,13 +503,21 @@ export class SelectiveMemory {
         const resultEntities = extractSubjectEntities(result.fact, this.getEntities());
         const shared = [...newEntities].filter(e => resultEntities.has(e));
         if (shared.length > 0) {
-          candidates.push(result);
+          // FIX 3: Boost priority for version-related facts
+          // When new fact says "Sol = v3.11", and existing says "Sol = v2.7", 
+          // this MUST be checked even if Levenshtein is low
+          if (hasVersion && /v\d+\.\d+/i.test(result.fact)) {
+            // Put version facts first (higher priority for contradiction check)
+            candidates.unshift(result);
+          } else {
+            candidates.push(result);
+          }
           checkedIds.add(result.id);
         }
       }
     }
 
-    return candidates;
+    return candidates.slice(0, MAX_ENTITY_CANDIDATES);
   }
 
   private async checkRelation(existing: Fact, newFact: string): Promise<{

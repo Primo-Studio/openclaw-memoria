@@ -967,6 +967,12 @@ export function register(api: OpenClawPluginApi): void {
 
       if (commands.length < 2) return;
 
+      // ── FIX 1: Filter — only capture reusable procedures ──
+      if (!proceduralMem.isReusableProcedure(commands)) {
+        api.logger.debug?.(`memoria: procedural skipped — not reusable (${commands.length} cmds, no action pattern)`);
+        return;
+      }
+
       // Quick fingerprint to avoid duplicate assemblies
       const fingerprint = commands.slice(-3).join('|').slice(0, 200);
       if (assembledGoals.has(fingerprint)) return;
@@ -1005,12 +1011,15 @@ Output JSON only (no markdown, no explanation):
 
         if (!meta.name || !meta.goal) return;
 
-        // Check if a similar procedure already exists
-        const existing = proceduralMem.search(meta.name, 3);
-        const similar = existing.find(p => 
-          p.name.toLowerCase() === meta.name.toLowerCase() ||
-          p.goal.toLowerCase() === meta.goal.toLowerCase()
-        );
+        // ── FIX 1b: Re-check name for noise patterns ──
+        if (!proceduralMem.isReusableProcedure(commands, meta.name)) {
+          api.logger.debug?.(`memoria: procedural skipped — LLM named it noise: "${meta.name}"`);
+          return;
+        }
+
+        // ── FIX 2: Smart duplicate detection ──
+        // Use findSimilarProcedure (word overlap) instead of exact match
+        const similar = proceduralMem.findSimilarProcedure(meta.name, meta.goal);
 
         if (similar) {
           // Reinforce existing procedure

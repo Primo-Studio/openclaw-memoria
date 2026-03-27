@@ -134,6 +134,112 @@ export class ProceduralMemory {
   }
 
   // ═══════════════════════════════════════════════════════
+  // FIX 1: Capture filter — only store reusable procedures
+  // FIX 2: Duplicate detection — merge instead of creating new
+  // ═══════════════════════════════════════════════════════
+
+  /**
+   * Check if a set of commands represents a reusable procedure
+   * (not a one-off diagnostic or health check).
+   * Returns false for noise: tail/grep-only sequences, single checks, etc.
+   */
+  isReusableProcedure(commands: string[], name?: string): boolean {
+    // Need at least 3 meaningful steps
+    const meaningfulCmds = commands.filter(cmd => {
+      const trimmed = cmd.trim();
+      // Skip pure read/diagnostic commands
+      if (/^\s*(echo|cat|head|tail|grep|ls|wc|sleep|date)\s/i.test(trimmed)) return false;
+      // Skip sqlite SELECT-only (diagnostic, not action)
+      if (/^\s*sqlite3\s.*SELECT/i.test(trimmed) && !/INSERT|UPDATE|DELETE|CREATE/i.test(trimmed)) return false;
+      // Skip short commands (< 10 chars)
+      if (trimmed.length < 10) return false;
+      return true;
+    });
+    if (meaningfulCmds.length < 3) return false;
+
+    // Check name for noise patterns (health check, diagnostic, status, etc.)
+    if (name) {
+      const noiseNames = [
+        /health\s*check/i, /diagnostic/i, /status\s*check/i,
+        /verification/i, /post-restart/i, /post-reload/i,
+        /log\s*analysis/i, /inspection/i, /audit.*status/i,
+      ];
+      if (noiseNames.some(p => p.test(name))) return false;
+    }
+
+    // Must contain at least one "action" command (not just reads)
+    const actionPatterns = [
+      /git\s+(commit|push|pull|tag|add)/i,
+      /npm\s+(install|publish|run|build)/i,
+      /clawhub\s+(publish|package)/i,
+      /openclaw\s+(plugins?\s+install)/i,
+      /curl\s+-.*POST/i,
+      /sed\s+-i/i, /mv\s+/i, /cp\s+/i,
+      /ssh\s+/i, /scp\s+/i,
+      /gh\s+(release|pr|issue)/i,
+      /pip\s+install/i, /brew\s+install/i,
+      /docker\s+(build|push|run)/i,
+      /vercel\s+(deploy|env)/i,
+      /convex\s+deploy/i,
+      /kill\s+-/i, /launchctl/i,
+    ];
+    const hasAction = commands.some(cmd => actionPatterns.some(p => p.test(cmd)));
+    if (!hasAction) return false;
+
+    return true;
+  }
+
+  /**
+   * Find a similar existing procedure by name or goal.
+   * Returns the best match if similarity is high enough, null otherwise.
+   */
+  findSimilarProcedure(name: string, goal: string): Procedure | null {
+    try {
+      const allProcs = this.getAllProcedures();
+      // Strip version numbers for comparison ("Release Memoria v3.10" → "Release Memoria")
+      const stripVersions = (s: string) => s.toLowerCase().replace(/v?\d+\.\d+(\.\d+)?/g, '').trim();
+      const nameClean = stripVersions(name);
+      const goalClean = stripVersions(goal);
+      const nameWords = nameClean.split(/\s+/).filter(w => w.length > 2);
+
+      let bestMatch: Procedure | null = null;
+      let bestScore = 0;
+
+      for (const proc of allProcs) {
+        const procNameClean = stripVersions(proc.name);
+        const procGoalClean = stripVersions(proc.goal);
+
+        // Exact clean name match (ignoring versions)
+        if (procNameClean === nameClean && nameClean.length > 5) return proc;
+
+        // Word overlap on name (version-stripped)
+        const procWords = procNameClean.split(/\s+/).filter(w => w.length > 2);
+        const commonWords = nameWords.filter(w => procWords.includes(w));
+        const wordOverlap = nameWords.length > 0 ? commonWords.length / Math.max(nameWords.length, procWords.length) : 0;
+        let score = wordOverlap * 0.6;
+
+        // Goal similarity (version-stripped)
+        if (goalClean.length > 5) {
+          const goalWords = goalClean.split(/\s+/).filter(w => w.length > 2);
+          const procGoalWords = procGoalClean.split(/\s+/).filter(w => w.length > 2);
+          const commonGoalWords = goalWords.filter(w => procGoalWords.includes(w));
+          const goalOverlap = goalWords.length > 0 ? commonGoalWords.length / Math.max(goalWords.length, procGoalWords.length) : 0;
+          score += goalOverlap * 0.4;
+        }
+
+        if (score > bestScore && score >= 0.5) {
+          bestScore = score;
+          bestMatch = proc;
+        }
+      }
+
+      return bestMatch;
+    } catch {
+      return null;
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════
   // Migration: add quality columns if missing
   // ═══════════════════════════════════════════════════════
 
@@ -274,6 +380,21 @@ Output JSON (no markdown):
         last_doc_check_at: Date.now(),
       };
 
+      // FIX 2: Check for similar existing procedure before storing
+      const existing = this.findSimilarProcedure(proc.name, proc.goal);
+      if (existing) {
+        // Reinforce existing instead of creating duplicate
+        existing.success_count += proc.success_count;
+        existing.failure_count += proc.failure_count;
+        existing.last_success_at = proc.last_success_at ?? existing.last_success_at;
+        existing.last_updated_at = Date.now();
+        existing.last_verified_at = Date.now();
+        existing.degradation_score = Math.max(0, existing.degradation_score - this.cfg.healingStep);
+        existing.quality.overall = this.computeOverall(existing.quality);
+        this.storeProcedure(existing);
+        return existing;
+      }
+
       this.storeProcedure(proc);
       return proc;
 
@@ -320,6 +441,9 @@ Output JSON (no markdown):
       if (commands.length < 2 || !hasSuccess) return null;
       const uniqueCommands = commands.filter((cmd, i) => i === 0 || cmd !== commands[i - 1]);
       if (uniqueCommands.length < 2) return null;
+
+      // FIX 1: Filter — only capture reusable procedures
+      if (!this.isReusableProcedure(uniqueCommands)) return null;
 
       return this.extractProcedure(
         uniqueCommands.map(c => ({ tool: 'exec', args: { command: c } })),
