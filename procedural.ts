@@ -289,6 +289,10 @@ Output JSON (no markdown):
    */
   getStats() {
     try {
+      if (!this.db || typeof this.db.prepare !== 'function') {
+        return { total: 0, degraded: 0, healthy: 0 };
+      }
+      
       const total = this.db.prepare(`SELECT COUNT(*) as count FROM procedures`).get() as any;
       const degraded = this.db.prepare(`SELECT COUNT(*) as count FROM procedures WHERE degradation_score > 0.5`).get() as any;
       const healthy = this.db.prepare(`SELECT COUNT(*) as count FROM procedures WHERE degradation_score < 0.3`).get() as any;
