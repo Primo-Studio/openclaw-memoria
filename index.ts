@@ -758,18 +758,53 @@ export function register(api: OpenClawPluginApi): void {
         } catch { /* non-critical */ }
 
         // Procedural memory: search for matching "how-to" procedures
+        // Cross-layer: uses Graph entities to enhance search + Embeddings for semantic match
         let proceduresContext = "";
+        const matchedProcedureIds: string[] = [];
         try {
-          const procedures = proceduralMem.search(prompt, 3);
+          // Strategy 1: Direct text search (fast, always works)
+          let procedures = proceduralMem.search(prompt, 3);
+
+          // Strategy 2: If few results, expand via Graph entities
+          // The graph knows "ClawHub" relates to "publish", "Memoria" relates to "plugin" etc.
+          if (procedures.length < 2) {
+            try {
+              const graphEntities = kg.findEntitiesInText(prompt);
+              if (graphEntities.length > 0) {
+                const relatedTerms = graphEntities
+                  .flatMap((e: any) => [e.name, ...(e.aliases || [])])
+                  .slice(0, 5);
+                for (const term of relatedTerms) {
+                  const extra = proceduralMem.search(term, 2);
+                  for (const p of extra) {
+                    if (!procedures.find(existing => existing.id === p.id)) {
+                      procedures.push(p);
+                    }
+                  }
+                }
+                if (procedures.length > 3) procedures = procedures.slice(0, 3);
+              }
+            } catch { /* graph expansion is non-critical */ }
+          }
+
           if (procedures.length > 0) {
             const procTexts: string[] = [];
             for (const proc of procedures) {
-              const successRate = proc.success_count / (proc.success_count + proc.failure_count || 1);
-              const status = proc.degradation_score > 0.5 ? "⚠ degraded" : "✓";
-              procTexts.push(`**${proc.name}** ${status} (${(successRate * 100).toFixed(0)}% success):\n${proc.steps.map((s, i) => `  ${i + 1}. ${s}`).join('\n')}`);
+              matchedProcedureIds.push(proc.id);
+              const successRate = proc.success_count / Math.max(proc.success_count + proc.failure_count, 1);
+              const status = proc.degradation_score > 0.5 ? "⚠ degraded" 
+                : proc.preferred ? "★ preferred" : "✓";
+              const qualityStr = `quality: ${(proc.quality.overall * 100).toFixed(0)}%`;
+              const versionStr = proc.version > 1 ? ` v${proc.version}` : '';
+              const gotchaStr = proc.gotchas ? `\n  ⚠ Gotchas: ${proc.gotchas}` : '';
+              procTexts.push(
+                `**${proc.name}**${versionStr} ${status} (${(successRate * 100).toFixed(0)}% success, ${qualityStr}):\n` +
+                proc.steps.map((s, i) => `  ${i + 1}. ${s}`).join('\n') +
+                gotchaStr
+              );
             }
             proceduresContext = `\n## 🔧 Known Procedures\n${procTexts.join('\n\n')}\n`;
-            api.logger.debug?.(`memoria: ${procedures.length} procedures matched`);
+            api.logger.debug?.(`memoria: ${procedures.length} procedures matched (graph-expanded)`);
           }
         } catch { /* non-critical */ }
 
@@ -802,6 +837,12 @@ export function register(api: OpenClawPluginApi): void {
         try { db.trackAccess(ids); } catch { /* non-critical */ }
         try { feedbackMgr.recordRecall(ids, prompt); } catch { /* non-critical */ }
         try { budget.recordRecall(recallLimit); } catch { /* non-critical */ }
+
+        // Cross-layer: track procedure recall for feedback
+        // Later, agent_end will check if procedures were actually useful
+        if (matchedProcedureIds.length > 0) {
+          try { feedbackMgr.recordRecall(matchedProcedureIds, `proc:${prompt}`); } catch { /* non-critical */ }
+        }
         try {
           // Update lifecycle state for recalled facts (fresh→mature transition)
           for (const fact of finalFacts) {
@@ -1001,6 +1042,14 @@ Output JSON only (no markdown, no explanation):
 
           proceduralMem.storeProcedure(proc as any);
           api.logger.info?.(`memoria: procedural ✅ NEW "${proc.name}" (${proc.steps.length} steps, real-time)`);
+
+          // Cross-layer: enrich Knowledge Graph with procedure entities
+          // "Publish to ClawHub" → entities: ClawHub, Memoria, plugin
+          try {
+            const procFact = `Procedure "${proc.name}": ${proc.goal}. Steps: ${commands.slice(0, 3).join('; ')}`;
+            await kg.extractAndStore(`proc_${proc.id}`, procFact);
+            api.logger.debug?.(`memoria: procedural → graph entities extracted for "${proc.name}"`);
+          } catch { /* graph enrichment is non-critical */ }
         }
 
         assembledGoals.add(fingerprint);
