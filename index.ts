@@ -428,8 +428,16 @@ export function register(api: OpenClawPluginApi): void {
     reflectEvery: cfg.procedural?.reflectEvery ?? 3,
     degradedThreshold: cfg.procedural?.degradedThreshold ?? 0.5,
     defaultSafety: cfg.procedural?.defaultSafety ?? 0.8,
+    staleDays: cfg.procedural?.staleDays ?? 30,
+    docCheckDays: cfg.procedural?.docCheckDays ?? 60,
   });
-  proceduralMem.ensureSchema(); // migrate quality columns if missing
+  proceduralMem.ensureSchema(); // migrate quality columns + doc_sources if missing
+
+  // Apply staleness penalties — like checking for OS updates at boot
+  const stalenessResult = proceduralMem.applyStalenessPenalties();
+  if (stalenessResult.updated > 0 || stalenessResult.flaggedForDocCheck > 0) {
+    console.log(`[memoria] 🕰️ Staleness check: ${stalenessResult.updated} aged, ${stalenessResult.flaggedForDocCheck} flagged for doc check`);
+  }
   const budget = new AdaptiveBudget({
     contextWindow: cfg.contextWindow || 200000,
     maxFacts: cfg.recallLimit || 12,
@@ -506,7 +514,9 @@ export function register(api: OpenClawPluginApi): void {
   const lifecycleNote = ` | lifecycle: ${lifecycleStats.fresh}f/${lifecycleStats.mature}m/${lifecycleStats.aged}a/${lifecycleStats.archived}⚰`;
   const hebbianNote = ` | graph: ${hebbianStats.strong} strong, ${hebbianStats.weak} weak`;
   const expertiseNote = ` | expertise: ${expertiseStats.expert}★★★/${expertiseStats.experienced}★★/${expertiseStats.familiar}★`;
-  const procNote = procStats.total > 0 ? ` | procedures: ${procStats.healthy}✓/${procStats.degraded}⚠` : "";
+  const procNote = procStats.total > 0 
+    ? ` | procedures: ${procStats.healthy}✓/${procStats.degraded}⚠${procStats.stale > 0 ? `/${procStats.stale}🕰️` : ''}` 
+    : "";
   api.logger.info?.(`memoria: v${pluginVersion} registered (${stats.active} facts, ${cStats.total} clusters, ${oStats.total} observations, ${embCount} embedded, ${gStats.entities} entities, ${gStats.relations} relations, ${tStats.totalTopics} topics${fbNote}${lifecycleNote}${hebbianNote}${expertiseNote}${procNote}, fallback: ${chain.providerNames.join(" → ")})`);
   
   // Log .md file sizes
@@ -796,15 +806,21 @@ export function register(api: OpenClawPluginApi): void {
             for (const proc of procedures) {
               matchedProcedureIds.push(proc.id);
               const successRate = proc.success_count / Math.max(proc.success_count + proc.failure_count, 1);
-              const status = proc.degradation_score > (cfg.procedural?.degradedThreshold ?? 0.5) ? "⚠ degraded" 
+              const degThreshold = cfg.procedural?.degradedThreshold ?? 0.5;
+              const isStale = proceduralMem.needsDocCheck(proc);
+              const isDegraded = proc.degradation_score > degThreshold;
+              const status = isDegraded ? "⚠ degraded" 
+                : isStale ? "🕰️ stale — verify before using"
                 : proc.preferred ? "★ preferred" : "✓";
               const qualityStr = `quality: ${(proc.quality.overall * 100).toFixed(0)}%`;
               const versionStr = proc.version > 1 ? ` v${proc.version}` : '';
               const gotchaStr = proc.gotchas ? `\n  ⚠ Gotchas: ${proc.gotchas}` : '';
+              const staleStr = isStale ? `\n  🕰️ Not used in a while — check docs/help before running. Doc sources: ${(proc.doc_sources || []).join(', ') || 'run --help'}` : '';
               procTexts.push(
                 `**${proc.name}**${versionStr} ${status} (${(successRate * 100).toFixed(0)}% success, ${qualityStr}):\n` +
                 proc.steps.map((s, i) => `  ${i + 1}. ${s}`).join('\n') +
-                gotchaStr
+                gotchaStr +
+                staleStr
               );
             }
             proceduresContext = `\n## 🔧 Known Procedures\n${procTexts.join('\n\n')}\n`;

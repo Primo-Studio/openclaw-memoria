@@ -56,6 +56,10 @@ export interface Procedure {
   degradation_score: number;       // 0-1, rises with failures
   alternative_of?: string;         // ID of procedure this can replace
   preferred?: boolean;             // is this the preferred approach for its goal?
+  // ── Staleness & Doc Sources ──
+  doc_sources?: string[];          // where to look when stale: ["clawhub --help", "https://docs.clawhub.com"]
+  last_verified_at?: number;       // last time we confirmed the procedure still works
+  last_doc_check_at?: number;      // last time we checked docs for updates
 }
 
 export interface ProcedureImprovement {
@@ -90,6 +94,12 @@ export interface ProceduralConfig {
   degradedThreshold: number; // default 0.5
   /** Default safety score for new procedures */
   defaultSafety: number;     // default 0.8
+  /** Days without use before a procedure starts aging (staleness) */
+  staleDays: number;         // default 30
+  /** Days without use before a procedure is flagged for doc check */
+  docCheckDays: number;      // default 60
+  /** Max staleness penalty added to degradation_score */
+  maxStalePenalty: number;   // default 0.3
 }
 
 const DEFAULT_PROCEDURAL_CONFIG: ProceduralConfig = {
@@ -104,6 +114,9 @@ const DEFAULT_PROCEDURAL_CONFIG: ProceduralConfig = {
   reflectEvery: 3,
   degradedThreshold: 0.5,
   defaultSafety: 0.8,
+  staleDays: 30,
+  docCheckDays: 60,
+  maxStalePenalty: 0.3,
 };
 
 export class ProceduralMemory {
@@ -140,6 +153,9 @@ export class ProceduralMemory {
         ['quality_overall', 'ALTER TABLE procedures ADD COLUMN quality_overall REAL DEFAULT 0.5'],
         ['gotchas', 'ALTER TABLE procedures ADD COLUMN gotchas TEXT'],
         ['preferred', 'ALTER TABLE procedures ADD COLUMN preferred INTEGER DEFAULT 0'],
+        ['doc_sources', 'ALTER TABLE procedures ADD COLUMN doc_sources TEXT'],
+        ['last_verified_at', 'ALTER TABLE procedures ADD COLUMN last_verified_at INTEGER'],
+        ['last_doc_check_at', 'ALTER TABLE procedures ADD COLUMN last_doc_check_at INTEGER'],
       ];
 
       for (const [col, sql] of migrations) {
@@ -227,7 +243,8 @@ Output JSON (no markdown):
     "reliability": 0.8,
     "elegance": 0.6,
     "safety": 0.9
-  }
+  },
+  "doc_sources": ["tool --help", "https://docs.example.com"]
 }`;
 
       const response = await this.llm.generate(prompt);
@@ -252,6 +269,9 @@ Output JSON (no markdown):
         context: meta.trigger_patterns?.join(', '),
         gotchas: meta.gotchas?.join(' | '),
         degradation_score: outcome === 'failure' ? 0.1 : 0,
+        doc_sources: meta.doc_sources || [],
+        last_verified_at: outcome === 'success' ? Date.now() : undefined,
+        last_doc_check_at: Date.now(),
       };
 
       this.storeProcedure(proc);
@@ -473,6 +493,309 @@ Output JSON (no markdown):
   }
 
   // ═══════════════════════════════════════════════════════
+  // Staleness — Time-based degradation
+  // Like an OS that hasn't been updated in months:
+  // it might still work, but you can't be sure.
+  // ═══════════════════════════════════════════════════════
+
+  /**
+   * Compute staleness penalty for a procedure based on time since last use.
+   * Returns 0 (fresh) to maxStalePenalty (very stale).
+   */
+  private computeStaleness(proc: Procedure): number {
+    const now = Date.now();
+    const lastUsed = proc.last_success_at || proc.last_failure_at || proc.last_updated_at;
+    const daysSinceUse = (now - lastUsed) / (1000 * 60 * 60 * 24);
+
+    if (daysSinceUse < this.cfg.staleDays) return 0;
+
+    // Linear ramp from staleDays to staleDays*3
+    const staleRange = this.cfg.staleDays * 2; // 60 days range by default
+    const progress = Math.min(1, (daysSinceUse - this.cfg.staleDays) / staleRange);
+    return progress * this.cfg.maxStalePenalty;
+  }
+
+  /**
+   * Check if a procedure needs a doc verification.
+   * Returns true if unused for > docCheckDays or if degradation is high.
+   */
+  needsDocCheck(proc: Procedure): boolean {
+    const now = Date.now();
+    const lastUsed = proc.last_success_at || proc.last_failure_at || proc.last_updated_at;
+    const daysSinceUse = (now - lastUsed) / (1000 * 60 * 60 * 24);
+    const lastDocCheck = proc.last_doc_check_at || 0;
+    const daysSinceDocCheck = (now - lastDocCheck) / (1000 * 60 * 60 * 24);
+
+    // Needs check if: unused too long, or degraded, or doc never checked
+    return (
+      daysSinceUse > this.cfg.docCheckDays ||
+      daysSinceDocCheck > this.cfg.docCheckDays ||
+      proc.degradation_score > this.cfg.degradedThreshold
+    );
+  }
+
+  /**
+   * Apply staleness penalty to all procedures at boot.
+   * Fresh procedures untouched; old ones get degradation penalty.
+   */
+  applyStalenessPenalties(): { updated: number; flaggedForDocCheck: number } {
+    let updated = 0;
+    let flaggedForDocCheck = 0;
+
+    try {
+      const allProcs = this.getAllProcedures();
+      for (const proc of allProcs) {
+        const stalePenalty = this.computeStaleness(proc);
+        if (stalePenalty > 0) {
+          const newDeg = Math.min(1.0, proc.degradation_score + stalePenalty);
+          if (newDeg !== proc.degradation_score) {
+            proc.degradation_score = newDeg;
+            proc.quality.overall = this.computeOverall(proc.quality);
+            this.storeProcedure(proc);
+            updated++;
+          }
+        }
+        if (this.needsDocCheck(proc)) {
+          flaggedForDocCheck++;
+        }
+      }
+    } catch (err) {
+      console.error('[ProceduralMemory] applyStalenessPenalties failed:', err);
+    }
+
+    return { updated, flaggedForDocCheck };
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // Doc consultation — When things fail or get stale,
+  // check the docs like a human would open the manual.
+  // ═══════════════════════════════════════════════════════
+
+  /**
+   * On failure: consult doc sources to understand why and potentially fix.
+   * Like a mechanic checking the service manual when something breaks.
+   */
+  async consultDocsOnFailure(
+    proc: Procedure,
+    errorOutput: string
+  ): Promise<{
+    diagnosis: string;
+    suggestedFix: string | null;
+    newSteps: string[] | null;
+    docSourceUsed: string | null;
+  }> {
+    try {
+      const docSources = proc.doc_sources || [];
+      // Build doc context from --help commands in the steps
+      const toolNames = this.extractToolNames(proc.steps);
+      const helpCommands = toolNames.map(t => `${t} --help 2>/dev/null | head -40`);
+
+      const prompt = `A procedure just FAILED. Diagnose and suggest a fix.
+
+Procedure: "${proc.name}" (v${proc.version})
+Goal: ${proc.goal}
+Steps: ${proc.steps.map((s, i) => `${i + 1}. ${s}`).join('\n')}
+Known gotchas: ${proc.gotchas || 'none'}
+Doc sources: ${docSources.length > 0 ? docSources.join(', ') : 'none registered'}
+Tools used: ${toolNames.join(', ') || 'unknown'}
+
+Error output:
+${errorOutput.slice(0, 1500)}
+
+Help commands to consult: ${helpCommands.join(' ; ')}
+
+Questions to answer:
+1. What changed? (API update? syntax change? new version?)
+2. Can the current steps be fixed?
+3. Is there a fundamentally better/newer way to do this?
+
+Output JSON (no markdown):
+{
+  "diagnosis": "what went wrong and why",
+  "suggestedFix": "how to fix the current steps, or null if unfixable",
+  "newSteps": ["step1", "step2"] or null if current steps fixable,
+  "docSourceUsed": "which doc/help was most useful"
+}`;
+
+      const response = await this.llm.generate(prompt);
+      const cleaned = response.replace(/```json\n?|\n?```/g, '').trim();
+      const result = JSON.parse(cleaned);
+
+      // Record the doc check
+      proc.last_doc_check_at = Date.now();
+
+      // If we got new steps, evolve the procedure
+      if (result.newSteps && Array.isArray(result.newSteps) && result.newSteps.length > 0) {
+        proc.version++;
+        proc.steps = result.newSteps;
+        proc.improvements.push({
+          timestamp: Date.now(),
+          change: `Steps updated after failure: ${result.diagnosis}`,
+          reason: 'Doc consultation after failure',
+        });
+        // Add the doc source if new
+        if (result.docSourceUsed && !docSources.includes(result.docSourceUsed)) {
+          docSources.push(result.docSourceUsed);
+          proc.doc_sources = docSources;
+        }
+      } else if (result.suggestedFix) {
+        proc.improvements.push({
+          timestamp: Date.now(),
+          change: result.suggestedFix,
+          reason: `Failure diagnosis: ${result.diagnosis}`,
+        });
+      }
+
+      // Add gotcha from the failure
+      const newGotcha = result.diagnosis.slice(0, 200);
+      proc.gotchas = proc.gotchas ? `${proc.gotchas} | ${newGotcha}` : newGotcha;
+
+      this.storeProcedure(proc);
+      return result;
+    } catch (err) {
+      console.error('[ProceduralMemory] consultDocsOnFailure failed:', err);
+      return {
+        diagnosis: 'Doc consultation failed',
+        suggestedFix: null,
+        newSteps: null,
+        docSourceUsed: null,
+      };
+    }
+  }
+
+  /**
+   * Proactive doc check — like checking for OS updates.
+   * Run periodically on stale procedures to discover new approaches.
+   */
+  async proactiveDocCheck(proc: Procedure): Promise<{
+    hasUpdates: boolean;
+    newApproach: string | null;
+    updatedSteps: string[] | null;
+  }> {
+    try {
+      const toolNames = this.extractToolNames(proc.steps);
+      const docSources = proc.doc_sources || [];
+
+      const prompt = `Review this procedure for potential improvements or outdated steps.
+
+Procedure: "${proc.name}" (v${proc.version}, last used ${this.formatAge(proc.last_success_at || proc.last_updated_at)} ago)
+Goal: ${proc.goal}
+Steps: ${proc.steps.map((s, i) => `${i + 1}. ${s}`).join('\n')}
+Tools: ${toolNames.join(', ')}
+Known gotchas: ${proc.gotchas || 'none'}
+Doc sources: ${docSources.join(', ') || 'none'}
+
+Consider:
+1. Are any commands deprecated or have newer alternatives?
+2. Is there a simpler/faster way to achieve the same goal?
+3. Are there new flags/options that would improve the procedure?
+4. Has the tool's API changed (new syntax, new subcommands)?
+
+Output JSON (no markdown):
+{
+  "hasUpdates": true/false,
+  "reason": "why this needs updating",
+  "newApproach": "description of better approach, or null",
+  "updatedSteps": ["step1", "step2"] or null if no change needed,
+  "newDocSources": ["url or command"] or []
+}`;
+
+      const response = await this.llm.generate(prompt);
+      const cleaned = response.replace(/```json\n?|\n?```/g, '').trim();
+      const result = JSON.parse(cleaned);
+
+      proc.last_doc_check_at = Date.now();
+
+      if (result.hasUpdates && result.updatedSteps?.length > 0) {
+        // Create alternative, don't replace directly
+        const altProc: Procedure = {
+          ...proc,
+          id: `proc_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+          name: `${proc.name} (updated)`,
+          steps: result.updatedSteps,
+          version: 1,
+          success_count: 0,
+          failure_count: 0,
+          last_success_at: undefined,
+          last_failure_at: undefined,
+          last_updated_at: Date.now(),
+          improvements: [{
+            timestamp: Date.now(),
+            change: result.reason,
+            reason: 'Proactive doc check',
+          }],
+          degradation_score: 0,
+          alternative_of: proc.id,
+          preferred: false,
+          doc_sources: [...(proc.doc_sources || []), ...(result.newDocSources || [])],
+          last_verified_at: Date.now(),
+          last_doc_check_at: Date.now(),
+        };
+        this.storeProcedure(altProc);
+
+        console.log(`[ProceduralMemory] 🔄 Created alternative "${altProc.name}" for "${proc.name}"`);
+      }
+
+      // Update doc sources on the original
+      if (result.newDocSources?.length > 0) {
+        const allSources = new Set([...(proc.doc_sources || []), ...result.newDocSources]);
+        proc.doc_sources = [...allSources];
+      }
+
+      this.storeProcedure(proc);
+
+      return {
+        hasUpdates: result.hasUpdates,
+        newApproach: result.newApproach || null,
+        updatedSteps: result.updatedSteps || null,
+      };
+    } catch (err) {
+      console.error('[ProceduralMemory] proactiveDocCheck failed:', err);
+      return { hasUpdates: false, newApproach: null, updatedSteps: null };
+    }
+  }
+
+  /**
+   * Get all procedures that need a doc check (stale or degraded).
+   */
+  getStaleOrDegraded(): Procedure[] {
+    try {
+      return this.getAllProcedures().filter(p => this.needsDocCheck(p));
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Extract tool names from steps for doc consultation.
+   */
+  private extractToolNames(steps: string[]): string[] {
+    const tools = new Set<string>();
+    for (const step of steps) {
+      // Match first word of commands
+      const match = step.match(/^\s*(?:cd\s+[^\s;]+\s*(?:&&|;)\s*)?(\w[\w.-]*)/);
+      if (match) {
+        const tool = match[1];
+        if (!['echo', 'sleep', 'cat', 'head', 'tail', 'grep', 'cd', 'mkdir', 'rm', 'cp', 'mv'].includes(tool)) {
+          tools.add(tool);
+        }
+      }
+    }
+    return [...tools];
+  }
+
+  /**
+   * Format age for display.
+   */
+  private formatAge(timestamp: number | undefined): string {
+    if (!timestamp) return 'unknown';
+    const days = Math.floor((Date.now() - timestamp) / (1000 * 60 * 60 * 24));
+    if (days === 0) return 'today';
+    if (days === 1) return '1 day';
+    return `${days} days`;
+  }
+
+  // ═══════════════════════════════════════════════════════
   // CRUD + Search
   // ═══════════════════════════════════════════════════════
 
@@ -485,8 +808,9 @@ Output JSON (no markdown):
           last_success_at, last_failure_at, last_updated_at,
           avg_duration_ms, best_duration_ms,
           quality_speed, quality_reliability, quality_elegance, quality_safety, quality_overall,
-          improvements, context, gotchas, degradation_score, alternative_of, preferred
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          improvements, context, gotchas, degradation_score, alternative_of, preferred,
+          doc_sources, last_verified_at, last_doc_check_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           name = excluded.name,
           goal = excluded.goal,
@@ -508,7 +832,10 @@ Output JSON (no markdown):
           context = excluded.context,
           gotchas = excluded.gotchas,
           degradation_score = excluded.degradation_score,
-          preferred = excluded.preferred
+          preferred = excluded.preferred,
+          doc_sources = excluded.doc_sources,
+          last_verified_at = excluded.last_verified_at,
+          last_doc_check_at = excluded.last_doc_check_at
       `).run(
         proc.id,
         proc.name,
@@ -533,7 +860,10 @@ Output JSON (no markdown):
         proc.gotchas ?? null,
         proc.degradation_score,
         proc.alternative_of ?? null,
-        proc.preferred ? 1 : 0
+        proc.preferred ? 1 : 0,
+        proc.doc_sources ? JSON.stringify(proc.doc_sources) : null,
+        proc.last_verified_at ?? null,
+        proc.last_doc_check_at ?? null
       );
 
       // Update FTS index
@@ -566,7 +896,8 @@ Output JSON (no markdown):
     procedureId: string,
     success: boolean,
     durationMs?: number,
-    notes?: string
+    notes?: string,
+    errorOutput?: string
   ): void {
     try {
       const proc = this.getProcedure(procedureId);
@@ -602,9 +933,20 @@ Output JSON (no markdown):
         }
       }
 
+      // Reset staleness on successful use
+      if (success) {
+        proc.last_verified_at = now;
+      }
+
       proc.quality.overall = this.computeOverall(proc.quality);
       proc.last_updated_at = now;
       this.storeProcedure(proc);
+
+      // On failure with error output: consult docs automatically
+      if (!success && errorOutput && proc.degradation_score >= this.cfg.degradationStep * 2) {
+        // Non-blocking doc consultation
+        this.consultDocsOnFailure(proc, errorOutput).catch(() => {});
+      }
 
     } catch (err) {
       console.error('[ProceduralMemory] recordExecution failed:', err);
@@ -725,10 +1067,13 @@ Output JSON (no markdown):
       const avgQ = (this.db.prepare(`SELECT AVG(quality_overall) as q FROM procedures`).get() as any)?.q || 0;
       const pref = (this.db.prepare(`SELECT COUNT(*) as c FROM procedures WHERE preferred = 1`).get() as any)?.c || 0;
 
+      const staleCount = this.getStaleOrDegraded().length;
+
       return {
         total,
         degraded,
         healthy,
+        stale: staleCount,
         avgQuality: Math.round(avgQ * 100) / 100,
         preferred: pref,
       };
@@ -794,6 +1139,9 @@ Output JSON (no markdown):
       degradation_score: row.degradation_score,
       alternative_of: row.alternative_of,
       preferred: !!row.preferred,
+      doc_sources: row.doc_sources ? JSON.parse(row.doc_sources) : undefined,
+      last_verified_at: row.last_verified_at,
+      last_doc_check_at: row.last_doc_check_at,
     };
   }
 }

@@ -65,6 +65,20 @@
             "maximum": 1.0,
             "default": 0.8,
             "description": "Default safety score for new procedures"
+          },
+          "staleDays": {
+            "type": "number",
+            "minimum": 7,
+            "maximum": 365,
+            "default": 30,
+            "description": "Days without use before a procedure starts degrading from staleness"
+          },
+          "docCheckDays": {
+            "type": "number",
+            "minimum": 7,
+            "maximum": 365,
+            "default": 60,
+            "description": "Days without use before flagging for doc verification"
           }
         }
       },
