@@ -1,5 +1,16 @@
 # Changelog
 
+## [3.7.2] - 2026-03-27
+### Fixed — 3 Critical Memory Issues
+- **ProceduralMemory DB fix**: was receiving MemoriaDB wrapper instead of raw better-sqlite3 Database, causing `this.db.prepare is not a function` — procedures were "captured" in logs but never persisted (0 in DB)
+- **Recall query pollution fix**: FTS5 search was matching on OpenClaw envelope metadata (`"Conversation info (untrusted metadata)..."`) instead of actual user message — causing 89% of facts to never be recalled. Now strips envelope before search
+- **DB cleanup**: 22 vague/meta facts superseded (e.g., "Le nouveau fait complète l'ancien"), cortex.db archived
+
+### Impact
+- Procedures now persist to SQLite correctly
+- Recall will match on what the user actually says, not Telegram metadata
+- 436 active facts (was 450, 14 were noise)
+
 ## [3.7.1] - 2026-03-27
 ### Fixed — Phase 3 Procedural Capture
 - **Dual-strategy extraction** for better reliability:

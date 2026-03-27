@@ -6,7 +6,7 @@
 
 ---
 
-## ✨ What's New in v3.7.0
+## ✨ What's New in v3.7.2
 
 ### 🔧 **Procedural Memory** *(NEW in 3.7.0)*
 Memoria now learns **"how to do things"**, not just "what happened":
