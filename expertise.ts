@@ -65,7 +65,7 @@ export class ExpertiseManager {
    */
   getAllExpertise(): TopicExpertise[] {
     const topics = this.db.raw.prepare(
-      "SELECT topic, interaction_count FROM topics ORDER BY interaction_count DESC"
+      "SELECT name as topic, access_count as interaction_count FROM topics ORDER BY access_count DESC"
     ).all() as Array<{ topic: string; interaction_count: number }>;
 
     return topics.map(t => ({
@@ -84,7 +84,7 @@ export class ExpertiseManager {
 
     for (const topic of topics) {
       const row = this.db.raw.prepare(
-        "SELECT interaction_count FROM topics WHERE topic = ?"
+        "SELECT access_count as interaction_count FROM topics WHERE name = ?"
       ).get(topic) as { interaction_count: number } | undefined;
 
       const count = row?.interaction_count ?? 0;
