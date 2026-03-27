@@ -433,10 +433,15 @@ export function register(api: OpenClawPluginApi): void {
   });
   proceduralMem.ensureSchema(); // migrate quality columns + doc_sources if missing
 
-  // Apply staleness penalties — like checking for OS updates at boot
-  const stalenessResult = proceduralMem.applyStalenessPenalties();
-  if (stalenessResult.updated > 0 || stalenessResult.flaggedForDocCheck > 0) {
-    console.log(`[memoria] 🕰️ Staleness check: ${stalenessResult.updated} aged, ${stalenessResult.flaggedForDocCheck} flagged for doc check`);
+  // Apply staleness penalties — once per process, not per session
+  // OpenClaw calls register() once per active session, but staleness is global
+  const stalenessKey = '__memoria_staleness_applied';
+  if (!(globalThis as any)[stalenessKey]) {
+    (globalThis as any)[stalenessKey] = true;
+    const stalenessResult = proceduralMem.applyStalenessPenalties();
+    if (stalenessResult.updated > 0 || stalenessResult.flaggedForDocCheck > 0) {
+      console.log(`[memoria] 🕰️ Staleness check: ${stalenessResult.updated} aged, ${stalenessResult.flaggedForDocCheck} flagged for doc check`);
+    }
   }
   const budget = new AdaptiveBudget({
     contextWindow: cfg.contextWindow || 200000,
