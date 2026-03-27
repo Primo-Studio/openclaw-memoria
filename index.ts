@@ -422,7 +422,7 @@ export function register(api: OpenClawPluginApi): void {
   const revisionMgr = new RevisionManager(db, chain);
   const hebbianMgr = new HebbianManager(db);
   const expertiseMgr = new ExpertiseManager(db);
-  const proceduralMem = new ProceduralMemory(db, chain);
+  const proceduralMem = new ProceduralMemory(db.raw, chain);
   const budget = new AdaptiveBudget({
     contextWindow: cfg.contextWindow || 200000,
     maxFacts: cfg.recallLimit || 12,
@@ -623,8 +623,26 @@ export function register(api: OpenClawPluginApi): void {
   if (cfg.autoRecall) {
     api.on("before_prompt_build", async (event, _ctx) => {
       try {
-        const prompt = typeof event.prompt === "string" ? event.prompt : "";
-        if (!prompt || prompt.length < 3) return undefined;
+        const rawPrompt = typeof event.prompt === "string" ? event.prompt : "";
+        if (!rawPrompt || rawPrompt.length < 3) return undefined;
+
+        // Strip OpenClaw envelope metadata to get the real user message
+        // The prompt contains "Conversation info (untrusted metadata)..." + JSON blocks
+        // which pollute FTS search with irrelevant tokens
+        let prompt = rawPrompt;
+        const lastJsonEnd = rawPrompt.lastIndexOf("```\n\n");
+        if (lastJsonEnd !== -1 && rawPrompt.includes("untrusted metadata")) {
+          prompt = rawPrompt.slice(lastJsonEnd + 5).trim();
+        }
+        // Also strip Memoria injection header if re-entering
+        if (prompt.startsWith("## 🧠 Memoria")) {
+          const afterMemoria = prompt.indexOf("\n\n", prompt.indexOf("Conversation info"));
+          if (afterMemoria !== -1) prompt = prompt.slice(afterMemoria).trim();
+        }
+        // Fallback: if stripping removed everything, use last 500 chars of raw
+        if (!prompt || prompt.length < 3) {
+          prompt = rawPrompt.slice(-500).trim();
+        }
 
         // ── User signal detection (correction / frustration) ──
         // Analyze the user message BEFORE recall so we can penalize
