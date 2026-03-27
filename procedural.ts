@@ -133,7 +133,7 @@ Output JSON (no markdown):
       // Find assistant messages with exec/command patterns
       const commandPatterns = [
         /```(?:bash|sh|shell)?\n([\s\S]+?)\n```/g,
-        /`([^`]+(?:clawhub|openclaw|npm|git|curl)[^`]+)`/g,
+        /`([^`]+(?:clawhub|openclaw|npm|git|curl|cd|mkdir)[^`]+)`/g,
         /(?:^|\n)\$ (.+?)(?:\n|$)/g,
       ];
 
@@ -157,7 +157,8 @@ Output JSON (no markdown):
           const matches = [...text.matchAll(pattern)];
           for (const match of matches) {
             const cmd = match[1]?.trim();
-            if (cmd && cmd.length > 5 && cmd.length < 500) {
+            // Skip if just a language name (bash, sh, shell) or too short/long
+            if (cmd && cmd.length > 5 && cmd.length < 500 && !/^(bash|sh|shell|zsh)$/i.test(cmd)) {
               commands.push(cmd);
             }
           }

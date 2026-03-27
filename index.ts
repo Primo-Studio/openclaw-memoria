@@ -1081,6 +1081,22 @@ export function register(api: OpenClawPluginApi): void {
       if (stored > 0) {
         await postProcessNewFacts("compaction");
       }
+
+      // ── Procedural Memory: extract from compaction summary ──
+      try {
+        // Parse summary as if it were assistant messages
+        const fakeMessages = [{ role: 'assistant', content: summary }];
+        const proc = await proceduralMem.extractFromMessages(
+          fakeMessages as any,
+          `Compaction summary: ${event.agentId || cfg.defaultAgent}`
+        );
+        if (proc) {
+          api.logger.info?.(`memoria: procedural ✅ captured from compaction "${proc.name}" (${proc.steps.length} steps)`);
+        }
+      } catch (err) {
+        api.logger.debug?.(`[DEBUG] procedural compaction extraction error: ${String(err)}`);
+      }
+
     } catch (err) {
       api.logger.warn?.(`memoria: compaction capture failed: ${String(err)}`);
     }
