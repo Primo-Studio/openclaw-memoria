@@ -31,6 +31,7 @@ export interface Fact {
   entity_ids: string;     // JSON array
   fact_type: "semantic" | "episodic"; // semantic = durable, episodic = dated/contextual
   relevance_weight: number; // 0.0-1.0, calculated from identity context
+  lifecycle_state: "fresh" | "mature" | "aged" | "archived"; // Phase 1: lifecycle management
 }
 
 export interface Entity {
@@ -102,6 +103,7 @@ export class MemoriaDB {
     this.migrateAddFeedbackColumns();
     this.migrateAddRelevanceWeight();
     this.migrateAddIdentityCache();
+    this.migrateAddLifecycleState();
     this.setSchemaVersion(SCHEMA_VERSION);
   }
 
@@ -157,6 +159,17 @@ export class MemoriaDB {
         );
       `);
     } catch { /* table already exists */ }
+  }
+
+  /** Migration: add lifecycle_state for fact evolution (fresh/mature/aged/archived) */
+  private migrateAddLifecycleState(): void {
+    try {
+      const cols = this.db.prepare("PRAGMA table_info(facts)").all() as Array<{ name: string }>;
+      if (!cols.some(c => c.name === "lifecycle_state")) {
+        this.db.exec("ALTER TABLE facts ADD COLUMN lifecycle_state TEXT DEFAULT 'fresh'");
+        this.db.exec("CREATE INDEX IF NOT EXISTS idx_facts_lifecycle ON facts(lifecycle_state)");
+      }
+    } catch { /* column already exists or table not yet created */ }
   }
 
   private getSchemaVersion(): number {
@@ -352,7 +365,7 @@ export class MemoriaDB {
   searchFacts(query: string, limit = 10): Fact[] {
     if (!query || query.trim().length === 0) {
       return this.db.prepare(
-        "SELECT * FROM facts WHERE superseded = 0 ORDER BY updated_at DESC LIMIT ?"
+        "SELECT * FROM facts WHERE superseded = 0 AND lifecycle_state != 'archived' ORDER BY updated_at DESC LIMIT ?"
       ).all(limit) as Fact[];
     }
 
@@ -374,14 +387,14 @@ export class MemoriaDB {
       return this.db.prepare(`
         SELECT f.* FROM facts f
         JOIN facts_fts fts ON f.rowid = fts.rowid
-        WHERE facts_fts MATCH ? AND f.superseded = 0
+        WHERE facts_fts MATCH ? AND f.superseded = 0 AND f.lifecycle_state != 'archived'
         ORDER BY rank
         LIMIT ?
       `).all(sanitized, limit) as Fact[];
     } catch {
       // Fallback: LIKE search if FTS5 fails
       return this.db.prepare(
-        "SELECT * FROM facts WHERE superseded = 0 AND fact LIKE ? ORDER BY updated_at DESC LIMIT ?"
+        "SELECT * FROM facts WHERE superseded = 0 AND lifecycle_state != 'archived' AND fact LIKE ? ORDER BY updated_at DESC LIMIT ?"
       ).all(`%${query.slice(0, 100)}%`, limit) as Fact[];
     }
   }
@@ -418,7 +431,7 @@ export class MemoriaDB {
   hotFacts(minAccess: number = 5, staleDays: number = 30, limit: number = 5): Fact[] {
     const cutoff = Date.now() - staleDays * 24 * 60 * 60 * 1000;
     return this.db.prepare(
-      `SELECT * FROM facts WHERE superseded = 0 AND access_count >= ? 
+      `SELECT * FROM facts WHERE superseded = 0 AND lifecycle_state != 'archived' AND access_count >= ? 
        AND COALESCE(last_accessed_at, updated_at) >= ?
        ORDER BY access_count DESC LIMIT ?`
     ).all(minAccess, cutoff, limit) as Fact[];

@@ -45,6 +45,7 @@ import { FactClusterManager } from "./fact-clusters.js";
 import { FeedbackManager } from "./feedback.js";
 import { AnthropicLLM } from "./providers/anthropic.js";
 import { IdentityParser } from "./identity-parser.js";
+import { LifecycleManager } from "./lifecycle.js";
 
 // ─── Config ───
 
@@ -413,6 +414,7 @@ export function register(api: OpenClawPluginApi): void {
     scanInterval: 15,
   });
   const identityParser = new IdentityParser(cfg.workspacePath);
+  const lifecycleMgr = new LifecycleManager(db);
   const budget = new AdaptiveBudget({
     contextWindow: cfg.contextWindow || 200000,
     maxFacts: cfg.recallLimit || 12,
@@ -473,9 +475,14 @@ export function register(api: OpenClawPluginApi): void {
     const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
     pluginVersion = pkg.version || pluginVersion;
   } catch { /* fallback to hardcoded */ }
+  // Refresh lifecycle states on boot
+  const lifecycleRefresh = lifecycleMgr.refreshAll();
+  const lifecycleStats = lifecycleMgr.getStats();
+
   const fbStats = feedbackMgr.getStats();
   const fbNote = fbStats.totalWithFeedback > 0 ? `, feedback: ${fbStats.totalWithFeedback} tracked (avg ${fbStats.avgUsefulness.toFixed(1)})` : "";
-  api.logger.info?.(`memoria: v${pluginVersion} registered (${stats.active} facts, ${cStats.total} clusters, ${oStats.total} observations, ${embCount} embedded, ${gStats.entities} entities, ${gStats.relations} relations, ${tStats.totalTopics} topics${fbNote}, fallback: ${chain.providerNames.join(" → ")})`);
+  const lifecycleNote = ` | lifecycle: ${lifecycleStats.fresh}f/${lifecycleStats.mature}m/${lifecycleStats.aged}a/${lifecycleStats.archived}⚰`;
+  api.logger.info?.(`memoria: v${pluginVersion} registered (${stats.active} facts, ${cStats.total} clusters, ${oStats.total} observations, ${embCount} embedded, ${gStats.entities} entities, ${gStats.relations} relations, ${tStats.totalTopics} topics${fbNote}${lifecycleNote}, fallback: ${chain.providerNames.join(" → ")})`);
   
   // Log .md file sizes
   const fileSizes = mdRegen.fileSizes();
@@ -729,11 +736,17 @@ export function register(api: OpenClawPluginApi): void {
 
         const context = formatRecallContext(finalFacts, observationContext);
 
-        // Track access + feedback loop + budget learning
+        // Track access + feedback loop + budget learning + lifecycle update
         const ids = finalFacts.map(f => f.id);
         try { db.trackAccess(ids); } catch { /* non-critical */ }
         try { feedbackMgr.recordRecall(ids, prompt); } catch { /* non-critical */ }
         try { budget.recordRecall(recallLimit); } catch { /* non-critical */ }
+        try {
+          // Update lifecycle state for recalled facts (fresh→mature transition)
+          for (const fact of finalFacts) {
+            lifecycleMgr.updateLifecycle(fact);
+          }
+        } catch { /* non-critical */ }
 
         const hotNote = hotLimit > 0 ? `, ${hotLimit} hot` : "";
         const graphNote = graphFacts.length > 0 ? `, +${graphFacts.length} graph` : "";
