@@ -1,0 +1,11 @@
+node_modules/
+*.db
+*.db-shm
+*.db-wal
+*.bak*
+.git/
+benchmarks/results/
+install.sh.bak-v34
+audit-v25.ts
+tests/
+package-lock.json
