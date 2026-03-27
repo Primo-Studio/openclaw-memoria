@@ -415,7 +415,7 @@ export class SelectiveMemory {
    * Process and apply: run the selective filter and execute the result.
    * Returns the stored/updated fact or null if skipped.
    */
-  async processAndApply(fact: string, category: string, confidence: number, agent = "koda", factType: "semantic" | "episodic" = "semantic"): Promise<{ stored: boolean; action: string; factId?: string; reason?: string }> {
+  async processAndApply(fact: string, category: string, confidence: number, agent = "koda", factType: "semantic" | "episodic" = "semantic", relevanceWeight = 0.5): Promise<{ stored: boolean; action: string; factId?: string; reason?: string }> {
     const result = await this.process(fact, category, confidence);
 
     switch (result.action) {
@@ -434,6 +434,7 @@ export class SelectiveMemory {
           created_at: Date.now(),
           updated_at: Date.now(),
           fact_type: factType,
+          relevance_weight: relevanceWeight,
         });
         return { stored: true, action: "store", factId: stored.id };
       }
@@ -451,6 +452,7 @@ export class SelectiveMemory {
           created_at: Date.now(),
           updated_at: Date.now(),
           fact_type: factType,
+          relevance_weight: relevanceWeight,
         });
         // Mark old as superseded
         this.db.supersedeFact(result.oldFactId, newFact.id);

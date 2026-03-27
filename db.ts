@@ -30,6 +30,7 @@ export interface Fact {
   md_line: number | null;
   entity_ids: string;     // JSON array
   fact_type: "semantic" | "episodic"; // semantic = durable, episodic = dated/contextual
+  relevance_weight: number; // 0.0-1.0, calculated from identity context
 }
 
 export interface Entity {
@@ -99,6 +100,8 @@ export class MemoriaDB {
     // V2: add fact_type column for semantic/episodic distinction
     this.migrateAddFactType();
     this.migrateAddFeedbackColumns();
+    this.migrateAddRelevanceWeight();
+    this.migrateAddIdentityCache();
     this.setSchemaVersion(SCHEMA_VERSION);
   }
 
@@ -129,6 +132,31 @@ export class MemoriaDB {
         this.db.exec("ALTER TABLE facts ADD COLUMN used_count INTEGER DEFAULT 0");
       }
     } catch { /* columns already exist or table not yet created */ }
+  }
+
+  /** Migration: add relevance_weight column for identity-aware prioritization */
+  private migrateAddRelevanceWeight(): void {
+    try {
+      const cols = this.db.prepare("PRAGMA table_info(facts)").all() as Array<{ name: string }>;
+      if (!cols.some(c => c.name === "relevance_weight")) {
+        this.db.exec("ALTER TABLE facts ADD COLUMN relevance_weight REAL DEFAULT 0.5");
+        // Index for sorting by relevance
+        this.db.exec("CREATE INDEX IF NOT EXISTS idx_facts_relevance ON facts(relevance_weight DESC)");
+      }
+    } catch { /* column already exists or table not yet created */ }
+  }
+
+  /** Migration: add identity_cache table for parsed USER.md/COMPANY.md */
+  private migrateAddIdentityCache(): void {
+    try {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS identity_cache (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+      `);
+    } catch { /* table already exists */ }
   }
 
   private getSchemaVersion(): number {
@@ -521,6 +549,20 @@ export class MemoriaDB {
       return count;
     });
     return tx();
+  }
+
+  // ─── Identity Cache ───
+
+  /** Store identity cache (JSON stringified) */
+  storeIdentityCache(key: string, value: string): void {
+    const now = Date.now();
+    this.db.prepare("INSERT OR REPLACE INTO identity_cache (key, value, updated_at) VALUES (?, ?, ?)").run(key, value, now);
+  }
+
+  /** Get identity cache */
+  getIdentityCache(key: string): string | null {
+    const row = this.db.prepare("SELECT value FROM identity_cache WHERE key = ?").get(key) as { value: string } | undefined;
+    return row?.value ?? null;
   }
 
   // ─── Close ───

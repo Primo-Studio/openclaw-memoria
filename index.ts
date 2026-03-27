@@ -44,6 +44,7 @@ import { ObservationManager } from "./observations.js";
 import { FactClusterManager } from "./fact-clusters.js";
 import { FeedbackManager } from "./feedback.js";
 import { AnthropicLLM } from "./providers/anthropic.js";
+import { IdentityParser } from "./identity-parser.js";
 
 // ─── Config ───
 
@@ -411,6 +412,7 @@ export function register(api: OpenClawPluginApi): void {
     subtopicThreshold: 5,
     scanInterval: 15,
   });
+  const identityParser = new IdentityParser(cfg.workspacePath);
   const budget = new AdaptiveBudget({
     contextWindow: cfg.contextWindow || 200000,
     maxFacts: cfg.recallLimit || 12,
@@ -836,12 +838,15 @@ export function register(api: OpenClawPluginApi): void {
           const factType = (f.type === "episodic") ? "episodic" : "semantic";
 
           try {
+            const category = normalizeCategory(f.category);
+            const relevance = identityParser.calculateRelevance(f.fact, category);
             const result = await selective.processAndApply(
               f.fact,
-              normalizeCategory(f.category),
+              category,
               f.confidence,
               cfg.defaultAgent,
-              factType
+              factType,
+              relevance
             );
             if (result.stored) {
               if (result.action === "enrich") enriched++;
@@ -852,10 +857,12 @@ export function register(api: OpenClawPluginApi): void {
             }
           } catch {
             // Fallback: store directly if selective fails
+            const category = normalizeCategory(f.category);
+            const relevance = identityParser.calculateRelevance(f.fact, category);
             db.storeFact({
               id: `fact_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
               fact: f.fact,
-              category: normalizeCategory(f.category),
+              category,
               confidence: f.confidence,
               source: "auto-capture",
               tags: "[]",
@@ -863,6 +870,7 @@ export function register(api: OpenClawPluginApi): void {
               created_at: Date.now(),
               updated_at: Date.now(),
               fact_type: factType,
+              relevance_weight: relevance,
             });
             stored++;
           }
@@ -926,16 +934,20 @@ export function register(api: OpenClawPluginApi): void {
         if (!f.fact || f.fact.length < 5 || f.confidence < 0.7) continue;
         const factType = (f.type === "episodic") ? "episodic" : "semantic";
         try {
+          const category = normalizeCategory(f.category);
+          const relevance = identityParser.calculateRelevance(f.fact, category);
           const result = await selective.processAndApply(
-            f.fact, normalizeCategory(f.category), f.confidence, cfg.defaultAgent, factType
+            f.fact, category, f.confidence, cfg.defaultAgent, factType, relevance
           );
           if (result.stored) stored++;
           else skipped++;
         } catch {
+          const category = normalizeCategory(f.category);
+          const relevance = identityParser.calculateRelevance(f.fact, category);
           db.storeFact({
             id: `fact_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
             fact: f.fact,
-            category: normalizeCategory(f.category),
+            category,
             confidence: f.confidence,
             source: "compaction",
             tags: "[]",
@@ -943,6 +955,7 @@ export function register(api: OpenClawPluginApi): void {
             created_at: Date.now(),
             updated_at: Date.now(),
             fact_type: factType,
+            relevance_weight: relevance,
           });
           stored++;
         }

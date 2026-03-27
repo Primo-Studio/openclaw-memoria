@@ -141,6 +141,11 @@ export function scoreFact(fact: Fact, now = Date.now()): ScoredFact {
     }
   }
 
+  // 8. Relevance weight — identity-aware prioritization (Phase 0)
+  // Facts about daily projects (Bureau, Polymarket) > internal tools (Memoria)
+  const relevanceWeight = (fact as any).relevance_weight ?? 0.5;
+  score *= (0.7 + relevanceWeight * 0.6); // Scale: 0.7x (weight=0) to 1.3x (weight=1.0)
+
   return { ...fact, temporalScore: score, ageHours, decayFactor };
 }
 
