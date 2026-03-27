@@ -424,6 +424,7 @@ export function register(api: OpenClawPluginApi): void {
   const hebbianMgr = new HebbianManager(db);
   const expertiseMgr = new ExpertiseManager(db);
   const proceduralMem = new ProceduralMemory(db.raw, chain);
+  proceduralMem.ensureSchema(); // migrate quality columns if missing
   const budget = new AdaptiveBudget({
     contextWindow: cfg.contextWindow || 200000,
     maxFacts: cfg.recallLimit || 12,
@@ -949,8 +950,8 @@ Output JSON only (no markdown, no explanation):
 
         if (similar) {
           // Reinforce existing procedure
-          proceduralMem.recordExecution(similar.id, true, 
-            recentExecs.reduce((sum, tc) => sum + (tc.durationMs || 0), 0));
+          const totalDuration = recentExecs.reduce((sum, tc) => sum + (tc.durationMs || 0), 0);
+          proceduralMem.recordExecution(similar.id, true, totalDuration);
           
           // Add improvement if steps changed
           const newSteps = commands.filter(c => !similar.steps.includes(c));
@@ -962,7 +963,25 @@ Output JSON only (no markdown, no explanation):
             );
           }
 
-          api.logger.info?.(`memoria: procedural ✅ reinforced "${similar.name}" (${similar.success_count + 1} successes)`);
+          // ── Reflect: was this the best approach? ──
+          // Only reflect every 3rd execution (avoid LLM spam)
+          if ((similar.success_count + 1) % 3 === 0) {
+            try {
+              const errors = recentExecs
+                .filter(tc => tc.error)
+                .map(tc => tc.error!);
+              const reflection = await proceduralMem.reflect(similar.id, {
+                durationMs: totalDuration,
+                stepsTaken: commands,
+                errorsEncountered: errors.length > 0 ? errors : undefined,
+              });
+              if (reflection?.should_improve) {
+                api.logger.info?.(`memoria: procedural 🔍 reflected on "${similar.name}" — ${reflection.suggestions.slice(0, 2).join('; ')}`);
+              }
+            } catch { /* reflection is non-critical */ }
+          }
+
+          api.logger.info?.(`memoria: procedural ✅ reinforced "${similar.name}" (v${similar.version}, ${similar.success_count + 1} successes, quality=${similar.quality.overall})`);
         } else {
           // Create new procedure
           const proc = {

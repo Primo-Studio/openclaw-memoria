@@ -1,5 +1,28 @@
 # Changelog
 
+## [3.9.0] - 2026-03-27
+### Added — Reflective Procedural Learning
+- **Quality dimensions** — each procedure scored on speed, reliability, elegance, safety
+  - Weighted composite: reliability (35%) > safety (25%) > speed (25%) > elegance (15%)
+  - Quality evolves with each execution, not static
+- **Post-execution reflection** — every 3rd success triggers LLM review
+  - "Was this the best approach?" → suggestions, quality reassessment
+  - Blends new assessment (70%) with accumulated wisdom (30%)
+  - Tracks gotchas/workarounds learned
+- **Alternatives** — same goal, different approaches
+  - `getAlternatives()` finds competing procedures
+  - `setPreferred()` marks the best approach
+  - Search prioritizes preferred procedures
+- **Version tracking** — procedures evolve: version increments on each improvement
+- **Personal best** — tracks fastest execution, speed quality improves when beaten
+- **Schema auto-migration** — new quality columns added seamlessly on boot
+
+### Why
+"Un humain n'enregistre pas un savoir en rentrant chez lui le soir — 
+il apprend sur le tas, il améliore en direct. La qualité passe par 
+une meilleure réflexion, et c'est en améliorant la qualité qu'on 
+gagne en vitesse d'exécution car on la reproduit plus souvent."
+
 ## [3.8.0] - 2026-03-27
 ### Added — Real-time Procedural Learning
 - **`after_tool_call` hook** — captures procedures in real-time, not at end of session
