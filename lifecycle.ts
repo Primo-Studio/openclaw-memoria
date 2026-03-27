@@ -99,25 +99,30 @@ export class LifecycleManager {
    * Batch update: refresh all active facts' lifecycle states
    */
   refreshAll(): { updated: number; breakdown: Record<LifecycleState, number> } {
-    const facts = this.db.raw.prepare("SELECT * FROM facts WHERE superseded = 0").all() as Fact[];
-    const now = Date.now();
-    let updated = 0;
+    try {
+      const facts = this.db.raw.prepare("SELECT * FROM facts WHERE superseded = 0").all() as Fact[];
+      const now = Date.now();
+      let updated = 0;
 
-    const breakdown: Record<LifecycleState, number> = {
-      fresh: 0,
-      mature: 0,
-      aged: 0,
-      archived: 0,
-    };
+      const breakdown: Record<LifecycleState, number> = {
+        fresh: 0,
+        mature: 0,
+        aged: 0,
+        archived: 0,
+      };
 
-    for (const fact of facts) {
-      const oldState = fact.lifecycle_state || "fresh";
-      const newState = this.updateLifecycle(fact, now);
-      if (oldState !== newState) updated++;
-      breakdown[newState]++;
+      for (const fact of facts) {
+        const oldState = fact.lifecycle_state || "fresh";
+        const newState = this.updateLifecycle(fact, now);
+        if (oldState !== newState) updated++;
+        breakdown[newState]++;
+      }
+
+      return { updated, breakdown };
+    } catch (err) {
+      console.error("[lifecycle] refreshAll failed:", err);
+      return { updated: 0, breakdown: { fresh: 0, mature: 0, aged: 0, archived: 0 } };
     }
-
-    return { updated, breakdown };
   }
 
   /**
@@ -155,24 +160,29 @@ export class LifecycleManager {
    * Get stats breakdown by lifecycle state
    */
   getStats(): Record<LifecycleState, number> {
-    const rows = this.db.raw.prepare(
-      `SELECT lifecycle_state, COUNT(*) as count 
-       FROM facts 
-       WHERE superseded = 0 
-       GROUP BY lifecycle_state`
-    ).all() as Array<{ lifecycle_state: LifecycleState; count: number }>;
+    try {
+      const rows = this.db.raw.prepare(
+        `SELECT lifecycle_state, COUNT(*) as count 
+         FROM facts 
+         WHERE superseded = 0 
+         GROUP BY lifecycle_state`
+      ).all() as Array<{ lifecycle_state: LifecycleState; count: number }>;
 
-    const stats: Record<LifecycleState, number> = {
-      fresh: 0,
-      mature: 0,
-      aged: 0,
-      archived: 0,
-    };
+      const stats: Record<LifecycleState, number> = {
+        fresh: 0,
+        mature: 0,
+        aged: 0,
+        archived: 0,
+      };
 
-    for (const row of rows) {
-      stats[row.lifecycle_state] = row.count;
+      for (const row of rows) {
+        stats[row.lifecycle_state] = row.count;
+      }
+
+      return stats;
+    } catch (err) {
+      console.error("[lifecycle] getStats failed:", err);
+      return { fresh: 0, mature: 0, aged: 0, archived: 0 };
     }
-
-    return stats;
   }
 }

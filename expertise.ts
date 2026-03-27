@@ -64,16 +64,21 @@ export class ExpertiseManager {
    * Get all topics with expertise levels
    */
   getAllExpertise(): TopicExpertise[] {
-    const topics = this.db.raw.prepare(
-      "SELECT name as topic, access_count as interaction_count FROM topics ORDER BY access_count DESC"
-    ).all() as Array<{ topic: string; interaction_count: number }>;
+    try {
+      const topics = this.db.raw.prepare(
+        "SELECT name as topic, access_count as interaction_count FROM topics ORDER BY access_count DESC"
+      ).all() as Array<{ topic: string; interaction_count: number }>;
 
-    return topics.map(t => ({
-      topic: t.topic,
-      interactionCount: t.interaction_count,
-      level: this.calculateLevel(t.interaction_count),
-      boost: this.getBoost(this.calculateLevel(t.interaction_count)),
-    }));
+      return topics.map(t => ({
+        topic: t.topic,
+        interactionCount: t.interaction_count,
+        level: this.calculateLevel(t.interaction_count),
+        boost: this.getBoost(this.calculateLevel(t.interaction_count)),
+      }));
+    } catch (err) {
+      console.error("[expertise] getAllExpertise failed:", err);
+      return [];
+    }
   }
 
   /**
@@ -105,19 +110,24 @@ export class ExpertiseManager {
    * Get stats: count by expertise level
    */
   getStats(): Record<ExpertiseLevel, number> {
-    const all = this.getAllExpertise();
-    const stats: Record<ExpertiseLevel, number> = {
-      novice: 0,
-      familiar: 0,
-      experienced: 0,
-      expert: 0,
-    };
+    try {
+      const all = this.getAllExpertise();
+      const stats: Record<ExpertiseLevel, number> = {
+        novice: 0,
+        familiar: 0,
+        experienced: 0,
+        expert: 0,
+      };
 
-    for (const exp of all) {
-      stats[exp.level]++;
+      for (const exp of all) {
+        stats[exp.level]++;
+      }
+
+      return stats;
+    } catch (err) {
+      console.error("[expertise] getStats failed:", err);
+      return { novice: 0, familiar: 0, experienced: 0, expert: 0 };
     }
-
-    return stats;
   }
 
   /**

@@ -98,15 +98,19 @@ export class HebbianManager {
    * Detect co-occurrences in a fact and reinforce
    */
   reinforceFromFact(factId: string, entities: string[]): void {
-    if (entities.length < 2) return;
+    try {
+      if (entities.length < 2) return;
 
-    // Reinforce all pairs (N×N-1)/2 relations
-    for (let i = 0; i < entities.length; i++) {
-      for (let j = i + 1; j < entities.length; j++) {
-        this.reinforceRelation(entities[i], entities[j], "co-occurs");
-        // Bidirectional
-        this.reinforceRelation(entities[j], entities[i], "co-occurs");
+      // Reinforce all pairs (N×N-1)/2 relations
+      for (let i = 0; i < entities.length; i++) {
+        for (let j = i + 1; j < entities.length; j++) {
+          this.reinforceRelation(entities[i], entities[j], "co-occurs");
+          // Bidirectional
+          this.reinforceRelation(entities[j], entities[i], "co-occurs");
+        }
       }
+    } catch (err) {
+      console.error("[hebbian] reinforceFromFact failed:", err);
     }
   }
 
@@ -114,21 +118,26 @@ export class HebbianManager {
    * Get stats on relation strengths
    */
   getStats(): RelationStats {
-    const all = this.db.raw.prepare("SELECT weight FROM relations").all() as Array<{ weight: number }>;
-    
-    const stats: RelationStats = {
-      total: all.length,
-      strong: 0,
-      weak: 0,
-      decayed: 0,
-    };
+    try {
+      const all = this.db.raw.prepare("SELECT weight FROM relations").all() as Array<{ weight: number }>;
+      
+      const stats: RelationStats = {
+        total: all.length,
+        strong: 0,
+        weak: 0,
+        decayed: 0,
+      };
 
-    for (const rel of all) {
-      if (rel.weight >= 1.0) stats.strong++;
-      else if (rel.weight < 0.5) stats.weak++;
+      for (const rel of all) {
+        if (rel.weight >= 1.0) stats.strong++;
+        else if (rel.weight < 0.5) stats.weak++;
+      }
+
+      return stats;
+    } catch (err) {
+      console.error("[hebbian] getStats failed:", err);
+      return { total: 0, strong: 0, weak: 0, decayed: 0 };
     }
-
-    return stats;
   }
 
   /**
