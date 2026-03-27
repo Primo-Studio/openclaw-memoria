@@ -1,3 +1,16 @@
+## 3.10.0 (2026-03-27)
+
+### Features
+- **FTS5 procedural search**: `procedures_fts` virtual table with LIKE fallback — fast full-text search on procedures (name, goal, context, gotchas, steps)
+- **Configurable thresholds**: `ProceduralConfig` interface with `qualityWeights`, `degradationStep`, `healingStep`, `reflectEvery`, `degradedThreshold`, `defaultSafety`
+- **FTS auto-sync**: index created at boot, rebuilt if empty, kept in sync on every `storeProcedure` call
+- **Plugin schema**: procedural config exposed in `openclaw.plugin.json` for wizard/UI configuration
+
+### Fixes
+- `kg` → `graph` variable reference (runtime crash)
+- Feedback proc IDs removed (was querying wrong table)
+- Procedure objects fully typed (no more `as any` partial objects)
+
 # Changelog
 
 ## [3.9.0] - 2026-03-27
