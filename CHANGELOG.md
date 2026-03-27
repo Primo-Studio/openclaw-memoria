@@ -1,5 +1,24 @@
 # Changelog
 
+## [3.7.0] - 2026-03-27
+### Added — Procedural Memory (Phase 3)
+- **How-to knowledge that improves with repetition**
+  - New `procedures` table: stores sequences of successful actions (exec/tool calls)
+  - Captures steps, success/failure counts, degradation score, alternatives
+  - Hook `agent_end`: detects successful command sequences → extracts procedure
+  - Hook `before_prompt_build`: searches matching procedures → injects steps
+  - Dynamic improvement: success_count++ reduces degradation, failure++ increases it
+  - Alternative paths: when degradation > 0.5, searches for better alternative procedure
+  - Example: "Publish to ClawHub" captured as 4-step procedure with success rate
+
+- **Stats at boot**: `procedures: 0✓/0⚠` (healthy/degraded)
+
+### Why this matters
+- Memoria now learns "how to do things" (not just "what happened")
+- Procedures improve over time as they're repeated successfully
+- Failed attempts trigger degradation → search for alternative approach
+- Solves: "I published v3.5.0 but don't remember HOW" → now it's stored & recalled
+
 ## [3.6.0] - 2026-03-27
 ### Added — Human-Like Memory Architecture
 - **Identity-aware memory** (Phase 0)

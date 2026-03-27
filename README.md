@@ -6,12 +6,24 @@
 
 ---
 
-## ✨ What's New in v3.6.0
+## ✨ What's New in v3.7.0
 
-### 🧬 **Identity-Aware Memory**
+### 🔧 **Procedural Memory** *(NEW in 3.7.0)*
+Memoria now learns **"how to do things"**, not just "what happened":
+- Captures successful command sequences automatically
+- Tracks success/failure rates per procedure
+- Improves with repetition (success++ → degradation--)
+- Searches for alternatives when a procedure degrades
+- Example: "How to publish on ClawHub" → stored as 4-step procedure with 100% success rate
+
+**Why it matters**: No more "I did this yesterday but don't remember how." Memoria now stores the steps.
+
+---
+
+### 🧬 **Identity-Aware Memory** *(v3.6.0)*
 Memoria now understands **who you are** and **what you care about**. Facts about your core projects (Bureau, Polymarket, client work) are prioritized over plugin config details.
 
-### 🌱 **Fact Evolution (Lifecycle)**
+### 🌱 **Fact Evolution (Lifecycle)** *(v3.6.0)*
 Facts evolve through 4 states like human memory:
 - **Fresh** → new facts (< 7 days OR < 3 recalls)
 - **Mature** → proven useful (3+ uses, no corrections)
@@ -20,13 +32,13 @@ Facts evolve through 4 states like human memory:
 
 Archived facts are excluded from recall — **forgotten, not deleted**.
 
-### 🔄 **Proactive Revision**
+### 🔄 **Proactive Revision** *(v3.6.0)*
 Mature facts recalled 10+ times trigger automatic LLM revision. If improved → new version created, old one superseded.
 
-### 🧠 **Hebbian Reinforcement**
+### 🧠 **Hebbian Reinforcement** *(v3.6.0)*
 Knowledge graph relations now strengthen when entities co-occur (like neural connections). Weak relations fade over time and are pruned automatically.
 
-### ⭐ **Expertise Specialization**
+### ⭐ **Expertise Specialization** *(v3.6.0)*
 Topics gain expertise levels based on interaction frequency:
 - `★` Novice → `★★` Familiar → `★★★` Experienced → `★★★★` Expert
 
@@ -36,7 +48,7 @@ Expert topics boost recall scores (your "specialist" knowledge rises to the top)
 
 ## ✨ Core Features
 
-- **14 memory layers** — from text search to knowledge graphs, feedback loops, emergent topics
+- **15 memory layers** — from text search to procedural memory, knowledge graphs, feedback loops, emergent topics
 - **Semantic vs Episodic** — durable knowledge decays slowly, dated events fade (like human memory)
 - **Observations** — living syntheses that evolve as new evidence appears
 - **Fact Clusters** — entity-grouped summaries for complete recall across sessions
