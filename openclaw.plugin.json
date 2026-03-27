@@ -207,6 +207,33 @@
                   "provider",
                   "model"
                 ]
+              },
+              "procedural": {
+                "type": "object",
+                "properties": {
+                  "provider": {
+                    "type": "string",
+                    "enum": [
+                      "ollama",
+                      "lmstudio",
+                      "openai",
+                      "openrouter"
+                    ]
+                  },
+                  "baseUrl": {
+                    "type": "string"
+                  },
+                  "model": {
+                    "type": "string"
+                  },
+                  "apiKey": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "provider",
+                  "model"
+                ]
               }
             }
           }
@@ -345,7 +372,7 @@
     },
     "llm": {
       "label": "LLM Provider",
-      "help": "Default: Ollama + gemma3:4b. Per-layer overrides available for extract/contradiction/graph/topics.",
+      "help": "Default: Ollama + gemma3:4b. Per-layer overrides available for extract/contradiction/graph/topics/procedural.",
       "advanced": true
     },
     "fallback": {

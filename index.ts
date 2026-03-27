@@ -82,7 +82,7 @@ interface MemoriaConfig {
 }
 
 /** Named layers that accept a per-layer LLM override */
-type MemoriaLayer = "extract" | "contradiction" | "graph" | "topics";
+type MemoriaLayer = "extract" | "contradiction" | "graph" | "topics" | "procedural";
 
 interface LayerLLMConfig {
   provider: "ollama" | "lmstudio" | "openai" | "openrouter" | "anthropic";
@@ -423,7 +423,8 @@ export function register(api: OpenClawPluginApi): void {
   const revisionMgr = new RevisionManager(db, chain);
   const hebbianMgr = new HebbianManager(db);
   const expertiseMgr = new ExpertiseManager(db);
-  const proceduralMem = new ProceduralMemory(db.raw, chain);
+  const proceduralLlm = layerLLM("procedural");
+  const proceduralMem = new ProceduralMemory(db.raw, proceduralLlm);
   proceduralMem.ensureSchema(); // migrate quality columns if missing
   const budget = new AdaptiveBudget({
     contextWindow: cfg.contextWindow || 200000,
