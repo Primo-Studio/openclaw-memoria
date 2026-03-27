@@ -46,6 +46,7 @@ import { FeedbackManager } from "./feedback.js";
 import { AnthropicLLM } from "./providers/anthropic.js";
 import { IdentityParser } from "./identity-parser.js";
 import { LifecycleManager } from "./lifecycle.js";
+import { RevisionManager } from "./revision.js";
 
 // ─── Config ───
 
@@ -415,6 +416,7 @@ export function register(api: OpenClawPluginApi): void {
   });
   const identityParser = new IdentityParser(cfg.workspacePath);
   const lifecycleMgr = new LifecycleManager(db);
+  const revisionMgr = new RevisionManager(db, chain);
   const budget = new AdaptiveBudget({
     contextWindow: cfg.contextWindow || 200000,
     maxFacts: cfg.recallLimit || 12,
@@ -747,6 +749,18 @@ export function register(api: OpenClawPluginApi): void {
             lifecycleMgr.updateLifecycle(fact);
           }
         } catch { /* non-critical */ }
+
+        // Proactive revision: check if any mature facts need refinement (async, non-blocking)
+        setImmediate(async () => {
+          try {
+            const revResult = await revisionMgr.checkAndRevise();
+            if (revResult.revised > 0) {
+              api.logger.info?.(`memoria: proactive revision completed (${revResult.revised} refined, ${revResult.created} new facts)`);
+            }
+          } catch (err) {
+            api.logger.debug?.(`memoria: proactive revision failed: ${String(err)}`);
+          }
+        });
 
         const hotNote = hotLimit > 0 ? `, ${hotLimit} hot` : "";
         const graphNote = graphFacts.length > 0 ? `, +${graphFacts.length} graph` : "";
