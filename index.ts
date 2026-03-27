@@ -769,7 +769,7 @@ export function register(api: OpenClawPluginApi): void {
           // The graph knows "ClawHub" relates to "publish", "Memoria" relates to "plugin" etc.
           if (procedures.length < 2) {
             try {
-              const graphEntities = kg.findEntitiesInText(prompt);
+              const graphEntities = graph.findEntitiesInText(prompt);
               if (graphEntities.length > 0) {
                 const relatedTerms = graphEntities
                   .flatMap((e: any) => [e.name, ...(e.aliases || [])])
@@ -838,11 +838,8 @@ export function register(api: OpenClawPluginApi): void {
         try { feedbackMgr.recordRecall(ids, prompt); } catch { /* non-critical */ }
         try { budget.recordRecall(recallLimit); } catch { /* non-critical */ }
 
-        // Cross-layer: track procedure recall for feedback
-        // Later, agent_end will check if procedures were actually useful
-        if (matchedProcedureIds.length > 0) {
-          try { feedbackMgr.recordRecall(matchedProcedureIds, `proc:${prompt}`); } catch { /* non-critical */ }
-        }
+        // Note: procedure feedback comes from after_tool_call (reinforcement/reflect),
+        // not from recall. Unlike facts, procedures prove their worth through execution.
         try {
           // Update lifecycle state for recalled facts (fresh→mature transition)
           for (const fact of finalFacts) {
@@ -1025,29 +1022,39 @@ Output JSON only (no markdown, no explanation):
 
           api.logger.info?.(`memoria: procedural ✅ reinforced "${similar.name}" (v${similar.version}, ${similar.success_count + 1} successes, quality=${similar.quality.overall})`);
         } else {
-          // Create new procedure
-          const proc = {
+          // Create new procedure with full type compliance
+          const proc: import("./procedural.js").Procedure = {
             id: `proc_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
             name: meta.name,
             goal: meta.goal,
             steps: commands,
+            version: 1,
             success_count: 1,
             failure_count: 0,
             last_success_at: Date.now(),
             last_updated_at: Date.now(),
-            improvements: [] as any[],
+            improvements: [],
+            quality: {
+              speed: 0.5,
+              reliability: 0.5,
+              elegance: Math.max(0.2, 1 - commands.length * 0.1), // fewer steps = more elegant
+              safety: 0.8,
+              overall: 0.5,
+            },
             context: [...(meta.trigger_patterns || []), ...(meta.gotchas || [])].join(', '),
+            gotchas: meta.gotchas?.join(' | '),
             degradation_score: 0,
+            preferred: false,
           };
 
-          proceduralMem.storeProcedure(proc as any);
+          proceduralMem.storeProcedure(proc);
           api.logger.info?.(`memoria: procedural ✅ NEW "${proc.name}" (${proc.steps.length} steps, real-time)`);
 
           // Cross-layer: enrich Knowledge Graph with procedure entities
           // "Publish to ClawHub" → entities: ClawHub, Memoria, plugin
           try {
             const procFact = `Procedure "${proc.name}": ${proc.goal}. Steps: ${commands.slice(0, 3).join('; ')}`;
-            await kg.extractAndStore(`proc_${proc.id}`, procFact);
+            await graph.extractAndStore(`proc_${proc.id}`, procFact);
             api.logger.debug?.(`memoria: procedural → graph entities extracted for "${proc.name}"`);
           } catch { /* graph enrichment is non-critical */ }
         }
