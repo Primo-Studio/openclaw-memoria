@@ -51,6 +51,7 @@ import { RevisionManager } from "./revision.js";
 import { HebbianManager } from "./hebbian.js";
 import { ExpertiseManager } from "./expertise.js";
 import { ProceduralMemory } from "./procedural.js";
+import { PatternManager } from "./patterns.js";
 
 // ─── Config ───
 
@@ -449,6 +450,9 @@ export function register(api: OpenClawPluginApi): void {
   });
   proceduralMem.ensureSchema(); // migrate quality columns + doc_sources if missing
 
+  // Pattern detection manager (Layer 20)
+  const patternMgr = new PatternManager(db, extractLlm, cfg.patterns);
+
   // Apply staleness penalties — once per process, not per session
   // OpenClaw calls register() once per active session, but staleness is global
   const stalenessKey = '__memoria_staleness_applied';
@@ -538,6 +542,9 @@ export function register(api: OpenClawPluginApi): void {
   // Procedural memory stats
   const procStats = proceduralMem.getStats();
 
+  // Pattern detection stats
+  const patStats = patternMgr.stats();
+
   const fbStats = feedbackMgr.getStats();
   const fbNote = fbStats.totalWithFeedback > 0 ? `, feedback: ${fbStats.totalWithFeedback} tracked (avg ${fbStats.avgUsefulness.toFixed(1)})` : "";
   const lifecycleNote = ` | lifecycle: ${lifecycleStats.fresh ?? 0}f/${lifecycleStats.settled ?? 0}s/${lifecycleStats.dormant ?? 0}d (cursor:${lifecycleMgr.detailCursor})`;
@@ -546,7 +553,8 @@ export function register(api: OpenClawPluginApi): void {
   const procNote = procStats.total > 0 
     ? ` | procedures: ${procStats.healthy}✓/${procStats.degraded}⚠${procStats.stale > 0 ? `/${procStats.stale}🕰️` : ''}` 
     : "";
-  api.logger.info?.(`memoria: v${pluginVersion} registered (${stats.active} facts, ${cStats.total} clusters, ${oStats.total} observations, ${embCount} embedded, ${gStats.entities} entities, ${gStats.relations} relations, ${tStats.totalTopics} topics${fbNote}${lifecycleNote}${hebbianNote}${expertiseNote}${procNote}, fallback: ${chain.providerNames.join(" → ")})`);
+  const patNote = patStats.total > 0 ? ` | patterns: ${patStats.total} (avg ${patStats.avgOccurrences} occ)` : "";
+  api.logger.info?.(`memoria: v${pluginVersion} registered (${stats.active} facts, ${cStats.total} clusters, ${oStats.total} observations, ${embCount} embedded, ${gStats.entities} entities, ${gStats.relations} relations, ${tStats.totalTopics} topics${fbNote}${lifecycleNote}${hebbianNote}${expertiseNote}${procNote}${patNote}, fallback: ${chain.providerNames.join(" → ")})`);
   
   // Log .md file sizes
   const fileSizes = mdRegen.fileSizes();
@@ -658,6 +666,14 @@ export function register(api: OpenClawPluginApi): void {
       if (regenReason) {
         const regenResult = mdRegen.regenerate();
         api.logger.info?.(`memoria: [${source}] auto md-regen triggered (${regenReason}) — ${regenResult.files} files, ${regenResult.recentFacts} recent, ${regenResult.archivedFacts} archived`);
+      }
+    } catch { /* non-critical */ }
+
+    // 8. Pattern detection: consolidate repeated similar facts
+    try {
+      const patternResult = await patternMgr.detectAndConsolidate();
+      if (patternResult.consolidated > 0) {
+        api.logger.info?.(`memoria: [${source}] patterns — ${patternResult.detected} groups found, ${patternResult.consolidated} consolidated`);
       }
     } catch { /* non-critical */ }
   }
@@ -897,6 +913,8 @@ export function register(api: OpenClawPluginApi): void {
                 if (boost > 1.0) mult *= boost;
               }
             } catch { /* expertise non-critical */ }
+            // Pattern boost: consolidated patterns get 1.5× score
+            mult *= patternMgr.applyPatternBoost(1.0, f.fact_type);
             if ((f as any).temporalScore) {
               return { ...f, temporalScore: (f as any).temporalScore * mult };
             }
