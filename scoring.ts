@@ -74,7 +74,7 @@ export function scoreFact(fact: Fact, now = Date.now()): ScoredFact {
   let decayFactor = 1.0;
 
   // 1. Category decay — semantic vs episodic
-  const factType = (fact as any).fact_type || "semantic";
+  const factType = fact.fact_type || "semantic";
   let halfLife: number;
   if (factType === "episodic") {
     halfLife = DECAY_CONFIG.episodicHalfLife[fact.category] ?? DECAY_CONFIG.defaultEpisodicHalfLife;
@@ -117,12 +117,12 @@ export function scoreFact(fact: Fact, now = Date.now()): ScoredFact {
   }
 
   // 7. Feedback loop: usefulness from actual usage in responses
-  const usefulness = (fact as any).usefulness ?? 0;
-  const recallCount = (fact as any).recall_count ?? 0;
+  const usefulness = fact.usefulness ?? 0;
+  const recallCount = fact.recall_count ?? 0;
   if (recallCount > 0) {
     // Useful facts get boosted, consistently ignored facts get penalized
     // Use ratio: used_count / recall_count → 0-1 scale
-    const usedCount = (fact as any).used_count ?? 0;
+    const usedCount = fact.used_count ?? 0;
     const usageRatio = usedCount / recallCount;
     
     if (usageRatio > 0.5) {
@@ -143,7 +143,7 @@ export function scoreFact(fact: Fact, now = Date.now()): ScoredFact {
 
   // 8. Relevance weight — identity-aware prioritization (Phase 0)
   // Facts about daily projects (Bureau, Polymarket) > internal tools (Memoria)
-  const relevanceWeight = (fact as any).relevance_weight ?? 0.5;
+  const relevanceWeight = fact.relevance_weight ?? 0.5;
   score *= (0.7 + relevanceWeight * 0.6); // Scale: 0.7x (weight=0) to 1.3x (weight=1.0)
 
   // 9. Lifecycle multiplier — prioritize fresh > settled > dormant

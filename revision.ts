@@ -62,8 +62,8 @@ export class RevisionManager {
    * Propose revision for a fact using LLM
    */
   async proposeRevision(fact: Fact): Promise<RevisionProposal> {
-    const recallCount = (fact as any).recall_count ?? 0;
-    const usedCount = (fact as any).used_count ?? 0;
+    const recallCount = fact.recall_count ?? 0;
+    const usedCount = fact.used_count ?? 0;
     const usageRatio = recallCount > 0 ? (usedCount / recallCount * 100).toFixed(0) : "0";
 
     const prompt = `You are reviewing a memory fact that has been recalled ${recallCount} times (used in ${usageRatio}% of those recalls).

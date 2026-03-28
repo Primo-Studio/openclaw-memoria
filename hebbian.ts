@@ -11,6 +11,8 @@
  *   - Track entity co-occurrence in facts and graph enrichment
  *   - Boost relation weight when entities co-occur
  *   - Decay weight for unused relations
+ * 
+ * DB schema: relations(id, source_id, target_id, relation, weight, context, created_at, last_accessed_at)
  */
 
 import type { MemoriaDB } from "./db.js";
@@ -39,22 +41,23 @@ export class HebbianManager {
   reinforceRelation(fromEntity: string, toEntity: string, relationType: string = "co-occurs"): void {
     const now = Date.now();
 
-    // Check if relation exists
+    // Check if relation exists (use actual DB column names)
     const existing = this.db.raw.prepare(
-      "SELECT * FROM relations WHERE from_entity = ? AND to_entity = ? AND relation_type = ?"
-    ).get(fromEntity, toEntity, relationType) as { weight: number; updated_at: number } | undefined;
+      "SELECT weight, last_accessed_at FROM relations WHERE source_id = ? AND target_id = ? AND relation = ?"
+    ).get(fromEntity, toEntity, relationType) as { weight: number; last_accessed_at: number } | undefined;
 
     if (existing) {
       // Boost existing relation (capped at maxWeight)
       const newWeight = Math.min(existing.weight + HEBBIAN_CONFIG.boostAmount, HEBBIAN_CONFIG.maxWeight);
       this.db.raw.prepare(
-        "UPDATE relations SET weight = ?, updated_at = ? WHERE from_entity = ? AND to_entity = ? AND relation_type = ?"
+        "UPDATE relations SET weight = ?, last_accessed_at = ? WHERE source_id = ? AND target_id = ? AND relation = ?"
       ).run(newWeight, now, fromEntity, toEntity, relationType);
     } else {
       // Create new relation with initial weight
+      const id = `rel_${now}_${Math.random().toString(36).slice(2, 9)}`;
       this.db.raw.prepare(
-        "INSERT INTO relations (from_entity, to_entity, relation_type, weight, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)"
-      ).run(fromEntity, toEntity, relationType, HEBBIAN_CONFIG.boostAmount, now, now);
+        "INSERT INTO relations (id, source_id, target_id, relation, weight, context, created_at, last_accessed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+      ).run(id, fromEntity, toEntity, relationType, HEBBIAN_CONFIG.boostAmount, null, now, now);
     }
   }
 
@@ -67,8 +70,8 @@ export class HebbianManager {
 
     // Find stale relations
     const stale = this.db.raw.prepare(
-      "SELECT from_entity, to_entity, relation_type, weight FROM relations WHERE updated_at < ? AND weight > ?"
-    ).all(cutoff, HEBBIAN_CONFIG.minWeight) as Array<{ from_entity: string; to_entity: string; relation_type: string; weight: number }>;
+      "SELECT id, source_id, target_id, relation, weight FROM relations WHERE last_accessed_at < ? AND weight > ?"
+    ).all(cutoff, HEBBIAN_CONFIG.minWeight) as Array<{ id: string; source_id: string; target_id: string; relation: string; weight: number }>;
 
     let decayed = 0;
     let pruned = 0;
@@ -78,15 +81,13 @@ export class HebbianManager {
 
       if (newWeight < HEBBIAN_CONFIG.minWeight) {
         // Prune very weak relations
-        this.db.raw.prepare(
-          "DELETE FROM relations WHERE from_entity = ? AND to_entity = ? AND relation_type = ?"
-        ).run(rel.from_entity, rel.to_entity, rel.relation_type);
+        this.db.raw.prepare("DELETE FROM relations WHERE id = ?").run(rel.id);
         pruned++;
       } else {
         // Decay weight
         this.db.raw.prepare(
-          "UPDATE relations SET weight = ?, updated_at = ? WHERE from_entity = ? AND to_entity = ? AND relation_type = ?"
-        ).run(newWeight, now, rel.from_entity, rel.to_entity, rel.relation_type);
+          "UPDATE relations SET weight = ?, last_accessed_at = ? WHERE id = ?"
+        ).run(newWeight, now, rel.id);
         decayed++;
       }
     }
@@ -143,12 +144,12 @@ export class HebbianManager {
   /**
    * Get strongest relations for an entity (for contextual recall)
    */
-  getStrongestRelations(entity: string, limit = 5): Array<{ to_entity: string; weight: number; relation_type: string }> {
+  getStrongestRelations(entity: string, limit = 5): Array<{ target_id: string; weight: number; relation: string }> {
     return this.db.raw.prepare(
-      `SELECT to_entity, weight, relation_type FROM relations 
-       WHERE from_entity = ? 
+      `SELECT target_id, weight, relation FROM relations 
+       WHERE source_id = ? 
        ORDER BY weight DESC 
        LIMIT ?`
-    ).all(entity, limit) as Array<{ to_entity: string; weight: number; relation_type: string }>;
+    ).all(entity, limit) as Array<{ target_id: string; weight: number; relation: string }>;
   }
 }

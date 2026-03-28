@@ -30,6 +30,10 @@ export interface Fact {
   md_line: number | null;
   entity_ids: string;     // JSON array
   fact_type: "semantic" | "episodic" | "cluster" | "pattern"; // semantic = durable, episodic = dated/contextual, cluster = thematic summary, pattern = consolidated behavioral
+  usefulness: number;       // feedback score, higher = more useful
+  recall_count: number;     // times recalled in prompts
+  used_count: number;       // times actually used in answers
+  synced_to_md: number;     // 0 = not synced, 1 = synced, 2 = regenerated
   relevance_weight: number; // 0.0-1.0, calculated from identity context
   lifecycle_state: "fresh" | "settled" | "dormant"; // fresh = new, settled = confirmed, dormant = unused
 }
@@ -368,7 +372,7 @@ export class MemoriaDB {
 
   // ─── Facts CRUD ───
 
-  storeFact(fact: Omit<Fact, "access_count" | "last_accessed_at" | "superseded" | "superseded_by" | "superseded_at" | "md_file" | "md_line" | "entity_ids"> & Partial<Fact>): Fact {
+  storeFact(fact: Omit<Fact, "access_count" | "last_accessed_at" | "superseded" | "superseded_by" | "superseded_at" | "md_file" | "md_line" | "entity_ids" | "usefulness" | "recall_count" | "used_count" | "synced_to_md" | "relevance_weight" | "lifecycle_state"> & Partial<Fact>): Fact {
     const now = Date.now();
     const row: Fact = {
       id: fact.id || `fact_${now}_${Math.random().toString(36).slice(2, 9)}`,
@@ -389,19 +393,28 @@ export class MemoriaDB {
       md_line: fact.md_line ?? null,
       entity_ids: fact.entity_ids || "[]",
       fact_type: fact.fact_type || "semantic",
+      usefulness: fact.usefulness ?? 0,
+      recall_count: fact.recall_count ?? 0,
+      used_count: fact.used_count ?? 0,
+      synced_to_md: fact.synced_to_md ?? 0,
+      relevance_weight: fact.relevance_weight ?? 0.5,
+      lifecycle_state: fact.lifecycle_state ?? "fresh",
     };
 
     this.db.prepare(`
       INSERT OR REPLACE INTO facts
       (id, fact, category, confidence, source, tags, agent, created_at, updated_at,
        access_count, last_accessed_at, superseded, superseded_by, superseded_at,
-       md_file, md_line, entity_ids, fact_type)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       md_file, md_line, entity_ids, fact_type,
+       usefulness, recall_count, used_count, synced_to_md, relevance_weight, lifecycle_state)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       row.id, row.fact, row.category, row.confidence, row.source, row.tags, row.agent,
       row.created_at, row.updated_at, row.access_count, row.last_accessed_at,
       row.superseded, row.superseded_by, row.superseded_at,
-      row.md_file, row.md_line, row.entity_ids, row.fact_type
+      row.md_file, row.md_line, row.entity_ids, row.fact_type,
+      row.usefulness, row.recall_count, row.used_count, row.synced_to_md,
+      row.relevance_weight, row.lifecycle_state
     );
 
     return row;

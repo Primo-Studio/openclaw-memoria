@@ -696,8 +696,8 @@ export function register(api: OpenClawPluginApi): void {
       // 9b. Hebbian → topics: strong relations (weight >= 1.0) between entities
       // If both entities belong to different topics, suggest parent-child or merge
       const strongRelations = db.raw.prepare(
-        `SELECT from_entity, to_entity, weight FROM relations WHERE weight >= 1.0 ORDER BY weight DESC LIMIT 20`
-      ).all() as Array<{ from_entity: string; to_entity: string; weight: number }>;
+        `SELECT source_id, target_id, weight FROM relations WHERE weight >= 1.0 ORDER BY weight DESC LIMIT 20`
+      ).all() as Array<{ source_id: string; target_id: string; weight: number }>;
       for (const rel of strongRelations) {
         // Find topics for each entity
         const fromTopics = db.raw.prepare(
@@ -705,13 +705,13 @@ export function register(api: OpenClawPluginApi): void {
            JOIN fact_topics ft ON ft.topic_id = t.id 
            JOIN facts f ON f.id = ft.fact_id 
            WHERE f.entity_ids LIKE ? AND f.superseded = 0`
-        ).all(`%${rel.from_entity}%`) as Array<{ id: string; name: string; parent_topic_id: string | null }>;
+        ).all(`%${rel.source_id}%`) as Array<{ id: string; name: string; parent_topic_id: string | null }>;
         const toTopics = db.raw.prepare(
           `SELECT DISTINCT t.id, t.name, t.parent_topic_id FROM topics t 
            JOIN fact_topics ft ON ft.topic_id = t.id 
            JOIN facts f ON f.id = ft.fact_id 
            WHERE f.entity_ids LIKE ? AND f.superseded = 0`
-        ).all(`%${rel.to_entity}%`) as Array<{ id: string; name: string; parent_topic_id: string | null }>;
+        ).all(`%${rel.target_id}%`) as Array<{ id: string; name: string; parent_topic_id: string | null }>;
 
         // If one topic is smaller, make it child of the larger
         for (const ft of fromTopics) {

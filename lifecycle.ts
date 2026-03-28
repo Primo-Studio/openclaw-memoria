@@ -69,7 +69,7 @@ export class LifecycleManager {
   updateLifecycle(fact: Fact, now = Date.now()): LifecycleState {
     const ageDays = (now - fact.created_at) / (1000 * 60 * 60 * 24);
     const accessCount = fact.access_count ?? 0;
-    const lastAccessed = (fact as any).last_accessed_at ?? fact.created_at;
+    const lastAccessed = fact.last_accessed_at ?? fact.created_at;
     const daysSinceAccess = (now - lastAccessed) / (1000 * 60 * 60 * 24);
 
     let newState: LifecycleState;

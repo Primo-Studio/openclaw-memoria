@@ -1,6 +1,6 @@
 ---
 name: Memoria for OpenClaw
-version: 3.20.1
+version: 3.21.0
 description: "Multi-layer persistent memory for OpenClaw. 7 memory layers, bring your own LLM (Ollama, LM Studio, or API), 100% local-first, zero cloud cost."
 author: Primo Studio (@Nieto42)
 license: Apache-2.0
