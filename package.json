@@ -11,7 +11,7 @@
       "./index.ts"
     ],
     "compat": {
-      "pluginApi": "1"
+      "pluginApi": ">=1"
     }
   },
   "dependencies": {
