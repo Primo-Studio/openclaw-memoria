@@ -290,11 +290,14 @@ export class TopicManager {
       const now = Date.now();
       const topicId = genId();
 
-      raw.prepare(`INSERT INTO topics (id, name, keywords, fact_count, first_seen, last_seen, importance_score)
-        VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
+      // Find potential parent topic by keyword overlap or name inclusion
+      const parentId = this.findParentTopic(name, cluster.keywords);
+
+      raw.prepare(`INSERT INTO topics (id, name, keywords, fact_count, first_seen, last_seen, importance_score, parent_topic_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(
         topicId, name, JSON.stringify(cluster.keywords),
         cluster.factIds.length, now, now,
-        cluster.factIds.length * 1.0, // initial importance
+        cluster.factIds.length * 1.0, parentId, // initial importance + parent
       );
 
       // Link facts
@@ -606,6 +609,28 @@ export class TopicManager {
     return affected;
   }
 
+  /**
+   * Re-parent existing orphan topics.
+   * Called once at boot to fix topics created before hierarchy logic existed.
+   */
+  reparentExistingTopics(): number {
+    const raw = this.db.raw;
+    const orphans = raw.prepare(
+      "SELECT * FROM topics WHERE parent_topic_id IS NULL OR parent_topic_id = '' ORDER BY fact_count ASC"
+    ).all() as Topic[];
+
+    let reparented = 0;
+    for (const topic of orphans) {
+      const kw: string[] = JSON.parse(topic.keywords as unknown as string || "[]");
+      const parentId = this.findParentTopic(topic.name, kw);
+      if (parentId && parentId !== topic.id) {
+        raw.prepare("UPDATE topics SET parent_topic_id = ? WHERE id = ?").run(parentId, topic.id);
+        reparented++;
+      }
+    }
+    return reparented;
+  }
+
   shouldScan(): boolean {
     return this.capturesSinceLastScan >= this.cfg.scanInterval;
   }
@@ -635,6 +660,70 @@ export class TopicManager {
   }
 
   // ─── Helpers ───
+
+  /**
+   * Find a parent topic for a newly created topic.
+   * Strategies:
+   *   1. Name inclusion: if an existing topic's name is contained in the new name (or vice-versa)
+   *   2. Keyword overlap: if a top-level topic shares keywords but is broader
+   * Returns parent topic ID or null.
+   */
+  private findParentTopic(newName: string, newKeywords: string[]): string | null {
+    const raw = this.db.raw;
+    const topLevelTopics = raw.prepare(
+      "SELECT * FROM topics WHERE (parent_topic_id IS NULL OR parent_topic_id = '') ORDER BY fact_count DESC"
+    ).all() as Topic[];
+
+    const newNameLower = newName.toLowerCase();
+    // Extract significant words (skip stop words, min 3 chars)
+    const stopWords = new Set(["et", "de", "du", "des", "le", "la", "les", "un", "une", "en", "à", "the", "and", "of", "for", "in", "on", "with", "a"]);
+    const newNameWords = newNameLower.split(/[\s/,—–-]+/).filter(w => w.length >= 3 && !stopWords.has(w));
+
+    let bestCandidate: { id: string; score: number } | null = null;
+
+    for (const topic of topLevelTopics) {
+      const topicNameLower = topic.name.toLowerCase();
+      // Skip if same name (would be a self-reference)
+      if (topicNameLower === newNameLower) continue;
+
+      // Strategy 1: Name inclusion — new topic name contains existing topic name
+      // e.g., "Memoria ClawHub" contains "Memoria" → parent is "Memoria" topic
+      if (newNameLower.includes(topicNameLower) && topicNameLower.length >= 3) {
+        return topic.id;
+      }
+
+      // Strategy 2: Shared significant words in name
+      // e.g., "Sol Memory" and "Sol Succès" share "sol" → broader one (more facts) is parent
+      const topicNameWords = topicNameLower.split(/[\s/,—–-]+/).filter(w => w.length >= 3 && !stopWords.has(w));
+      const sharedWords = newNameWords.filter(w => topicNameWords.includes(w));
+      if (sharedWords.length > 0 && topic.fact_count > 3) {
+        // Score: shared words / max words, weighted by parent fact_count
+        const wordOverlap = sharedWords.length / Math.max(newNameWords.length, topicNameWords.length);
+        // Prefer the topic with more facts (broader = better parent)
+        const score = wordOverlap * Math.log2(topic.fact_count + 1);
+        if (score > 0.4 && (!bestCandidate || score > bestCandidate.score)) {
+          // Only set as parent if existing topic is broader (more facts)
+          if (topic.fact_count >= 5) {
+            bestCandidate = { id: topic.id, score };
+          }
+        }
+      }
+
+      // Strategy 3: Keyword overlap — existing topic has ≥50% of new topic's keywords
+      // but is broader (has more facts)
+      const topicKw: string[] = JSON.parse(topic.keywords as unknown as string || "[]");
+      if (topicKw.length > 0 && newKeywords.length > 0) {
+        const shared = newKeywords.filter(k => topicKw.includes(k)).length;
+        const overlapRatio = shared / newKeywords.length;
+        // New topic shares ≥50% keywords with existing AND existing is broader
+        if (overlapRatio >= 0.5 && topic.fact_count > newKeywords.length * 2) {
+          return topic.id;
+        }
+      }
+    }
+
+    return bestCandidate?.id ?? null;
+  }
 
   private async generateTopicName(keywords: string[], sampleFactIds: string[]): Promise<string> {
     try {

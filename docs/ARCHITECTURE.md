@@ -85,6 +85,13 @@ Memoria integrates with OpenClaw via three hooks:
 | 10 | Fact Clusters | `fact-clusters.ts` | ✅ |
 | 11 | .md Sync + Regen | `sync.ts`, `md-regen.ts` | ❌ |
 | 12 | Fallback Chain | `fallback.ts` | all |
+| 13 | Procedural Memory | `procedural.ts` | ✅ |
+| 14 | Lifecycle | `lifecycle.ts` | ❌ |
+| 15 | Feedback Loop | `feedback.ts` | ❌ |
+| 16 | Hebbian Reinforcement | `hebbian.ts` | ❌ |
+| 17 | Identity Parser | `identity-parser.ts` | ❌ |
+| 18 | Expertise Specialization | `expertise.ts` | ❌ |
+| 19 | Proactive Revision | `revision.ts` | ✅ |
 
 ## Procedural Memory
 
@@ -106,7 +113,9 @@ Memoria integrates with OpenClaw via three hooks:
 - `embeddings` — float vectors (768d default)
 - `entities`, `relations` — knowledge graph
 - `topics`, `fact_topics` — emergent topic system
+- `cluster_members` — maps cluster facts to their member facts
 - `observations` — living syntheses
+- `procedures` — procedural memory (how-to steps)
 
 ## Categories (7)
 

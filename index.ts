@@ -521,6 +521,14 @@ export function register(api: OpenClawPluginApi): void {
   } catch { /* fallback to hardcoded */ }
   // Refresh lifecycle states on boot
   const lifecycleRefresh = lifecycleMgr.refreshAll();
+
+  // Re-parent orphan topics (fix topics created before hierarchy logic)
+  try {
+    const reparented = topicMgr.reparentExistingTopics();
+    if (reparented > 0) {
+      api.logger.info?.(`memoria: reparented ${reparented} orphan topics`);
+    }
+  } catch { /* non-critical */ }
   const lifecycleStats = lifecycleMgr.getStats();
 
   // Hebbian + Expertise stats
@@ -871,7 +879,7 @@ export function register(api: OpenClawPluginApi): void {
             }
           } catch { /* non-critical */ }
 
-          // Apply lifecycle multiplier + cluster-member deprioritization BEFORE tree building
+          // Apply lifecycle multiplier + expertise boost + cluster-member deprioritization BEFORE tree building
           const allFactsCandidates = [...hotScored, ...topFacts, ...graphFacts, ...topicFacts].map(f => {
             let mult = lifecycleMgr.getRecallMultiplier(f.lifecycle_state);
             // Facts already represented by a cluster get 40% penalty
@@ -879,7 +887,17 @@ export function register(api: OpenClawPluginApi): void {
             if (clusteredFactIds.has(f.id) && f.fact_type !== "cluster") {
               mult *= 0.6;
             }
-            if (mult < 1.0 && (f as any).temporalScore) {
+            // Expertise boost: facts linked to expert-level topics get up to 1.5× score
+            try {
+              const factTopics = db.raw.prepare(
+                "SELECT t.name FROM topics t JOIN fact_topics ft ON ft.topic_id = t.id WHERE ft.fact_id = ?"
+              ).all(f.id) as Array<{ name: string }>;
+              if (factTopics.length > 0) {
+                const boost = expertiseMgr.applyExpertiseBoost(1.0, factTopics.map(t => t.name));
+                if (boost > 1.0) mult *= boost;
+              }
+            } catch { /* expertise non-critical */ }
+            if ((f as any).temporalScore) {
               return { ...f, temporalScore: (f as any).temporalScore * mult };
             }
             return f;

@@ -297,15 +297,17 @@ export class FactClusterManager {
    * Create a new cluster fact.
    */
   private createCluster(entityName: string, text: string, memberFacts: Fact[]): void {
+    const members = memberFacts.slice(0, MAX_CLUSTER_FACTS);
     const meta: ClusterMeta = {
-      memberIds: memberFacts.slice(0, MAX_CLUSTER_FACTS).map(f => f.id),
+      memberIds: members.map(f => f.id),
       entityName,
       generatedAt: Date.now(),
       stale: false,
     };
 
+    const clusterId = `cluster_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
     this.db.storeFact({
-      id: `cluster_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+      id: clusterId,
       fact: text,
       category: memberFacts[0]?.category || "savoir",
       confidence: 0.85,
@@ -316,14 +318,18 @@ export class FactClusterManager {
       updated_at: Date.now(),
       fact_type: "cluster" as any,
     });
+
+    // Populate cluster_members table
+    this.syncClusterMembers(clusterId, members);
   }
 
   /**
    * Update an existing cluster with fresh text and members.
    */
   private updateCluster(clusterId: string, text: string, memberFacts: Fact[]): void {
+    const members = memberFacts.slice(0, MAX_CLUSTER_FACTS);
     const meta: ClusterMeta = {
-      memberIds: memberFacts.slice(0, MAX_CLUSTER_FACTS).map(f => f.id),
+      memberIds: members.map(f => f.id),
       entityName: memberFacts[0]?.category || "entity",
       generatedAt: Date.now(),
       stale: false,
@@ -332,6 +338,24 @@ export class FactClusterManager {
     this.db.raw.prepare(
       "UPDATE facts SET fact = ?, tags = ?, updated_at = ? WHERE id = ?"
     ).run(text, JSON.stringify(meta), Date.now(), clusterId);
+
+    // Refresh cluster_members table
+    this.syncClusterMembers(clusterId, members);
+  }
+
+  /**
+   * Sync the cluster_members relational table with the cluster's member facts.
+   * Replaces all existing entries for this cluster.
+   */
+  private syncClusterMembers(clusterId: string, memberFacts: Fact[]): void {
+    try {
+      const raw = this.db.raw;
+      raw.prepare("DELETE FROM cluster_members WHERE cluster_id = ?").run(clusterId);
+      const insert = raw.prepare("INSERT OR IGNORE INTO cluster_members (cluster_id, fact_id) VALUES (?, ?)");
+      for (const f of memberFacts) {
+        insert.run(clusterId, f.id);
+      }
+    } catch { /* cluster_members table may not exist yet — non-critical */ }
   }
 
   /**

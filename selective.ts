@@ -249,6 +249,31 @@ Réponds UNIQUEMENT en JSON:
 - Si les deux sont INDÉPENDANTS: {"relation": "independent"}
 - Si c'est un DOUBLON: {"relation": "duplicate"}`;
 
+// ─── Preference enrichment formatter ───
+
+/**
+ * When merging preference facts, preserve ALL details/contexts from each occurrence.
+ * Format: 'RÈGLE: [the rule]. Contextes: [context1 (date)], [context2 (date)], ...'
+ */
+function formatPreferenceEnrichment(existingFact: string, newFact: string, llmMerged: string): string {
+  const now = new Date().toISOString().slice(0, 10);
+
+  // If the existing fact already has the RÈGLE format, append new context
+  if (existingFact.startsWith("RÈGLE:")) {
+    const contextMatch = existingFact.match(/Contextes:\s*(.+)$/);
+    const existingContexts = contextMatch ? contextMatch[1] : "";
+    // Extract the rule part (up to "Contextes:" or full text)
+    const rulePart = existingFact.replace(/\s*Contextes:\s*.+$/, "");
+    const newContext = newFact.length > 80 ? newFact.slice(0, 80) + "…" : newFact;
+    return `${rulePart} Contextes: ${existingContexts}${existingContexts ? ", " : ""}${newContext} (${now})`;
+  }
+
+  // First enrichment: create the RÈGLE format from LLM merged text
+  const existingSnippet = existingFact.length > 80 ? existingFact.slice(0, 80) + "…" : existingFact;
+  const newSnippet = newFact.length > 80 ? newFact.slice(0, 80) + "…" : newFact;
+  return `RÈGLE: ${llmMerged} Contextes: ${existingSnippet} (antérieur), ${newSnippet} (${now})`;
+}
+
 // ─── Main class ───
 
 export class SelectiveMemory {
@@ -323,6 +348,12 @@ export class SelectiveMemory {
       return { action: "skip", reason: "noise" };
     }
 
+    // Category-specific thresholds: preferences are often reformulated differently
+    // but carry the same intent → use lower thresholds to catch more duplicates
+    const isPreference = category === "preference";
+    const dupThreshold = isPreference ? 0.65 : this.cfg.dupThreshold;
+    const enrichThreshold = isPreference ? 0.45 : this.cfg.enrichThreshold;
+
     // 2. Dedup check (FTS5 + Levenshtein + Jaccard + prefix check)
     const candidates = this.db.searchFacts(fact, this.cfg.dupCandidates);
     const newKeywords = extractKeywords(fact);
@@ -339,12 +370,12 @@ export class SelectiveMemory {
       const combined = levSim * 0.6 + jacSim * 0.4; // weighted average
 
       // Exact duplicate
-      if (combined >= this.cfg.dupThreshold) {
+      if (combined >= dupThreshold) {
         return { action: "skip", reason: "duplicate" };
       }
 
       // Potential enrichment or contradiction (moderate similarity)
-      if (combined >= this.cfg.enrichThreshold && (this.cfg.contradictionCheck || this.cfg.enrichEnabled)) {
+      if (combined >= enrichThreshold && (this.cfg.contradictionCheck || this.cfg.enrichEnabled)) {
         const relation = await this.checkRelation(candidate, fact);
 
         if (relation.type === "duplicate") {
@@ -362,10 +393,14 @@ export class SelectiveMemory {
         }
 
         if (relation.type === "enrichment" && relation.merged) {
+          // For preferences: format enriched fact with consolidated contexts
+          const mergedText = isPreference
+            ? formatPreferenceEnrichment(candidate.fact, fact, relation.merged)
+            : relation.merged;
           return {
             action: "enrich",
             existingFactId: candidate.id,
-            mergedFact: relation.merged,
+            mergedFact: mergedText,
             confidence: Math.max(confidence, candidate.confidence),
           };
         }

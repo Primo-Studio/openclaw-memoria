@@ -105,6 +105,7 @@ export class MemoriaDB {
     this.migrateAddIdentityCache();
     this.migrateAddLifecycleState();
     this.migrateAddProcedures();
+    this.migrateAddClusterMembers();
     this.setSchemaVersion(SCHEMA_VERSION);
   }
 
@@ -196,6 +197,22 @@ export class MemoriaDB {
         CREATE INDEX IF NOT EXISTS idx_procedures_name ON procedures(name);
         CREATE INDEX IF NOT EXISTS idx_procedures_degradation ON procedures(degradation_score);
         CREATE INDEX IF NOT EXISTS idx_procedures_success_rate ON procedures(success_count, failure_count);
+      `);
+    } catch { /* table already exists */ }
+  }
+
+  /** Migration: add cluster_members table to track which facts compose a cluster */
+  private migrateAddClusterMembers(): void {
+    try {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS cluster_members (
+          cluster_id TEXT NOT NULL,
+          fact_id TEXT NOT NULL,
+          PRIMARY KEY (cluster_id, fact_id),
+          FOREIGN KEY (cluster_id) REFERENCES facts(id) ON DELETE CASCADE,
+          FOREIGN KEY (fact_id) REFERENCES facts(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_cluster_members_fact ON cluster_members(fact_id);
       `);
     } catch { /* table already exists */ }
   }
