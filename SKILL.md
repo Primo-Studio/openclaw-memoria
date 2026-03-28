@@ -1,7 +1,7 @@
 ---
-name: Memoria
-version: 3.14.1
-description: "Persistent memory that thinks like a human brain. Facts, procedures, errors — remembered forever, prioritized smartly."
+name: Memoria for OpenClaw
+version: 3.15.2
+description: "Multi-layer persistent memory for OpenClaw. 7 memory layers, bring your own LLM (Ollama, LM Studio, or API), 100% local-first, zero cloud cost."
 author: Primo Studio (@Nieto42)
 license: Apache-2.0
 homepage: https://github.com/Primo-Studio/openclaw-memoria
@@ -13,25 +13,54 @@ tags:
   - brain-inspired
   - procedural
   - lifecycle
-  - error-detection
+  - ollama
+  - lm-studio
+  - multi-layer
 env:
   - name: OPENROUTER_API_KEY
     required: false
-    description: Optional — for remote LLM fallback if no local model available
+    description: Optional — only needed if using a remote LLM provider as fallback
 ---
 
-# 🧠 Memoria — Persistent Memory for OpenClaw
+# 🧠 Memoria — Multi-Layer Persistent Memory for OpenClaw
 
-**Memory that thinks like you do.** Your AI assistant remembers what matters, forgets what doesn't, learns from mistakes, and gets better over time.
+**The most complete memory system for OpenClaw.** 7 layers of memory that work together, powered by YOUR choice of LLM.
 
-## What it does
+## Why Memoria?
 
-- **Facts** — Extracts and stores durable knowledge from every conversation
-- **Procedures** — Learns HOW to do things (not just what happened), improves with repetition
-- **Error Detection** 🔥 — Touch fire once, remember forever. Dangers captured automatically on first occurrence
-- **Lifecycle** — Fresh → Settled → Dormant. Nothing is ever deleted, but priority shifts naturally
-- **Knowledge Graph** — Entities and relations enriching every recall
-- **100% Local** — SQLite + FTS5 + Ollama. Zero cloud, zero cost
+### 🏗️ 7 Memory Layers (not just a fact store)
+1. **Facts** — Durable knowledge extracted from every conversation
+2. **Procedures** — HOW to do things, improves with repetition, learns from failures
+3. **Knowledge Graph** — Entities + relations connecting your facts
+4. **Topics & Expertise** — Tracks what you talk about most, specializes over time
+5. **Observations** — Short-term working memory for active context
+6. **Error Detection** 🔥 — Touch fire once, remember forever. Dangers captured on first occurrence
+7. **Lifecycle** — Fresh → Settled → Dormant. Nothing deleted, priority shifts naturally
+
+### 🔌 Bring Your Own LLM
+Configure each layer independently. Mix and match:
+- **Ollama** — Run gemma3, qwen3.5, llama, or any model locally (recommended)
+- **LM Studio** — Use any GGUF model from your local server
+- **Remote APIs** — OpenAI, Anthropic, OpenRouter as primary or fallback
+- **Fallback chains** — Ollama → LM Studio → API. If one fails, the next takes over automatically
+
+### 🏠 100% Local-First
+- **SQLite + FTS5** — No external database needed
+- **Local embeddings** — nomic-embed-text via Ollama (zero API cost)
+- **Zero cloud dependency** — Works offline, your data stays on your machine
+- **Fallback chain** — Degrades gracefully if a provider goes down
+
+### 🧬 What Makes Memoria Different
+| Feature | Memoria | Basic memory plugins |
+|---------|---------|---------------------|
+| Memory layers | 7 specialized layers | Single fact store |
+| LLM choice | Any local or remote model | Usually hardcoded |
+| Per-layer LLM config | ✅ Different model per layer | ❌ |
+| Procedural learning | ✅ Learns HOW, not just WHAT | ❌ |
+| Error detection | ✅ Auto-captures dangers | ❌ |
+| Knowledge graph | ✅ Entities + relations | ❌ |
+| Lifecycle management | ✅ Smart aging, never forgets | ❌ or simple TTL |
+| Cost | $0 with local models | Varies |
 
 ## Installation
 
@@ -47,21 +76,40 @@ git clone https://github.com/Primo-Studio/openclaw-memoria.git memoria
 cd memoria && npm install
 ```
 
-Then restart your gateway.
+Then add to your `openclaw.json`:
+```json
+"plugins": {
+  "entries": {
+    "memoria": { "enabled": true },
+    "memory-convex": { "enabled": false }
+  }
+}
+```
 
 ## Configuration
 
-Minimal (3 lines in `openclaw.json` under `plugins.entries`):
+### Minimal (works out of the box with Ollama)
+Just install and restart. Defaults: Ollama + gemma3:4b for extraction, nomic for embeddings.
+
+### Custom LLM per layer
 ```json
-"memoria": { "enabled": true },
-"memory-convex": { "enabled": false }
+"memoria": {
+  "enabled": true,
+  "config": {
+    "llm": {
+      "default": { "provider": "ollama", "model": "qwen3.5:4b" },
+      "procedural": { "provider": "lmstudio", "model": "your-model" },
+      "graph": { "provider": "openai", "model": "gpt-4o-mini" }
+    }
+  }
+}
 ```
 
 ## Feedback & Community
 
 **We'd love your feedback!** Tell us how Memoria works for you:
-- 🐦 Tweet us [@Nitix_](https://x.com/Nitix_) — share your setup, results, or ideas
-- ⭐ Star the repo: [github.com/Primo-Studio/openclaw-memoria](https://github.com/Primo-Studio/openclaw-memoria)
-- 🐛 Issues: [GitHub Issues](https://github.com/Primo-Studio/openclaw-memoria/issues)
+- 🐦 **Tweet us** [@Nitix_](https://x.com/Nitix_) — share your setup, results, or ideas
+- ⭐ **Star the repo**: [github.com/Primo-Studio/openclaw-memoria](https://github.com/Primo-Studio/openclaw-memoria)
+- 🐛 **Issues**: [GitHub Issues](https://github.com/Primo-Studio/openclaw-memoria/issues)
 
-Built by [Primo Studio](https://primo-studio.fr) 🇬🇫 — AI tooling from French Guiana.
+Built with ❤️ by [Primo Studio](https://primo-studio.fr) 🇬🇫 — AI tooling from French Guiana.
