@@ -1,6 +1,6 @@
 ---
 name: Memoria for OpenClaw
-version: 3.15.2
+version: 3.16.0
 description: "Multi-layer persistent memory for OpenClaw. 7 memory layers, bring your own LLM (Ollama, LM Studio, or API), 100% local-first, zero cloud cost."
 author: Primo Studio (@Nieto42)
 license: Apache-2.0
@@ -17,9 +17,19 @@ tags:
   - lm-studio
   - multi-layer
 env:
+  - name: OPENAI_API_KEY
+    required: false
+    description: Optional — used as fallback for LLM extraction and embeddings if local models unavailable
   - name: OPENROUTER_API_KEY
     required: false
-    description: Optional — only needed if using a remote LLM provider as fallback
+    description: Optional — used as fallback for remote LLM provider
+  - name: OPENCLAW_WORKSPACE
+    required: false
+    description: Auto-set by OpenClaw — workspace path for memory files
+security: |
+  Memoria runs 100% locally by default. No data is sent externally unless you explicitly configure a remote LLM provider.
+  All memory is stored in a local SQLite database on your machine.
+  API keys are only used if you opt into remote providers as fallback — they are never required.
 ---
 
 # 🧠 Memoria — Multi-Layer Persistent Memory for OpenClaw

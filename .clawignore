@@ -1,0 +1,11 @@
+# Dev/test files — not part of the published package
+audit-v25.ts
+bootstrap-topics.ts
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+*.bak
+*.tar.gz
+node_modules/
+.git/
