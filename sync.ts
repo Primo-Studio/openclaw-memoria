@@ -67,6 +67,7 @@ export class MdSync {
   private lastSyncTimestamps: Map<string, number> = new Map();
 
   constructor(db: MemoriaDB, config?: Partial<SyncConfig>) {
+    this.db = db;
     this.cfg = { ...DEFAULT_SYNC_CONFIG, ...config };
   }
 
@@ -152,7 +153,7 @@ export class MdSync {
             confidence: 0.7,
             source: "md-sync",
             agent: "koda",
-          });
+          } as any);
           imported++;
         } catch { /* dedup or error */ }
       }

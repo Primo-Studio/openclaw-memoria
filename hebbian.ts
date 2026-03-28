@@ -33,7 +33,11 @@ export interface RelationStats {
 }
 
 export class HebbianManager {
-  constructor(private db: MemoriaDB) {}
+  private db: MemoriaDB;
+  
+  constructor(db: MemoriaDB) {
+    this.db = db;
+  }
 
   /**
    * Reinforce relation between two entities (co-occurrence detected)

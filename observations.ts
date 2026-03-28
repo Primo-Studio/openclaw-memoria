@@ -175,7 +175,7 @@ export class ObservationManager {
 
       for (const obs of allObs) {
         if (!obs.embedding) continue;
-        const sim = cosineSimilarity(factEmb, obs.embedding);
+        const sim = cosineSimilarity(new Float32Array(factEmb), new Float32Array(obs.embedding));
         if (sim > bestSim && sim >= this.cfg.matchThreshold) {
           bestSim = sim;
           best = obs;
@@ -249,7 +249,7 @@ export class ObservationManager {
     if (this.embedder) {
       try {
         const emb = await this.embedder.embed(newSummary);
-        embedding = Buffer.from(emb.buffer);
+        embedding = Buffer.from(new Float32Array(emb).buffer);
       } catch (e) { console.debug('memoria:observations: ' + String(e)); }
     }
 
@@ -297,7 +297,7 @@ export class ObservationManager {
     if (this.embedder) {
       try {
         const emb = await this.embedder.embed(summary);
-        embedding = Buffer.from(emb.buffer);
+        embedding = Buffer.from(new Float32Array(emb).buffer);
       } catch (e) { console.debug('memoria:observations: ' + String(e)); }
     }
 
@@ -366,7 +366,7 @@ export class ObservationManager {
           .filter(o => o.embedding)
           .map(o => ({
             observation: o,
-            score: cosineSimilarity(queryEmb, o.embedding!),
+            score: cosineSimilarity(new Float32Array(queryEmb), new Float32Array(o.embedding!)),
           }))
           .filter(s => s.score >= 0.3)
           .sort((a, b) => b.score - a.score)

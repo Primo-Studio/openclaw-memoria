@@ -40,7 +40,7 @@
 
 import fs from "fs";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { MemoriaDB } from "./db.js";
+import { MemoriaDB, Fact } from "./db.js";
 import { scoreAndRank, getHotFacts, HOT_TIER_CONFIG } from "./scoring.js";
 import { SelectiveMemory } from "./selective.js";
 import { EmbeddingManager } from "./embeddings.js";
@@ -104,6 +104,21 @@ interface MemoriaConfig {
     /** Per-layer overrides: each key = layer name, value = provider config */
     overrides?: Partial<Record<MemoriaLayer, LayerLLMConfig>>;
   };
+  lifecycle?: {
+    freshDays?: number;
+    settledMinAccess?: number;
+    dormantAfterDays?: number;
+    detailCursor?: number;
+    revisionRecallThreshold?: number;
+  };
+  procedural?: {
+    reflectEvery?: number;
+    degradedThreshold?: number;
+    defaultSafety?: number;
+    staleDays?: number;
+    docCheckDays?: number;
+  };
+  patterns?: any; // PatternManager config, loosely typed for now
 }
 
 /** Named layers that accept a per-layer LLM override */
@@ -594,7 +609,7 @@ export function register(api: OpenClawPluginApi): void {
   const hebbianNote = ` | graph: ${hebbianStats.strong} strong, ${hebbianStats.weak} weak`;
   const expertiseNote = ` | expertise: ${expertiseStats.expert}★★★/${expertiseStats.experienced}★★/${expertiseStats.familiar}★`;
   const procNote = procStats.total > 0 
-    ? ` | procedures: ${procStats.healthy}✓/${procStats.degraded}⚠${procStats.stale > 0 ? `/${procStats.stale}🕰️` : ''}` 
+    ? ` | procedures: ${procStats.healthy}✓/${procStats.degraded}⚠${(procStats.stale ?? 0) > 0 ? `/${procStats.stale}🕰️` : ''}` 
     : "";
   const patNote = patStats.total > 0 ? ` | patterns: ${patStats.total} (avg ${patStats.avgOccurrences} occ)` : "";
   const contEnabled = cfg.continuous?.enabled !== false && cfg.autoCapture;
@@ -817,7 +832,7 @@ export function register(api: OpenClawPluginApi): void {
   // ════════════════════════════════════════════════════════════════
 
   if (cfg.autoRecall) {
-    api.on("before_prompt_build", async (event, _ctx) => {
+    api.on("before_prompt_build", async (event: any, _ctx: any) => {
       try {
         const rawPrompt = typeof event.prompt === "string" ? event.prompt : "";
         if (!rawPrompt || rawPrompt.length < 3) return undefined;
@@ -1030,7 +1045,7 @@ export function register(api: OpenClawPluginApi): void {
           } catch (e) { api?.logger?.debug?.('memoria:cluster-parse: ' + String(e)); }
 
           // Apply lifecycle multiplier + expertise boost + cluster-member deprioritization BEFORE tree building
-          const allFactsCandidates = [...hotScored, ...topFacts, ...graphFacts, ...topicFacts].map(f => {
+          const allFactsCandidates = [...hotScored, ...topFacts, ...graphFacts, ...topicFacts].map((f: any) => {
             let mult = lifecycleMgr.getRecallMultiplier(f.lifecycle_state);
             // Facts already represented by a cluster get 40% penalty
             // (the cluster summary carries their info more concisely)
@@ -1054,10 +1069,10 @@ export function register(api: OpenClawPluginApi): void {
             }
             return f;
           });
-          const tree = await treeBuilder.build(allFactsCandidates, prompt);
+          const tree = await treeBuilder.build(allFactsCandidates as any, prompt);
           
           // Extract facts in priority order (tree weights)
-          finalFacts = treeBuilder.extractFacts(tree, recallLimit);
+          finalFacts = treeBuilder.extractFacts(tree, recallLimit) as any;
 
           // Log tree structure (debug)
           if (tree.roots.length > 0) {
@@ -1067,12 +1082,12 @@ export function register(api: OpenClawPluginApi): void {
         } catch (e) {
           api?.logger?.debug?.('memoria:tree-build: ' + String(e));
           // Fallback: use flat list
-          finalFacts = [...topFacts, ...graphFacts, ...topicFacts].slice(0, recallLimit);
+          finalFacts = [...topFacts, ...graphFacts, ...topicFacts].slice(0, recallLimit) as any;
         }
 
         if (finalFacts.length === 0 && !observationContext && !proceduresContext) return undefined;
 
-        const context = formatRecallContext(finalFacts, observationContext) + proceduresContext;
+        const context = formatRecallContext(finalFacts as any, observationContext) + proceduresContext;
 
         // Track access + feedback loop + budget learning + lifecycle update
         const ids = finalFacts.map(f => f.id);
@@ -1142,7 +1157,7 @@ export function register(api: OpenClawPluginApi): void {
   ];
 
   // Buffer user messages
-  api.on("message_received", async (event, _ctx) => {
+  api.on("message_received", async (event: any, _ctx: any) => {
     if (!CONTINUOUS_ENABLED) return;
     try {
       if (!event.content || event.content.length < 5) return;
@@ -1169,10 +1184,10 @@ export function register(api: OpenClawPluginApi): void {
   });
 
   // Buffer assistant responses + trigger periodic extraction
-  api.on("llm_output", async (event, _ctx) => {
+  api.on("llm_output", async (event: any, _ctx: any) => {
     if (!CONTINUOUS_ENABLED) return;
     try {
-      const texts = event.assistantTexts?.filter(t => t && t.length > 15) || [];
+      const texts = event.assistantTexts?.filter((t: any) => t && t.length > 15) || [];
       if (texts.length === 0) return;
 
       const combined = texts.join("\n").slice(0, 3000);
@@ -1256,7 +1271,7 @@ export function register(api: OpenClawPluginApi): void {
       .replace("{MAX_FACTS}", String(Math.min(cfg.captureMaxFacts, trigger === "periodic" ? 3 : 5)));
 
     try {
-      const result = await extractLlm.generateWithMeta(prompt, {
+      const result = await extractLlm.generateWithMeta!(prompt, {
         maxTokens: 768,
         temperature: 0.1,
         format: "json",
@@ -1342,7 +1357,7 @@ export function register(api: OpenClawPluginApi): void {
   let lastAssemblyTime = 0;
   const ASSEMBLY_COOLDOWN_MS = 60_000; // 1 minute between assemblies
 
-  api.on("after_tool_call", async (event, _ctx) => {
+  api.on("after_tool_call", async (event: any, _ctx: any) => {
     try {
       const { toolName, params, result, error, durationMs } = event;
       
@@ -1421,7 +1436,7 @@ Output JSON only (no markdown, no explanation):
 }`;
 
       try {
-        const response = await extractLlm.generateWithMeta(prompt, {
+        const response = await extractLlm.generateWithMeta!(prompt, {
           maxTokens: 512,
           temperature: 0.1,
           format: "json",
@@ -1538,7 +1553,7 @@ Output JSON only (no markdown, no explanation):
   // ════════════════════════════════════════════════════════════════
 
   if (cfg.autoCapture) {
-    api.on("agent_end", async (event, _ctx) => {
+    api.on("agent_end", async (event: any, _ctx: any) => {
       if (!event.success || !event.messages || event.messages.length === 0) return;
 
       // Track how many messages continuous already processed
@@ -1609,7 +1624,7 @@ Output JSON only (no markdown, no explanation):
           .replace("{TEXT}", recentTexts)
           .replace("{MAX_FACTS}", String(cfg.captureMaxFacts));
 
-        const result = await extractLlm.generateWithMeta(prompt, {
+        const result = await extractLlm.generateWithMeta!(prompt, {
           maxTokens: 1024,
           temperature: 0.1,
           format: "json",
@@ -1744,7 +1759,7 @@ Output JSON only (no markdown, no explanation):
   // HOOK: after_compaction — Save before loss (Layer 1)
   // ════════════════════════════════════════════════════════════════
 
-  api.on("after_compaction", async (event, _ctx) => {
+  api.on("after_compaction", async (event: any, _ctx: any) => {
     // Budget learning: compaction happened → we may have been too aggressive
     try { budget.onCompaction(); } catch (e) { api?.logger?.debug?.('memoria:budget-compaction: ' + String(e)); }
     const penaltyNote = budget.penalty > 0 ? ` (compaction penalty: -${budget.penalty} facts)` : "";
@@ -1758,7 +1773,7 @@ Output JSON only (no markdown, no explanation):
         .replace("{TEXT}", summary.slice(0, 4000))
         .replace("{MAX_FACTS}", String(cfg.captureMaxFacts)); // Same limit as agent_end
 
-      const result = await extractLlm.generateWithMeta(prompt, {
+      const result = await extractLlm.generateWithMeta!(prompt, {
         maxTokens: 1024,
         temperature: 0.1,
         format: "json",

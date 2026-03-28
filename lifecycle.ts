@@ -56,9 +56,11 @@ function normalizeState(state: string | null | undefined): LifecycleState {
 }
 
 export class LifecycleManager {
+  private db: MemoriaDB;
   private cfg: LifecycleConfig;
 
-  constructor(private db: MemoriaDB, config?: Partial<LifecycleConfig>) {
+  constructor(db: MemoriaDB, config?: Partial<LifecycleConfig>) {
+    this.db = db;
     this.cfg = { ...DEFAULT_LIFECYCLE_CONFIG, ...config };
   }
 

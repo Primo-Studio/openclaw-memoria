@@ -57,9 +57,10 @@ async function main() {
         access_count: old.accessCount ?? 0,
         last_accessed_at: old.lastAccessedAt ?? null,
         superseded: old.superseded ? 1 : 0,
+        fact_type: "semantic",
         superseded_by: old.supersededBy ?? null,
         superseded_at: old.supersededAt ?? null,
-      });
+      } as any);
       imported++;
     } catch (err) {
       console.warn(`  ⚠ Skipped: ${String(err)}`);

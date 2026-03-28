@@ -41,7 +41,11 @@ export interface TopicExpertise {
 }
 
 export class ExpertiseManager {
-  constructor(private db: MemoriaDB) {}
+  private db: MemoriaDB;
+  
+  constructor(db: MemoriaDB) {
+    this.db = db;
+  }
 
   /**
    * Calculate expertise level from interaction count

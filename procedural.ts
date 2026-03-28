@@ -1042,10 +1042,11 @@ Output JSON (no markdown):
 
         // Track failure reason — like noting "Route A had traffic at 6pm"
         // This helps understand WHEN/WHY a procedure fails, not just that it did
+        const context = errorOutput || notes;
         if (context) {
           try {
             const reasons: string[] = JSON.parse(
-              this.db.prepare("SELECT failure_reasons FROM procedures WHERE id = ?").get(proc.id)?.failure_reasons || "[]"
+              (this.db.prepare("SELECT failure_reasons FROM procedures WHERE id = ?").get(proc.id) as any)?.failure_reasons || "[]"
             );
             const reason = typeof context === 'string' ? context : JSON.stringify(context);
             const timestamp = new Date().toISOString().slice(0, 10);
