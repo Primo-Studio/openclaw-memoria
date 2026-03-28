@@ -121,13 +121,17 @@ const DEFAULT_PROCEDURAL_CONFIG: ProceduralConfig = {
 };
 
 export class ProceduralMemory {
+  private db: Database;
+  private llm: LLMProvider;
   private cfg: ProceduralConfig;
 
   constructor(
-    private db: Database,
-    private llm: LLMProvider,
+    db: Database,
+    llm: LLMProvider,
     config?: Partial<ProceduralConfig>
   ) {
+    this.db = db;
+    this.llm = llm;
     this.cfg = { ...DEFAULT_PROCEDURAL_CONFIG, ...config };
     if (config?.qualityWeights) {
       this.cfg.qualityWeights = { ...DEFAULT_PROCEDURAL_CONFIG.qualityWeights, ...config.qualityWeights };
