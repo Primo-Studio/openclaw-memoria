@@ -227,7 +227,8 @@ export class ProceduralMemory {
       }
 
       return bestMatch;
-    } catch {
+    } catch (e) {
+      console.debug('memoria:procedural: ' + String(e));
       return null;
     }
   }
@@ -278,7 +279,8 @@ export class ProceduralMemory {
         if (procCount > 0 && ftsCount === 0) {
           this.rebuildFts();
         }
-      } catch {
+      } catch (e) {
+        console.debug('memoria:procedural: ' + String(e));
         // FTS creation can fail if table already exists with different schema — non-critical
       }
     } catch (err) {
@@ -295,7 +297,8 @@ export class ProceduralMemory {
         SELECT name, goal, COALESCE(context,''), COALESCE(gotchas,''), steps
         FROM procedures
       `).run();
-    } catch {
+    } catch (e) {
+      console.debug('memoria:procedural: ' + String(e));
       // Non-critical — LIKE fallback will work
     }
   }
@@ -878,7 +881,8 @@ Output JSON (no markdown):
   getStaleOrDegraded(): Procedure[] {
     try {
       return this.getAllProcedures().filter(p => this.needsDocCheck(p));
-    } catch {
+    } catch (e) {
+      console.debug('memoria:procedural: ' + String(e));
       return [];
     }
   }
@@ -1001,7 +1005,8 @@ Output JSON (no markdown):
             JSON.stringify(proc.steps)
           );
         }
-      } catch {
+      } catch (e) {
+        console.debug('memoria:procedural: ' + String(e));
         // FTS sync is non-critical
       }
     } catch (err) {
@@ -1050,7 +1055,7 @@ Output JSON (no markdown):
             const trimmed = reasons.slice(-10);
             this.db.prepare("UPDATE procedures SET failure_reasons = ? WHERE id = ?")
               .run(JSON.stringify(trimmed), proc.id);
-          } catch { /* non-critical */ }
+          } catch (e) { console.debug('memoria:procedural: ' + String(e)); }
         }
       }
 
@@ -1138,7 +1143,8 @@ Output JSON (no markdown):
             LIMIT ?
           `).all(ftsQuery, limit) as any[];
         }
-      } catch {
+      } catch (e) {
+        console.debug('memoria:procedural: ' + String(e));
         // FTS not available or query syntax error — fall through to LIKE
       }
 

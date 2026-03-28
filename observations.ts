@@ -152,7 +152,8 @@ export class ObservationManager {
       }
 
       return { action: "accumulated" };
-    } catch {
+    } catch (e) {
+      console.debug('memoria:observations: ' + String(e));
       return { action: "skipped" };
     }
   }
@@ -182,7 +183,8 @@ export class ObservationManager {
       }
 
       return best;
-    } catch {
+    } catch (e) {
+      console.debug('memoria:observations: ' + String(e));
       return this.findByKeywords(factText);
     }
   }
@@ -236,7 +238,8 @@ export class ObservationManager {
       })).trim();
       
       if (newSummary.length < 10) newSummary = obs.summary; // LLM returned garbage
-    } catch {
+    } catch (e) {
+      console.debug('memoria:observations: ' + String(e));
       // LLM failed — just append fact reference, keep old summary
       newSummary = obs.summary;
     }
@@ -247,7 +250,7 @@ export class ObservationManager {
       try {
         const emb = await this.embedder.embed(newSummary);
         embedding = Buffer.from(emb.buffer);
-      } catch { /* keep old */ }
+      } catch (e) { console.debug('memoria:observations: ' + String(e)); }
     }
 
     const now = Date.now();
@@ -279,7 +282,8 @@ export class ObservationManager {
         // LLM returned garbage — use concat fallback
         summary = facts.map(f => f.fact).join(". ");
       }
-    } catch {
+    } catch (e) {
+      console.debug('memoria:observations: ' + String(e));
       summary = facts.map(f => f.fact).join(". ");
     }
 
@@ -294,7 +298,7 @@ export class ObservationManager {
       try {
         const emb = await this.embedder.embed(summary);
         embedding = Buffer.from(emb.buffer);
-      } catch { /* skip */ }
+      } catch (e) { console.debug('memoria:observations: ' + String(e)); }
     }
 
     this.db.raw.prepare(`
@@ -319,7 +323,8 @@ export class ObservationManager {
       // Clean up: remove quotes, "Topic:", etc.
       const cleaned = response.replace(/^["']|["']$/g, "").replace(/^topic:\s*/i, "").trim();
       return cleaned.length > 1 && cleaned.length < 60 ? cleaned : null;
-    } catch {
+    } catch (e) {
+      console.debug('memoria:observations: ' + String(e));
       return null;
     }
   }
@@ -340,7 +345,8 @@ export class ObservationManager {
         ORDER BY rank LIMIT 20
       `).all(query) as Array<{ id: string; fact: string; category: string }>;
       return results;
-    } catch {
+    } catch (e) {
+      console.debug('memoria:observations: ' + String(e));
       return [];
     }
   }
@@ -369,7 +375,7 @@ export class ObservationManager {
         // Track access
         for (const s of scored) this.trackAccess(s.observation.id);
         return scored;
-      } catch { /* fallback to keyword */ }
+      } catch (e) { console.debug('memoria:observations: ' + String(e)); }
     }
 
     // Fallback: keyword matching
@@ -453,7 +459,7 @@ export class ObservationManager {
           affected++;
         }
       }
-    } catch { /* non-critical */ }
+    } catch (e) { console.debug('memoria:observations: ' + String(e)); }
     return affected;
   }
 

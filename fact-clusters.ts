@@ -111,7 +111,8 @@ export class FactClusterManager {
         }
         generated++;
       }
-    } catch {
+    } catch (e) {
+      console.debug('memoria:clusters: ' + String(e));
       // Non-critical: clusters are a quality enhancement, not required
     }
 
@@ -143,7 +144,7 @@ export class FactClusterManager {
             if (ent) entities.push(ent.name);
           }
         }
-      } catch { /* ignore parse errors */ }
+      } catch (e) { console.debug('memoria:clusters: ' + String(e)); }
 
       // Fallback: extract proper nouns as entity proxies
       if (entities.length === 0) {
@@ -223,7 +224,8 @@ export class FactClusterManager {
       }
 
       return false;
-    } catch {
+    } catch (e) {
+      console.debug('memoria:clusters: ' + String(e));
       return true; // Can't parse meta → treat as stale
     }
   }
@@ -245,7 +247,7 @@ export class FactClusterManager {
           this.db.raw.prepare("UPDATE facts SET tags = ?, updated_at = ? WHERE id = ?")
             .run(JSON.stringify(meta), Date.now(), cluster.id);
           staleCount++;
-        } catch { /* ignore */ }
+        } catch (e) { console.debug('memoria:clusters: ' + String(e)); }
       }
     }
 
@@ -288,7 +290,8 @@ export class FactClusterManager {
 
       if (text.length < 20) return null;
       return text;
-    } catch {
+    } catch (e) {
+      console.debug('memoria:clusters: ' + String(e));
       return null;
     }
   }
@@ -355,7 +358,7 @@ export class FactClusterManager {
       for (const f of memberFacts) {
         insert.run(clusterId, f.id);
       }
-    } catch { /* cluster_members table may not exist yet — non-critical */ }
+    } catch (e) { console.debug('memoria:clusters: ' + String(e)); }
   }
 
   /**

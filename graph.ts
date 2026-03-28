@@ -146,7 +146,8 @@ export class KnowledgeGraph {
       }
 
       return { entities: entCount, relations: relCount };
-    } catch {
+    } catch (e) {
+      console.debug('memoria:graph: ' + String(e));
       return { entities: 0, relations: 0 };
     }
   }
@@ -312,14 +313,14 @@ export class KnowledgeGraph {
             ).run(JSON.stringify(updated), rel.id);
           }
           affected++;
-        } catch { /* parse error, skip */ }
+        } catch (e) { console.debug('memoria:graph: ' + String(e)); }
       }
 
       // 2. Clean entity_ids from the superseded fact (clear the link)
       this.rawDb.prepare(
         "UPDATE facts SET entity_ids = NULL WHERE id = ? AND superseded = 1"
       ).run(factId);
-    } catch { /* non-critical */ }
+    } catch (e) { console.debug('memoria:graph: ' + String(e)); }
     return affected;
   }
 
@@ -402,7 +403,8 @@ export class KnowledgeGraph {
       const arr = JSON.parse(existing) as string[];
       if (!arr.includes(newItem)) arr.push(newItem);
       return JSON.stringify(arr.slice(-20));
-    } catch {
+    } catch (e) {
+      console.debug('memoria:graph: ' + String(e));
       return JSON.stringify([newItem]);
     }
   }

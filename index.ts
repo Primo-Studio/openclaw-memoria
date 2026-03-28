@@ -447,10 +447,10 @@ export function register(api: OpenClawPluginApi): void {
   const embedProviders: EmbedProvider[] = [primaryEmbed];
   // Add fallback embed providers (only if different from primary)
   if (cfg.embed.provider !== "lmstudio") {
-    try { embedProviders.push(lmStudioEmbed(cfg.embed.model, cfg.embed.dimensions)); } catch { /* skip */ }
+    try { embedProviders.push(lmStudioEmbed(cfg.embed.model, cfg.embed.dimensions)); } catch (e) { api?.logger?.debug?.('memoria:embed-fallback: ' + String(e)); }
   }
   if (cfg.embed.provider !== "openai" && (cfg.embed.apiKey || cfg.llm.apiKey || process.env.OPENAI_API_KEY)) {
-    try { embedProviders.push(openaiEmbed("text-embedding-3-small", cfg.embed.apiKey || cfg.llm.apiKey || process.env.OPENAI_API_KEY || "", cfg.embed.dimensions)); } catch { /* skip */ }
+    try { embedProviders.push(openaiEmbed("text-embedding-3-small", cfg.embed.apiKey || cfg.llm.apiKey || process.env.OPENAI_API_KEY || "", cfg.embed.dimensions)); } catch (e) { api?.logger?.debug?.('memoria:embed-fallback: ' + String(e)); }
   }
   const embedder = embedProviders.length > 1
     ? new EmbedFallback(embedProviders, { info: api.logger.info?.bind(api.logger), warn: api.logger.warn?.bind(api.logger) })
@@ -547,7 +547,7 @@ export function register(api: OpenClawPluginApi): void {
       if (parts.length > 0) {
         api.logger.debug?.(`memoria: supersede cascade for ${supersededId} — ${parts.join(", ")}`);
       }
-    } catch { /* non-critical */ }
+    } catch (e) { api?.logger?.debug?.('memoria:supersede-cascade: ' + String(e)); }
   };
 
   // Ensure sync column exists
@@ -565,7 +565,7 @@ export function register(api: OpenClawPluginApi): void {
     const pkgPath = new URL("./package.json", import.meta.url);
     const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
     pluginVersion = pkg.version || pluginVersion;
-  } catch { /* fallback to hardcoded */ }
+  } catch (e) { api?.logger?.debug?.('memoria:version-read: ' + String(e)); }
   // Refresh lifecycle states on boot
   const lifecycleRefresh = lifecycleMgr.refreshAll();
 
@@ -575,7 +575,7 @@ export function register(api: OpenClawPluginApi): void {
     if (reparented > 0) {
       api.logger.info?.(`memoria: reparented ${reparented} orphan topics`);
     }
-  } catch { /* non-critical */ }
+  } catch (e) { api?.logger?.debug?.('memoria:topic-reparent: ' + String(e)); }
   const lifecycleStats = lifecycleMgr.getStats();
 
   // Hebbian + Expertise stats
@@ -640,7 +640,7 @@ export function register(api: OpenClawPluginApi): void {
         const n = await embeddingMgr.embedBatch(toEmbed.map(f => ({ id: f.id, text: f.fact })));
         if (n > 0) api.logger.info?.(`memoria: [${source}] embedded ${n} new facts`);
       }
-    } catch { /* non-critical */ }
+    } catch (e) { api?.logger?.debug?.('memoria:embed-batch: ' + String(e)); }
 
     // 2. Graph: extract entities/relations (limit to 5 to avoid LLM spam)
     try {
@@ -661,7 +661,7 @@ export function register(api: OpenClawPluginApi): void {
       if (totalEnt > 0 || totalRel > 0) {
         api.logger.info?.(`memoria: [${source}] graph extracted ${totalEnt} entities, ${totalRel} relations`);
       }
-    } catch { /* non-critical */ }
+    } catch (e) { api?.logger?.debug?.('memoria:graph-extract: ' + String(e)); }
 
     // 3. Topics: keyword extraction + topic association
     try {
@@ -695,7 +695,7 @@ export function register(api: OpenClawPluginApi): void {
       if (obsUpdated > 0 || obsCreated > 0) {
         api.logger.info?.(`memoria: [${source}] observations — ${obsCreated} created, ${obsUpdated} updated`);
       }
-    } catch { /* non-critical */ }
+    } catch (e) { api?.logger?.debug?.('memoria:observations: ' + String(e)); }
 
     // 5. Fact Clusters: generate/refresh thematic summaries
     try {
@@ -708,7 +708,7 @@ export function register(api: OpenClawPluginApi): void {
           await embeddingMgr.embedBatch(toEmbed.map(f => ({ id: f.id, text: f.fact })));
         }
       }
-    } catch { /* non-critical */ }
+    } catch (e) { api?.logger?.debug?.('memoria:clusters: ' + String(e)); }
 
     // 6. Sync new facts to .md files
     try {
@@ -716,7 +716,7 @@ export function register(api: OpenClawPluginApi): void {
       if (syncResult.synced > 0) {
         api.logger.info?.(`memoria: [${source}] synced ${syncResult.synced} facts to .md files`);
       }
-    } catch { /* non-critical */ }
+    } catch (e) { api?.logger?.debug?.('memoria:md-sync: ' + String(e)); }
 
     // 7. Auto md-regen: smart trigger (captures count OR stale OR file size)
     try {
@@ -726,7 +726,7 @@ export function register(api: OpenClawPluginApi): void {
         const regenResult = mdRegen.regenerate();
         api.logger.info?.(`memoria: [${source}] auto md-regen triggered (${regenReason}) — ${regenResult.files} files, ${regenResult.recentFacts} recent, ${regenResult.archivedFacts} archived`);
       }
-    } catch { /* non-critical */ }
+    } catch (e) { api?.logger?.debug?.('memoria:md-regen: ' + String(e)); }
 
     // 8. Pattern detection: consolidate repeated similar facts
     try {
@@ -734,7 +734,7 @@ export function register(api: OpenClawPluginApi): void {
       if (patternResult.consolidated > 0) {
         api.logger.info?.(`memoria: [${source}] patterns — ${patternResult.detected} groups found, ${patternResult.consolidated} consolidated`);
       }
-    } catch { /* non-critical */ }
+    } catch (e) { api?.logger?.debug?.('memoria:patterns: ' + String(e)); }
 
     // 9. Cross-layer connections (Phase 3)
     try {
@@ -803,13 +803,13 @@ export function register(api: OpenClawPluginApi): void {
             db.raw.prepare("UPDATE facts SET lifecycle_state = 'settled' WHERE id = ?").run(p.id);
             crossUpdates++;
           }
-        } catch { /* skip malformed */ }
+        } catch (e) { api?.logger?.debug?.('memoria:parse: ' + String(e)); }
       }
 
       if (crossUpdates > 0) {
         api.logger.info?.(`memoria: [${source}] cross-layer — ${crossUpdates} updates (feedback→lifecycle, hebbian→topics, lifecycle→patterns)`);
       }
-    } catch { /* cross-layer non-critical */ }
+    } catch (e) { api?.logger?.debug?.('memoria:cross-layer: ' + String(e)); }
   }
 
   // ════════════════════════════════════════════════════════════════
@@ -854,7 +854,7 @@ export function register(api: OpenClawPluginApi): void {
               api.logger.info?.(`memoria: user signal (${parts.join(" + ")}) → ${penalized.length} facts penalized by ${signal.penalty}`);
             }
           }
-        } catch { /* non-critical — don't block recall */ }
+        } catch (e) { api?.logger?.debug?.('memoria:recall: ' + String(e)); }
 
         // Adaptive budget: compute how many facts to inject based on context usage
         const messageCount = (event as any).messageCount || (event as any).messages?.length || 0;
@@ -913,7 +913,7 @@ export function register(api: OpenClawPluginApi): void {
               graph.hebbianReinforce(entityIds);
             }
           }
-        } catch { /* graph enrichment is non-critical */ }
+        } catch (e) { api?.logger?.debug?.('memoria:graph-enrichment: ' + String(e)); }
 
         // Topic enrichment: find relevant topics and add their facts
         // Pass expanded queries for broader topic matching
@@ -938,7 +938,7 @@ export function register(api: OpenClawPluginApi): void {
               api.logger.debug?.(`memoria: topics matched: ${relevantTopics.map(t => t.topic.name).join(", ")}`);
             }
           }
-        } catch { /* topic enrichment non-critical */ }
+        } catch (e) { api?.logger?.debug?.('memoria:topic-enrichment: ' + String(e)); }
 
         // Observations: synthesized multi-fact summaries (PRIORITY over individual facts)
         let observationContext = "";
@@ -948,7 +948,7 @@ export function register(api: OpenClawPluginApi): void {
             observationContext = observationMgr.formatForRecall(relevantObs);
             api.logger.debug?.(`memoria: ${relevantObs.length} observations matched`);
           }
-        } catch { /* non-critical */ }
+        } catch (e) { api?.logger?.debug?.('memoria:observations-recall: ' + String(e)); }
 
         // Procedural memory: search for matching "how-to" procedures
         // Cross-layer: uses Graph entities to enhance search + Embeddings for semantic match
@@ -977,7 +977,7 @@ export function register(api: OpenClawPluginApi): void {
                 }
                 if (procedures.length > 3) procedures = procedures.slice(0, 3);
               }
-            } catch { /* graph expansion is non-critical */ }
+            } catch (e) { api?.logger?.debug?.('memoria:graph-expansion: ' + String(e)); }
           }
 
           if (procedures.length > 0) {
@@ -1005,7 +1005,7 @@ export function register(api: OpenClawPluginApi): void {
             proceduresContext = `\n## 🔧 Known Procedures\n${procTexts.join('\n\n')}\n`;
             api.logger.debug?.(`memoria: ${procedures.length} procedures matched (graph-expanded)`);
           }
-        } catch { /* non-critical */ }
+        } catch (e) { api?.logger?.debug?.('memoria:procedural-recall: ' + String(e)); }
 
         // Context tree: organize facts hierarchically, weight by query
         // Merge: hot tier (always first) + search + graph + topic
@@ -1025,9 +1025,9 @@ export function register(api: OpenClawPluginApi): void {
                 if (!meta.stale && Array.isArray(meta.memberIds)) {
                   for (const id of meta.memberIds) clusteredFactIds.add(id);
                 }
-              } catch { /* bad JSON, skip */ }
+              } catch (e) { api?.logger?.debug?.('memoria:json-parse: ' + String(e)); }
             }
-          } catch { /* non-critical */ }
+          } catch (e) { api?.logger?.debug?.('memoria:cluster-parse: ' + String(e)); }
 
           // Apply lifecycle multiplier + expertise boost + cluster-member deprioritization BEFORE tree building
           const allFactsCandidates = [...hotScored, ...topFacts, ...graphFacts, ...topicFacts].map(f => {
@@ -1046,7 +1046,7 @@ export function register(api: OpenClawPluginApi): void {
                 const boost = expertiseMgr.applyExpertiseBoost(1.0, factTopics.map(t => t.name));
                 if (boost > 1.0) mult *= boost;
               }
-            } catch { /* expertise non-critical */ }
+            } catch (e) { api?.logger?.debug?.('memoria:expertise: ' + String(e)); }
             // Pattern boost: consolidated patterns get 1.5× score
             mult *= patternMgr.applyPatternBoost(1.0, f.fact_type);
             if ((f as any).temporalScore) {
@@ -1064,7 +1064,8 @@ export function register(api: OpenClawPluginApi): void {
             const treeView = treeBuilder.renderTree(tree, 2);
             api.logger.debug?.(`memoria tree:\n${treeView}`);
           }
-        } catch {
+        } catch (e) {
+          api?.logger?.debug?.('memoria:tree-build: ' + String(e));
           // Fallback: use flat list
           finalFacts = [...topFacts, ...graphFacts, ...topicFacts].slice(0, recallLimit);
         }
@@ -1075,9 +1076,9 @@ export function register(api: OpenClawPluginApi): void {
 
         // Track access + feedback loop + budget learning + lifecycle update
         const ids = finalFacts.map(f => f.id);
-        try { db.trackAccess(ids); } catch { /* non-critical */ }
-        try { feedbackMgr.recordRecall(ids, prompt); } catch { /* non-critical */ }
-        try { budget.recordRecall(recallLimit); } catch { /* non-critical */ }
+        try { db.trackAccess(ids); } catch (e) { api?.logger?.debug?.('memoria:track-access: ' + String(e)); }
+        try { feedbackMgr.recordRecall(ids, prompt); } catch (e) { api?.logger?.debug?.('memoria:feedback-record: ' + String(e)); }
+        try { budget.recordRecall(recallLimit); } catch (e) { api?.logger?.debug?.('memoria:budget-record: ' + String(e)); }
 
         // Note: procedure feedback comes from after_tool_call (reinforcement/reflect),
         // not from recall. Unlike facts, procedures prove their worth through execution.
@@ -1086,7 +1087,7 @@ export function register(api: OpenClawPluginApi): void {
           for (const fact of finalFacts) {
             lifecycleMgr.updateLifecycle(fact);
           }
-        } catch { /* non-critical */ }
+        } catch (e) { api?.logger?.debug?.('memoria:lifecycle-update: ' + String(e)); }
 
         // Proactive revision: check if any settled facts need refinement (async, non-blocking)
         setImmediate(async () => {
@@ -1284,7 +1285,8 @@ export function register(api: OpenClawPluginApi): void {
             else if (res.action === "supersede") superseded++;
             else stored++;
           } else { skipped++; }
-        } catch {
+        } catch (e) {
+          api?.logger?.debug?.('memoria:contradiction-check: ' + String(e));
           const category = normalizeCategory(f.category);
           const relevance = identityParser.calculateRelevance(f.fact, category);
           db.storeFact({
@@ -1474,7 +1476,7 @@ Output JSON only (no markdown, no explanation):
               if (reflection?.should_improve) {
                 api.logger.info?.(`memoria: procedural 🔍 reflected on "${similar.name}" — ${reflection.suggestions.slice(0, 2).join('; ')}`);
               }
-            } catch { /* reflection is non-critical */ }
+            } catch (e) { api?.logger?.debug?.('memoria:procedural-reflection: ' + String(e)); }
           }
 
           api.logger.info?.(`memoria: procedural ✅ reinforced "${similar.name}" (v${similar.version}, ${similar.success_count + 1} successes, quality=${similar.quality.overall})`);
@@ -1513,7 +1515,7 @@ Output JSON only (no markdown, no explanation):
             const procFact = `Procedure "${proc.name}": ${proc.goal}. Steps: ${commands.slice(0, 3).join('; ')}`;
             await graph.extractAndStore(`proc_${proc.id}`, procFact);
             api.logger.debug?.(`memoria: procedural → graph entities extracted for "${proc.name}"`);
-          } catch { /* graph enrichment is non-critical */ }
+          } catch (e) { api?.logger?.debug?.('memoria:procedural-graph: ' + String(e)); }
         }
 
         assembledGoals.add(fingerprint);
@@ -1568,7 +1570,7 @@ Output JSON only (no markdown, no explanation):
               api.logger.debug?.(`memoria: feedback — ${fb.used} used, ${fb.ignored} ignored (${fb.details.length} total)`);
             }
           }
-        } catch { /* feedback is non-critical */ }
+        } catch (e) { api?.logger?.debug?.('memoria:feedback-process: ' + String(e)); }
 
         // Collect user + assistant texts
         const texts: string[] = [];
@@ -1650,7 +1652,8 @@ Output JSON only (no markdown, no explanation):
             } else {
               skipped++;
             }
-          } catch {
+          } catch (e) {
+            api?.logger?.debug?.('memoria:selective-store: ' + String(e));
             // Fallback: store directly if selective fails
             const category = normalizeCategory(f.category);
             const relevance = identityParser.calculateRelevance(f.fact, category);
@@ -1743,7 +1746,7 @@ Output JSON only (no markdown, no explanation):
 
   api.on("after_compaction", async (event, _ctx) => {
     // Budget learning: compaction happened → we may have been too aggressive
-    try { budget.onCompaction(); } catch { /* non-critical */ }
+    try { budget.onCompaction(); } catch (e) { api?.logger?.debug?.('memoria:budget-compaction: ' + String(e)); }
     const penaltyNote = budget.penalty > 0 ? ` (compaction penalty: -${budget.penalty} facts)` : "";
     if (penaltyNote) api.logger.debug?.(`memoria: budget adjusted${penaltyNote}`);
 
@@ -1783,7 +1786,8 @@ Output JSON only (no markdown, no explanation):
           );
           if (result.stored) stored++;
           else skipped++;
-        } catch {
+        } catch (e) {
+          api?.logger?.debug?.('memoria:compaction-store: ' + String(e));
           const category = normalizeCategory(f.category);
           const relevance = identityParser.calculateRelevance(f.fact, category);
           db.storeFact({

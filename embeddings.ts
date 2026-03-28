@@ -118,7 +118,7 @@ export class EmbeddingManager {
           try {
             await this.embedFact(fact.id, fact.text);
             embedded++;
-          } catch { /* skip */ }
+          } catch (e) { console.debug('memoria:embeddings: ' + String(e)); }
         }
       }
     }
@@ -278,7 +278,8 @@ export class EmbeddingManager {
             }
           }
         }
-      } catch {
+      } catch (e) {
+        console.debug('memoria:embeddings: ' + String(e));
         // Embedding not available → FTS only
       }
     }
@@ -333,7 +334,7 @@ export class EmbeddingManager {
     try {
       const result = this.db.raw.prepare("DELETE FROM embeddings WHERE fact_id = ?").run(factId);
       return (result.changes ?? 0) > 0;
-    } catch { return false; }
+    } catch (e) { console.debug('memoria:embeddings: ' + String(e)); return false; }
   }
 
   embeddedCount(): number {

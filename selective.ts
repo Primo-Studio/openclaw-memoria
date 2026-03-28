@@ -311,7 +311,7 @@ export class SelectiveMemory {
     try {
       this.knownEntities = this.db.allEntityNames();
       this.entitiesLoadedAt = Date.now();
-    } catch { /* graph table might not exist yet */ }
+    } catch (e) { console.debug('memoria:selective: ' + String(e)); }
   }
 
   private getEntities(): string[] {
@@ -453,7 +453,8 @@ export class SelectiveMemory {
             }
           }
         }
-      } catch {
+      } catch (e) {
+        console.debug('memoria:selective: ' + String(e));
         // Entity check failed → continue with store (fail-safe)
       }
     }
@@ -508,7 +509,7 @@ export class SelectiveMemory {
         // Mark old as superseded
         this.db.supersedeFact(result.oldFactId, newFact.id);
         // Notify other layers (observations, clusters)
-        try { this.onSupersede?.(result.oldFactId, newFact.id); } catch { /* non-critical */ }
+        try { this.onSupersede?.(result.oldFactId, newFact.id); } catch (e) { console.debug('memoria:selective: ' + String(e)); }
         return { stored: true, action: "supersede", factId: newFact.id };
       }
 
@@ -600,7 +601,8 @@ export class SelectiveMemory {
         default:
           return { type: "independent" };
       }
-    } catch {
+    } catch (e) {
+      console.debug('memoria:selective: ' + String(e));
       // LLM failed → safe default: treat as independent (store both)
       return { type: "independent" };
     }

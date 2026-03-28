@@ -147,7 +147,8 @@ export class TopicManager {
         .filter((k: unknown) => typeof k === "string" && k.length > 1 && k.length < 50)
         .map((k: string) => k.toLowerCase().trim())
         .slice(0, this.cfg.maxKeywordsPerFact);
-    } catch {
+    } catch (e) {
+      console.debug('memoria:topics: ' + String(e));
       return [];
     }
   }
@@ -172,7 +173,7 @@ export class TopicManager {
           rowid.rowid, rowid.rowid, rowid.rowid, JSON.stringify(keywords),
         );
       }
-    } catch { /* FTS rebuild non-critical */ }
+    } catch (e) { console.debug('memoria:topics: ' + String(e)); }
 
     // Find matching topics
     const matchedTopics = this.findMatchingTopics(keywords);
@@ -310,7 +311,7 @@ export class TopicManager {
       try {
         raw.prepare(`INSERT OR IGNORE INTO entities (id, name, type, created_at)
           VALUES (?, ?, 'topic', ?)`).run(topicId, name, now);
-      } catch { /* Non-critical */ }
+      } catch (e) { console.debug('memoria:topics: ' + String(e)); }
 
       created++;
     }
@@ -543,7 +544,7 @@ export class TopicManager {
             results.push({ topic, score, facts: factRows.map(r => r.fact) });
           }
         }
-      } catch { /* Embedding search non-critical */ }
+      } catch (e) { console.debug('memoria:topics: ' + String(e)); }
     }
 
     // Sort by score and limit
@@ -605,7 +606,7 @@ export class TopicManager {
         }
         affected++;
       }
-    } catch { /* non-critical */ }
+    } catch (e) { console.debug('memoria:topics: ' + String(e)); }
     return affected;
   }
 
@@ -749,7 +750,8 @@ Réponds UNIQUEMENT le nom du topic, rien d'autre. Exemples: "Bureau CRM", "Infr
 
       const name = response.trim().replace(/["\n]/g, "").slice(0, 50);
       return name || keywords.slice(0, 2).join(" ");
-    } catch {
+    } catch (e) {
+      console.debug('memoria:topics: ' + String(e));
       return keywords.slice(0, 2).join(" ");
     }
   }

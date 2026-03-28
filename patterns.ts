@@ -183,7 +183,7 @@ export class PatternManager {
           // Mark as eligible — actual writing done by caller (index.ts)
           autoWritten++;
         }
-      } catch { /* skip malformed */ }
+      } catch (e) { console.debug('memoria:patterns: ' + String(e)); }
     }
 
     return { detected, consolidated, autoWritten };
@@ -251,7 +251,7 @@ export class PatternManager {
         const existingIds = new Set(meta.occurrences.map(o => o.factId));
         const overlap = group.filter(f => existingIds.has(f.id)).length;
         if (overlap >= Math.ceil(group.length * 0.4)) return p;
-      } catch { /* skip */ }
+      } catch (e) { console.debug('memoria:patterns: ' + String(e)); }
     }
     return null;
   }
@@ -286,7 +286,7 @@ export class PatternManager {
           .run(JSON.stringify(meta), meta.confidence, Date.now(), patternFact.id);
         return true;
       }
-    } catch { /* non-critical */ }
+    } catch (e) { console.debug('memoria:patterns: ' + String(e)); }
     return false;
   }
 
@@ -332,7 +332,8 @@ Réponds en JSON STRICT (pas de markdown, pas de \`\`\`):
         action: parsed.action || undefined,
         autoWritten: false,
       };
-    } catch {
+    } catch (e) {
+      console.debug('memoria:patterns: ' + String(e));
       // LLM failed — create pattern without LLM (just concatenate facts)
       const rule = `[Auto-consolidé] ${group[0].fact.slice(0, 200)} (${group.length} occurrences similaires)`;
       return {
@@ -392,7 +393,7 @@ Réponds en JSON STRICT (pas de markdown, pas de \`\`\`):
         const meta = JSON.parse(p.tags || "{}") as DetectedPattern;
         occCount = meta.occurrences?.length || 0;
         pType = meta.patternType || "behavior";
-      } catch { /* skip */ }
+      } catch (e) { console.debug('memoria:patterns: ' + String(e)); }
       return {
         fact: p.fact,
         confidence: p.confidence,
@@ -426,7 +427,7 @@ Réponds en JSON STRICT (pas de markdown, pas de \`\`\`):
         if (!meta.autoWritten && meta.occurrences && meta.occurrences.length >= this.cfg.autoWriteThreshold) {
           eligible.push(meta);
         }
-      } catch { /* skip */ }
+      } catch (e) { console.debug('memoria:patterns: ' + String(e)); }
     }
     return eligible;
   }
@@ -443,7 +444,7 @@ Réponds en JSON STRICT (pas de markdown, pas de \`\`\`):
       meta.autoWritten = true;
       raw.prepare("UPDATE facts SET tags = ?, updated_at = ? WHERE id = ?")
         .run(JSON.stringify(meta), Date.now(), patternId);
-    } catch { /* non-critical */ }
+    } catch (e) { console.debug('memoria:patterns: ' + String(e)); }
   }
 
   // ─── Stats ───
@@ -463,7 +464,8 @@ Réponds en JSON STRICT (pas de markdown, pas de \`\`\`):
         const t = meta.patternType || "unknown";
         byType[t] = (byType[t] || 0) + 1;
         totalOcc += meta.occurrences?.length || 0;
-      } catch {
+      } catch (e) {
+        console.debug('memoria:patterns: ' + String(e));
         byType["unknown"] = (byType["unknown"] || 0) + 1;
       }
     }
