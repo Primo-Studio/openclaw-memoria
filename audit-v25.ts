@@ -1,5 +1,8 @@
 /**
- * Audit Memoria v2.5.0 — Hot Tier + Access Learning + Config
+ * @deprecated LEGACY — Audit Memoria v2.5.0 (March 2026)
+ * This audit script targets v2.5.0 logic and uses local absolute paths.
+ * Kept for historical reference only. Do not use for current versions.
+ * Current version: v3.22.3 — see tests/test-core.ts for active tests.
  */
 import { MemoriaDB } from "./db.js";
 import { scoreFact, scoreAndRank, getHotFacts, HOT_TIER_CONFIG } from "./scoring.js";

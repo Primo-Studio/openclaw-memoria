@@ -1,7 +1,7 @@
 ---
 name: Memoria for OpenClaw
-version: 3.22.3
-description: "Multi-layer persistent memory for OpenClaw. 20 memory layers, bring your own LLM (Ollama, LM Studio, or API), 100% local-first, zero cloud cost."
+version: 3.23.0
+description: "Human-like persistent memory for AI agents. 21 cognitive layers, knowledge graph, procedural learning, continuous capture, BYO LLM, 100% local-first, zero cloud cost."
 author: Primo Studio (@Nieto42)
 license: Apache-2.0
 homepage: https://github.com/Primo-Studio/openclaw-memoria

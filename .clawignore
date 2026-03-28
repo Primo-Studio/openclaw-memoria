@@ -1,6 +1,7 @@
 # Dev/test files — not part of the published package
 audit-v25.ts
 bootstrap-topics.ts
+benchmarks/
 *.db
 *.db-journal
 *.db-shm

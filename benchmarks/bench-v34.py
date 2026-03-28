@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Memoria v3.4.0 Benchmark — Fact Clusters + GPT-5.4-nano Judge"""
+"""
+LEGACY — Memoria v3.4.0 Benchmark (March 2026)
+Targets v3.4.0 with 10 synthetic sessions. Kept for reference.
+Current version: v3.22.3 with 21 layers — updated benchmarks TBD.
+"""
 import json, time, requests, sqlite3, os, re
 from collections import defaultdict
 

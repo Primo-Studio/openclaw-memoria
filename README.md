@@ -6,16 +6,17 @@
 
 ---
 
-## ✨ What's New in v3.22.2
+## ✨ What's New in v3.22.3
 
 ### 🔄 Continuous Learning — Layer 21 *(v3.22.0)*
 Memoria no longer waits for end-of-session to learn. New real-time capture via `message_received` + `llm_output` hooks:
 - **3 extraction modes**: periodic (every N turns), urgent (on user frustration/error), self-error (on assistant self-admission)
 - **Cross-layer integration**: extracted facts go through the full pipeline (selective dedup → embed → graph → topics → observations → clusters → sync)
 - **Smart dedup with agent_end**: avoids double LLM calls when continuous already captured
-- 6 bugs fixed across 3 audit rounds (v3.22.0 → v3.22.1 → v3.22.2)
+- 6 bugs fixed across 3 audit rounds (v3.22.0 → v3.22.1 → v3.22.3)
+- **Node 24.x compatibility** — fixed CONTINUOUS_ENABLED TDZ crash on gateways with embedded Node 24.x
 
-### 🔍 Deep Audit — 10+6 bugs found & fixed *(v3.21.0–v3.22.2)*
+### 🔍 Deep Audit — 10+6 bugs found & fixed *(v3.21.0–v3.22.3)*
 Full code audit revealed critical alignment issues:
 - **Hebbian learning was 100% dead** — wrong column names since creation
 - **Proactive revision never triggered** — searched for obsolete lifecycle state
@@ -96,7 +97,7 @@ See [INSTALL.md](INSTALL.md) for advanced options.
 
 ```
 ┌──────────────────────────────────────────────────────┐
-│                   MEMORIA v3.22.2                    │
+│                   MEMORIA v3.22.3                    │
 ├──────────────────────────────────────────────────────┤
 │                                                      │
 │  RECALL (before each response):                      │
