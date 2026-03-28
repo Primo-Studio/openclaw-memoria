@@ -1,6 +1,6 @@
 ---
 name: Memoria for OpenClaw
-version: 3.24.0
+version: 3.25.0
 description: "Human-like persistent memory for AI agents. 21 cognitive layers, knowledge graph, procedural learning, continuous capture, BYO LLM, 100% local-first, zero cloud cost."
 author: Primo Studio (@Nieto42)
 license: Apache-2.0
