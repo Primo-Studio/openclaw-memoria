@@ -1,6 +1,7 @@
 /**
- * Procedural Memory — "how-to" knowledge that improves over time
+ * Memoria — Layer 13: Procedural Memory (1281 LOC — largest module)
  * 
+ * Captures "how to do things" with steps, quality scores, gotchas, and alternatives.
  * Like a craftsman improving their technique:
  * - First time: capture the basic approach
  * - Each repeat: reflect — was this the best way? faster? more reliable?

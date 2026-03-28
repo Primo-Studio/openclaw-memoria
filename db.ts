@@ -1,8 +1,24 @@
 /**
- * Memoria — SQLite Database Layer
+ * Memoria — SQLite Database Layer (Layer 1)
  * 
- * Schema: facts, facts_fts, embeddings, entities, relations, chunks, meta
+ * The foundation of Memoria. Manages the SQLite database with:
+ * - facts + facts_fts (FTS5 full-text search)
+ * - embeddings (768d float vectors as BLOBs)
+ * - entities + relations (knowledge graph)
+ * - topics + fact_topics (emergent topic system)
+ * - observations (living syntheses)
+ * - procedures + procedures_fts (how-to memory)
+ * - cluster_members (fact → cluster mapping)
+ * - identity_cache, meta, chunks
+ * 
  * Uses better-sqlite3 for synchronous, fast, zero-dependency SQLite.
+ * All migrations auto-run on construction (additive, never destructive).
+ * 
+ * @example
+ * const db = new MemoriaDB("/path/to/workspace");
+ * db.storeFact({ id: "f_123", fact: "...", category: "savoir", ... });
+ * const results = db.searchFacts("Bureau"); // FTS5 search
+ * db.raw.prepare("SELECT ...").all(); // direct SQLite access
  */
 
 import Database from "better-sqlite3";
@@ -11,6 +27,16 @@ import fs from "fs";
 
 const SCHEMA_VERSION = 1;
 
+/**
+ * Core fact record stored in SQLite. Every piece of knowledge Memoria captures.
+ * 
+ * Key fields for contributors:
+ * - `fact_type`: "semantic" (durable truth) | "episodic" (dated event) | "cluster" (summary) | "pattern" (consolidated)
+ * - `lifecycle_state`: "fresh" → "settled" → "dormant" (controls recall priority, NOT deletion)
+ * - `superseded`: 0 = active, 1 = replaced by a newer/better version (superseded_by has the replacement ID)
+ * - `tags`: JSON string array, e.g. '["convex","bureau"]'
+ * - `entity_ids`: JSON string array of entity IDs linked to this fact
+ */
 export interface Fact {
   id: string;
   fact: string;
@@ -38,6 +64,7 @@ export interface Fact {
   lifecycle_state: "fresh" | "settled" | "dormant"; // fresh = new, settled = confirmed, dormant = unused
 }
 
+/** Knowledge graph node. Types: person, project, tool, concept, place. */
 export interface Entity {
   id: string;
   name: string;
@@ -47,6 +74,7 @@ export interface Entity {
   access_count: number;
 }
 
+/** Knowledge graph edge. Weight increases via Hebbian reinforcement (co-occurrence), decays when unused. */
 export interface Relation {
   id: string;
   source_id: string;
@@ -58,8 +86,20 @@ export interface Relation {
   last_accessed_at: number | null;
 }
 
+/**
+ * Main database class. Created once in index.ts and shared with all managers.
+ * 
+ * Key methods:
+ * - `storeFact(fact)` — INSERT OR REPLACE with full column list
+ * - `searchFacts(query)` — FTS5 full-text search on fact text
+ * - `getActiveFacts()` — all non-superseded facts
+ * - `supersedeFact(oldId, newId)` — mark fact as replaced
+ * - `raw` — direct better-sqlite3 Database for custom queries
+ * 
+ * Schema migrations run automatically in constructor (additive only).
+ */
 export class MemoriaDB {
-  /** Exposed for direct query access (embeddings, etc.) */
+  /** Direct better-sqlite3 access for custom queries from other modules */
   readonly raw: Database.Database;
   private db: Database.Database;
 

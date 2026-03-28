@@ -1,14 +1,24 @@
 /**
- * Memoria — Couche 2: Mémoire Sélective
+ * Memoria — Layer 3: Selective Memory (Gatekeeper)
  * 
- * Filtre intelligent entre perception et stockage.
- * Comme le cerveau qui trie : important → stocker, bruit → ignorer.
+ * Decides whether a new fact should be stored, merged, or rejected.
+ * Like the brain filtering: important → store, noise → ignore.
  * 
- * 4 fonctions:
- *   1. Dédup (FTS5 + Levenshtein) — pas de doublons
- *   2. Contradiction check (LLM local) — supersede l'ancien si contredit
- *   3. Seuil d'importance — filtre le bruit ("ok", "merci", etc.)
- *   4. Enrichissement — merge si un fait existant est complété
+ * Pipeline (in processAndApply):
+ *   1. Noise filter — skip trivial facts ("ok", "merci", too short)
+ *   2. FTS5 candidates — find similar existing facts
+ *   3. Levenshtein dedup — reject near-exact duplicates
+ *   4. Prefix dedup — reject facts that start the same way
+ *   5. LLM contradiction check — if similarity > threshold, ask LLM if it contradicts
+ *   6. Store / Enrich / Supersede / Skip
+ * 
+ * Thresholds are configurable per category (preferences have tighter dedup at 0.65).
+ * LLM is only called for contradiction detection (step 5), not for every fact.
+ * 
+ * @example
+ * const result = await selective.processAndApply("Bureau uses Convex", "savoir", 0.9);
+ * // result: { stored: true, action: "store", factId: "f_abc123" }
+ * // or:     { stored: false, action: "skip", reason: "duplicate" }
  */
 
 import type { MemoriaDB, Fact } from "./db.js";

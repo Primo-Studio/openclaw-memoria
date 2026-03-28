@@ -1,8 +1,14 @@
 /**
- * Memoria — Couche 4: Embeddings + Cosine Similarity
+ * Memoria — Layer 4: Embeddings + Hybrid Search
  * 
- * Stocke les vecteurs dans SQLite (BLOB), calcule la similarité cosine,
- * et fournit un hybrid search (FTS5 + cosine).
+ * Stores 768d float vectors in SQLite (BLOB), computes cosine similarity,
+ * and provides hybrid search (FTS5 text match + cosine similarity + temporal scoring).
+ * 
+ * Key methods:
+ *   embedFact(id, text) — compute and store embedding for one fact
+ *   embedBatch() — batch process all unembedded facts
+ *   hybridSearch(query) — combined FTS5 + cosine + scoring
+ *   cosineSimilarity(a, b) — vector distance (exported utility)
  * 
  * Les vecteurs sont stockés en Float32Array → BLOB pour perf maximale.
  */

@@ -1,28 +1,41 @@
 /**
- * 🧠 Memoria — Multi-layer memory plugin for OpenClaw
+ * 🧠 Memoria — Multi-layer memory plugin for OpenClaw (v3.22.2)
  * 
- * v3.2.0 — Reasoning models, dated recall, Anthropic provider, adaptive FTS, procedures
- * v3.0.0 — Semantic/Episodic memory, Observations, Procedural memory, Adaptive recall
+ * This file is the plugin entry point. It:
+ *   1. Parses config from openclaw.json → MemoriaConfig
+ *   2. Creates all managers (db, embedding, graph, topics, etc.)
+ *   3. Registers 5 OpenClaw hooks to power recall + capture + continuous learning
+ *   4. Orchestrates the post-capture pipeline (postProcessNewFacts)
  * 
- * Layers:
- *   1. Perception (capture) — after_tool_call (real-time) + agent_end + after_compaction hooks
- *   2. Selective Memory — dedup, contradiction, enrichment
- *   3. Embeddings — cosine similarity + hybrid search (FTS5 + cosine + temporal)
- *   4. Knowledge Graph — entity extraction, Hebbian reinforcement, BFS traversal
- *   5. Context Tree — hierarchical fact organization, query-weighted
- *   6. Adaptive Budget — dynamic recall limit based on context usage
- *   7. Sync .md — append new facts to workspace markdown files
- *   8. Topics Émergents — auto-clustering, sub-topics, decay, semantic search
- *   9. .md Vivants — bounded regeneration, archive old facts
- *  10. Fallback Chain — Ollama → OpenAI → LM Studio → FTS-only survival
+ * == HOOKS (in order of a typical turn) ==
+ *   message_received  → Layer 21: buffer user message, detect urgent signals
+ *   before_prompt_build → RECALL: budget → search → score → inject facts into context
+ *   llm_output        → Layer 21: buffer assistant response, trigger extraction if due
+ *   after_tool_call   → Layer 13: real-time procedural capture from tool executions
+ *   agent_end         → CAPTURE: LLM extract → selective → postProcess (embed, graph, topics...)
+ *   after_compaction   → Safety net: same as agent_end but from compacted summaries
  * 
- * Hooks:
- *   message_received → buffer user messages for continuous learning
- *   llm_output → buffer assistant responses + trigger micro-extraction every N turns or on error signal
- *   before_prompt_build → search facts, inject via prependContext
- *   after_tool_call → real-time procedural capture (learn on-the-fly, not end-of-session)
- *   agent_end → extract facts via LLM, store in SQLite + flush remaining procedure buffer
- *   after_compaction → extract durable facts from summaries
+ * == 21 LAYERS ==
+ *   1. SQLite + FTS5 (db.ts)          12. Fallback Chain (fallback.ts)
+ *   2. Temporal Scoring (scoring.ts)   13. Procedural Memory (procedural.ts)
+ *   3. Selective Memory (selective.ts) 14. Lifecycle (lifecycle.ts)
+ *   4. Embeddings (embeddings.ts)      15. Feedback Loop (feedback.ts)
+ *   5. Knowledge Graph (graph.ts)      16. Hebbian (hebbian.ts)
+ *   6. Context Tree (context-tree.ts)  17. Identity Parser (identity-parser.ts)
+ *   7. Adaptive Budget (budget.ts)     18. Expertise (expertise.ts)
+ *   8. Emergent Topics (topics.ts)     19. Proactive Revision (revision.ts)
+ *   9. Observations (observations.ts)  20. Behavioral Patterns (patterns.ts)
+ *  10. Fact Clusters (fact-clusters.ts)21. Continuous Learning (this file, hooks)
+ *  11. .md Sync (sync.ts, md-regen.ts)
+ * 
+ * == KEY INTERNAL FUNCTIONS ==
+ *   parseConfig()          — raw JSON → typed MemoriaConfig
+ *   formatRecallContext()   — facts → text block injected before prompt
+ *   normalizeCategory()     — free-form category → one of 7 canonical categories
+ *   postProcessNewFacts()   — 8-step pipeline after each capture batch
+ *   doContinuousExtraction() — Layer 21 micro-extraction from rolling buffer
+ * 
+ * For the full architecture, see docs/ARCHITECTURE.md and docs/MODULES.md.
  */
 
 import fs from "fs";
@@ -103,6 +116,7 @@ interface LayerLLMConfig {
   apiKey?: string;
 }
 
+/** Parse raw plugin config (from openclaw.json) into typed MemoriaConfig with smart defaults. */
 function parseConfig(raw: Record<string, unknown> | undefined): MemoriaConfig {
   const embed = (raw?.embed as Record<string, unknown>) || {};
   const llm = (raw?.llm as Record<string, unknown>) || {};
@@ -140,6 +154,7 @@ function parseConfig(raw: Record<string, unknown> | undefined): MemoriaConfig {
 
 // ─── Provider Factory ───
 
+/** Create an embedding provider from config. Used for the main embedder + fallback list. */
 function createEmbedProvider(cfg: MemoriaConfig["embed"]): EmbedProvider {
   switch (cfg.provider) {
     case "ollama":
@@ -155,6 +170,7 @@ function createEmbedProvider(cfg: MemoriaConfig["embed"]): EmbedProvider {
   }
 }
 
+/** Create an LLM provider from config. Used for the main chain + per-layer overrides. */
 function createLLMProvider(cfg: MemoriaConfig["llm"]): LLMProvider {
   switch (cfg.provider) {
     case "ollama":
@@ -255,6 +271,11 @@ JSON valide uniquement:
 
 // ─── Formatting ───
 
+/**
+ * Format recalled facts + observations into the text block injected before the prompt.
+ * Output goes into `event.prependContext` in the before_prompt_build hook.
+ * Includes: header, observations section, per-fact lines with [category] [age] prefix, known procedures.
+ */
 function formatRecallContext(facts: Array<{ fact: string; category: string; confidence: number; temporalScore: number; created_at?: number; updated_at?: number; fact_type?: string }>, observationContext = ""): string {
   if (facts.length === 0 && !observationContext) return "";
   const parts: string[] = [
@@ -300,6 +321,7 @@ function formatRecallContext(facts: Array<{ fact: string; category: string; conf
 
 // ─── JSON Parse Helper ───
 
+/** Safely parse JSON from LLM output. Handles markdown code fences, trailing commas, and partial JSON. */
 function parseJSON(text: string): unknown {
   // Strip markdown code blocks (```json ... ``` or ``` ... ```)
   let cleaned = text.trim();
@@ -319,6 +341,11 @@ function parseJSON(text: string): unknown {
 
 const VALID_CATEGORIES = new Set(["savoir", "erreur", "preference", "outil", "chronologie", "rh", "client"]);
 
+/**
+ * Normalize free-form LLM category output → one of 7 canonical categories.
+ * Mapping: architecture/mécanisme → savoir, sévérité/bug → erreur, financier → client, etc.
+ * Unknown categories default to "savoir".
+ */
 function normalizeCategory(raw: string): string {
   const lower = (raw || "savoir").toLowerCase().trim();
   if (VALID_CATEGORIES.has(lower)) return lower;
@@ -332,6 +359,11 @@ function normalizeCategory(raw: string): string {
 
 // ─── Plugin Registration ───
 
+/**
+ * Plugin entry point called by OpenClaw on load.
+ * Creates all managers, registers all hooks, starts background tasks.
+ * This is the only export that matters — OpenClaw calls register() on startup.
+ */
 export function register(api: OpenClawPluginApi): void {
   // api.pluginConfig = plugin-specific config from openclaw.json plugins.entries.memoria.config
   // api.config = global OpenClaw config (NOT what we want)
@@ -583,8 +615,21 @@ export function register(api: OpenClawPluginApi): void {
   }
 
   // ─── Shared post-processing for newly captured facts ───
-  // Called by agent_end AND after_compaction to ensure ALL facts get enriched
-
+  /**
+   * Post-capture pipeline — runs after every batch of new facts.
+   * Called by: agent_end, after_compaction, AND doContinuousExtraction.
+   * 
+   * 8 steps:
+   *   1. embedBatch() — vectorize unembedded facts
+   *   2. graph.extractAndStore() — entities + relations from new facts
+   *   3. hebbian.reinforce() — strengthen co-occurring entity relations
+   *   4. topics.onFactCaptured() + scanAndEmerge() — keyword extraction, topic creation
+   *   5. observations.onFactCaptured() — match/create living syntheses
+   *   6. clusters.generateClusters() — entity-grouped summaries
+   *   7. mdSync.syncToMd() + mdRegen — append to .md files, regenerate if > 200 lines
+   *   8. patterns.detectAndConsolidate() — consolidate repeated similar facts
+   *   9. Cross-layer: feedback→lifecycle, hebbian→topics hierarchy, lifecycle→patterns
+   */
   async function postProcessNewFacts(source: "capture" | "compaction"): Promise<void> {
     // 1. Embed unembedded facts
     try {
@@ -1164,6 +1209,18 @@ export function register(api: OpenClawPluginApi): void {
     }
   });
 
+  /**
+   * Layer 21: Continuous Learning — micro-extraction from rolling buffer.
+   * 
+   * Triggers:
+   *   - "periodic": every N turns (default 4), with cooldown
+   *   - "urgent": immediate on user frustration/error keywords (bypasses cooldown)
+   *   - "self-error": immediate on assistant self-admission phrases
+   * 
+   * Uses same LLM_EXTRACT_PROMPT + selective + postProcessNewFacts as agent_end.
+   * Guarded by continuousExtractionInProgress lock to prevent concurrent runs.
+   * Buffer is snapshot + cleared before extraction to avoid re-processing.
+   */
   async function doContinuousExtraction(trigger: "periodic" | "urgent" | "self-error"): Promise<void> {
     if (continuousBuffer.length < 2) return;
     if (continuousExtractionInProgress) return; // prevent concurrent extractions

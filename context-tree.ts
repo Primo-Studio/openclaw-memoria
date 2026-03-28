@@ -1,8 +1,8 @@
 /**
- * Memoria — Couche 6: Context Tree (arbre sémantique auto-généré)
+ * Memoria — Layer 6: Context Tree
  * 
- * Organise les faits en hiérarchie thématique pour un recall structuré.
- * Au lieu de "voici 8 faits plats", on dit :
+ * Organizes facts into a semantic hierarchy for structured recall.
+ * Instead of "here are 8 flat facts", we inject:
  * 
  * Bureau (3 faits)
  *   ├─ CRM (2 faits)

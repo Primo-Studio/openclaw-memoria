@@ -1,7 +1,8 @@
 /**
- * Memoria — Phase 7a: Budget Adaptatif
+ * Memoria — Layer 7: Adaptive Budget
  * 
- * Ajuste dynamiquement le nombre de faits injectés selon l'espace contexte disponible.
+ * Dynamically adjusts the number of facts injected based on available context space.
+ * Tiers: empty (12 facts) → light (10) → medium (8) → heavy (5) → critical (2).
  * 
  * Début de session (context vide) → 8-10 faits
  * Session moyenne → 5-6 faits  

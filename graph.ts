@@ -1,8 +1,15 @@
 /**
- * Memoria — Couche 5: Knowledge Graph + Apprentissage Hebbien
+ * Memoria — Layer 5: Knowledge Graph
  * 
- * Quand tu penses "Bureau", le graph active Convex, CRM, Qonto, Alexandre...
- * Comme les neurones qui s'activent en chaîne.
+ * Extracts entities (person/project/tool/concept/place) and relations from facts via LLM.
+ * Enables associative recall: "Bureau" → Convex, CRM, Qonto, Alexandre...
+ * 
+ * Key methods:
+ *   extractAndStore(facts) — LLM extracts entities/relations, stores in DB
+ *   findEntitiesInText(query) — find mentioned entities in a search query
+ *   getRelatedFacts(entityIds) — BFS 2 hops to find connected facts
+ * 
+ * Note: Hebbian reinforcement (co-occurrence strengthening) is in hebbian.ts (Layer 16).
  * 
  * Les connexions se RENFORCENT à chaque co-accès (Hebb: "neurons that fire together wire together").
  * Les connexions inutilisées s'AFFAIBLISSENT (decay).

@@ -1,13 +1,25 @@
 /**
- * Memoria — Phase 10: Fallback Chain LLM
+ * Memoria — Layer 12: Fallback Chain
  * 
- * Essaie une liste ordonnée de providers LLM. Premier qui répond gagne.
- * Si tous échouent → retourne null (le code appelant gère le mode dégradé).
+ * Implements both LLMProvider and EmbedProvider interfaces.
+ * Tries providers in order; first successful response wins.
+ * If all fail → throws (callers wrap in try/catch for graceful degradation).
  * 
- * Ordre par défaut (configurable) :
+ * Default order (configurable via "fallback" in plugin config):
  *   1. Ollama gemma3:4b (local, 0€)
  *   2. OpenAI GPT-5.4-nano (cloud, ~$0.001)
  *   3. LM Studio GLM-4.7 (local, 0€)
+ * 
+ * Used by: every module that needs LLM (selective, graph, topics, observations,
+ * clusters, procedural, revision, patterns). Modules receive the chain via constructor
+ * and don't know/care about the fallback — they see a single LLMProvider.
+ * 
+ * @example
+ * const chain = new FallbackChain([
+ *   { type: "ollama", model: "gemma3:4b" },
+ *   { type: "openai", model: "gpt-5.4-nano", apiKey: "..." }
+ * ]);
+ * const answer = await chain.generate("Extract entities..."); // tries Ollama first
  *   4. null → FTS-only / skip
  */
 

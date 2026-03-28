@@ -1,8 +1,8 @@
 /**
- * md-regen.ts — Phase 9: Living Markdown Files
+ * Memoria — Layer 11b: .md Auto-Regeneration
  *
  * Problem: .md files grow indefinitely → context bloat at OpenClaw boot
- * Solution: Keep them "living" with bounded size:
+ * Solution: Keep them "living" with bounded size (~200 lines):
  *   - Recent facts on top (last 30 days)
  *   - Archive older facts → DB only (with backlink)
  *   - Regenerate .md periodically (not append-only)

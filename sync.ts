@@ -1,8 +1,11 @@
 /**
- * Memoria — Phase 7b: Sync .md bidirectionnelle
+ * Memoria — Layer 11a: .md Sync
  * 
- * DB → .md : Quand Memoria capture un fait, il l'écrit dans le bon fichier .md
- * .md → DB : Quand un .md est modifié manuellement, les nouveaux faits sont importés
+ * DB → .md: When Memoria captures a fact, it appends to the right workspace .md file
+ * Category mapping: savoir/erreur → MEMORY.md, outil → TOOLS.md, preference → USER.md, rh/client → COMPANY.md
+ * 
+ * Each fact is appended with format: `- **[date]** fact text _(confidence%)_`
+ * Sets synced_to_md = 1 after successful write.
  * 
  * Mapping catégorie → fichier :
  *   outil     → TOOLS.md

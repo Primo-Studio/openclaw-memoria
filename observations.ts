@@ -1,8 +1,8 @@
 /**
- * Memoria — Phase 3: Observations
+ * Memoria — Layer 9: Observations
  * 
- * Synthèse intelligente multi-faits qui évolue.
- * Comme Hindsight "Observations": au lieu de 10 faits éparpillés,
+ * Living syntheses that evolve as new evidence appears.
+ * Instead of 10 scattered facts about "Bureau deploy",
  * UNE observation cohérente qui se met à jour.
  *
  * Cycle de vie:
