@@ -165,65 +165,60 @@ function createLLMProvider(cfg: MemoriaConfig["llm"]): LLMProvider {
 const WORKSPACE = process.env.OPENCLAW_WORKSPACE || `${process.env.HOME}/.openclaw/workspace`;
 
 const LLM_EXTRACT_PROMPT = `Tu es un extracteur de faits pour un système de mémoire AI.
-Analyse le texte et extrais les faits qui méritent d'être retenus à long terme.
+Analyse le texte et extrais les faits qui méritent d'être retenus.
 
-TROIS TYPES de faits:
-- "semantic" = vérité durable ou PROCESSUS APPRIS (comment faire X, ce qui marche, tricks, patterns)
-- "episodic" = événement daté important (déploiement, bug trouvé, milestone atteint)
+DEUX TYPES de faits:
+- "semantic" = vérité durable, processus appris, configuration, règle découverte
+- "episodic" = événement daté, état temporaire, action en cours, résultat observé
 
-STOCKER — comme un cerveau humain qui apprend:
-✅ Processus appris ("pour migrer SQLite WAL, utiliser VACUUM INTO au lieu de cp")
-✅ Ce qui a marché ("le fallback chain a résolu les crashes quand Ollama est off")
-✅ Tricks/patterns ("tsx -e ne marche pas avec les imports locaux → utiliser un fichier .ts")
-✅ Leçons d'erreurs ("api.config ≠ api.pluginConfig — toutes les configs étaient ignorées")
-✅ Décisions techniques ("on utilise Ollama pour l'extraction")
-✅ Configurations ("fallback: ollama → lmstudio, zéro cloud")
-✅ Architectures ("Memoria utilise SQLite + FTS5 + embeddings")
-✅ Préférences utilisateur ("Neto veut du step-by-step")
-✅ États durables ("Sol tourne Memoria v2.7.0 en local")
-✅ Événements importants avec date ("25/03 — bug api.pluginConfig corrigé")
-✅ RÉSULTATS DE TESTS/BENCHMARKS avec chiffres ("Benchmark LongMemEval-S: Retrieval 92% (11/12), RAG 25%, bottleneck = modèle local pas le retrieval")
-✅ CONCLUSIONS tirées d'expériences ("GPT-OSS 20B est 4x plus rapide que Qwen 35B mais accuracy 0% → le problème est l'absence de RAG, pas le modèle")
-✅ COMPARAISONS mesurées ("AMT retrieval 100% en 291s vs ByteRover 50% en 2297s — AMT plus rapide et plus précis")
-✅ CARACTÉRISTIQUES machine/infra ("Mac Mini Sol = 64 Go RAM, Ollama + LM Studio installés")
+RÈGLE D'OR: TOUJOURS INCLURE LES DÉTAILS CONCRETS
+Imagine que tu notes pour une secrétaire qui doit pouvoir tout retrouver plus tard.
+❌ "Neto a eu une réunion importante" → MANQUE: avec qui? quand? sur quoi?
+✅ "Neto a eu une réunion avec le client CCOG le 28/03 à 14h sur la refonte du site"
+❌ "Sol a été redémarré" → MANQUE: pourquoi? quel était le problème?
+✅ "Sol a été redémarré le 28/03 à 18h25 car better-sqlite3 était compilé pour la mauvaise version de Node (137 vs 141). Fix: npm rebuild"
+❌ "Une réflexion excellente a été faite" → MANQUE: quelle réflexion? quel contenu?
+✅ "Neto propose que la mémoire fonctionne comme un cerveau humain: ne rien supprimer, prioriser par usage, les détails éphémères (heure d'un vol) s'effacent mais l'expérience (le vol était long) reste"
+
+EXTRAIRE — tout ce qui a du contenu:
+✅ Processus appris avec les étapes ("pour migrer SQLite WAL: VACUUM INTO au lieu de cp")
+✅ Ce qui a marché ET pourquoi ("le fallback chain résout les crashes car Ollama tombe parfois")
+✅ Leçons d'erreurs avec la cause ("api.config ≠ api.pluginConfig → configs ignorées")
+✅ Décisions avec la raison ("on utilise qwen3.5:4b car meilleure qualité JSON, avec think:false")
+✅ Configs exactes ("Memoria: recallLimit=8, extract LLM qwen3.5:4b, fallback gemma3:4b")
+✅ Résultats avec chiffres ("Benchmark: retrieval 92% (11/12), RAG 25%, bottleneck = modèle local")
+✅ Préférences avec contexte ("Neto veut du step-by-step, une feature à la fois avec validation")
+✅ États temporaires AVEC CONTEXTE ("Sol est en train de refaire HydroTrack — blocker: API endpoint changé")
+✅ Événements avec date ET détail ("28/03 — Memoria v3.13.0 live: lifecycle fresh/settled/dormant, 385f/90s/0d")
+✅ Ce que quelqu'un fait en ce moment ET pourquoi ("Sol travaille sur la refonte HydroTrack depuis le 26/03, priorité car le client attend la démo")
+✅ Outils internes et leur état ("Memoria v3.13.0: lifecycle humain, curseur détail 1-10, 475 facts, publié ClawHub + GitHub")
+✅ Produits/MVPs et leur avancement ("Bureau module CA v1.2.0 en prod, matching auto Qonto↔projets fonctionnel")
 
 GÉNÉRALISER — quand un pattern se répète:
-🔄 Si le même type de problème arrive 2+ fois → stocker la RÈGLE GÉNÉRALE, pas juste le cas
-   Exemple: "npm introuvable en SSH" + "ollama introuvable en SSH" → "Les commandes installées via brew/nvm ne sont pas dans le PATH en SSH non-interactif — utiliser source ~/.zprofile ou le chemin complet"
-🔄 Si une commande marche pour un cas → généraliser: "lms server start démarre LM Studio sans GUI" (pas juste "j'ai démarré LM Studio")
+🔄 Même problème 2+ fois → stocker la RÈGLE + les cas concrets
+   "Les commandes brew/nvm (npm, ollama, node) ne sont pas dans le PATH en SSH non-interactif — fix: source ~/.zprofile ou chemin complet /opt/homebrew/bin/"
 
-NE PAS STOCKER — seulement le jetable:
-❌ TODOs sans contexte ("pull X", "faire Y") — SAUF si explique POURQUOI/COMMENT
-❌ Confirmations vides ("ok", "merci", "compris", "c'est fait")
-❌ Narration sans résultat ("je lis le fichier", "je regarde") — MAIS stocker si un RÉSULTAT suit ("j'ai testé X → résultat Y")
-❌ Évidences triviales ("Node.js est installé") sauf si c'était un problème résolu
-❌ Statuts binaires sans info ("test passé ✅", "ça marche") — stocker plutôt les CHIFFRES et CONCLUSIONS
-❌ MÉTA-FAITS qui parlent DU PROCESSUS de stockage lui-même ("le nouveau fait complète l'info précédente", "ce fait a été ajouté", "la migration vers Memoria inclut des liens") — stocker le CONTENU, pas le commentaire sur le contenu
-❌ Faits VAGUES sans nom propre, chiffre, commande ou date concrète ("des informations supplémentaires ont été fournies", "la configuration a été mise à jour") — ÊTRE SPÉCIFIQUE : quel outil, quelle version, quelle commande, quel chiffre ?
+NE PAS STOCKER:
+❌ Confirmations vides ("ok", "merci", "compris")
+❌ Narration pure sans résultat ("je lis le fichier", "je regarde le code")
+❌ MÉTA-FAITS sur le stockage lui-même ("le nouveau fait complète l'ancien", "ce fait a été ajouté")
+❌ Faits sans AUCUN élément concret ("des informations ont été fournies", "la configuration a été mise à jour")
 
-PRIORITÉ D'EXTRACTION — ce qui compte le plus:
-🥇 Apprentissages = ce qu'on a APPRIS en faisant (conclusions, règles découvertes)
-🥈 Résultats mesurés = chiffres, métriques, comparaisons avant/après
-🥉 Faits durables = configs, architectures, états des systèmes
-
-QUALITÉ OBLIGATOIRE — chaque fait DOIT respecter ces critères:
-⚠️ Contenir au moins UN élément concret: nom propre (Ollama, Sol, Neto), OU chiffre (2.8s, 616 faits), OU commande (clawhub install), OU version (v3.4.1), OU date (26/03)
-⚠️ Être AUTONOME = compréhensible par quelqu'un qui lit ce fait seul, sans contexte
-⚠️ Ne JAMAIS commencer par "Le nouveau fait..." ou "Ce fait..." ou "L'information..." — commencer par le SUJET réel
+QUALITÉ — chaque fait DOIT:
+⚠️ Contenir au moins UN élément concret: nom propre, chiffre, commande, version, ou date
+⚠️ Être AUTONOME = compréhensible seul, sans contexte
+⚠️ Inclure le POURQUOI ou le CONTEXTE quand c'est pertinent (pas juste QUOI)
+⚠️ Ne JAMAIS commencer par "Le nouveau fait..." ou "Ce fait..." → commencer par le SUJET réel
 
 Règles:
-- Chaque fait = phrase(s) complète(s) et autonome(s) (compréhensible sans contexte)
-- Pour les PROCÉDURES (comment faire X): garder les étapes ensemble en UN SEUL fait (2-4 phrases OK)
-  Exemple bon: "Pour migrer SQLite WAL: 1) ouvrir en readonly, 2) VACUUM INTO target, 3) fermer. Ne pas utiliser cp car ça perd les données WAL."
-  Exemple mauvais: "Étape 1: ouvrir en readonly" (inutile seul)
-- UN FAIT PAR ENTITÉ DISTINCTE — si le texte parle de 3 personnes/outils/projets, créer 3 faits séparés
-  Exemple bon: "Alexandre gagne 6.50€/h" + "Pierre a quitté l'entreprise, son taux était 7.39€/h"
-  Exemple mauvais: "Alexandre et Pierre travaillent chez Primo Studio" (trop vague, mélange les infos)
+- Phrase(s) complète(s) et autonome(s)
+- Pour les PROCÉDURES: garder les étapes ensemble en UN fait (2-4 phrases OK)
+- UN FAIT PAR ENTITÉ — si le texte parle de 3 sujets distincts, 3 faits séparés
 - Catégories: savoir, erreur, preference, outil, chronologie, rh, client
 - type: "semantic" ou "episodic"
 - confidence: 0.7 minimum
 - Maximum {MAX_FACTS} faits
-- Si rien de durable → {"facts": []}
+- Si rien de concret → {"facts": []}
 
 Texte:
 "{TEXT}"
@@ -843,11 +838,32 @@ export function register(api: OpenClawPluginApi): void {
         // Merge: hot tier (always first) + search + graph + topic
         let finalFacts: Fact[] = [];
         try {
-          // Apply lifecycle multiplier BEFORE tree building
-          // This adjusts temporalScore so dormant facts naturally sink lower
-          // but are NOT excluded — they can still surface if query-relevant
+          // Build set of fact IDs that are members of active (non-stale) clusters
+          // These facts are represented by their cluster summary, so they get deprioritized
+          // (not excluded — they can still surface if directly relevant)
+          let clusteredFactIds: Set<string> = new Set();
+          try {
+            const clusters = db.raw.prepare(
+              "SELECT tags FROM facts WHERE fact_type = 'cluster' AND superseded = 0"
+            ).all() as Array<{ tags: string }>;
+            for (const c of clusters) {
+              try {
+                const meta = JSON.parse(c.tags);
+                if (!meta.stale && Array.isArray(meta.memberIds)) {
+                  for (const id of meta.memberIds) clusteredFactIds.add(id);
+                }
+              } catch { /* bad JSON, skip */ }
+            }
+          } catch { /* non-critical */ }
+
+          // Apply lifecycle multiplier + cluster-member deprioritization BEFORE tree building
           const allFactsCandidates = [...hotScored, ...topFacts, ...graphFacts, ...topicFacts].map(f => {
-            const mult = lifecycleMgr.getRecallMultiplier(f.lifecycle_state);
+            let mult = lifecycleMgr.getRecallMultiplier(f.lifecycle_state);
+            // Facts already represented by a cluster get 40% penalty
+            // (the cluster summary carries their info more concisely)
+            if (clusteredFactIds.has(f.id) && f.fact_type !== "cluster") {
+              mult *= 0.6;
+            }
             if (mult < 1.0 && (f as any).temporalScore) {
               return { ...f, temporalScore: (f as any).temporalScore * mult };
             }

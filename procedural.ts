@@ -144,28 +144,20 @@ export class ProceduralMemory {
    * Returns false for noise: tail/grep-only sequences, single checks, etc.
    */
   isReusableProcedure(commands: string[], name?: string): boolean {
-    // Need at least 3 meaningful steps
+    // Keep any procedure with at least 1 meaningful action step
+    // Philosophy: even a single successful method is worth remembering
+    // ("I learned to open this door by pulling instead of pushing")
+    // The procedure will prove its value through repeated use (or not)
     const meaningfulCmds = commands.filter(cmd => {
       const trimmed = cmd.trim();
-      // Skip pure read/diagnostic commands
-      if (/^\s*(echo|cat|head|tail|grep|ls|wc|sleep|date)\s/i.test(trimmed)) return false;
-      // Skip sqlite SELECT-only (diagnostic, not action)
-      if (/^\s*sqlite3\s.*SELECT/i.test(trimmed) && !/INSERT|UPDATE|DELETE|CREATE/i.test(trimmed)) return false;
+      // Skip pure echo/sleep (not real steps)
+      if (/^\s*(echo|sleep|date)\s/i.test(trimmed) && trimmed.length < 30) return false;
       // Skip short commands (< 10 chars)
       if (trimmed.length < 10) return false;
       return true;
     });
-    if (meaningfulCmds.length < 3) return false;
-
-    // Check name for noise patterns (health check, diagnostic, status, etc.)
-    if (name) {
-      const noiseNames = [
-        /health\s*check/i, /diagnostic/i, /status\s*check/i,
-        /verification/i, /post-restart/i, /post-reload/i,
-        /log\s*analysis/i, /inspection/i, /audit.*status/i,
-      ];
-      if (noiseNames.some(p => p.test(name))) return false;
-    }
+    // At least 1 meaningful step (was 3 — too strict, missed valid procedures)
+    if (meaningfulCmds.length < 1) return false;
 
     // Must contain at least one "action" command (not just reads)
     const actionPatterns = [
@@ -1041,6 +1033,24 @@ Output JSON (no markdown):
         proc.degradation_score = Math.min(1.0, proc.degradation_score + this.cfg.degradationStep);
         const total = proc.success_count + proc.failure_count;
         proc.quality.reliability = proc.success_count / total;
+
+        // Track failure reason — like noting "Route A had traffic at 6pm"
+        // This helps understand WHEN/WHY a procedure fails, not just that it did
+        if (context) {
+          try {
+            const reasons: string[] = JSON.parse(
+              this.db.prepare("SELECT failure_reasons FROM procedures WHERE id = ?").get(proc.id)?.failure_reasons || "[]"
+            );
+            const reason = typeof context === 'string' ? context : JSON.stringify(context);
+            const timestamp = new Date().toISOString().slice(0, 10);
+            const entry = `[${timestamp}] ${reason.slice(0, 200)}`;
+            reasons.push(entry);
+            // Keep last 10 failure reasons (rolling window)
+            const trimmed = reasons.slice(-10);
+            this.db.prepare("UPDATE procedures SET failure_reasons = ? WHERE id = ?")
+              .run(JSON.stringify(trimmed), proc.id);
+          } catch { /* non-critical */ }
+        }
       }
 
       // Update duration stats

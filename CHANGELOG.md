@@ -484,3 +484,23 @@ gagne en vitesse d'exécution car on la reproduit plus souvent."
 - Phase 1: Core SQLite + FTS5, temporal scoring, perception hooks
 - `MemoriaDB` class, migration from facts.json (423 facts)
 - Provider abstraction (Ollama, OpenAI-compat, LM Studio)
+
+## v3.14.0 — Smarter Extraction + Consolidation + Contextual Procedures
+
+### Extraction Quality
+- Rewritten prompt: demands CONCRETE DETAILS (who, what, when, why)
+- Bad: "Neto had an important meeting" / Good: "Neto met client CCOG on 28/03 at 2pm about site redesign"
+- Bad: "Sol was restarted" / Good: "Sol restarted on 28/03 at 18h25, cause: better-sqlite3 node version mismatch, fix: npm rebuild"
+- Eliminated meta-facts ("this fact complements the previous one")
+
+### Cluster-Aware Recall
+- Facts that are members of an active cluster get 40% score reduction in auto-recall
+- The cluster summary represents them more concisely
+- Original facts still accessible on explicit/deep queries
+
+### Procedures: First Success = Valid
+- Lowered capture threshold from 3 meaningful steps to 1
+- Philosophy: "I learned to open this foreign door handle on the first try"
+- Procedures prove value through repeated use, not arbitrary minimums
+- Added failure_reasons tracking: records WHY a procedure failed (context/conditions)
+- Like noting "Route A has traffic at 6pm" — helps choose alternatives intelligently
