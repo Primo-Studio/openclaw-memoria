@@ -93,6 +93,7 @@ Memoria integrates with OpenClaw via three hooks:
 | 18 | Expertise Specialization | `expertise.ts` | ❌ |
 | 19 | Proactive Revision | `revision.ts` | ✅ |
 | 20 | Behavioral Patterns | `patterns.ts` | ✅ |
+| 21 | Continuous Learning | `index.ts` (hooks) | ✅ |
 
 ## Procedural Memory
 

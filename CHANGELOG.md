@@ -543,3 +543,14 @@ gagne en vitesse d'exécution car on la reproduit plus souvent."
 - Provider abstraction (Ollama, OpenAI-compat, LM Studio)
 
 <!-- v3.14.x entries moved to proper chronological position above -->
+
+## 3.22.0 — 2026-03-28
+
+### Added
+- **Layer 21: Continuous Learning** — real-time fact capture via `message_received` + `llm_output` hooks
+  - Rolling buffer of last 10 user/assistant exchanges
+  - Periodic extraction every 4 turns (configurable via `continuous.interval`)
+  - **Urgent extraction** triggered immediately on frustration/error signals (e.g. "ne fais plus", "doublon", "crash")
+  - **Self-error detection** — captures when assistant acknowledges its own mistake
+  - Uses same LLM extraction prompt and selective dedup pipeline as agent_end
+  - Independent of context size, compaction, or session end — works with 60K, 200K, or 10M token contexts
