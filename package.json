@@ -1,6 +1,6 @@
 {
   "name": "memoria-plugin",
-  "version": "3.25.0",
+  "version": "3.25.1",
   "description": "Human-like persistent memory for AI agents. 21 cognitive layers, knowledge graph, procedural learning, continuous capture, bring your own LLM (Ollama, LM Studio, or API), 100% local-first on SQLite, zero cloud cost.",
   "license": "Apache-2.0",
   "author": "Primo Studio",
