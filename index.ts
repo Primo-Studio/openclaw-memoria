@@ -1075,6 +1075,7 @@ export function register(api: OpenClawPluginApi): void {
   const continuousBuffer: Array<{ role: "user" | "assistant"; text: string; ts: number }> = [];
   let continuousTurnCount = 0;
   let lastContinuousExtraction = 0;
+  let continuousExtractionInProgress = false; // guard against concurrent extractions
   const CONTINUOUS_ENABLED = cfg.continuous?.enabled !== false && cfg.autoCapture; // on by default if autoCapture
   const CONTINUOUS_COOLDOWN_MS = cfg.continuous?.cooldownMs ?? 45_000; // 45s between normal extractions
   const CONTINUOUS_MAX_BUFFER = 10; // keep last 10 exchanges
@@ -1165,16 +1166,22 @@ export function register(api: OpenClawPluginApi): void {
 
   async function doContinuousExtraction(trigger: "periodic" | "urgent" | "self-error"): Promise<void> {
     if (continuousBuffer.length < 2) return;
+    if (continuousExtractionInProgress) return; // prevent concurrent extractions
 
     const now = Date.now();
     // Urgent bypasses cooldown, others respect it
     if (trigger === "periodic" && now - lastContinuousExtraction < CONTINUOUS_COOLDOWN_MS) return;
 
+    continuousExtractionInProgress = true;
     lastContinuousExtraction = now;
     continuousTurnCount = 0;
 
-    // Build context from buffer
-    const context = continuousBuffer
+    // Snapshot and clear buffer to avoid re-processing same messages
+    const snapshot = [...continuousBuffer];
+    continuousBuffer.length = 0;
+
+    // Build context from snapshot
+    const context = snapshot
       .map(m => `[${m.role}]: ${m.text}`)
       .join("\n---\n");
 
@@ -1247,6 +1254,8 @@ export function register(api: OpenClawPluginApi): void {
       }
     } catch (err) {
       api.logger.debug?.(`memoria: continuous extraction failed: ${String(err)}`);
+    } finally {
+      continuousExtractionInProgress = false;
     }
   }
 
