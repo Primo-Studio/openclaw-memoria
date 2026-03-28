@@ -218,7 +218,7 @@ export class FallbackChain implements LLMProvider {
       if (!provCfg.embedModel) continue;
       try {
         return this.getEmbed(provCfg);
-      } catch {
+      } catch (_e) {
         continue;
       }
     }

@@ -60,6 +60,11 @@ interface ContinuousState {
  *   - cfg.autoCapture = true (master capture switch)
  *   - cfg.continuous.enabled !== false (layer switch, default true)
  */
+export interface ContinuousHooksState {
+  /** Returns true if continuous extraction has run at least once this session */
+  hasExtracted(): boolean;
+}
+
 export function registerContinuousHooks(
   api: OpenClawPluginApi,
   cfg: MemoriaConfig,
@@ -68,9 +73,9 @@ export function registerContinuousHooks(
   extractLlm: LLMProvider,
   identityParser: IdentityParser,
   postProcessNewFacts: (source: "capture" | "compaction") => Promise<void>
-): void {
+): ContinuousHooksState {
   const ENABLED = cfg.continuous?.enabled !== false && cfg.autoCapture;
-  if (!ENABLED) return;
+  if (!ENABLED) return { hasExtracted: () => false };
 
   const COOLDOWN_MS = cfg.continuous?.cooldownMs ?? 45_000;
   const MAX_BUFFER = 10;
@@ -144,6 +149,8 @@ export function registerContinuousHooks(
       api.logger.debug?.(`memoria: continuous llm_output error: ${String(err)}`);
     }
   });
+
+  return { hasExtracted: () => state.lastExtraction > 0 };
 }
 
 // ─── Extraction Logic ───

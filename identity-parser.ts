@@ -143,7 +143,7 @@ export class IdentityParser {
     try {
       const fullPath = path.join(this.workspaceRoot, relativePath);
       return fs.readFileSync(fullPath, "utf-8");
-    } catch {
+    } catch (_e) {
       return ""; // File doesn't exist or unreadable
     }
   }

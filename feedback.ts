@@ -139,7 +139,7 @@ export class FeedbackManager {
       raw.prepare(
         "UPDATE facts SET usefulness = ?, recall_count = ?, used_count = ?, last_accessed_at = ? WHERE id = ?"
       ).run(newUsefulness, newRecallCount, newUsedCount, Date.now(), factId);
-    } catch {
+    } catch (_e) {
       // Non-critical — don't crash on feedback failure
     }
   }
@@ -171,7 +171,7 @@ export class FeedbackManager {
         mostUseful: best.map(r => r.id),
         leastUseful: worst.map(r => r.id),
       };
-    } catch {
+    } catch (_e) {
       return { totalWithFeedback: 0, avgUsefulness: 0, mostUseful: [], leastUseful: [] };
     }
   }
@@ -273,7 +273,7 @@ export class FeedbackManager {
       try {
         this.updateUsefulness(factId, penalty);
         penalized.push(factId);
-      } catch { /* non-critical */ }
+      } catch (_e) { /* non-critical */ }
     }
     return penalized;
   }

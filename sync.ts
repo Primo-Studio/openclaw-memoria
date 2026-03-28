@@ -155,7 +155,7 @@ export class MdSync {
             agent: "koda",
           } as any);
           imported++;
-        } catch { /* dedup or error */ }
+        } catch (_e) { /* dedup or error */ }
       }
 
       if (newFacts.length > 0) files.push(mapping.file);
@@ -175,7 +175,7 @@ export class MdSync {
       if (!hasColumn) {
         db.raw.prepare("ALTER TABLE facts ADD COLUMN synced_to_md INTEGER DEFAULT 0").run();
       }
-    } catch { /* column might already exist */ }
+    } catch (_e) { /* column might already exist */ }
   }
 
   // ─── Private ───

@@ -61,7 +61,7 @@ export class OpenAICompatLLM implements LLMProvider {
     try {
       const response = await this.generate(prompt, options);
       return { response, provider: this.name, attemptMs: Date.now() - start, fallbacksUsed: 0 };
-    } catch {
+    } catch (_e) {
       return null;
     }
   }

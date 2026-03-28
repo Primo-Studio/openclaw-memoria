@@ -119,7 +119,7 @@ export class MemoriaDB {
           const legacyDb = new Database(legacyPath, { readonly: true });
           legacyDb.exec(`VACUUM INTO '${dbPath.replace(/'/g, "''")}'`);
           legacyDb.close();
-        } catch {
+        } catch (_e) {
           // Fallback: copy file + WAL + SHM
           fs.copyFileSync(legacyPath, dbPath);
           const walPath = legacyPath + "-wal";
@@ -162,7 +162,7 @@ export class MemoriaDB {
         // Index for filtering
         this.db.exec("CREATE INDEX IF NOT EXISTS idx_facts_type ON facts(fact_type)");
       }
-    } catch { /* column already exists or table not yet created */ }
+    } catch (_e) { /* column already exists or table not yet created */ }
   }
 
   /** Migration: add feedback loop columns (usefulness, recall_count, used_count) */
@@ -179,7 +179,7 @@ export class MemoriaDB {
       if (!colNames.has("used_count")) {
         this.db.exec("ALTER TABLE facts ADD COLUMN used_count INTEGER DEFAULT 0");
       }
-    } catch { /* columns already exist or table not yet created */ }
+    } catch (_e) { /* columns already exist or table not yet created */ }
   }
 
   /** Migration: add relevance_weight column for identity-aware prioritization */
@@ -191,7 +191,7 @@ export class MemoriaDB {
         // Index for sorting by relevance
         this.db.exec("CREATE INDEX IF NOT EXISTS idx_facts_relevance ON facts(relevance_weight DESC)");
       }
-    } catch { /* column already exists or table not yet created */ }
+    } catch (_e) { /* column already exists or table not yet created */ }
   }
 
   /** Migration: add identity_cache table for parsed USER.md/COMPANY.md */
@@ -204,7 +204,7 @@ export class MemoriaDB {
           updated_at INTEGER NOT NULL
         );
       `);
-    } catch { /* table already exists */ }
+    } catch (_e) { /* table already exists */ }
   }
 
   /** Migration: add lifecycle_state for fact evolution (fresh/settled/dormant) */
@@ -215,7 +215,7 @@ export class MemoriaDB {
         this.db.exec("ALTER TABLE facts ADD COLUMN lifecycle_state TEXT DEFAULT 'fresh'");
         this.db.exec("CREATE INDEX IF NOT EXISTS idx_facts_lifecycle ON facts(lifecycle_state)");
       }
-    } catch { /* column already exists or table not yet created */ }
+    } catch (_e) { /* column already exists or table not yet created */ }
   }
 
   /** Migration: add procedures table for procedural memory (Phase 3) */
@@ -242,7 +242,7 @@ export class MemoriaDB {
         CREATE INDEX IF NOT EXISTS idx_procedures_degradation ON procedures(degradation_score);
         CREATE INDEX IF NOT EXISTS idx_procedures_success_rate ON procedures(success_count, failure_count);
       `);
-    } catch { /* table already exists */ }
+    } catch (_e) { /* table already exists */ }
   }
 
   /** Migration: add cluster_members table to track which facts compose a cluster */
@@ -258,14 +258,14 @@ export class MemoriaDB {
         );
         CREATE INDEX IF NOT EXISTS idx_cluster_members_fact ON cluster_members(fact_id);
       `);
-    } catch { /* table already exists */ }
+    } catch (_e) { /* table already exists */ }
   }
 
   private getSchemaVersion(): number {
     try {
       const row = this.db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string } | undefined;
       return row ? parseInt(row.value, 10) : 0;
-    } catch {
+    } catch (_e) {
       return 0; // meta table doesn't exist yet
     }
   }
@@ -489,7 +489,7 @@ export class MemoriaDB {
         ORDER BY rank
         LIMIT ?
       `).all(sanitized, limit) as Fact[];
-    } catch {
+    } catch (_e) {
       // Fallback: LIKE search if FTS5 fails
       return this.db.prepare(
         "SELECT * FROM facts WHERE superseded = 0 AND lifecycle_state != 'dormant' AND fact LIKE ? ORDER BY updated_at DESC LIMIT ?"

@@ -81,7 +81,7 @@ export class MdRegenManager {
       const row = raw.prepare("SELECT value FROM meta WHERE key = 'captures_since_regen'").get() as { value: string } | undefined;
       const current = row ? parseInt(row.value, 10) : 0;
       raw.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('captures_since_regen', ?)").run(String(current + 1));
-    } catch { /* non-critical */ }
+    } catch (_e) { /* non-critical */ }
   }
 
   /** Check if auto-regen should trigger. Returns reason or null. */
@@ -121,7 +121,7 @@ export class MdRegenManager {
       }
 
       return null; // No regen needed
-    } catch {
+    } catch (_e) {
       return null;
     }
   }
@@ -132,7 +132,7 @@ export class MdRegenManager {
       const raw = this.db.raw;
       raw.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('captures_since_regen', '0')").run();
       raw.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('last_regen_at', ?)").run(String(Date.now()));
-    } catch { /* non-critical */ }
+    } catch (_e) { /* non-critical */ }
   }
 
   /**
@@ -338,7 +338,7 @@ export class MdRegenManager {
           lines: content.split("\n").length,
           bytes: content.length,
         };
-      } catch {
+      } catch (_e) {
         stats[relPath] = { exists: false, lines: 0, bytes: 0 };
       }
     }
