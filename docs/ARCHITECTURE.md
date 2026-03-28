@@ -95,6 +95,30 @@ Memoria integrates with OpenClaw via three hooks:
 | 20 | Behavioral Patterns | `patterns.ts` | ✅ |
 | 21 | Continuous Learning | `index.ts` (hooks) | ✅ |
 
+## Continuous Learning (Layer 21)
+
+Real-time fact capture via `message_received` + `llm_output` hooks, independent of context window size, compaction, or session end.
+
+**Hooks:**
+- `message_received` → buffers user messages, detects urgent signals (frustration, error keywords)
+- `llm_output` → buffers assistant responses, triggers extraction
+
+**3 extraction modes:**
+- **Periodic** — every N turns (default 4), with 45s cooldown between extractions
+- **Urgent** — immediate on frustration/error signals (bypasses cooldown): "ne fais plus", "crash", "doublon", "putain"...
+- **Self-error** — immediate when assistant acknowledges its own mistake: "par erreur", "j'aurais dû"...
+
+**Cross-layer integration:**
+- Uses same `extractLlm` + `LLM_EXTRACT_PROMPT` as agent_end
+- Facts go through `selective.processAndApply()` → dedup/contradiction/enrichment
+- Triggers full `postProcessNewFacts()` → embed, graph, topics, observations, clusters, sync
+- `agent_end` reduces its scope when continuous already captured (avoids double LLM calls)
+
+**Config (`continuous` in plugin config):**
+- `interval` (default 4): extract every N turns
+- `cooldownMs` (default 45000): minimum gap between periodic extractions
+- `enabled` (default true when autoCapture is true): toggle on/off
+
 ## Procedural Memory
 
 - Short fact (<60 chars) + TODO pattern → skip

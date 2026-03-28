@@ -67,6 +67,15 @@ interface MemoriaConfig {
   workspacePath: string;
   syncMd: boolean;
   fallback: FallbackProviderConfig[];
+  /** Continuous Learning (Layer 21) config */
+  continuous?: {
+    /** Extract every N turns (default 4) */
+    interval?: number;
+    /** Cooldown between periodic extractions in ms (default 45000) */
+    cooldownMs?: number;
+    /** Enable/disable (default true when autoCapture is true) */
+    enabled?: boolean;
+  };
   embed: {
     provider: "ollama" | "lmstudio" | "openai" | "openrouter" | "anthropic";
     baseUrl?: string;
@@ -556,7 +565,8 @@ export function register(api: OpenClawPluginApi): void {
     ? ` | procedures: ${procStats.healthy}✓/${procStats.degraded}⚠${procStats.stale > 0 ? `/${procStats.stale}🕰️` : ''}` 
     : "";
   const patNote = patStats.total > 0 ? ` | patterns: ${patStats.total} (avg ${patStats.avgOccurrences} occ)` : "";
-  api.logger.info?.(`memoria: v${pluginVersion} registered (${stats.active} facts, ${cStats.total} clusters, ${oStats.total} observations, ${embCount} embedded, ${gStats.entities} entities, ${gStats.relations} relations, ${tStats.totalTopics} topics${fbNote}${lifecycleNote}${hebbianNote}${expertiseNote}${procNote}${patNote}, fallback: ${chain.providerNames.join(" → ")})`);
+  const contNote = CONTINUOUS_ENABLED ? ` | continuous: every ${CONTINUOUS_NORMAL_INTERVAL} turns` : "";
+  api.logger.info?.(`memoria: v${pluginVersion} registered (${stats.active} facts, ${cStats.total} clusters, ${oStats.total} observations, ${embCount} embedded, ${gStats.entities} entities, ${gStats.relations} relations, ${tStats.totalTopics} topics${fbNote}${lifecycleNote}${hebbianNote}${expertiseNote}${procNote}${patNote}${contNote}, fallback: ${chain.providerNames.join(" → ")})`);
   
   // Log .md file sizes
   const fileSizes = mdRegen.fileSizes();
@@ -1065,7 +1075,8 @@ export function register(api: OpenClawPluginApi): void {
   const continuousBuffer: Array<{ role: "user" | "assistant"; text: string; ts: number }> = [];
   let continuousTurnCount = 0;
   let lastContinuousExtraction = 0;
-  const CONTINUOUS_COOLDOWN_MS = 45_000; // 45s between normal extractions
+  const CONTINUOUS_ENABLED = cfg.continuous?.enabled !== false && cfg.autoCapture; // on by default if autoCapture
+  const CONTINUOUS_COOLDOWN_MS = cfg.continuous?.cooldownMs ?? 45_000; // 45s between normal extractions
   const CONTINUOUS_MAX_BUFFER = 10; // keep last 10 exchanges
   const CONTINUOUS_NORMAL_INTERVAL = cfg.continuous?.interval ?? 4; // extract every N turns
   const CONTINUOUS_URGENT_PATTERNS = [
@@ -1083,6 +1094,7 @@ export function register(api: OpenClawPluginApi): void {
 
   // Buffer user messages
   api.on("message_received", async (event, _ctx) => {
+    if (!CONTINUOUS_ENABLED) return;
     try {
       if (!event.content || event.content.length < 5) return;
       // Skip heartbeat/system messages
@@ -1109,6 +1121,7 @@ export function register(api: OpenClawPluginApi): void {
 
   // Buffer assistant responses + trigger periodic extraction
   api.on("llm_output", async (event, _ctx) => {
+    if (!CONTINUOUS_ENABLED) return;
     try {
       const texts = event.assistantTexts?.filter(t => t && t.length > 15) || [];
       if (texts.length === 0) return;
@@ -1458,6 +1471,9 @@ Output JSON only (no markdown, no explanation):
     api.on("agent_end", async (event, _ctx) => {
       if (!event.success || !event.messages || event.messages.length === 0) return;
 
+      // Track how many messages continuous already processed
+      const continuousAlreadyCaptured = lastContinuousExtraction > 0;
+
       try {
         // ── Feedback loop: measure if recalled facts were used in responses ──
         try {
@@ -1509,8 +1525,16 @@ Output JSON only (no markdown, no explanation):
 
         if (texts.length === 0) return;
 
-        // Take last 3 messages (most relevant)
-        const recentTexts = texts.slice(-3).join("\n---\n");
+        // If continuous learning already captured during this session,
+        // only extract from messages NOT yet seen (reduce duplicate LLM calls)
+        const effectiveTexts = continuousAlreadyCaptured
+          ? texts.slice(-1) // Only the very last message (likely not yet captured)
+          : texts.slice(-3);
+
+        if (effectiveTexts.length === 0) return;
+
+        // Take last messages (most relevant)
+        const recentTexts = effectiveTexts.join("\n---\n");
         const prompt = LLM_EXTRACT_PROMPT
           .replace("{TEXT}", recentTexts)
           .replace("{MAX_FACTS}", String(cfg.captureMaxFacts));
