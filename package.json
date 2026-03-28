@@ -1,6 +1,6 @@
 {
   "name": "memoria-plugin",
-  "version": "3.22.2",
+  "version": "3.22.3",
   "description": "Multi-layer persistent memory for OpenClaw. 7 memory layers, bring your own LLM (Ollama, LM Studio, or API), 100% local-first, zero cloud cost.",
   "license": "Apache-2.0",
   "author": "Primo Studio",

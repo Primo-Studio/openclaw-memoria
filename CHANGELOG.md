@@ -1,4 +1,10 @@
 ## 3.22.2 — Layer 21: Continuous Learning + 6 Bug Fixes (2026-03-28)
+## [3.22.3] — 2026-03-28
+
+### Fixed
+- **CRITICAL: CONTINUOUS_ENABLED TDZ crash on Node 24.x** — `const` variable accessed before declaration at register time, causing plugin to fail silently on gateways running Node 24.x (embedded binary). Inlined config read for boot log.
+- **better-sqlite3 cross-Node-version build guide** — documented that `npx node-gyp rebuild --target=24.13.1` is needed when shell Node differs from gateway's embedded Node.
+
 
 ### New: Layer 21 — Continuous Learning
 Real-time fact capture via `message_received` + `llm_output` hooks, independent of session end or compaction.
