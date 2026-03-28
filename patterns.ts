@@ -364,7 +364,7 @@ Réponds en JSON STRICT (pas de markdown, pas de \`\`\`):
       agent: "memoria",
       created_at: Date.now(),
       updated_at: Date.now(),
-      fact_type: "pattern" as any,
+      fact_type: "pattern",
     });
 
     // Supersede member facts — they're now consolidated

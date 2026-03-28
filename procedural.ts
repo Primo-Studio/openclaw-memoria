@@ -16,7 +16,7 @@
  */
 
 import type { Database } from 'better-sqlite3';
-import type { LLMProvider } from './fallback.js';
+import type { LLMProvider } from './providers/types.js';
 
 // ─── Quality dimensions ───
 // Each procedure is scored on these. Like choosing a recipe:

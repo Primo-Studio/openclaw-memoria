@@ -14,7 +14,7 @@
  */
 
 import type { MemoriaDB, Fact } from "./db.js";
-import type { LLMProvider } from "./llm-provider.js";
+import type { LLMProvider } from "./providers/types.js";
 
 export const REVISION_CONFIG = {
   recallThreshold: 10,      // Trigger revision after 10 recalls
@@ -48,7 +48,7 @@ export class RevisionManager {
     const facts = this.db.raw.prepare(`
       SELECT * FROM facts
       WHERE superseded = 0
-      AND lifecycle_state = 'mature'
+      AND lifecycle_state = 'settled'
       AND recall_count >= ?
       AND (last_accessed_at IS NULL OR last_accessed_at >= ?)
       ORDER BY recall_count DESC

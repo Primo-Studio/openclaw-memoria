@@ -29,9 +29,9 @@ export interface Fact {
   md_file: string | null;
   md_line: number | null;
   entity_ids: string;     // JSON array
-  fact_type: "semantic" | "episodic"; // semantic = durable, episodic = dated/contextual
+  fact_type: "semantic" | "episodic" | "cluster" | "pattern"; // semantic = durable, episodic = dated/contextual, cluster = thematic summary, pattern = consolidated behavioral
   relevance_weight: number; // 0.0-1.0, calculated from identity context
-  lifecycle_state: "fresh" | "mature" | "aged" | "archived"; // Phase 1: lifecycle management
+  lifecycle_state: "fresh" | "settled" | "dormant"; // fresh = new, settled = confirmed, dormant = unused
 }
 
 export interface Entity {
@@ -163,7 +163,7 @@ export class MemoriaDB {
     } catch { /* table already exists */ }
   }
 
-  /** Migration: add lifecycle_state for fact evolution (fresh/mature/aged/archived) */
+  /** Migration: add lifecycle_state for fact evolution (fresh/settled/dormant) */
   private migrateAddLifecycleState(): void {
     try {
       const cols = this.db.prepare("PRAGMA table_info(facts)").all() as Array<{ name: string }>;
@@ -410,7 +410,7 @@ export class MemoriaDB {
   searchFacts(query: string, limit = 10): Fact[] {
     if (!query || query.trim().length === 0) {
       return this.db.prepare(
-        "SELECT * FROM facts WHERE superseded = 0 AND lifecycle_state != 'archived' ORDER BY updated_at DESC LIMIT ?"
+        "SELECT * FROM facts WHERE superseded = 0 AND lifecycle_state != 'dormant' ORDER BY updated_at DESC LIMIT ?"
       ).all(limit) as Fact[];
     }
 
@@ -432,14 +432,14 @@ export class MemoriaDB {
       return this.db.prepare(`
         SELECT f.* FROM facts f
         JOIN facts_fts fts ON f.rowid = fts.rowid
-        WHERE facts_fts MATCH ? AND f.superseded = 0 AND f.lifecycle_state != 'archived'
+        WHERE facts_fts MATCH ? AND f.superseded = 0 AND f.lifecycle_state != 'dormant'
         ORDER BY rank
         LIMIT ?
       `).all(sanitized, limit) as Fact[];
     } catch {
       // Fallback: LIKE search if FTS5 fails
       return this.db.prepare(
-        "SELECT * FROM facts WHERE superseded = 0 AND lifecycle_state != 'archived' AND fact LIKE ? ORDER BY updated_at DESC LIMIT ?"
+        "SELECT * FROM facts WHERE superseded = 0 AND lifecycle_state != 'dormant' AND fact LIKE ? ORDER BY updated_at DESC LIMIT ?"
       ).all(`%${query.slice(0, 100)}%`, limit) as Fact[];
     }
   }
@@ -476,7 +476,7 @@ export class MemoriaDB {
   hotFacts(minAccess: number = 5, staleDays: number = 30, limit: number = 5): Fact[] {
     const cutoff = Date.now() - staleDays * 24 * 60 * 60 * 1000;
     return this.db.prepare(
-      `SELECT * FROM facts WHERE superseded = 0 AND lifecycle_state != 'archived' AND access_count >= ? 
+      `SELECT * FROM facts WHERE superseded = 0 AND lifecycle_state != 'dormant' AND access_count >= ? 
        AND COALESCE(last_accessed_at, updated_at) >= ?
        ORDER BY access_count DESC LIMIT ?`
     ).all(minAccess, cutoff, limit) as Fact[];

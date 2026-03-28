@@ -316,7 +316,7 @@ export class FactClusterManager {
       agent: "memoria",
       created_at: Date.now(),
       updated_at: Date.now(),
-      fact_type: "cluster" as any,
+      fact_type: "cluster",
     });
 
     // Populate cluster_members table

@@ -1023,13 +1023,13 @@ export function register(api: OpenClawPluginApi): void {
         // Note: procedure feedback comes from after_tool_call (reinforcement/reflect),
         // not from recall. Unlike facts, procedures prove their worth through execution.
         try {
-          // Update lifecycle state for recalled facts (fresh→mature transition)
+          // Update lifecycle state for recalled facts (fresh→settled transition)
           for (const fact of finalFacts) {
             lifecycleMgr.updateLifecycle(fact);
           }
         } catch { /* non-critical */ }
 
-        // Proactive revision: check if any mature facts need refinement (async, non-blocking)
+        // Proactive revision: check if any settled facts need refinement (async, non-blocking)
         setImmediate(async () => {
           try {
             const revResult = await revisionMgr.checkAndRevise();
