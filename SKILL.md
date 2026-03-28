@@ -1,6 +1,6 @@
 ---
 name: Memoria for OpenClaw
-version: 3.16.0
+version: 3.17.0
 description: "Multi-layer persistent memory for OpenClaw. 7 memory layers, bring your own LLM (Ollama, LM Studio, or API), 100% local-first, zero cloud cost."
 author: Primo Studio (@Nieto42)
 license: Apache-2.0
@@ -19,17 +19,37 @@ tags:
 env:
   - name: OPENAI_API_KEY
     required: false
-    description: Optional — used as fallback for LLM extraction and embeddings if local models unavailable
+    description: Optional — used as fallback for LLM extraction and embeddings when local models are unavailable. Never required for default operation.
   - name: OPENROUTER_API_KEY
     required: false
-    description: Optional — used as fallback for remote LLM provider
+    description: Optional — used as fallback for remote LLM provider. Never required for default operation.
   - name: OPENCLAW_WORKSPACE
     required: false
-    description: Auto-set by OpenClaw — workspace path for memory files
+    description: Auto-set by OpenClaw runtime — workspace path for memory files. Do not set manually.
 security: |
-  Memoria runs 100% locally by default. No data is sent externally unless you explicitly configure a remote LLM provider.
-  All memory is stored in a local SQLite database on your machine.
-  API keys are only used if you opt into remote providers as fallback — they are never required.
+  ## Data & Privacy
+  - Memoria runs 100% locally by default. No data leaves your machine unless you explicitly configure a remote LLM.
+  - All memory is stored in a local SQLite database in your OpenClaw workspace.
+  - API keys (OPENAI_API_KEY, OPENROUTER_API_KEY) are optional fallbacks — never required.
+
+  ## What Memoria reads
+  - Workspace files: USER.md, COMPANY.md, projects/* — used for identity-aware relevance scoring.
+    These files may contain personal or business information. Review them before enabling Memoria.
+  - Conversation content: assistant messages and tool call results, to extract durable facts.
+  - No files outside the OpenClaw workspace are read.
+
+  ## What Memoria writes
+  - A single SQLite database (memoria.db) in your workspace/memory/ folder.
+  - Optional markdown summaries in workspace/memory/ folder.
+  - No network requests unless a remote LLM fallback is configured.
+
+  ## Hooks used
+  - before_prompt_build: injects recalled facts into context
+  - after_tool_call: captures procedural knowledge (how-to steps)
+  - agent_end: extracts facts from completed conversations
+  - after_compaction: extracts facts from compacted summaries
+  These are standard OpenClaw plugin hooks. They run locally within the plugin process.
+entrypoint: index.ts
 ---
 
 # 🧠 Memoria — Multi-Layer Persistent Memory for OpenClaw
@@ -74,25 +94,28 @@ Configure each layer independently. Mix and match:
 
 ## Installation
 
-### As Plugin (recommended)
+### As Plugin (recommended — one command)
 ```bash
 openclaw plugins install clawhub:memoria-plugin
 ```
+This installs Memoria from the ClawHub registry. No manual steps needed.
 
-### From source
+### From source (for contributors / advanced users)
+If you prefer to inspect the code first:
+1. Browse the repository: [github.com/Primo-Studio/openclaw-memoria](https://github.com/Primo-Studio/openclaw-memoria)
+2. Review the source code, especially `index.ts` (main entrypoint) and `openclaw.plugin.json` (config schema)
+3. Clone and install:
 ```bash
 cd ~/.openclaw/extensions
 git clone https://github.com/Primo-Studio/openclaw-memoria.git memoria
 cd memoria && npm install
 ```
 
-Then add to your `openclaw.json`:
+Then add to your `openclaw.json` under `plugins.entries`:
 ```json
-"plugins": {
-  "entries": {
-    "memoria": { "enabled": true },
-    "memory-convex": { "enabled": false }
-  }
+{
+  "memoria": { "enabled": true },
+  "memory-convex": { "enabled": false }
 }
 ```
 
@@ -114,6 +137,18 @@ Just install and restart. Defaults: Ollama + gemma3:4b for extraction, nomic for
   }
 }
 ```
+
+## Source Code
+
+The full source is available on GitHub: [Primo-Studio/openclaw-memoria](https://github.com/Primo-Studio/openclaw-memoria)
+
+Key files:
+- `index.ts` — Main plugin entrypoint (hooks, extraction, recall pipeline)
+- `procedural.ts` — Procedural memory (how-to learning)
+- `lifecycle.ts` — Lifecycle management (fresh/settled/dormant)
+- `scoring.ts` — Temporal scoring and relevance ranking
+- `selective.ts` — Dedup, contradiction detection, fact quality
+- `openclaw.plugin.json` — Configuration schema
 
 ## Feedback & Community
 
