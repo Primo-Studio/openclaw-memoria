@@ -1,41 +1,18 @@
 /**
- * 🧠 Memoria — Multi-layer memory plugin for OpenClaw (v3.22.2)
+ * 🧠 Memoria — Multi-layer memory plugin for OpenClaw (v3.22.2 → Phase 2.1 refactor)
  * 
- * This file is the plugin entry point. It:
- *   1. Parses config from openclaw.json → MemoriaConfig
- *   2. Creates all managers (db, embedding, graph, topics, etc.)
- *   3. Registers 5 OpenClaw hooks to power recall + capture + continuous learning
- *   4. Orchestrates the post-capture pipeline (postProcessNewFacts)
+ * THIS IS NOW A THIN ADAPTER. The heavy lifting has been moved to focused modules:
+ *   - config.ts       — MemoriaConfig interface, parseConfig, provider factories
+ *   - extraction.ts   — LLM_EXTRACT_PROMPT, parseJSON, normalizeCategory
+ *   - format.ts       — formatRecallContext
+ *   - continuous.ts   — Layer 21 continuous learning hooks
+ *   - orchestrator.ts — postProcessNewFacts cascade pipeline
  * 
- * == HOOKS (in order of a typical turn) ==
- *   message_received  → Layer 21: buffer user message, detect urgent signals
- *   before_prompt_build → RECALL: budget → search → score → inject facts into context
- *   llm_output        → Layer 21: buffer assistant response, trigger extraction if due
- *   after_tool_call   → Layer 13: real-time procedural capture from tool executions
- *   agent_end         → CAPTURE: LLM extract → selective → postProcess (embed, graph, topics...)
- *   after_compaction   → Safety net: same as agent_end but from compacted summaries
- * 
- * == 21 LAYERS ==
- *   1. SQLite + FTS5 (db.ts)          12. Fallback Chain (fallback.ts)
- *   2. Temporal Scoring (scoring.ts)   13. Procedural Memory (procedural.ts)
- *   3. Selective Memory (selective.ts) 14. Lifecycle (lifecycle.ts)
- *   4. Embeddings (embeddings.ts)      15. Feedback Loop (feedback.ts)
- *   5. Knowledge Graph (graph.ts)      16. Hebbian (hebbian.ts)
- *   6. Context Tree (context-tree.ts)  17. Identity Parser (identity-parser.ts)
- *   7. Adaptive Budget (budget.ts)     18. Expertise (expertise.ts)
- *   8. Emergent Topics (topics.ts)     19. Proactive Revision (revision.ts)
- *   9. Observations (observations.ts)  20. Behavioral Patterns (patterns.ts)
- *  10. Fact Clusters (fact-clusters.ts)21. Continuous Learning (this file, hooks)
- *  11. .md Sync (sync.ts, md-regen.ts)
- * 
- * == KEY INTERNAL FUNCTIONS ==
- *   parseConfig()          — raw JSON → typed MemoriaConfig
- *   formatRecallContext()   — facts → text block injected before prompt
- *   normalizeCategory()     — free-form category → one of 7 canonical categories
- *   postProcessNewFacts()   — 8-step pipeline after each capture batch
- *   doContinuousExtraction() — Layer 21 micro-extraction from rolling buffer
- * 
- * For the full architecture, see docs/ARCHITECTURE.md and docs/MODULES.md.
+ * This file:
+ *   1. Imports all modules
+ *   2. Creates managers
+ *   3. Registers OpenClaw hooks (before_prompt_build, after_tool_call, agent_end, after_compaction)
+ *   4. Wires everything together
  */
 
 import fs from "fs";
@@ -52,14 +29,12 @@ import { MdRegenManager } from "./md-regen.js";
 import { FallbackChain } from "./fallback.js";
 import type { FallbackProviderConfig } from "./fallback.js";
 import { TopicManager } from "./topics.js";
-import { OllamaEmbed, OllamaLLM } from "./providers/ollama.js";
-import { OpenAICompatLLM, OpenAICompatEmbed, lmStudioLLM, lmStudioEmbed, openaiLLM, openaiEmbed, openrouterLLM, openrouterEmbed } from "./providers/openai-compat.js";
+import { lmStudioLLM, lmStudioEmbed, openaiEmbed } from "./providers/openai-compat.js";
 import type { EmbedProvider, LLMProvider } from "./providers/types.js";
 import { EmbedFallback } from "./embed-fallback.js";
 import { ObservationManager } from "./observations.js";
 import { FactClusterManager } from "./fact-clusters.js";
 import { FeedbackManager } from "./feedback.js";
-import { AnthropicLLM } from "./providers/anthropic.js";
 import { IdentityParser } from "./identity-parser.js";
 import { LifecycleManager } from "./lifecycle.js";
 import { RevisionManager } from "./revision.js";
@@ -68,317 +43,15 @@ import { ExpertiseManager } from "./expertise.js";
 import { ProceduralMemory } from "./procedural.js";
 import { PatternManager } from "./patterns.js";
 
-// ─── Config ───
-
-interface MemoriaConfig {
-  autoRecall: boolean;
-  autoCapture: boolean;
-  recallLimit: number;
-  captureMaxFacts: number;
-  defaultAgent: string;
-  contextWindow: number;
-  workspacePath: string;
-  syncMd: boolean;
-  fallback: FallbackProviderConfig[];
-  /** Continuous Learning (Layer 21) config */
-  continuous?: {
-    /** Extract every N turns (default 4) */
-    interval?: number;
-    /** Cooldown between periodic extractions in ms (default 45000) */
-    cooldownMs?: number;
-    /** Enable/disable (default true when autoCapture is true) */
-    enabled?: boolean;
-  };
-  embed: {
-    provider: "ollama" | "lmstudio" | "openai" | "openrouter" | "anthropic";
-    baseUrl?: string;
-    model: string;
-    dimensions: number;
-    apiKey?: string;
-  };
-  llm: {
-    provider: "ollama" | "lmstudio" | "openai" | "openrouter" | "anthropic";
-    baseUrl?: string;
-    model: string;
-    apiKey?: string;
-    /** Per-layer overrides: each key = layer name, value = provider config */
-    overrides?: Partial<Record<MemoriaLayer, LayerLLMConfig>>;
-  };
-  lifecycle?: {
-    freshDays?: number;
-    settledMinAccess?: number;
-    dormantAfterDays?: number;
-    detailCursor?: number;
-    revisionRecallThreshold?: number;
-  };
-  procedural?: {
-    reflectEvery?: number;
-    degradedThreshold?: number;
-    defaultSafety?: number;
-    staleDays?: number;
-    docCheckDays?: number;
-  };
-  patterns?: any; // PatternManager config, loosely typed for now
-}
-
-/** Named layers that accept a per-layer LLM override */
-type MemoriaLayer = "extract" | "contradiction" | "graph" | "topics" | "procedural";
-
-interface LayerLLMConfig {
-  provider: "ollama" | "lmstudio" | "openai" | "openrouter" | "anthropic";
-  baseUrl?: string;
-  model: string;
-  apiKey?: string;
-}
-
-/** Parse raw plugin config (from openclaw.json) into typed MemoriaConfig with smart defaults. */
-function parseConfig(raw: Record<string, unknown> | undefined): MemoriaConfig {
-  const embed = (raw?.embed as Record<string, unknown>) || {};
-  const llm = (raw?.llm as Record<string, unknown>) || {};
-  return {
-    autoRecall: raw?.autoRecall !== false,
-    autoCapture: raw?.autoCapture !== false,
-    recallLimit: (raw?.recallLimit as number) || 12,
-    captureMaxFacts: (raw?.captureMaxFacts as number) || 8,
-    defaultAgent: (raw?.defaultAgent as string) || "koda",
-    contextWindow: (raw?.contextWindow as number) || 200000,
-    workspacePath: (raw?.workspacePath as string) || process.env.HOME + "/.openclaw/workspace",
-    syncMd: raw?.syncMd !== false,
-    fallback: ((raw?.fallback as any[]) || []).map((f: any) => ({
-      ...f,
-      // Normalize: user config uses "provider", internal uses "type"
-      type: f.type || f.provider || "ollama",
-      name: f.name || f.provider || f.type || "ollama",
-    })) as FallbackProviderConfig[],
-    embed: {
-      provider: (embed.provider as MemoriaConfig["embed"]["provider"]) || "ollama",
-      baseUrl: embed.baseUrl as string | undefined,
-      model: (embed.model as string) || "nomic-embed-text-v2-moe",
-      dimensions: (embed.dimensions as number) || 768,
-      apiKey: embed.apiKey as string | undefined,
-    },
-    llm: {
-      provider: (llm.provider as MemoriaConfig["llm"]["provider"]) || "ollama",
-      baseUrl: llm.baseUrl as string | undefined,
-      model: (llm.model as string) || "gemma3:4b",
-      apiKey: llm.apiKey as string | undefined,
-      overrides: (llm.overrides as MemoriaConfig["llm"]["overrides"]) || undefined,
-    },
-  };
-}
-
-// ─── Provider Factory ───
-
-/** Create an embedding provider from config. Used for the main embedder + fallback list. */
-function createEmbedProvider(cfg: MemoriaConfig["embed"]): EmbedProvider {
-  switch (cfg.provider) {
-    case "ollama":
-      return new OllamaEmbed(cfg.baseUrl || "http://localhost:11434", cfg.model, cfg.dimensions);
-    case "lmstudio":
-      return lmStudioEmbed(cfg.model, cfg.dimensions, cfg.baseUrl || "http://localhost:1234/v1");
-    case "openai":
-      return openaiEmbed(cfg.model, cfg.apiKey || "", cfg.dimensions);
-    case "openrouter":
-      return openrouterEmbed(cfg.model, cfg.apiKey || "", cfg.dimensions);
-    default:
-      return new OllamaEmbed(); // safe default
-  }
-}
-
-/** Create an LLM provider from config. Used for the main chain + per-layer overrides. */
-function createLLMProvider(cfg: MemoriaConfig["llm"]): LLMProvider {
-  switch (cfg.provider) {
-    case "ollama":
-      return new OllamaLLM(cfg.baseUrl || "http://localhost:11434", cfg.model);
-    case "lmstudio":
-      return lmStudioLLM(cfg.model, cfg.baseUrl || "http://localhost:1234/v1");
-    case "openai":
-      return openaiLLM(cfg.model, cfg.apiKey || "");
-    case "openrouter":
-      return openrouterLLM(cfg.model, cfg.apiKey || "");
-    case "anthropic":
-      return new AnthropicLLM(cfg.model, cfg.apiKey || "", cfg.baseUrl);
-    default:
-      return new OllamaLLM(); // safe default
-  }
-}
-
-// ─── Constants ───
+// NEW: import refactored modules
+import { parseConfig, createEmbedProvider, createLLMProvider, type MemoriaConfig, type MemoriaLayer } from "./config.js";
+import { LLM_EXTRACT_PROMPT, parseJSON, normalizeCategory } from "./extraction.js";
+import { formatRecallContext } from "./format.js";
+import { registerContinuousHooks } from "./continuous.js";
+import { createPostProcessNewFacts } from "./orchestrator.js";
 
 const WORKSPACE = process.env.OPENCLAW_WORKSPACE || `${process.env.HOME}/.openclaw/workspace`;
 
-const LLM_EXTRACT_PROMPT = `Tu es un extracteur de faits pour un système de mémoire AI.
-Analyse le texte et extrais les faits qui méritent d'être retenus.
-
-DEUX TYPES de faits:
-- "semantic" = vérité durable, processus appris, configuration, règle découverte
-- "episodic" = événement daté, état temporaire, action en cours, résultat observé
-
-RÈGLE D'OR: TOUJOURS INCLURE LES DÉTAILS CONCRETS
-Imagine que tu notes pour une secrétaire qui doit pouvoir tout retrouver plus tard.
-❌ "Neto a eu une réunion importante" → MANQUE: avec qui? quand? sur quoi?
-✅ "Neto a eu une réunion avec le client CCOG le 28/03 à 14h sur la refonte du site"
-❌ "Sol a été redémarré" → MANQUE: pourquoi? quel était le problème?
-✅ "Sol a été redémarré le 28/03 à 18h25 car better-sqlite3 était compilé pour la mauvaise version de Node (137 vs 141). Fix: npm rebuild"
-❌ "Une réflexion excellente a été faite" → MANQUE: quelle réflexion? quel contenu?
-✅ "Neto propose que la mémoire fonctionne comme un cerveau humain: ne rien supprimer, prioriser par usage, les détails éphémères (heure d'un vol) s'effacent mais l'expérience (le vol était long) reste"
-
-EXTRAIRE — tout ce qui a du contenu:
-✅ Processus appris avec les étapes ("pour migrer SQLite WAL: VACUUM INTO au lieu de cp")
-✅ Ce qui a marché ET pourquoi ("le fallback chain résout les crashes car Ollama tombe parfois")
-✅ Leçons d'erreurs avec la cause ("api.config ≠ api.pluginConfig → configs ignorées")
-✅ Décisions avec la raison ("on utilise qwen3.5:4b car meilleure qualité JSON, avec think:false")
-✅ Configs exactes ("Memoria: recallLimit=8, extract LLM qwen3.5:4b, fallback gemma3:4b")
-✅ Résultats avec chiffres ("Benchmark: retrieval 92% (11/12), RAG 25%, bottleneck = modèle local")
-✅ Préférences avec contexte ("Neto veut du step-by-step, une feature à la fois avec validation")
-✅ États temporaires AVEC CONTEXTE ("Sol est en train de refaire HydroTrack — blocker: API endpoint changé")
-✅ Événements avec date ET détail ("28/03 — Memoria v3.13.0 live: lifecycle fresh/settled/dormant, 385f/90s/0d")
-✅ Ce que quelqu'un fait en ce moment ET pourquoi ("Sol travaille sur la refonte HydroTrack depuis le 26/03, priorité car le client attend la démo")
-✅ Outils internes et leur état ("Memoria v3.13.0: lifecycle humain, curseur détail 1-10, 475 facts, publié ClawHub + GitHub")
-✅ Produits/MVPs et leur avancement ("Bureau module CA v1.2.0 en prod, matching auto Qonto↔projets fonctionnel")
-
-GÉNÉRALISER — quand un pattern se répète:
-🔄 Même problème 2+ fois → stocker la RÈGLE + les cas concrets
-   "Les commandes brew/nvm (npm, ollama, node) ne sont pas dans le PATH en SSH non-interactif — fix: source ~/.zprofile ou chemin complet /opt/homebrew/bin/"
-
-🔥 ERREURS ET DANGERS — PRIORITÉ MAXIMALE (comme toucher du feu):
-Quand quelque chose a causé un PROBLÈME RÉEL (crash, perte de données, service mort, bug en prod, Neto qui doit intervenir physiquement):
-→ Catégorie "erreur", confidence 0.95+
-→ Inclure: CE QUI S'EST PASSÉ + POURQUOI c'est dangereux + CE QU'IL NE FAUT JAMAIS REFAIRE + L'ALTERNATIVE SÛRE
-→ C'est comme un panneau "DANGER" : on le note dès la PREMIÈRE FOIS, pas après la 2ème brûlure
-Exemples de VRAIS dangers à capter:
-✅ "NE JAMAIS utiliser openclaw gateway stop via exec — tue le daemon sans le relancer, gateway reste mort. Utiliser gateway restart (SIGUSR1)." (catégorie erreur)
-✅ "NE JAMAIS faire cp sur une DB SQLite en mode WAL — données perdues. Utiliser VACUUM INTO." (catégorie erreur)
-✅ "NE JAMAIS push sur main sans test — régression garantie. Toujours une branche séparée." (catégorie erreur)
-Signaux qu'un fait est un DANGER:
-- Quelqu'un dit "ne fais plus ça", "c'est la 2ème fois", "putain", "j'ai dû aller faire X manuellement"
-- Un service/outil est mort/cassé après une action
-- Un rollback ou fix manuel a été nécessaire
-- Le mot "jamais", "interdit", "critique", "ne pas" dans la conversation
-
-NE PAS STOCKER:
-❌ Confirmations vides ("ok", "merci", "compris")
-❌ Narration pure sans résultat ("je lis le fichier", "je regarde le code")
-❌ MÉTA-FAITS sur le stockage lui-même ("le nouveau fait complète l'ancien", "ce fait a été ajouté")
-❌ Faits sans AUCUN élément concret ("des informations ont été fournies", "la configuration a été mise à jour")
-
-QUALITÉ — chaque fait DOIT:
-⚠️ Contenir au moins UN élément concret: nom propre, chiffre, commande, version, ou date
-⚠️ Être AUTONOME = compréhensible seul, sans contexte
-⚠️ Inclure le POURQUOI ou le CONTEXTE quand c'est pertinent (pas juste QUOI)
-⚠️ Ne JAMAIS commencer par "Le nouveau fait..." ou "Ce fait..." → commencer par le SUJET réel
-
-Règles:
-- Phrase(s) complète(s) et autonome(s)
-- Pour les PROCÉDURES: garder les étapes ensemble en UN fait (2-4 phrases OK)
-- UN FAIT PAR ENTITÉ — si le texte parle de 3 sujets distincts, 3 faits séparés
-- Catégories: savoir, erreur, preference, outil, chronologie, rh, client
-- type: "semantic" ou "episodic"
-- confidence: 0.7 minimum
-- Maximum {MAX_FACTS} faits
-- Si rien de concret → {"facts": []}
-
-Texte:
-"{TEXT}"
-
-JSON valide uniquement:
-{"facts": [{"fact": "phrase", "category": "...", "type": "semantic|episodic", "confidence": 0.X}]}`;
-
-// ─── Formatting ───
-
-/**
- * Format recalled facts + observations into the text block injected before the prompt.
- * Output goes into `event.prependContext` in the before_prompt_build hook.
- * Includes: header, observations section, per-fact lines with [category] [age] prefix, known procedures.
- */
-function formatRecallContext(facts: Array<{ fact: string; category: string; confidence: number; temporalScore: number; created_at?: number; updated_at?: number; fact_type?: string }>, observationContext = ""): string {
-  if (facts.length === 0 && !observationContext) return "";
-  const parts: string[] = [
-    "## 🧠 Memoria — Mémoire persistante",
-    "Faits provenant de la mémoire long terme (source de vérité).",
-    "En cas de conflit avec un résumé LCM → la mémoire persistante a priorité.",
-    "Les faits les plus récents (par date) sont les plus fiables en cas de contradiction.",
-    "",
-  ];
-
-  // Observations first (synthesized, higher quality)
-  if (observationContext) {
-    parts.push("### Observations (synthèses vivantes)");
-    parts.push(observationContext);
-    parts.push("");
-  }
-
-  // Individual facts with dates for Knowledge Update disambiguation
-  if (facts.length > 0) {
-    if (observationContext) parts.push("### Faits individuels");
-    const now = Date.now();
-    const lines = facts.map(f => {
-      const conf = f.confidence >= 0.9 ? "" : ` (${Math.round(f.confidence * 100)}%)`;
-      // Add date tag so the answering model can disambiguate updates
-      let dateTag = "";
-      const ts = f.updated_at || f.created_at;
-      if (ts && ts > 0) {
-        const d = new Date(ts);
-        const ageDays = Math.floor((now - ts) / 86400000);
-        if (ageDays === 0) dateTag = ` [aujourd'hui]`;
-        else if (ageDays === 1) dateTag = ` [hier]`;
-        else if (ageDays < 7) dateTag = ` [il y a ${ageDays}j]`;
-        else dateTag = ` [${d.toISOString().slice(0, 10)}]`;
-      }
-      return `- [${f.category}]${dateTag} ${f.fact}${conf}`;
-    });
-    parts.push(...lines);
-    parts.push("");
-  }
-
-  return parts.join("\n");
-}
-
-// ─── JSON Parse Helper ───
-
-/** Safely parse JSON from LLM output. Handles markdown code fences, trailing commas, and partial JSON. */
-function parseJSON(text: string): unknown {
-  // Strip markdown code blocks (```json ... ``` or ``` ... ```)
-  let cleaned = text.trim();
-  if (cleaned.startsWith("```")) {
-    const lines = cleaned.split("\n");
-    lines.shift(); // remove opening ```json or ```
-    if (lines[lines.length - 1]?.trim() === "```") lines.pop();
-    cleaned = lines.join("\n").trim();
-  }
-  // Try to extract JSON object/array via regex
-  const match = cleaned.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
-  if (match) cleaned = match[1];
-  return JSON.parse(cleaned);
-}
-
-// ─── Category Normalization ───
-
-const VALID_CATEGORIES = new Set(["savoir", "erreur", "preference", "outil", "chronologie", "rh", "client"]);
-
-/**
- * Normalize free-form LLM category output → one of 7 canonical categories.
- * Mapping: architecture/mécanisme → savoir, sévérité/bug → erreur, financier → client, etc.
- * Unknown categories default to "savoir".
- */
-function normalizeCategory(raw: string): string {
-  const lower = (raw || "savoir").toLowerCase().trim();
-  if (VALID_CATEGORIES.has(lower)) return lower;
-  // Common LLM variants → map to valid
-  if (lower === "préférence" || lower === "préférences") return "preference";
-  if (lower === "architecture" || lower === "mécanisme" || lower === "stock" || lower === "état") return "savoir";
-  if (lower === "financier") return "client";
-  if (lower === "sévérité" || lower === "bug") return "erreur";
-  return "savoir"; // fallback: anything unknown → savoir
-}
-
-// ─── Plugin Registration ───
-
-/**
- * Plugin entry point called by OpenClaw on load.
- * Creates all managers, registers all hooks, starts background tasks.
- * This is the only export that matters — OpenClaw calls register() on startup.
- */
 export function register(api: OpenClawPluginApi): void {
   // api.pluginConfig = plugin-specific config from openclaw.json plugins.entries.memoria.config
   // api.config = global OpenClaw config (NOT what we want)
