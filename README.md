@@ -2,38 +2,40 @@
 
 **Memory that thinks like you do.** Your AI assistant remembers what matters, forgets what doesn't, and gets better over time.
 
-**SQLite-backed · Fully local · Zero cloud · 20 memory layers · Human-like architecture**
+**SQLite-backed · Fully local · Zero cloud · 21 memory layers · Human-like architecture**
 
 ---
 
-## ✨ What's New in v3.21.0
+## ✨ What's New in v3.22.2
 
-### 🔍 Deep Audit — 10 bugs found & fixed
-Full code audit revealed critical alignment issues between DB schema and TypeScript types:
-- **Hebbian learning was 100% dead** — wrong column names since creation, all queries silently failed
+### 🔄 Continuous Learning — Layer 21 *(v3.22.0)*
+Memoria no longer waits for end-of-session to learn. New real-time capture via `message_received` + `llm_output` hooks:
+- **3 extraction modes**: periodic (every N turns), urgent (on user frustration/error), self-error (on assistant self-admission)
+- **Cross-layer integration**: extracted facts go through the full pipeline (selective dedup → embed → graph → topics → observations → clusters → sync)
+- **Smart dedup with agent_end**: avoids double LLM calls when continuous already captured
+- 6 bugs fixed across 3 audit rounds (v3.22.0 → v3.22.1 → v3.22.2)
+
+### 🔍 Deep Audit — 10+6 bugs found & fixed *(v3.21.0–v3.22.2)*
+Full code audit revealed critical alignment issues:
+- **Hebbian learning was 100% dead** — wrong column names since creation
 - **Proactive revision never triggered** — searched for obsolete lifecycle state
-- **storeFact() lost 6 columns** on INSERT — usefulness, recall_count, used_count, synced_to_md, relevance_weight, lifecycle_state were silently dropped
-- All 20 layers now properly aligned with the actual database schema
+- **storeFact() lost 6 columns** on INSERT
+- **Concurrent extraction risk** and **buffer never cleared** in continuous learning
+- All 21 layers now properly aligned with the actual database schema
 
 ### 🧩 Behavioral Patterns *(v3.19.0)*
-Detects repeated similar facts and consolidates them into patterns:
-- "Neto wants step-by-step" appears 5 times → consolidated into one pattern with occurrences tracked
-- Patterns promoted to "settled" lifecycle automatically after 5+ occurrences
+Detects repeated similar facts and consolidates them into patterns.
 
 ### 🔗 Cross-Layer Connections *(v3.20.0)*
-Three bridges that make layers communicate:
 - **Feedback → Lifecycle**: facts recalled 5+ times with positive usefulness → auto-promoted to "settled"
-- **Hebbian → Topics**: strong entity relations (weight ≥ 1.0) auto-organize topics into parent/child hierarchy
+- **Hebbian → Topics**: strong entity relations auto-organize topics into parent/child hierarchy
 - **Lifecycle → Patterns**: confirmed patterns (5+ occurrences) → settled (never forgotten)
-
-### 🏗️ Cluster Members *(v3.18.0)*
-New `cluster_members` table tracks which facts belong to which clusters. Topic hierarchy with parent inference and reparenting on boot.
 
 ---
 
 ## ✨ Core Features
 
-- **20 memory layers** — from text search to procedural memory, knowledge graphs, behavioral patterns, and cross-layer connections
+- **21 memory layers** — from text search to procedural memory, knowledge graphs, behavioral patterns, continuous learning, and cross-layer connections
 - **Semantic vs Episodic** — durable knowledge decays slowly, dated events fade (like human memory)
 - **Lifecycle management** — facts evolve: fresh → settled → dormant (not "mature/archived")
 - **Observations** — living syntheses that evolve as new evidence appears
@@ -90,11 +92,11 @@ See [INSTALL.md](INSTALL.md) for advanced options.
 
 ---
 
-## 🏗️ Architecture — 20 Layers
+## 🏗️ Architecture — 21 Layers
 
 ```
 ┌──────────────────────────────────────────────────────┐
-│                   MEMORIA v3.21.0                    │
+│                   MEMORIA v3.22.2                    │
 ├──────────────────────────────────────────────────────┤
 │                                                      │
 │  RECALL (before each response):                      │
@@ -109,7 +111,12 @@ See [INSTALL.md](INSTALL.md) for advanced options.
 │  → Clusters → Patterns → Cross-layer connections     │
 │  → Sync .md → Auto-regen                             │
 │                                                      │
-│  LEARNING (continuous):                              │
+│  CONTINUOUS (real-time, during conversation):         │
+│  message_received + llm_output → rolling buffer      │
+│  → periodic/urgent/self-error triggers               │
+│  → LLM Extract → same pipeline as CAPTURE            │
+│                                                      │
+│  LEARNING (background):                              │
 │  Feedback (usefulness/recall/used) → Lifecycle       │
 │  Hebbian (co-occurrence) → Topic hierarchy           │
 │  Pattern detection → Consolidation                   │
@@ -144,8 +151,9 @@ See [INSTALL.md](INSTALL.md) for advanced options.
 | 18 | Expertise | `expertise.ts` | ❌ | Topic access → recall boost |
 | 19 | Proactive Revision | `revision.ts` | ✅ | Revise settled facts via LLM |
 | 20 | Behavioral Patterns | `patterns.ts` | ✅ | Detect + consolidate repetitions |
+| 21 | Continuous Learning | `index.ts` (hooks) | ✅ | Real-time capture during conversation |
 
-**8 layers use LLM** (14 calls total) via the Fallback Chain. **12 layers are pure algorithmic.**
+**9 layers use LLM** via the Fallback Chain. **12 layers are pure algorithmic.**
 
 For scoring formulas, decay rates, and detailed pipeline descriptions, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
@@ -220,7 +228,8 @@ Detailed methodology and scripts in [benchmarks/](benchmarks/).
 | v3.19 | Behavioral pattern detection (Layer 20) | ✅ Done |
 | v3.20 | Cross-layer connections (feedback→lifecycle, hebbian→topics, lifecycle→patterns) | ✅ Done |
 | v3.21 | Deep audit: 10 bugs fixed, full type alignment, all 20 layers validated | ✅ Done |
-| v3.22+ | Image memory, interest profiles, LCM bridge, Sol/Luna benchmarks | 🔜 Next |
+| v3.22 | Layer 21: Continuous Learning (real-time capture) + 6 more bug fixes | ✅ Done |
+| v3.23+ | Image memory, interest profiles, LCM bridge, Sol/Luna benchmarks | 🔜 Next |
 
 ---
 

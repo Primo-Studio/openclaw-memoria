@@ -5,10 +5,14 @@
 
 ## Hooks
 
-Memoria integrates with OpenClaw via three hooks:
+Memoria integrates with OpenClaw via five hooks:
 - `before_prompt_build` — Recall pipeline (inject relevant facts into context)
+- `message_received` — Buffer user messages for continuous learning (Layer 21)
+- `llm_output` — Buffer assistant responses + trigger extraction (Layer 21)
 - `agent_end` — Capture pipeline (extract facts from conversation)
 - `after_compaction` — Capture pipeline (extract facts from compacted summaries)
+
+Additionally, `after_tool_call` is used for real-time procedural capture (Layer 13).
 
 ## Recall Pipeline
 

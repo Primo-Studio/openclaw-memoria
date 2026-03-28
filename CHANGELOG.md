@@ -1,3 +1,28 @@
+## 3.22.2 — Layer 21: Continuous Learning + 6 Bug Fixes (2026-03-28)
+
+### New: Layer 21 — Continuous Learning
+Real-time fact capture via `message_received` + `llm_output` hooks, independent of session end or compaction.
+- **3 extraction modes**: periodic (every N turns), urgent (on user frustration/error), self-error (on assistant self-admission)
+- **Cross-layer integration**: facts go through selective dedup → full postProcess pipeline (embed, graph, topics, observations, clusters, sync)
+- **Smart dedup with agent_end**: when continuous already captured during the session, agent_end reduces its extraction scope to avoid double LLM calls
+- **Configurable**: `continuous.interval` (default 4), `continuous.cooldownMs` (default 45s), `continuous.enabled` (default true)
+
+### Bug Fixes (3 rounds of audit)
+**v3.22.0** — Initial implementation
+**v3.22.1** — Audit round 1:
+- `cfg.continuous` not typed in `MemoriaConfig` → added full interface
+- No `enabled` guard → both hooks now check `CONTINUOUS_ENABLED` before running
+- `cooldownMs` hardcoded → now reads from config
+- agent_end double capture → reduces scope when continuous already ran
+
+**v3.22.2** — Audit round 2:
+- **Concurrent extraction risk** — urgent trigger during periodic extraction ran 2 extractions in parallel → added `continuousExtractionInProgress` lock with `finally` release
+- **Buffer never cleared** — same messages re-analyzed at each extraction → snapshot + clear before extraction
+
+### Documentation
+- `docs/ARCHITECTURE.md`: full Layer 21 section with config, hooks, extraction modes, cross-layer integration
+- Boot log now shows continuous learning status
+
 ## 3.21.0 — Deep Audit: 10 Bugs Found & Fixed (2026-03-28)
 
 ### Critical Fixes
