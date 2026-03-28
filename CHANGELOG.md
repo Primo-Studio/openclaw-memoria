@@ -504,3 +504,13 @@ gagne en vitesse d'exécution car on la reproduit plus souvent."
 - Procedures prove value through repeated use, not arbitrary minimums
 - Added failure_reasons tracking: records WHY a procedure failed (context/conditions)
 - Like noting "Route A has traffic at 6pm" — helps choose alternatives intelligently
+
+## v3.14.1 — Error Detection: Touch fire once, remember forever
+
+### Automatic Error/Danger Capture
+- New prompt section 🔥 ERREURS ET DANGERS with explicit signal detection
+- When something causes a REAL problem (crash, service dead, manual intervention needed)
+  → automatically extracted as category "erreur" with confidence 0.95+
+- Detects danger signals: "ne fais plus ça", "c'est la 2ème fois", frustration keywords, service failures
+- Like touching fire: noted as critical on the FIRST occurrence, not after the second burn
+- Each error fact includes: what happened + why it's dangerous + what to NEVER do again + the safe alternative

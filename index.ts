@@ -198,6 +198,21 @@ GÉNÉRALISER — quand un pattern se répète:
 🔄 Même problème 2+ fois → stocker la RÈGLE + les cas concrets
    "Les commandes brew/nvm (npm, ollama, node) ne sont pas dans le PATH en SSH non-interactif — fix: source ~/.zprofile ou chemin complet /opt/homebrew/bin/"
 
+🔥 ERREURS ET DANGERS — PRIORITÉ MAXIMALE (comme toucher du feu):
+Quand quelque chose a causé un PROBLÈME RÉEL (crash, perte de données, service mort, bug en prod, Neto qui doit intervenir physiquement):
+→ Catégorie "erreur", confidence 0.95+
+→ Inclure: CE QUI S'EST PASSÉ + POURQUOI c'est dangereux + CE QU'IL NE FAUT JAMAIS REFAIRE + L'ALTERNATIVE SÛRE
+→ C'est comme un panneau "DANGER" : on le note dès la PREMIÈRE FOIS, pas après la 2ème brûlure
+Exemples de VRAIS dangers à capter:
+✅ "NE JAMAIS utiliser openclaw gateway stop via exec — tue le daemon sans le relancer, gateway reste mort. Utiliser gateway restart (SIGUSR1)." (catégorie erreur)
+✅ "NE JAMAIS faire cp sur une DB SQLite en mode WAL — données perdues. Utiliser VACUUM INTO." (catégorie erreur)
+✅ "NE JAMAIS push sur main sans test — régression garantie. Toujours une branche séparée." (catégorie erreur)
+Signaux qu'un fait est un DANGER:
+- Quelqu'un dit "ne fais plus ça", "c'est la 2ème fois", "putain", "j'ai dû aller faire X manuellement"
+- Un service/outil est mort/cassé après une action
+- Un rollback ou fix manuel a été nécessaire
+- Le mot "jamais", "interdit", "critique", "ne pas" dans la conversation
+
 NE PAS STOCKER:
 ❌ Confirmations vides ("ok", "merci", "compris")
 ❌ Narration pure sans résultat ("je lis le fichier", "je regarde le code")
