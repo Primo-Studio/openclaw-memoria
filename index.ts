@@ -419,7 +419,13 @@ export function register(api: OpenClawPluginApi): void {
     scanInterval: 15,
   });
   const identityParser = new IdentityParser(cfg.workspacePath);
-  const lifecycleMgr = new LifecycleManager(db);
+  const lifecycleMgr = new LifecycleManager(db, {
+    freshDays: cfg.lifecycle?.freshDays ?? 15,
+    settledMinAccess: cfg.lifecycle?.settledMinAccess ?? 3,
+    dormantAfterDays: cfg.lifecycle?.dormantAfterDays ?? 60,
+    detailCursor: cfg.lifecycle?.detailCursor ?? 5,
+    revisionRecallThreshold: cfg.lifecycle?.revisionRecallThreshold ?? 10,
+  });
   const revisionMgr = new RevisionManager(db, chain);
   const hebbianMgr = new HebbianManager(db);
   const expertiseMgr = new ExpertiseManager(db);
@@ -516,7 +522,7 @@ export function register(api: OpenClawPluginApi): void {
 
   const fbStats = feedbackMgr.getStats();
   const fbNote = fbStats.totalWithFeedback > 0 ? `, feedback: ${fbStats.totalWithFeedback} tracked (avg ${fbStats.avgUsefulness.toFixed(1)})` : "";
-  const lifecycleNote = ` | lifecycle: ${lifecycleStats.fresh}f/${lifecycleStats.mature}m/${lifecycleStats.aged}a/${lifecycleStats.archived}⚰`;
+  const lifecycleNote = ` | lifecycle: ${lifecycleStats.fresh ?? 0}f/${lifecycleStats.settled ?? 0}s/${lifecycleStats.dormant ?? 0}d (cursor:${lifecycleMgr.detailCursor})`;
   const hebbianNote = ` | graph: ${hebbianStats.strong} strong, ${hebbianStats.weak} weak`;
   const expertiseNote = ` | expertise: ${expertiseStats.expert}★★★/${expertiseStats.experienced}★★/${expertiseStats.familiar}★`;
   const procNote = procStats.total > 0 
@@ -837,7 +843,16 @@ export function register(api: OpenClawPluginApi): void {
         // Merge: hot tier (always first) + search + graph + topic
         let finalFacts: Fact[] = [];
         try {
-          const allFactsCandidates = [...hotScored, ...topFacts, ...graphFacts, ...topicFacts];
+          // Apply lifecycle multiplier BEFORE tree building
+          // This adjusts temporalScore so dormant facts naturally sink lower
+          // but are NOT excluded — they can still surface if query-relevant
+          const allFactsCandidates = [...hotScored, ...topFacts, ...graphFacts, ...topicFacts].map(f => {
+            const mult = lifecycleMgr.getRecallMultiplier(f.lifecycle_state);
+            if (mult < 1.0 && (f as any).temporalScore) {
+              return { ...f, temporalScore: (f as any).temporalScore * mult };
+            }
+            return f;
+          });
           const tree = await treeBuilder.build(allFactsCandidates, prompt);
           
           // Extract facts in priority order (tree weights)

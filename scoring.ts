@@ -146,6 +146,12 @@ export function scoreFact(fact: Fact, now = Date.now()): ScoredFact {
   const relevanceWeight = (fact as any).relevance_weight ?? 0.5;
   score *= (0.7 + relevanceWeight * 0.6); // Scale: 0.7x (weight=0) to 1.3x (weight=1.0)
 
+  // 9. Lifecycle multiplier — prioritize fresh > settled > dormant
+  // Dormant facts are NOT deleted — they just surface less in auto-recall.
+  // When user explicitly asks about past events, lifecycle filter is bypassed.
+  // The multiplier is applied externally via LifecycleManager.getRecallMultiplier()
+  // to keep scoring independent of lifecycle config/cursor.
+
   return { ...fact, temporalScore: score, ageHours, decayFactor };
 }
 

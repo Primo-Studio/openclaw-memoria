@@ -1,94 +1,112 @@
 /**
- * Lifecycle Manager — Fact evolution like human memory
+ * Lifecycle Manager — Human-like memory prioritization
+ * 
+ * Philosophy: NEVER delete, NEVER forget. Everything stays in the DB forever.
+ * Lifecycle controls RECALL PRIORITY, not existence.
  * 
  * States:
- *   fresh    → new facts (< 7 days OR < 3 recalls)
- *   mature   → proven useful (3+ uses, no corrections)
- *   aged     → rarely used (> 90 days + low usage ratio)
- *   archived → forgotten (> 180 days + never used OR flagged for deletion)
+ *   fresh    → new facts (< freshDays), high recall priority
+ *   settled  → established facts (accessed 3+ times OR aged past freshDays), normal priority
+ *   dormant  → not accessed in 60+ days, low auto-recall priority but ALWAYS searchable on demand
  * 
- * Transitions happen automatically based on:
- *   - Time since creation
- *   - Recall count vs used count
- *   - Corrections/frustration signals
+ * The "detail cursor" (1-10) lets the user control how much dormant context
+ * gets included in automatic recall:
+ *   cursor 1  → only fresh + top settled
+ *   cursor 5  → fresh + settled (default)
+ *   cursor 10 → fresh + settled + dormant (everything)
+ * 
+ * When the user explicitly asks about a past event ("what did I do on March 15?"),
+ * ALL states are searched regardless of cursor — like asking your secretary to check the calendar.
+ * 
+ * Key insight from Neto: "I still remember learning to ride a bike at age 7.
+ * You don't forget — you just don't think about it every day."
  */
 
 import type { MemoriaDB, Fact } from "./db.js";
 
-export const LIFECYCLE_CONFIG = {
-  // Fresh → Mature
-  matureMinRecalls: 3,
-  matureMinUsageRatio: 0.4,  // At least 40% of recalls resulted in usage
-  matureMinDays: 3,           // Can't become mature instantly
+export interface LifecycleConfig {
+  /** Days a fact stays "fresh" (high priority). Default: 15 */
+  freshDays: number;
+  /** Min access_count to become "settled" before freshDays. Default: 3 */
+  settledMinAccess: number;
+  /** Days without access before becoming "dormant". Default: 60 */
+  dormantAfterDays: number;
+  /** Detail cursor (1-10). Controls how much dormant context is auto-recalled. Default: 5 */
+  detailCursor: number;
+  /** After N recalls of a settled fact, consider proactive revision. Default: 10 */
+  revisionRecallThreshold: number;
+}
 
-  // Mature → Aged (stale)
-  agedMinDays: 90,
-  agedMaxUsageRatio: 0.3,     // Used < 30% of recalls
-
-  // Aged → Archived (forgotten)
-  archivedMinDays: 180,
-  archivedMaxRecalls: 1,      // Almost never recalled
-
-  // Fresh → Aged (direct, if never used)
-  freshToAgedDays: 30,
-  freshToAgedMaxRecalls: 0,
-
-  // Proactive revision trigger
-  revisionRecallThreshold: 10,  // After 10 recalls of a mature fact, consider revision
+export const DEFAULT_LIFECYCLE_CONFIG: LifecycleConfig = {
+  freshDays: 15,
+  settledMinAccess: 3,
+  dormantAfterDays: 60,
+  detailCursor: 5,
+  revisionRecallThreshold: 10,
 };
 
-export type LifecycleState = "fresh" | "mature" | "aged" | "archived";
+export type LifecycleState = "fresh" | "settled" | "dormant";
+
+// Backward compat: map old states to new
+function normalizeState(state: string | null | undefined): LifecycleState {
+  if (!state || state === "fresh") return "fresh";
+  if (state === "mature" || state === "settled") return "settled";
+  if (state === "aged" || state === "archived" || state === "dormant") return "dormant";
+  return "fresh";
+}
 
 export class LifecycleManager {
-  constructor(private db: MemoriaDB) {}
+  private cfg: LifecycleConfig;
+
+  constructor(private db: MemoriaDB, config?: Partial<LifecycleConfig>) {
+    this.cfg = { ...DEFAULT_LIFECYCLE_CONFIG, ...config };
+  }
 
   /**
-   * Update lifecycle state for a single fact
+   * Update lifecycle state for a single fact.
+   * Uses access_count as the real signal (not recall_count which was broken).
    */
   updateLifecycle(fact: Fact, now = Date.now()): LifecycleState {
     const ageDays = (now - fact.created_at) / (1000 * 60 * 60 * 24);
-    const recallCount = (fact as any).recall_count ?? 0;
-    const usedCount = (fact as any).used_count ?? 0;
-    const usageRatio = recallCount > 0 ? usedCount / recallCount : 0;
+    const accessCount = fact.access_count ?? 0;
+    const lastAccessed = (fact as any).last_accessed_at ?? fact.created_at;
+    const daysSinceAccess = (now - lastAccessed) / (1000 * 60 * 60 * 24);
 
-    let newState: LifecycleState = fact.lifecycle_state || "fresh";
+    let newState: LifecycleState;
 
-    // Archived (permanent)
+    // Dormant: not accessed in dormantAfterDays AND past fresh period
     if (
-      ageDays > LIFECYCLE_CONFIG.archivedMinDays &&
-      recallCount <= LIFECYCLE_CONFIG.archivedMaxRecalls
+      ageDays > this.cfg.freshDays &&
+      daysSinceAccess > this.cfg.dormantAfterDays
     ) {
-      newState = "archived";
+      newState = "dormant";
     }
-    // Aged (stale but not forgotten)
+    // Settled: either accessed enough times, or past fresh period with some access
     else if (
-      ageDays > LIFECYCLE_CONFIG.agedMinDays &&
-      usageRatio < LIFECYCLE_CONFIG.agedMaxUsageRatio
+      accessCount >= this.cfg.settledMinAccess ||
+      (ageDays > this.cfg.freshDays && accessCount > 0)
     ) {
-      newState = "aged";
+      newState = "settled";
     }
-    // Fresh → Aged shortcut (never recalled)
-    else if (
-      ageDays > LIFECYCLE_CONFIG.freshToAgedDays &&
-      recallCount <= LIFECYCLE_CONFIG.freshToAgedMaxRecalls
-    ) {
-      newState = "aged";
-    }
-    // Mature (proven useful)
-    else if (
-      ageDays >= LIFECYCLE_CONFIG.matureMinDays &&
-      recallCount >= LIFECYCLE_CONFIG.matureMinRecalls &&
-      usageRatio >= LIFECYCLE_CONFIG.matureMinUsageRatio
-    ) {
-      newState = "mature";
-    }
-    // Fresh (default)
-    else {
+    // Fresh: still new
+    else if (ageDays <= this.cfg.freshDays) {
       newState = "fresh";
+    }
+    // Past fresh period, never accessed → still settled (not dormant yet, needs dormantAfterDays)
+    else {
+      newState = "settled";
+    }
+
+    // Normalize old state for comparison
+    const currentState = normalizeState(fact.lifecycle_state);
+
+    // A dormant fact that gets accessed again → back to settled (wake up)
+    if (currentState === "dormant" && accessCount > 0 && daysSinceAccess < this.cfg.dormantAfterDays) {
+      newState = "settled";
     }
 
     // Only update DB if state changed
-    if (newState !== fact.lifecycle_state) {
+    if (newState !== currentState) {
       this.db.raw.prepare("UPDATE facts SET lifecycle_state = ? WHERE id = ?").run(newState, fact.id);
     }
 
@@ -106,13 +124,12 @@ export class LifecycleManager {
 
       const breakdown: Record<LifecycleState, number> = {
         fresh: 0,
-        mature: 0,
-        aged: 0,
-        archived: 0,
+        settled: 0,
+        dormant: 0,
       };
 
       for (const fact of facts) {
-        const oldState = fact.lifecycle_state || "fresh";
+        const oldState = normalizeState(fact.lifecycle_state);
         const newState = this.updateLifecycle(fact, now);
         if (oldState !== newState) updated++;
         breakdown[newState]++;
@@ -121,17 +138,37 @@ export class LifecycleManager {
       return { updated, breakdown };
     } catch (err) {
       console.error("[lifecycle] refreshAll failed:", err);
-      return { updated: 0, breakdown: { fresh: 0, mature: 0, aged: 0, archived: 0 } };
+      return { updated: 0, breakdown: { fresh: 0, settled: 0, dormant: 0 } };
     }
   }
 
   /**
-   * Check if a mature fact needs proactive revision
+   * Get the recall score multiplier based on lifecycle state and detail cursor.
+   * 
+   * fresh   → 1.0 (always full priority)
+   * settled → 0.8 (slight reduction)
+   * dormant → scales with cursor:
+   *   cursor 1  → 0.05 (almost invisible in auto-recall)
+   *   cursor 5  → 0.25 (occasionally surfaces)
+   *   cursor 10 → 0.7  (nearly full priority)
+   */
+  getRecallMultiplier(state: string | null | undefined): number {
+    const s = normalizeState(state);
+    if (s === "fresh") return 1.0;
+    if (s === "settled") return 0.85;
+    // dormant: scale with cursor (1-10)
+    const cursor = Math.max(1, Math.min(10, this.cfg.detailCursor));
+    return 0.05 + (cursor - 1) * 0.072; // cursor 1→0.05, 5→0.34, 10→0.70
+  }
+
+  /**
+   * Check if a settled fact needs proactive revision
    */
   needsRevision(fact: Fact): boolean {
-    if (fact.lifecycle_state !== "mature") return false;
-    const recallCount = (fact as any).recall_count ?? 0;
-    return recallCount >= LIFECYCLE_CONFIG.revisionRecallThreshold;
+    const state = normalizeState(fact.lifecycle_state);
+    if (state !== "settled") return false;
+    const accessCount = fact.access_count ?? 0;
+    return accessCount >= this.cfg.revisionRecallThreshold;
   }
 
   /**
@@ -141,19 +178,12 @@ export class LifecycleManager {
     const facts = this.db.raw.prepare(
       `SELECT * FROM facts 
        WHERE superseded = 0 
-       AND lifecycle_state = 'mature' 
-       AND recall_count >= ?
-       ORDER BY recall_count DESC
+       AND lifecycle_state = 'settled' 
+       AND access_count >= ?
+       ORDER BY access_count DESC
        LIMIT 5`
-    ).all(LIFECYCLE_CONFIG.revisionRecallThreshold) as Fact[];
+    ).all(this.cfg.revisionRecallThreshold) as Fact[];
     return facts;
-  }
-
-  /**
-   * Archive a fact manually (e.g., after user correction/deletion request)
-   */
-  archiveFact(factId: string): void {
-    this.db.raw.prepare("UPDATE facts SET lifecycle_state = 'archived' WHERE id = ?").run(factId);
   }
 
   /**
@@ -166,23 +196,28 @@ export class LifecycleManager {
          FROM facts 
          WHERE superseded = 0 
          GROUP BY lifecycle_state`
-      ).all() as Array<{ lifecycle_state: LifecycleState; count: number }>;
+      ).all() as Array<{ lifecycle_state: string; count: number }>;
 
       const stats: Record<LifecycleState, number> = {
         fresh: 0,
-        mature: 0,
-        aged: 0,
-        archived: 0,
+        settled: 0,
+        dormant: 0,
       };
 
       for (const row of rows) {
-        stats[row.lifecycle_state] = row.count;
+        const normalized = normalizeState(row.lifecycle_state);
+        stats[normalized] += row.count;
       }
 
       return stats;
     } catch (err) {
       console.error("[lifecycle] getStats failed:", err);
-      return { fresh: 0, mature: 0, aged: 0, archived: 0 };
+      return { fresh: 0, settled: 0, dormant: 0 };
     }
+  }
+
+  /** Get current detail cursor value */
+  get detailCursor(): number {
+    return this.cfg.detailCursor;
   }
 }

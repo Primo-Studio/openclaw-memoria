@@ -41,6 +41,41 @@
         "type": "boolean",
         "default": true
       },
+      "lifecycle": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Human-like memory lifecycle. Controls recall priority, never deletes. Dormant facts are always searchable on explicit request.",
+        "properties": {
+          "freshDays": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 90,
+            "default": 15,
+            "description": "Days a fact stays 'fresh' (highest recall priority)"
+          },
+          "settledMinAccess": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 50,
+            "default": 3,
+            "description": "Access count to become 'settled' before freshDays expires"
+          },
+          "dormantAfterDays": {
+            "type": "number",
+            "minimum": 15,
+            "maximum": 365,
+            "default": 60,
+            "description": "Days without access before becoming 'dormant' (low auto-recall priority, still searchable)"
+          },
+          "detailCursor": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 10,
+            "default": 5,
+            "description": "Detail cursor (1-10). Higher = more dormant context in auto-recall. 1=minimal, 5=normal, 10=everything"
+          }
+        }
+      },
       "procedural": {
         "type": "object",
         "additionalProperties": false,
