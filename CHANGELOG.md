@@ -1,3 +1,60 @@
+## 3.21.0 — Deep Audit: 10 Bugs Found & Fixed (2026-03-28)
+
+### Critical Fixes
+- **Hebbian learning was 100% dead** — `hebbian.ts` used wrong column names (`from_entity`/`to_entity`/`relation_type`/`updated_at`) but DB has `source_id`/`target_id`/`relation`/`last_accessed_at`). All queries silently returned nothing since creation.
+- **Proactive revision never triggered** — searched for `lifecycle_state = 'mature'` but DB only has `fresh`/`settled`/`dormant`
+- **storeFact() lost 6 columns** on INSERT — `usefulness`, `recall_count`, `used_count`, `synced_to_md`, `relevance_weight`, `lifecycle_state` silently dropped
+- **Fact interface missing 4 DB columns** — 8 `as any` casts removed
+- **4 SQL queries filtered wrong lifecycle state** — `!= 'archived'` → `!= 'dormant'`
+- **Cross-layer 9b used wrong column names** — same `from_entity`/`to_entity` bug as hebbian
+- **revision.ts imported non-existent file** — `./llm-provider.js` → `./providers/types.js`
+- **procedural.ts wrong import path** — aligned to `./providers/types.js`
+- **Fact type unions incomplete** — added `"cluster"` and `"pattern"` to `fact_type`
+
+## 3.20.1 — Audit: 6 Bugs Found & Fixed (2026-03-28)
+- Type alignment: `fact_type` and `lifecycle_state` unions updated
+- SQL queries: 4 instances of `archived` → `dormant`
+- Import fixes: `revision.ts` and `procedural.ts`
+
+## 3.20.0 — Cross-Layer Connections (2026-03-28)
+- **Feedback → Lifecycle**: facts recalled 5+ times with usefulness ≥ 2 → auto-promoted to "settled"
+- **Hebbian → Topics**: strong relations (weight ≥ 1.0) auto-organize topic hierarchy (smaller becomes child)
+- **Lifecycle → Patterns**: patterns with 5+ occurrences → settled
+- Pattern detection step added to postProcessNewFacts
+
+## 3.19.0 — Behavioral Pattern Detection, Layer 20 (2026-03-28)
+- New module `patterns.ts` (~477 LOC) — detects repeated similar facts and consolidates
+- Patterns stored as `fact_type = "pattern"` with occurrence metadata in tags
+- Wired into capture pipeline (postProcessNewFacts) and recall scoring
+- ARCHITECTURE.md updated to reflect Layer 20
+
+## 3.18.0 — Fix Existing Layers, Phase 1 (2026-03-28)
+- New DB table `cluster_members` with backfill (~407 links)
+- Topics parent inference improved (composite-name strategy)
+- Boot-time reparenting of existing topics (17 reparented)
+- ARCHITECTURE.md reviewed/updated (19→20 layers documented)
+
+## 3.17.0 — ClawHub Security Fixes (2026-03-28)
+- SKILL.md: explicit `entrypoint: index.ts`, env vars declared optional, expanded security section
+- Install instructions: plugin install (one command) + "review code first" for source
+- Bundle includes all .ts modules + index.ts
+- License: Apache-2.0 in YAML frontmatter
+
+## 3.16.0 — ClawHub Suspicious Fix (2026-03-28)
+- Created `.clawignore` to exclude dev/audit artifacts
+- Declared env vars (OPENAI_API_KEY, OPENROUTER_API_KEY, OPENCLAW_WORKSPACE) as optional
+- Added security posture section to SKILL.md
+
+## 3.14.1 — Error Detection: Touch Fire Once (2026-03-27)
+- Automatic error signal detection (crashes, frustration keywords, rollbacks)
+- Each error captures: what happened, why dangerous, what to never repeat, safe alternative
+
+## 3.14.0 — Smarter Extraction + Consolidation (2026-03-27)
+- Extraction prompt rewritten: demands concrete details (who/what/when/why)
+- Cluster-aware recall: member facts get -40% score penalty
+- Procedures: first success = worth remembering (was: needed 3+ steps)
+- Added `failure_reasons` column for contextual alternative selection
+
 ## 3.12.0 — Capture Quality & Contradiction Detection
 
 ### Fix 1: Capture Filter
@@ -485,32 +542,4 @@ gagne en vitesse d'exécution car on la reproduit plus souvent."
 - `MemoriaDB` class, migration from facts.json (423 facts)
 - Provider abstraction (Ollama, OpenAI-compat, LM Studio)
 
-## v3.14.0 — Smarter Extraction + Consolidation + Contextual Procedures
-
-### Extraction Quality
-- Rewritten prompt: demands CONCRETE DETAILS (who, what, when, why)
-- Bad: "Neto had an important meeting" / Good: "Neto met client CCOG on 28/03 at 2pm about site redesign"
-- Bad: "Sol was restarted" / Good: "Sol restarted on 28/03 at 18h25, cause: better-sqlite3 node version mismatch, fix: npm rebuild"
-- Eliminated meta-facts ("this fact complements the previous one")
-
-### Cluster-Aware Recall
-- Facts that are members of an active cluster get 40% score reduction in auto-recall
-- The cluster summary represents them more concisely
-- Original facts still accessible on explicit/deep queries
-
-### Procedures: First Success = Valid
-- Lowered capture threshold from 3 meaningful steps to 1
-- Philosophy: "I learned to open this foreign door handle on the first try"
-- Procedures prove value through repeated use, not arbitrary minimums
-- Added failure_reasons tracking: records WHY a procedure failed (context/conditions)
-- Like noting "Route A has traffic at 6pm" — helps choose alternatives intelligently
-
-## v3.14.1 — Error Detection: Touch fire once, remember forever
-
-### Automatic Error/Danger Capture
-- New prompt section 🔥 ERREURS ET DANGERS with explicit signal detection
-- When something causes a REAL problem (crash, service dead, manual intervention needed)
-  → automatically extracted as category "erreur" with confidence 0.95+
-- Detects danger signals: "ne fais plus ça", "c'est la 2ème fois", frustration keywords, service failures
-- Like touching fire: noted as critical on the FIRST occurrence, not after the second burn
-- Each error fact includes: what happened + why it's dangerous + what to NEVER do again + the safe alternative
+<!-- v3.14.x entries moved to proper chronological position above -->

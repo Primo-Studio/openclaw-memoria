@@ -1,7 +1,7 @@
 ---
 name: Memoria for OpenClaw
 version: 3.21.0
-description: "Multi-layer persistent memory for OpenClaw. 7 memory layers, bring your own LLM (Ollama, LM Studio, or API), 100% local-first, zero cloud cost."
+description: "Multi-layer persistent memory for OpenClaw. 20 memory layers, bring your own LLM (Ollama, LM Studio, or API), 100% local-first, zero cloud cost."
 author: Primo Studio (@Nieto42)
 license: Apache-2.0
 homepage: https://github.com/Primo-Studio/openclaw-memoria
@@ -54,11 +54,11 @@ entrypoint: index.ts
 
 # 🧠 Memoria — Multi-Layer Persistent Memory for OpenClaw
 
-**The most complete memory system for OpenClaw.** 7 layers of memory that work together, powered by YOUR choice of LLM.
+**The most complete memory system for OpenClaw.** 20 layers of memory that work together, powered by YOUR choice of LLM.
 
 ## Why Memoria?
 
-### 🏗️ 7 Memory Layers (not just a fact store)
+### 🏗️ 20 Memory Layers (not just a fact store)
 1. **Facts** — Durable knowledge extracted from every conversation
 2. **Procedures** — HOW to do things, improves with repetition, learns from failures
 3. **Knowledge Graph** — Entities + relations connecting your facts
@@ -83,7 +83,7 @@ Configure each layer independently. Mix and match:
 ### 🧬 What Makes Memoria Different
 | Feature | Memoria | Basic memory plugins |
 |---------|---------|---------------------|
-| Memory layers | 7 specialized layers | Single fact store |
+| Memory layers | 20 specialized layers | Single fact store |
 | LLM choice | Any local or remote model | Usually hardcoded |
 | Per-layer LLM config | ✅ Different model per layer | ❌ |
 | Procedural learning | ✅ Learns HOW, not just WHAT | ❌ |

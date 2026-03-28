@@ -2,85 +2,73 @@
 
 **Memory that thinks like you do.** Your AI assistant remembers what matters, forgets what doesn't, and gets better over time.
 
-**SQLite-backed · Fully local · Zero cloud · Human-like memory architecture**
+**SQLite-backed · Fully local · Zero cloud · 20 memory layers · Human-like architecture**
 
 ---
 
-## ✨ What's New in v3.7.2
+## ✨ What's New in v3.21.0
 
-### 🔧 **Procedural Memory** *(NEW in 3.7.0)*
-Memoria now learns **"how to do things"**, not just "what happened":
-- Captures successful command sequences automatically
-- Tracks success/failure rates per procedure
-- Improves with repetition (success++ → degradation--)
-- Searches for alternatives when a procedure degrades
-- Example: "How to publish on ClawHub" → stored as 4-step procedure with 100% success rate
+### 🔍 Deep Audit — 10 bugs found & fixed
+Full code audit revealed critical alignment issues between DB schema and TypeScript types:
+- **Hebbian learning was 100% dead** — wrong column names since creation, all queries silently failed
+- **Proactive revision never triggered** — searched for obsolete lifecycle state
+- **storeFact() lost 6 columns** on INSERT — usefulness, recall_count, used_count, synced_to_md, relevance_weight, lifecycle_state were silently dropped
+- All 20 layers now properly aligned with the actual database schema
 
-**Why it matters**: No more "I did this yesterday but don't remember how." Memoria now stores the steps.
+### 🧩 Behavioral Patterns *(v3.19.0)*
+Detects repeated similar facts and consolidates them into patterns:
+- "Neto wants step-by-step" appears 5 times → consolidated into one pattern with occurrences tracked
+- Patterns promoted to "settled" lifecycle automatically after 5+ occurrences
 
----
+### 🔗 Cross-Layer Connections *(v3.20.0)*
+Three bridges that make layers communicate:
+- **Feedback → Lifecycle**: facts recalled 5+ times with positive usefulness → auto-promoted to "settled"
+- **Hebbian → Topics**: strong entity relations (weight ≥ 1.0) auto-organize topics into parent/child hierarchy
+- **Lifecycle → Patterns**: confirmed patterns (5+ occurrences) → settled (never forgotten)
 
-### 🧬 **Identity-Aware Memory** *(v3.6.0)*
-Memoria now understands **who you are** and **what you care about**. Facts about your core projects (Bureau, Polymarket, client work) are prioritized over plugin config details.
-
-### 🌱 **Fact Evolution (Lifecycle)** *(v3.6.0)*
-Facts evolve through 4 states like human memory:
-- **Fresh** → new facts (< 7 days OR < 3 recalls)
-- **Mature** → proven useful (3+ uses, no corrections)
-- **Aged** → rarely used (90+ days, low usage)
-- **Archived** → forgotten (180+ days, never used)
-
-Archived facts are excluded from recall — **forgotten, not deleted**.
-
-### 🔄 **Proactive Revision** *(v3.6.0)*
-Mature facts recalled 10+ times trigger automatic LLM revision. If improved → new version created, old one superseded.
-
-### 🧠 **Hebbian Reinforcement** *(v3.6.0)*
-Knowledge graph relations now strengthen when entities co-occur (like neural connections). Weak relations fade over time and are pruned automatically.
-
-### ⭐ **Expertise Specialization** *(v3.6.0)*
-Topics gain expertise levels based on interaction frequency:
-- `★` Novice → `★★` Familiar → `★★★` Experienced → `★★★★` Expert
-
-Expert topics boost recall scores (your "specialist" knowledge rises to the top).
+### 🏗️ Cluster Members *(v3.18.0)*
+New `cluster_members` table tracks which facts belong to which clusters. Topic hierarchy with parent inference and reparenting on boot.
 
 ---
 
 ## ✨ Core Features
 
-- **15 memory layers** — from text search to procedural memory, knowledge graphs, feedback loops, emergent topics
+- **20 memory layers** — from text search to procedural memory, knowledge graphs, behavioral patterns, and cross-layer connections
 - **Semantic vs Episodic** — durable knowledge decays slowly, dated events fade (like human memory)
+- **Lifecycle management** — facts evolve: fresh → settled → dormant (not "mature/archived")
 - **Observations** — living syntheses that evolve as new evidence appears
-- **Fact Clusters** — entity-grouped summaries for complete recall across sessions
-- **Procedural memory** — tricks, patterns, "what worked" preserved, not filtered
+- **Fact Clusters** — entity-grouped summaries with tracked membership
+- **Procedural memory** — captures "how to do things" with steps, gotchas, quality scores, and failure reasons
+- **Behavioral patterns** — detects repeated preferences and consolidates them
 - **Adaptive recall** — injects 2-12 facts based on context load
-- **Hot Tier** — frequently accessed facts always recalled
-- **Query Expansion** — synonyms, FR↔EN, abbreviations auto-expanded
-- **Feedback loop** — facts used rise; ignored/corrected facts sink
-- **User signal detection** — corrections and frustration penalize bad facts
-- **Self-regulating budget** — learns from compactions, auto-adjusts
-- **Cross-layer cascade** — superseded facts update graph, topics, embeddings, observations
+- **Hot Tier** — frequently accessed facts (5+ recalls) always recalled
+- **Feedback loop** — usefulness/recall_count/used_count tracked per fact
+- **Cross-layer connections** — feedback→lifecycle, hebbian→topics, lifecycle→patterns
+- **Hebbian reinforcement** — knowledge graph relations strengthen on co-occurrence, decay when unused
+- **Proactive revision** — settled facts get LLM review and potential update
+- **Identity-aware** — parses SOUL.md/USER.md to prioritize relevant facts
+- **Expertise specialization** — topic access frequency boosts recall
 - **Provider-agnostic** — Ollama, LM Studio, OpenAI, OpenRouter, Anthropic
-- **Fallback chain** — if primary LLM crashes, memory keeps working
+- **Fallback chain** — if primary LLM fails, next one takes over; if all fail, facts still stored
 - **Zero config** — smart defaults, 60-second setup
 
 ---
 
 ## 🚀 Quick Install
 
+### As Plugin (recommended)
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Primo-Studio/openclaw-memoria/main/install.sh | bash
+openclaw plugins install memoria-plugin
 ```
 
-The interactive wizard guides you through provider selection and model setup.
-
-> 💡 Everything is changeable after install via `bash ~/.openclaw/extensions/memoria/configure.sh`
-
-### Update
-
+### From Source (review code first)
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Primo-Studio/openclaw-memoria/main/install.sh | bash -s -- --update
+cd ~/.openclaw/extensions
+git clone https://github.com/Primo-Studio/openclaw-memoria.git memoria
+cd memoria && npm install
 ```
+
+> 💡 Configure after install via `bash ~/.openclaw/extensions/memoria/configure.sh`
 
 ### Minimal manual config
 
@@ -102,35 +90,64 @@ See [INSTALL.md](INSTALL.md) for advanced options.
 
 ---
 
-## 🏗️ How It Works
+## 🏗️ Architecture — 20 Layers
 
 ```
 ┌──────────────────────────────────────────────────────┐
-│                   MEMORIA v3.5.0                     │
+│                   MEMORIA v3.21.0                    │
 ├──────────────────────────────────────────────────────┤
 │                                                      │
 │  RECALL (before each response):                      │
-│  User Signal Detection (correction/frustration)      │
-│  → Observations → Hot Facts → Hybrid Search          │
-│  → Knowledge Graph → Topics → Adaptive Budget        │
+│  Budget → Observations → Hybrid Search (FTS5+embed)  │
+│  → Knowledge Graph → Topics → Context Tree           │
+│  → Lifecycle mult × Expertise boost × Cluster penalty│
+│  → Format + Inject                                   │
 │                                                      │
 │  CAPTURE (after each conversation):                  │
-│  Extract → Classify → Filter → Store                 │
-│  → Embed → Graph → Topics → Observations             │
-│  → Clusters → Feedback Loop → Sync to .md            │
+│  LLM Extract → Selective (dedup/contradiction)       │
+│  → Embed → Graph → Hebbian → Topics → Observations  │
+│  → Clusters → Patterns → Cross-layer connections     │
+│  → Sync .md → Auto-regen                             │
 │                                                      │
 │  LEARNING (continuous):                              │
-│  Feedback (used/ignored) → Scoring adjustment        │
-│  User correction → Penalize bad facts                │
-│  Compaction → Budget self-regulation                 │
-│  Supersede → Cascade to all layers                   │
+│  Feedback (usefulness/recall/used) → Lifecycle       │
+│  Hebbian (co-occurrence) → Topic hierarchy           │
+│  Pattern detection → Consolidation                   │
+│  Proactive revision → Fact evolution                 │
 │                                                      │
 ├──────────────────────────────────────────────────────┤
 │  SQLite (FTS5 + vectors) · No cloud required         │
 └──────────────────────────────────────────────────────┘
 ```
 
-For detailed architecture, layer descriptions, and scoring formulas, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+### Layer Map
+
+| # | Layer | File | LLM? | Purpose |
+|---|-------|------|------|---------|
+| 1 | SQLite Core + FTS5 | `db.ts` | ❌ | Storage, full-text search |
+| 2 | Temporal Scoring | `scoring.ts` | ❌ | Decay, hot tier (5+ accesses) |
+| 3 | Selective Memory | `selective.ts` | ✅ | Dedup, contradiction check |
+| 4 | Embeddings + Hybrid | `embeddings.ts` | ❌ | Cosine similarity (embed only) |
+| 5 | Knowledge Graph | `graph.ts` | ✅ | Entity/relation extraction |
+| 6 | Context Tree | `context-tree.ts` | ❌ | Hierarchical organization |
+| 7 | Adaptive Budget | `budget.ts` | ❌ | Auto-adjust facts injected |
+| 8 | Emergent Topics | `topics.ts` | ✅ | Keyword extraction, topic naming |
+| 9 | Observations | `observations.ts` | ✅ | Living syntheses from evidence |
+| 10 | Fact Clusters | `fact-clusters.ts` | ✅ | Entity-grouped summaries |
+| 11 | .md Sync + Regen | `sync.ts`, `md-regen.ts` | ❌ | Write facts to workspace files |
+| 12 | Fallback Chain | `fallback.ts` | all | Ollama → OpenAI → LM Studio |
+| 13 | Procedural Memory | `procedural.ts` | ✅ | How-to steps, quality, gotchas |
+| 14 | Lifecycle | `lifecycle.ts` | ❌ | fresh → settled → dormant |
+| 15 | Feedback Loop | `feedback.ts` | ❌ | usefulness, recall_count, used_count |
+| 16 | Hebbian | `hebbian.ts` | ❌ | Strengthen co-occurring relations |
+| 17 | Identity Parser | `identity-parser.ts` | ❌ | Parse SOUL.md/USER.md |
+| 18 | Expertise | `expertise.ts` | ❌ | Topic access → recall boost |
+| 19 | Proactive Revision | `revision.ts` | ✅ | Revise settled facts via LLM |
+| 20 | Behavioral Patterns | `patterns.ts` | ✅ | Detect + consolidate repetitions |
+
+**8 layers use LLM** (14 calls total) via the Fallback Chain. **12 layers are pure algorithmic.**
+
+For scoring formulas, decay rates, and detailed pipeline descriptions, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ---
 
@@ -183,7 +200,9 @@ Tested on LongMemEval-S (30 questions, 5 categories):
 | v3.2.0 | 73% | 50% | Contradiction supersession + procedural |
 | v3.3.0 | 75% | 43% | Query expansion + topic recall |
 | v3.4.0 | 82% | 50% | Fact Clusters (multi-session +75%) |
-| v3.5.0 | **82%+** | **50%** | Feedback loop + cross-layer cascade + user signal detection |
+| v3.5.0 | 82%+ | 50% | Feedback loop + cross-layer cascade |
+
+> v3.14–3.21 benchmarks pending (Sol benchmark planned).
 
 Detailed methodology and scripts in [benchmarks/](benchmarks/).
 
@@ -193,12 +212,15 @@ Detailed methodology and scripts in [benchmarks/](benchmarks/).
 
 | Version | Feature | Status |
 |---------|---------|--------|
-| v3.5.0 | **Feedback Loop** — usefulness tracking, user correction/frustration detection | ✅ Done |
-| v3.5.0 | **Cross-Layer Cascade** — supersede propagates to all 4 layers | ✅ Done |
-| v3.5.0 | **Self-Regulating Budget** — learns from compactions | ✅ Done |
-| v3.6.0 | **Image Memory** — extract and remember important details from images | 🔜 Planned |
-| v3.6.0 | **Interest Profile** — track user's recurring themes, boost relevant topics | 🔜 Planned |
-| v3.7.0 | **LCM Bridge** — cross-reference with conversation summaries | 💡 Design |
+| v3.0–3.5 | Core layers (1-12): FTS5, scoring, selective, graph, topics, observations, clusters, feedback, cascade | ✅ Done |
+| v3.6–3.7 | Identity-aware, lifecycle, hebbian, expertise, procedural | ✅ Done |
+| v3.8–3.12 | Procedural quality (reflection, alternatives, gotchas), capture quality, error detection | ✅ Done |
+| v3.14–3.17 | Smarter extraction, cluster-aware recall, security/packaging fixes | ✅ Done |
+| v3.18 | Cluster members table, topic hierarchy with parent inference | ✅ Done |
+| v3.19 | Behavioral pattern detection (Layer 20) | ✅ Done |
+| v3.20 | Cross-layer connections (feedback→lifecycle, hebbian→topics, lifecycle→patterns) | ✅ Done |
+| v3.21 | Deep audit: 10 bugs fixed, full type alignment, all 20 layers validated | ✅ Done |
+| v3.22+ | Image memory, interest profiles, LCM bridge, Sol/Luna benchmarks | 🔜 Next |
 
 ---
 
