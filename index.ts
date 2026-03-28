@@ -676,6 +676,81 @@ export function register(api: OpenClawPluginApi): void {
         api.logger.info?.(`memoria: [${source}] patterns — ${patternResult.detected} groups found, ${patternResult.consolidated} consolidated`);
       }
     } catch { /* non-critical */ }
+
+    // 9. Cross-layer connections (Phase 3)
+    try {
+      let crossUpdates = 0;
+
+      // 9a. Feedback → lifecycle promotion
+      // Facts recalled 5+ times with positive usefulness → force settled
+      const highUseFacts = db.raw.prepare(
+        `SELECT id, lifecycle_state, recall_count, usefulness FROM facts 
+         WHERE superseded = 0 AND recall_count >= 5 AND usefulness >= 2 
+         AND (lifecycle_state IS NULL OR lifecycle_state = 'fresh')`
+      ).all() as Array<{ id: string; lifecycle_state: string; recall_count: number; usefulness: number }>;
+      for (const f of highUseFacts) {
+        db.raw.prepare("UPDATE facts SET lifecycle_state = 'settled' WHERE id = ?").run(f.id);
+        crossUpdates++;
+      }
+
+      // 9b. Hebbian → topics: strong relations (weight >= 1.0) between entities
+      // If both entities belong to different topics, suggest parent-child or merge
+      const strongRelations = db.raw.prepare(
+        `SELECT from_entity, to_entity, weight FROM relations WHERE weight >= 1.0 ORDER BY weight DESC LIMIT 20`
+      ).all() as Array<{ from_entity: string; to_entity: string; weight: number }>;
+      for (const rel of strongRelations) {
+        // Find topics for each entity
+        const fromTopics = db.raw.prepare(
+          `SELECT DISTINCT t.id, t.name, t.parent_topic_id FROM topics t 
+           JOIN fact_topics ft ON ft.topic_id = t.id 
+           JOIN facts f ON f.id = ft.fact_id 
+           WHERE f.entity_ids LIKE ? AND f.superseded = 0`
+        ).all(`%${rel.from_entity}%`) as Array<{ id: string; name: string; parent_topic_id: string | null }>;
+        const toTopics = db.raw.prepare(
+          `SELECT DISTINCT t.id, t.name, t.parent_topic_id FROM topics t 
+           JOIN fact_topics ft ON ft.topic_id = t.id 
+           JOIN facts f ON f.id = ft.fact_id 
+           WHERE f.entity_ids LIKE ? AND f.superseded = 0`
+        ).all(`%${rel.to_entity}%`) as Array<{ id: string; name: string; parent_topic_id: string | null }>;
+
+        // If one topic is smaller, make it child of the larger
+        for (const ft of fromTopics) {
+          for (const tt of toTopics) {
+            if (ft.id === tt.id) continue;
+            if (ft.parent_topic_id || tt.parent_topic_id) continue; // already has parent
+            const ftCount = (db.raw.prepare("SELECT fact_count FROM topics WHERE id = ?").get(ft.id) as any)?.fact_count || 0;
+            const ttCount = (db.raw.prepare("SELECT fact_count FROM topics WHERE id = ?").get(tt.id) as any)?.fact_count || 0;
+            // Smaller becomes child of larger (only if ratio > 2:1)
+            if (ftCount > ttCount * 2 && ttCount > 0) {
+              db.raw.prepare("UPDATE topics SET parent_topic_id = ? WHERE id = ?").run(ft.id, tt.id);
+              crossUpdates++;
+            } else if (ttCount > ftCount * 2 && ftCount > 0) {
+              db.raw.prepare("UPDATE topics SET parent_topic_id = ? WHERE id = ?").run(tt.id, ft.id);
+              crossUpdates++;
+            }
+          }
+        }
+      }
+
+      // 9c. Lifecycle → patterns: confirmed patterns (5+ occurrences) → settled
+      const freshPatterns = db.raw.prepare(
+        `SELECT id, tags FROM facts WHERE fact_type = 'pattern' AND superseded = 0 
+         AND (lifecycle_state IS NULL OR lifecycle_state = 'fresh')`
+      ).all() as Array<{ id: string; tags: string }>;
+      for (const p of freshPatterns) {
+        try {
+          const meta = JSON.parse(p.tags || "{}");
+          if (meta.occurrences && meta.occurrences.length >= 5) {
+            db.raw.prepare("UPDATE facts SET lifecycle_state = 'settled' WHERE id = ?").run(p.id);
+            crossUpdates++;
+          }
+        } catch { /* skip malformed */ }
+      }
+
+      if (crossUpdates > 0) {
+        api.logger.info?.(`memoria: [${source}] cross-layer — ${crossUpdates} updates (feedback→lifecycle, hebbian→topics, lifecycle→patterns)`);
+      }
+    } catch { /* cross-layer non-critical */ }
   }
 
   // ════════════════════════════════════════════════════════════════
