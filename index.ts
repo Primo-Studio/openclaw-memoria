@@ -597,7 +597,9 @@ export function register(api: OpenClawPluginApi): void {
     ? ` | procedures: ${procStats.healthy}✓/${procStats.degraded}⚠${procStats.stale > 0 ? `/${procStats.stale}🕰️` : ''}` 
     : "";
   const patNote = patStats.total > 0 ? ` | patterns: ${patStats.total} (avg ${patStats.avgOccurrences} occ)` : "";
-  const contNote = CONTINUOUS_ENABLED ? ` | continuous: every ${CONTINUOUS_NORMAL_INTERVAL} turns` : "";
+  const contEnabled = cfg.continuous?.enabled !== false && cfg.autoCapture;
+  const contInterval = cfg.continuous?.interval ?? 4;
+  const contNote = contEnabled ? ` | continuous: every ${contInterval} turns` : "";
   api.logger.info?.(`memoria: v${pluginVersion} registered (${stats.active} facts, ${cStats.total} clusters, ${oStats.total} observations, ${embCount} embedded, ${gStats.entities} entities, ${gStats.relations} relations, ${tStats.totalTopics} topics${fbNote}${lifecycleNote}${hebbianNote}${expertiseNote}${procNote}${patNote}${contNote}, fallback: ${chain.providerNames.join(" → ")})`);
   
   // Log .md file sizes
