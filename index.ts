@@ -16,6 +16,7 @@
 import fs from "fs";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { MemoriaDB } from "./core/db.js";
+import { WriteAheadLog } from "./core/wal.js";
 import { SelectiveMemory } from "./core/selective.js";
 import { EmbeddingManager } from "./core/embeddings.js";
 import { KnowledgeGraph } from "./core/graph.js";
@@ -56,6 +57,18 @@ export function register(api: OpenClawPluginApi): void {
   const cfg = parseConfig(rawPluginConfig);
 
   const db = new MemoriaDB(WORKSPACE);
+  const wal = new WriteAheadLog(db.raw);
+
+  // Process any unprocessed WAL entries from a previous crash
+  const unprocessedCount = wal.unprocessedCount();
+  if (unprocessedCount > 0) {
+    api.logger.info?.(`memoria: WAL has ${unprocessedCount} unprocessed entries from previous session — will process on next extraction`);
+  }
+  // Cleanup old processed WAL entries
+  const cleaned = wal.cleanup(7);
+  if (cleaned > 0) {
+    api.logger.debug?.(`memoria: WAL cleanup: removed ${cleaned} old processed entries`);
+  }
 
   // ─── Fallback chain: config providers → default chain ───
   api.logger.info?.(`[memoria] Config loaded: fallback=${cfg.fallback.length} providers, llm=${cfg.llm.provider}/${cfg.llm.model}, embed=${cfg.embed.provider}/${cfg.embed.model}`);
@@ -312,7 +325,7 @@ export function register(api: OpenClawPluginApi): void {
   // Layer 21: Continuous Learning (message_received + llm_output)
   const continuousState = registerContinuousHooks(
     api, cfg, db, selective, extractLlm, identityParser, postProcessNewFacts,
-    prefetchCache, recallDepsForPrefetch,
+    prefetchCache, recallDepsForPrefetch, wal,
   );
 
   // Layer 1b: Real-time procedural capture (after_tool_call)

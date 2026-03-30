@@ -19,6 +19,7 @@ import { LLM_EXTRACT_PROMPT, parseJSON, normalizeCategory } from "./core/extract
 import type { PrefetchCache } from "./prefetch.js";
 import { computeRecall, extractUserPrompt } from "./recall.js";
 import type { RecallDeps } from "./recall.js";
+import type { WriteAheadLog } from "./core/wal.js";
 
 // ─── Constants ───
 
@@ -98,7 +99,8 @@ export function registerContinuousHooks(
   identityParser: IdentityParser,
   postProcessNewFacts: (source: "capture" | "compaction") => Promise<void>,
   prefetchCache?: PrefetchCache,
-  recallDeps?: Omit<RecallDeps, "prefetchCache">
+  recallDeps?: Omit<RecallDeps, "prefetchCache">,
+  wal?: WriteAheadLog
 ): ContinuousHooksState {
   const ENABLED = cfg.continuous?.enabled !== false && cfg.autoCapture;
   if (!ENABLED) return { hasExtracted: () => false };
@@ -120,6 +122,12 @@ export function registerContinuousHooks(
       if (!event.content || event.content.length < 5) return;
       // Skip heartbeat/system messages
       if (/^(HEARTBEAT|Read HEARTBEAT|NO_REPLY)/i.test(event.content)) return;
+
+      // ── WAL: persist message IMMEDIATELY (< 1ms, crash-safe) ──
+      if (wal) {
+        try { wal.write("user", event.content); }
+        catch (e) { api.logger.debug?.(`memoria: WAL write error: ${String(e)}`); }
+      }
 
       state.buffer.push({
         role: "user",
@@ -189,6 +197,12 @@ export function registerContinuousHooks(
       const combined = texts.join("\n").slice(0, 3000);
       // Skip empty/system responses
       if (/^(HEARTBEAT_OK|NO_REPLY)$/i.test(combined.trim())) return;
+
+      // ── WAL: persist assistant response IMMEDIATELY ──
+      if (wal) {
+        try { wal.write("assistant", combined); }
+        catch (e) { api.logger.debug?.(`memoria: WAL write error: ${String(e)}`); }
+      }
 
       state.buffer.push({
         role: "assistant",
