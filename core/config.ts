@@ -65,6 +65,12 @@ export interface MemoriaConfig {
     docCheckDays?: number;
   };
   patterns?: any; // PatternManager config, loosely typed for now
+  autoSkill?: {
+    minSuccesses?: number;
+    minQuality?: number;
+    skillDir?: string;
+    maxPerSession?: number;
+  };
 }
 
 /** Named layers that accept a per-layer LLM override */

@@ -18,6 +18,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { MemoriaDB } from "./core/db.js";
 import { WriteAheadLog } from "./core/wal.js";
 import { SelfObserver } from "./core/self-observation.js";
+import { AutoSkillCreator } from "./core/auto-skill.js";
 import { SelectiveMemory } from "./core/selective.js";
 import { EmbeddingManager } from "./core/embeddings.js";
 import { KnowledgeGraph } from "./core/graph.js";
@@ -60,6 +61,8 @@ export function register(api: OpenClawPluginApi): void {
   const db = new MemoriaDB(WORKSPACE);
   const wal = new WriteAheadLog(db.raw);
   const selfObserver = new SelfObserver(db.raw);
+  // autoSkill is initialized later, after proceduralMem is created
+  let autoSkill: AutoSkillCreator;
 
   // Process any unprocessed WAL entries from a previous crash
   const unprocessedCount = wal.unprocessedCount();
@@ -186,6 +189,7 @@ export function register(api: OpenClawPluginApi): void {
     docCheckDays: cfg.procedural?.docCheckDays ?? 60,
   });
   proceduralMem.ensureSchema();
+  autoSkill = new AutoSkillCreator(proceduralMem, WORKSPACE, cfg.autoSkill);
 
   const patternMgr = new PatternManager(db, extractLlm, cfg.patterns);
 
@@ -340,6 +344,35 @@ export function register(api: OpenClawPluginApi): void {
   };
   registerAgentEndHook(captureDeps);
   registerCompactionHook(captureDeps);
+
+  // Layer 23: Auto Skill Creation + Self-Observation success tracking (agent_end)
+  api.on("agent_end", async (event: any, _ctx: any) => {
+    try {
+      // Record session success in self-observation
+      if (event.success && selfObserver) {
+        const msgCount = event.messages?.length || 0;
+        const toolCount = event.toolCallCount || 0;
+        if (msgCount > 2 || toolCount > 0) {
+          // Detect domain from conversation content
+          const lastMsgs = (event.messages || [])
+            .slice(-5)
+            .map((m: any) => m.content || "")
+            .join(" ");
+          selfObserver.record("success", lastMsgs.slice(0, 500));
+        }
+      }
+
+      // Check for mature procedures → promote to skill files
+      if (event.success) {
+        const promoted = autoSkill.checkAndPromote();
+        if (promoted > 0) {
+          api.logger.info?.(`memoria: 🎓 auto-skill: ${promoted} procedure(s) promoted to skill files`);
+        }
+      }
+    } catch (err) {
+      api.logger.debug?.(`memoria: auto-skill/self-obs agent_end error: ${String(err)}`);
+    }
+  });
 }
 
 export default { register };
