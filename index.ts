@@ -17,6 +17,7 @@ import fs from "fs";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { MemoriaDB } from "./core/db.js";
 import { WriteAheadLog } from "./core/wal.js";
+import { SelfObserver } from "./core/self-observation.js";
 import { SelectiveMemory } from "./core/selective.js";
 import { EmbeddingManager } from "./core/embeddings.js";
 import { KnowledgeGraph } from "./core/graph.js";
@@ -58,6 +59,7 @@ export function register(api: OpenClawPluginApi): void {
 
   const db = new MemoriaDB(WORKSPACE);
   const wal = new WriteAheadLog(db.raw);
+  const selfObserver = new SelfObserver(db.raw);
 
   // Process any unprocessed WAL entries from a previous crash
   const unprocessedCount = wal.unprocessedCount();
@@ -312,20 +314,20 @@ export function register(api: OpenClawPluginApi): void {
   registerRecallHook({
     api, cfg, db, embeddingMgr, graph, topicMgr, observationMgr,
     proceduralMem, treeBuilder, budget, feedbackMgr, lifecycleMgr,
-    expertiseMgr, patternMgr, revisionMgr, prefetchCache,
+    expertiseMgr, patternMgr, revisionMgr, prefetchCache, selfObserver,
   });
 
   // RecallDeps without prefetchCache — for prefetch computation
   const recallDepsForPrefetch = {
     api, cfg, db, embeddingMgr, graph, topicMgr, observationMgr,
     proceduralMem, treeBuilder, budget, feedbackMgr, lifecycleMgr,
-    expertiseMgr, patternMgr, revisionMgr,
+    expertiseMgr, patternMgr, revisionMgr, selfObserver,
   };
 
   // Layer 21: Continuous Learning (message_received + llm_output)
   const continuousState = registerContinuousHooks(
     api, cfg, db, selective, extractLlm, identityParser, postProcessNewFacts,
-    prefetchCache, recallDepsForPrefetch, wal,
+    prefetchCache, recallDepsForPrefetch, wal, selfObserver,
   );
 
   // Layer 1b: Real-time procedural capture (after_tool_call)

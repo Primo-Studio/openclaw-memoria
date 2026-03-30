@@ -20,6 +20,7 @@ import type { PrefetchCache } from "./prefetch.js";
 import { computeRecall, extractUserPrompt } from "./recall.js";
 import type { RecallDeps } from "./recall.js";
 import type { WriteAheadLog } from "./core/wal.js";
+import type { SelfObserver } from "./core/self-observation.js";
 
 // ─── Constants ───
 
@@ -100,7 +101,8 @@ export function registerContinuousHooks(
   postProcessNewFacts: (source: "capture" | "compaction") => Promise<void>,
   prefetchCache?: PrefetchCache,
   recallDeps?: Omit<RecallDeps, "prefetchCache">,
-  wal?: WriteAheadLog
+  wal?: WriteAheadLog,
+  selfObserver?: SelfObserver
 ): ContinuousHooksState {
   const ENABLED = cfg.continuous?.enabled !== false && cfg.autoCapture;
   if (!ENABLED) return { hasExtracted: () => false };
@@ -153,6 +155,11 @@ export function registerContinuousHooks(
       const isCorrection = CORRECTION_PATTERNS.some(p => p.test(event.content));
       if (isCorrection) {
         api.logger.info?.(`memoria: 📝 continuous — correction detected in user message`);
+        // Self-observation: record correction signal
+        if (selfObserver) {
+          try { selfObserver.record("correction", event.content); }
+          catch (e) { api.logger.debug?.(`memoria: self-obs error: ${String(e)}`); }
+        }
         // Log to .learnings/ for self-improving-agent coupling
         try {
           const workspacePath = cfg.workspacePath || process.env.OPENCLAW_WORKSPACE || "";
@@ -181,6 +188,11 @@ export function registerContinuousHooks(
       const isUrgent = CONTINUOUS_URGENT_PATTERNS.some(p => p.test(event.content));
       if (isUrgent) {
         api.logger.info?.(`memoria: ⚡ continuous — urgent signal detected in user message`);
+        // Self-observation: frustration or error detection
+        if (selfObserver) {
+          try { selfObserver.record("frustration", event.content); }
+          catch (e) { api.logger.debug?.(`memoria: self-obs error: ${String(e)}`); }
+        }
         await doContinuousExtraction(api, cfg, db, selective, extractLlm, identityParser, postProcessNewFacts, state, "urgent");
       }
     } catch (err) {

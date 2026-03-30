@@ -22,6 +22,7 @@ import type { RevisionManager } from "./core/revision.js";
 import { scoreAndRank, getHotFacts, HOT_TIER_CONFIG } from "./core/scoring.js";
 import { formatRecallContext } from "./core/format.js";
 import type { PrefetchCache } from "./prefetch.js";
+import type { SelfObserver } from "./core/self-observation.js";
 
 export interface RecallDeps {
   api: OpenClawPluginApi;
@@ -40,6 +41,7 @@ export interface RecallDeps {
   patternMgr: PatternManager;
   revisionMgr: RevisionManager;
   prefetchCache?: PrefetchCache;
+  selfObserver?: SelfObserver;
 }
 
 /**
@@ -297,7 +299,15 @@ export async function computeRecall(
 
   if (finalFacts.length === 0 && !observationContext && !proceduresContext) return undefined;
 
-  const context = formatRecallContext(finalFacts as any, observationContext) + proceduresContext;
+  // Self-observation: append agent profile if enough data
+  let selfObsContext = "";
+  try {
+    if (deps.selfObserver) {
+      selfObsContext = deps.selfObserver.formatForPrompt();
+    }
+  } catch (e) { api?.logger?.debug?.('memoria:self-obs-recall: ' + String(e)); }
+
+  const context = formatRecallContext(finalFacts as any, observationContext) + proceduresContext + selfObsContext;
 
   // Track access + feedback loop + budget learning + lifecycle update
   const ids = finalFacts.map(f => f.id);
