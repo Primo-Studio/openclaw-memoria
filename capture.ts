@@ -5,16 +5,16 @@
  */
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import type { MemoriaConfig } from "./config.js";
-import type { MemoriaDB } from "./db.js";
-import type { SelectiveMemory } from "./selective.js";
-import type { LLMProvider } from "./providers/types.js";
-import type { IdentityParser } from "./identity-parser.js";
-import type { ProceduralMemory } from "./procedural.js";
-import type { FeedbackManager } from "./feedback.js";
-import type { AdaptiveBudget } from "./budget.js";
+import type { MemoriaConfig } from "./core/config.js";
+import type { MemoriaDB } from "./core/db.js";
+import type { SelectiveMemory } from "./core/selective.js";
+import type { LLMProvider } from "./core/providers/types.js";
+import type { IdentityParser } from "./core/identity-parser.js";
+import type { ProceduralMemory } from "./core/procedural.js";
+import type { FeedbackManager } from "./core/feedback.js";
+import type { AdaptiveBudget } from "./core/budget.js";
 import type { ContinuousHooksState } from "./continuous.js";
-import { LLM_EXTRACT_PROMPT, parseJSON, normalizeCategory } from "./extraction.js";
+import { LLM_EXTRACT_PROMPT, parseJSON, normalizeCategory } from "./core/extraction.js";
 
 export interface CaptureDeps {
   api: OpenClawPluginApi;

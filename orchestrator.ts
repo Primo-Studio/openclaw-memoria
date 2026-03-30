@@ -9,16 +9,16 @@
  */
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import type { MemoriaDB } from "./db.js";
-import type { EmbeddingManager } from "./embeddings.js";
-import type { KnowledgeGraph } from "./graph.js";
-import type { HebbianManager } from "./hebbian.js";
-import type { TopicManager } from "./topics.js";
-import type { ObservationManager } from "./observations.js";
-import type { FactClusterManager } from "./fact-clusters.js";
-import type { MdSync } from "./sync.js";
-import type { MdRegenManager } from "./md-regen.js";
-import type { PatternManager } from "./patterns.js";
+import type { MemoriaDB } from "./core/db.js";
+import type { EmbeddingManager } from "./core/embeddings.js";
+import type { KnowledgeGraph } from "./core/graph.js";
+import type { HebbianManager } from "./core/hebbian.js";
+import type { TopicManager } from "./core/topics.js";
+import type { ObservationManager } from "./core/observations.js";
+import type { FactClusterManager } from "./core/fact-clusters.js";
+import type { MdSync } from "./core/sync.js";
+import type { MdRegenManager } from "./core/md-regen.js";
+import type { PatternManager } from "./core/patterns.js";
 
 /**
  * Create the postProcessNewFacts pipeline function.

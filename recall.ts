@@ -5,22 +5,22 @@
  */
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import type { MemoriaConfig } from "./config.js";
-import type { MemoriaDB, Fact } from "./db.js";
-import type { EmbeddingManager } from "./embeddings.js";
-import type { KnowledgeGraph } from "./graph.js";
-import type { TopicManager } from "./topics.js";
-import type { ObservationManager } from "./observations.js";
-import type { ProceduralMemory } from "./procedural.js";
-import type { ContextTreeBuilder } from "./context-tree.js";
-import { AdaptiveBudget } from "./budget.js";
-import type { FeedbackManager } from "./feedback.js";
-import type { LifecycleManager } from "./lifecycle.js";
-import type { ExpertiseManager } from "./expertise.js";
-import type { PatternManager } from "./patterns.js";
-import type { RevisionManager } from "./revision.js";
-import { scoreAndRank, getHotFacts, HOT_TIER_CONFIG } from "./scoring.js";
-import { formatRecallContext } from "./format.js";
+import type { MemoriaConfig } from "./core/config.js";
+import type { MemoriaDB, Fact } from "./core/db.js";
+import type { EmbeddingManager } from "./core/embeddings.js";
+import type { KnowledgeGraph } from "./core/graph.js";
+import type { TopicManager } from "./core/topics.js";
+import type { ObservationManager } from "./core/observations.js";
+import type { ProceduralMemory } from "./core/procedural.js";
+import type { ContextTreeBuilder } from "./core/context-tree.js";
+import { AdaptiveBudget } from "./core/budget.js";
+import type { FeedbackManager } from "./core/feedback.js";
+import type { LifecycleManager } from "./core/lifecycle.js";
+import type { ExpertiseManager } from "./core/expertise.js";
+import type { PatternManager } from "./core/patterns.js";
+import type { RevisionManager } from "./core/revision.js";
+import { scoreAndRank, getHotFacts, HOT_TIER_CONFIG } from "./core/scoring.js";
+import { formatRecallContext } from "./core/format.js";
 
 export interface RecallDeps {
   api: OpenClawPluginApi;

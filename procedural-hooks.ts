@@ -5,10 +5,10 @@
  */
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import type { MemoriaConfig } from "./config.js";
-import type { LLMProvider } from "./providers/types.js";
-import type { ProceduralMemory, Procedure } from "./procedural.js";
-import type { KnowledgeGraph } from "./graph.js";
+import type { MemoriaConfig } from "./core/config.js";
+import type { LLMProvider } from "./core/providers/types.js";
+import type { ProceduralMemory, Procedure } from "./core/procedural.js";
+import type { KnowledgeGraph } from "./core/graph.js";
 
 /**
  * Register the after_tool_call hook for real-time procedural capture (Layer 1b).

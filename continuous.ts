@@ -10,12 +10,12 @@
  */
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import type { MemoriaConfig } from "./config.js";
-import type { MemoriaDB } from "./db.js";
-import type { SelectiveMemory } from "./selective.js";
-import type { LLMProvider } from "./providers/types.js";
-import type { IdentityParser } from "./identity-parser.js";
-import { LLM_EXTRACT_PROMPT, parseJSON, normalizeCategory } from "./extraction.js";
+import type { MemoriaConfig } from "./core/config.js";
+import type { MemoriaDB } from "./core/db.js";
+import type { SelectiveMemory } from "./core/selective.js";
+import type { LLMProvider } from "./core/providers/types.js";
+import type { IdentityParser } from "./core/identity-parser.js";
+import { LLM_EXTRACT_PROMPT, parseJSON, normalizeCategory } from "./core/extraction.js";
 
 // ─── Constants ───
 
