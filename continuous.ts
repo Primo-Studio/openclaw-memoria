@@ -32,6 +32,27 @@ export const CONTINUOUS_URGENT_PATTERNS = [
   /\bduplicate\b/i, /\bmistake\b/i,
 ];
 
+// Correction patterns — user is correcting the agent's behavior/output
+export const CORRECTION_PATTERNS = [
+  // Direct corrections (FR)
+  /\bnon\s*[,!.]?\s*(c'est|c'etait|il\s+faut|faut)\b/i,
+  /\bc'est\s+pas\s+(ça|ca|correct|bon)\b/i,
+  /\bje\s+t'ai\s+dit\s+(que|de)\b/i,
+  /\bje\s+t'avais\s+dit\b/i,
+  /\bt'as\s+pas\s+(compris|lu|vu|fait)\b/i,
+  /\bc'est\s+faux\b/i, /\bc'est\s+pas\s+ce\s+que\b/i,
+  /\bregarde\s+bien\b/i, /\brelis\b/i,
+  /\bje\s+voulais\s+dire\b/i, /\bpas\s+comme\s+(ça|ca)\b/i,
+  /\btu\s+(comprends|captes)\s+pas\b/i,
+  /\ben\s+fait\s*[,!]\s*(c'est|il|faut)\b/i,
+  /\btu\s+te\s+trompe/i, /\bmauvais/i,
+  // Direct corrections (EN)
+  /\bno\s*[,!.]?\s*(it'?s|that'?s|you\s+should|I\s+said|I\s+meant)\b/i,
+  /\bthat'?s\s+(wrong|incorrect|not\s+(right|what))\b/i,
+  /\bactually\s*[,!]/i, /\bI\s+already\s+told\s+you\b/i,
+  /\byou\s+(misunderstood|didn'?t\s+(understand|read|listen))\b/i,
+];
+
 const SELF_ERROR_PATTERNS = [
   /erreur.*j'ai\s+(fait|commis|créé)/i,
   /mon\s+erreur/i, /j'aurais\s+d[uû]/i,
@@ -102,6 +123,34 @@ export function registerContinuousHooks(
       });
       if (state.buffer.length > MAX_BUFFER) state.buffer.shift();
       state.turnCount++;
+
+      // Check for correction signals — user is fixing agent's mistake
+      const isCorrection = CORRECTION_PATTERNS.some(p => p.test(event.content));
+      if (isCorrection) {
+        api.logger.info?.(`memoria: 📝 continuous — correction detected in user message`);
+        // Log to .learnings/ for self-improving-agent coupling
+        try {
+          const workspacePath = cfg.workspacePath || process.env.OPENCLAW_WORKSPACE || "";
+          if (workspacePath) {
+            const fs = await import("fs");
+            const path = await import("path");
+            const learningsDir = path.join(workspacePath, ".learnings");
+            const learningsFile = path.join(learningsDir, "LEARNINGS.md");
+            if (fs.existsSync(learningsFile)) {
+              const now = new Date();
+              const timestamp = now.toISOString().slice(0, 16).replace("T", " ");
+              const snippet = event.content.slice(0, 200).replace(/\n/g, " ");
+              const entry = `\n### ${timestamp} — Correction\n- **Category**: correction\n- **What happened**: User corrected the agent\n- **Context**: "${snippet}"\n- **Source**: memoria auto-detection\n\n`;
+              fs.appendFileSync(learningsFile, entry);
+              api.logger.debug?.(`memoria: correction logged to .learnings/LEARNINGS.md`);
+            }
+          }
+        } catch (e) {
+          api.logger.debug?.(`memoria: failed to write .learnings: ${String(e)}`);
+        }
+        await doContinuousExtraction(api, cfg, db, selective, extractLlm, identityParser, postProcessNewFacts, state, "correction");
+        return; // correction already triggers extraction, skip urgent check
+      }
 
       // Check for urgent signals in user message — extract immediately
       const isUrgent = CONTINUOUS_URGENT_PATTERNS.some(p => p.test(event.content));
@@ -176,7 +225,7 @@ async function doContinuousExtraction(
   identityParser: IdentityParser,
   postProcessNewFacts: (source: "capture" | "compaction") => Promise<void>,
   state: ContinuousState,
-  trigger: "periodic" | "urgent" | "self-error"
+  trigger: "periodic" | "urgent" | "self-error" | "correction"
 ): Promise<void> {
   if (state.buffer.length < 2) return;
   if (state.inProgress) return; // prevent concurrent extractions
@@ -202,6 +251,8 @@ async function doContinuousExtraction(
     ? "\n\n⚠️ SIGNAL D'URGENCE DÉTECTÉ — L'utilisateur exprime une frustration ou signale une erreur. PRIORITÉ MAXIMALE aux faits de catégorie 'erreur'."
     : trigger === "self-error"
     ? "\n\n⚠️ L'ASSISTANT A DÉTECTÉ SA PROPRE ERREUR — Capturer ce qui s'est mal passé, pourquoi, et ce qu'il ne faut plus faire."
+    : trigger === "correction"
+    ? "\n\n📝 CORRECTION DÉTECTÉE — L'utilisateur corrige l'assistant. Capturer : (1) ce que l'assistant a fait de FAUX, (2) ce qui est CORRECT selon l'utilisateur, (3) la RÈGLE à retenir pour ne pas répéter. Catégorie = 'erreur' ou 'preference' selon le contexte."
     : "";
 
   const prompt = LLM_EXTRACT_PROMPT
