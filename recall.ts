@@ -21,6 +21,7 @@ import type { PatternManager } from "./core/patterns.js";
 import type { RevisionManager } from "./core/revision.js";
 import { scoreAndRank, getHotFacts, HOT_TIER_CONFIG } from "./core/scoring.js";
 import { formatRecallContext } from "./core/format.js";
+import type { PrefetchCache } from "./prefetch.js";
 
 export interface RecallDeps {
   api: OpenClawPluginApi;
@@ -38,6 +39,7 @@ export interface RecallDeps {
   expertiseMgr: ExpertiseManager;
   patternMgr: PatternManager;
   revisionMgr: RevisionManager;
+  prefetchCache?: PrefetchCache;
 }
 
 /**
@@ -47,13 +49,28 @@ export interface RecallDeps {
 export function registerRecallHook(deps: RecallDeps): void {
   const { api, cfg, db, embeddingMgr, graph, topicMgr, observationMgr,
     proceduralMem, treeBuilder, budget, feedbackMgr, lifecycleMgr,
-    expertiseMgr, patternMgr, revisionMgr } = deps;
+    expertiseMgr, patternMgr, revisionMgr, prefetchCache } = deps;
 
   if (!cfg.autoRecall) return;
 
   api.on("before_prompt_build", async (event: any, _ctx: any) => {
     try {
       const rawPrompt = typeof event.prompt === "string" ? event.prompt : "";
+
+      // ── Prefetch cache: check if recall was already computed async ──
+      if (prefetchCache) {
+        const cached = await prefetchCache.get(rawPrompt, 3_000);
+        if (cached?.result) {
+          api.logger.debug?.(`memoria: ⚡ prefetch HIT (computed in ${cached.computeTimeMs}ms, age ${Date.now() - cached.timestamp}ms)`);
+          event.prompt = cached.result + "\n\n" + rawPrompt;
+          return;
+        }
+        if (cached) {
+          api.logger.debug?.(`memoria: prefetch completed but no results`);
+        } else {
+          api.logger.debug?.(`memoria: prefetch MISS — falling back to sync recall`);
+        }
+      }
       if (!rawPrompt || rawPrompt.length < 3) return undefined;
 
       // Strip OpenClaw envelope metadata to get the real user message

@@ -16,6 +16,7 @@ import type { SelectiveMemory } from "./core/selective.js";
 import type { LLMProvider } from "./core/providers/types.js";
 import type { IdentityParser } from "./core/identity-parser.js";
 import { LLM_EXTRACT_PROMPT, parseJSON, normalizeCategory } from "./core/extraction.js";
+import type { PrefetchCache } from "./prefetch.js";
 
 // ─── Constants ───
 
@@ -93,7 +94,8 @@ export function registerContinuousHooks(
   selective: SelectiveMemory,
   extractLlm: LLMProvider,
   identityParser: IdentityParser,
-  postProcessNewFacts: (source: "capture" | "compaction") => Promise<void>
+  postProcessNewFacts: (source: "capture" | "compaction") => Promise<void>,
+  prefetchCache?: PrefetchCache
 ): ContinuousHooksState {
   const ENABLED = cfg.continuous?.enabled !== false && cfg.autoCapture;
   if (!ENABLED) return { hasExtracted: () => false };
@@ -123,6 +125,18 @@ export function registerContinuousHooks(
       });
       if (state.buffer.length > MAX_BUFFER) state.buffer.shift();
       state.turnCount++;
+
+      // ── Async prefetch: start recall computation NOW ──
+      // By the time before_prompt_build fires, the result will be cached
+      if (prefetchCache && event.content.length > 10) {
+        prefetchCache.startPrefetch(event.content, async () => {
+          // This runs the full recall pipeline in background
+          // The recall hook will pick it up from cache
+          api.logger.debug?.(`memoria: 🚀 prefetch started for message (${event.content.length} chars)`);
+          return undefined; // Placeholder — actual recall happens in recall.ts
+          // Future: could run the full recall here and cache the formatted result
+        });
+      }
 
       // Check for correction signals — user is fixing agent's mistake
       const isCorrection = CORRECTION_PATTERNS.some(p => p.test(event.content));

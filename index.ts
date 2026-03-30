@@ -45,6 +45,7 @@ import { parseConfig, createEmbedProvider, type MemoriaConfig, type MemoriaLayer
 import { createPostProcessNewFacts } from "./orchestrator.js";
 import { registerContinuousHooks } from "./continuous.js";
 import { registerRecallHook } from "./recall.js";
+import { PrefetchCache } from "./prefetch.js";
 import { registerProceduralHook } from "./procedural-hooks.js";
 import { registerAgentEndHook, registerCompactionHook } from "./capture.js";
 
@@ -289,18 +290,22 @@ export function register(api: OpenClawPluginApi): void {
     observationMgr, clusterMgr, mdSync, mdRegen, patternMgr
   );
 
+  // ─── Prefetch cache (async recall, inspired by Hermes) ───
+  const prefetchCache = new PrefetchCache(30_000);
+
   // ─── Register all hooks ───
 
   // Layer 6: Recall (before_prompt_build)
   registerRecallHook({
     api, cfg, db, embeddingMgr, graph, topicMgr, observationMgr,
     proceduralMem, treeBuilder, budget, feedbackMgr, lifecycleMgr,
-    expertiseMgr, patternMgr, revisionMgr,
+    expertiseMgr, patternMgr, revisionMgr, prefetchCache,
   });
 
   // Layer 21: Continuous Learning (message_received + llm_output)
   const continuousState = registerContinuousHooks(
-    api, cfg, db, selective, extractLlm, identityParser, postProcessNewFacts
+    api, cfg, db, selective, extractLlm, identityParser, postProcessNewFacts,
+    prefetchCache,
   );
 
   // Layer 1b: Real-time procedural capture (after_tool_call)
