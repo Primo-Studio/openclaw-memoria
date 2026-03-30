@@ -17,6 +17,8 @@ import type { LLMProvider } from "./core/providers/types.js";
 import type { IdentityParser } from "./core/identity-parser.js";
 import { LLM_EXTRACT_PROMPT, parseJSON, normalizeCategory } from "./core/extraction.js";
 import type { PrefetchCache } from "./prefetch.js";
+import { computeRecall, extractUserPrompt } from "./recall.js";
+import type { RecallDeps } from "./recall.js";
 
 // ─── Constants ───
 
@@ -95,7 +97,8 @@ export function registerContinuousHooks(
   extractLlm: LLMProvider,
   identityParser: IdentityParser,
   postProcessNewFacts: (source: "capture" | "compaction") => Promise<void>,
-  prefetchCache?: PrefetchCache
+  prefetchCache?: PrefetchCache,
+  recallDeps?: Omit<RecallDeps, "prefetchCache">
 ): ContinuousHooksState {
   const ENABLED = cfg.continuous?.enabled !== false && cfg.autoCapture;
   if (!ENABLED) return { hasExtracted: () => false };
@@ -128,14 +131,14 @@ export function registerContinuousHooks(
 
       // ── Async prefetch: start recall computation NOW ──
       // By the time before_prompt_build fires, the result will be cached
-      if (prefetchCache && event.content.length > 10) {
-        prefetchCache.startPrefetch(event.content, async () => {
-          // This runs the full recall pipeline in background
-          // The recall hook will pick it up from cache
-          api.logger.debug?.(`memoria: 🚀 prefetch started for message (${event.content.length} chars)`);
-          return undefined; // Placeholder — actual recall happens in recall.ts
-          // Future: could run the full recall here and cache the formatted result
-        });
+      if (prefetchCache && recallDeps && event.content.length > 10) {
+        const userMsg = extractUserPrompt(event.content);
+        if (userMsg.length > 5) {
+          prefetchCache.startPrefetch(event.content, async () => {
+            api.logger.debug?.(`memoria: 🚀 prefetch started for message (${userMsg.length} chars)`);
+            return computeRecall(userMsg, state.turnCount, recallDeps);
+          });
+        }
       }
 
       // Check for correction signals — user is fixing agent's mistake

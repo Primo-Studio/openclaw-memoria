@@ -302,10 +302,17 @@ export function register(api: OpenClawPluginApi): void {
     expertiseMgr, patternMgr, revisionMgr, prefetchCache,
   });
 
+  // RecallDeps without prefetchCache — for prefetch computation
+  const recallDepsForPrefetch = {
+    api, cfg, db, embeddingMgr, graph, topicMgr, observationMgr,
+    proceduralMem, treeBuilder, budget, feedbackMgr, lifecycleMgr,
+    expertiseMgr, patternMgr, revisionMgr,
+  };
+
   // Layer 21: Continuous Learning (message_received + llm_output)
   const continuousState = registerContinuousHooks(
     api, cfg, db, selective, extractLlm, identityParser, postProcessNewFacts,
-    prefetchCache,
+    prefetchCache, recallDepsForPrefetch,
   );
 
   // Layer 1b: Real-time procedural capture (after_tool_call)
