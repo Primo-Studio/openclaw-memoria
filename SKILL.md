@@ -1,7 +1,7 @@
 ---
 name: Memoria for OpenClaw
 version: 3.33.0
-description: "The most advanced memory system for AI agents. 21 cognitive layers, knowledge graph, procedural learning, automatic fact extraction, continuous capture. Works with Claude, Cursor, Copilot, ChatGPT & any OpenClaw agent. 100% local-first (SQLite + Ollama), zero cloud cost, zero API keys required. WAL protocol, vector search, auto-learning — never lose context again."
+description: "The most advanced memory system for AI agents. 24 cognitive layers, knowledge graph, procedural learning, dialectic queries, AI self-observation, auto skill creation, crash-safe WAL, async prefetch. Works with Claude, Cursor, Copilot, ChatGPT & any OpenClaw agent. 100% local-first (SQLite + Ollama), zero cloud cost, zero API keys required."
 author: Primo Studio (@Nieto42)
 license: Apache-2.0
 homepage: https://github.com/Primo-Studio/openclaw-memoria
@@ -67,6 +67,12 @@ tags:
   - multi-layer
   - fact-extraction
   - self-improving
+  - self-observation
+  - dialectic
+  - auto-skill
+  - prefetch
+  - crash-recovery
+  - async
 env:
   - name: OPENAI_API_KEY
     required: false
