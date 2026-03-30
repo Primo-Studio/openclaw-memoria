@@ -19,6 +19,7 @@ import { MemoriaDB } from "./core/db.js";
 import { WriteAheadLog } from "./core/wal.js";
 import { SelfObserver } from "./core/self-observation.js";
 import { AutoSkillCreator } from "./core/auto-skill.js";
+import { DialecticMemory } from "./core/dialectic.js";
 import { SelectiveMemory } from "./core/selective.js";
 import { EmbeddingManager } from "./core/embeddings.js";
 import { KnowledgeGraph } from "./core/graph.js";
@@ -302,6 +303,15 @@ export function register(api: OpenClawPluginApi): void {
       .then(n => api.logger.info?.(`memoria: background embed complete — ${n} facts indexed`))
       .catch(err => api.logger.warn?.(`memoria: background embed failed: ${String(err)}`));
   }
+
+  // ─── Dialectic Memory (Layer 24) ───
+  const dialectic = new DialecticMemory({
+    db, embeddingMgr, graph, topicMgr: topicMgr!,
+    proceduralMem, observationMgr, llm: extractLlm,
+  });
+
+  // Expose dialectic.query() for external use (e.g., tools, commands)
+  (api as any)._memoriaDialectic = dialectic;
 
   // ─── Create shared post-processing pipeline ───
   const postProcessNewFacts = createPostProcessNewFacts(
