@@ -535,5 +535,26 @@
       "help": "Living multi-fact syntheses. emergenceThreshold=min facts to create, matchThreshold=cosine sim to update",
       "advanced": true
     }
-  }
+  },
+  "description": "The most advanced memory system for AI agents. 21 cognitive layers, knowledge graph, procedural learning, vector search. 100% local-first, zero cloud cost.",
+  "keywords": [
+    "memory",
+    "ai-agent",
+    "persistent-memory",
+    "long-term-memory",
+    "knowledge-graph",
+    "procedural",
+    "vector-search",
+    "sqlite",
+    "ollama",
+    "local-first",
+    "cognitive",
+    "claude",
+    "cursor",
+    "copilot",
+    "openclaw",
+    "wal",
+    "developer-tools",
+    "typescript"
+  ]
 }
