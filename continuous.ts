@@ -141,7 +141,11 @@ export function registerContinuousHooks(
 
       // ── Async prefetch: start recall computation NOW ──
       // By the time before_prompt_build fires, the result will be cached
-      if (prefetchCache && recallDeps && event.content.length > 10) {
+      // Debounce: skip if last prefetch was < 5s ago (prevents loop on rapid messages)
+      const now = Date.now();
+      const PREFETCH_DEBOUNCE_MS = 5_000;
+      if (prefetchCache && recallDeps && event.content.length > 10 &&
+          (now - state.lastExtraction > PREFETCH_DEBOUNCE_MS || state.turnCount <= 1)) {
         const userMsg = extractUserPrompt(event.content);
         if (userMsg.length > 5) {
           prefetchCache.startPrefetch(event.content, async () => {

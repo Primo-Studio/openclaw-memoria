@@ -1127,12 +1127,17 @@ Output JSON (no markdown):
       let rows: any[] = [];
       try {
         // Sanitize query for FTS5: remove special chars, keep words
-        const ftsQuery = query
+        // Use AND to require ALL significant words — avoids false matches
+        // e.g. "c'est quoi la boucle" won't match procedures just because they contain "boucle"
+        const words = query
           .replace(/[^\w\s\-]/g, ' ')
           .split(/\s+/)
-          .filter(w => w.length > 2)
+          .filter(w => w.length > 3);  // min 4 chars to skip noise words
+        // If few words, use OR (broad); if enough words, use AND (strict)
+        const joiner = words.length >= 3 ? ' AND ' : ' OR ';
+        const ftsQuery = words
           .map(w => `"${w}"`)
-          .join(' OR ');
+          .join(joiner);
 
         if (ftsQuery.length > 0) {
           rows = this.db.prepare(`

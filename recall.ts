@@ -218,8 +218,11 @@ export async function computeRecall(
     }
 
     if (procedures.length > 0) {
+      // Limit to max 2 procedures, show max 3 steps each (avoid context bloat)
+      const MAX_PROCEDURES = 2;
+      const MAX_STEPS = 3;
       const procTexts: string[] = [];
-      for (const proc of procedures) {
+      for (const proc of procedures.slice(0, MAX_PROCEDURES)) {
         matchedProcedureIds.push(proc.id);
         const successRate = proc.success_count / Math.max(proc.success_count + proc.failure_count, 1);
         const degThreshold = cfg.procedural?.degradedThreshold ?? 0.5;
@@ -230,17 +233,20 @@ export async function computeRecall(
           : proc.preferred ? "★ preferred" : "✓";
         const qualityStr = `quality: ${(proc.quality.overall * 100).toFixed(0)}%`;
         const versionStr = proc.version > 1 ? ` v${proc.version}` : '';
-        const gotchaStr = proc.gotchas ? `\n  ⚠ Gotchas: ${proc.gotchas}` : '';
-        const staleStr = isStale ? `\n  🕰️ Not used in a while — check docs/help before running. Doc sources: ${(proc.doc_sources || []).join(', ') || 'run --help'}` : '';
+        const gotchaStr = proc.gotchas ? `\n  ⚠ Gotchas: ${proc.gotchas.slice(0, 200)}` : '';
+        const staleStr = isStale ? `\n  🕰️ Stale — verify before using` : '';
+        const truncatedSteps = proc.steps.slice(0, MAX_STEPS);
+        const moreSteps = proc.steps.length > MAX_STEPS ? `\n  ... (+${proc.steps.length - MAX_STEPS} more steps)` : '';
         procTexts.push(
           `**${proc.name}**${versionStr} ${status} (${(successRate * 100).toFixed(0)}% success, ${qualityStr}):\n` +
-          proc.steps.map((s, i) => `  ${i + 1}. ${s}`).join('\n') +
+          truncatedSteps.map((s, i) => `  ${i + 1}. ${s.slice(0, 300)}`).join('\n') +
+          moreSteps +
           gotchaStr +
           staleStr
         );
       }
       proceduresContext = `\n## 🔧 Known Procedures\n${procTexts.join('\n\n')}\n`;
-      api.logger.debug?.(`memoria: ${procedures.length} procedures matched (graph-expanded)`);
+      api.logger.debug?.(`memoria: ${procedures.length} procedures matched, showing ${Math.min(procedures.length, MAX_PROCEDURES)} (graph-expanded)`);
     }
   } catch (e) { api?.logger?.debug?.('memoria:procedural-recall: ' + String(e)); }
 
