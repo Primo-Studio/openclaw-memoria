@@ -21,7 +21,18 @@ import {
 import { RegistryStore } from '../storage/registry.js'
 import { ContentStore, rowToFact, type FactRow, type FtsHit, type FtsSearchOptions } from '../storage/content.js'
 import { EmbeddingIndexer, hybridSearchFacts } from '../vector/index.js'
-import { CognitionEngine, TopicEngine, PatternEngine, type TopicSummary, type Pattern } from '../cognition/index.js'
+import {
+  CognitionEngine,
+  TopicEngine,
+  PatternEngine,
+  ProceduralEngine,
+  FeedbackEngine,
+  ClusterEngine,
+  type TopicSummary,
+  type Pattern,
+  type ProcedureMatch,
+  type ProceduralProcedure,
+} from '../cognition/index.js'
 import { estimateTokens, newId, sha256Hex } from '../util.js'
 import { createSecretProvider, RegexRedactor } from '../secrets/index.js'
 import type { SecretProvider } from '../secrets/types.js'
@@ -90,6 +101,9 @@ export class Memoria {
   private readonly cognitionEngines = new WeakMap<ContentStore, CognitionEngine>()
   private readonly topicEngines = new WeakMap<ContentStore, TopicEngine>()
   private readonly patternEngines = new WeakMap<ContentStore, PatternEngine>()
+  private readonly proceduralEngines = new WeakMap<ContentStore, ProceduralEngine>()
+  private readonly feedbackEngines = new WeakMap<ContentStore, FeedbackEngine>()
+  private readonly clusterEngines = new WeakMap<ContentStore, ClusterEngine>()
 
   private constructor(resolved: ResolvedConfig, opts: MemoriaInitOptions) {
     this.resolved = resolved
@@ -548,6 +562,100 @@ export class Memoria {
       this.patternEngines.set(store, engine)
     }
     return engine
+  }
+
+  private proceduralFor(store: ContentStore): ProceduralEngine {
+    let engine = this.proceduralEngines.get(store)
+    if (!engine) {
+      engine = new ProceduralEngine({ store })
+      this.proceduralEngines.set(store, engine)
+    }
+    return engine
+  }
+
+  private feedbackFor(store: ContentStore): FeedbackEngine {
+    let engine = this.feedbackEngines.get(store)
+    if (!engine) {
+      engine = new FeedbackEngine({ store })
+      this.feedbackEngines.set(store, engine)
+    }
+    return engine
+  }
+
+  private clusterFor(store: ContentStore): ClusterEngine {
+    let engine = this.clusterEngines.get(store)
+    if (!engine) {
+      engine = new ClusterEngine({ store })
+      this.clusterEngines.set(store, engine)
+    }
+    return engine
+  }
+
+  // ---------------------------------------------------------- procédures (couche 6)
+
+  /** Retrouve les meilleures procédures pour une tâche (FTS + taux de succès), gouverné. */
+  matchProcedures(instanceId: string, query: string, limit = 5): ProcedureMatch[] {
+    this.assertOpen()
+    const instance = this.mustInstance(instanceId)
+    const targets = this.resolveReadTargets(instance)
+    const out: ProcedureMatch[] = []
+    for (const target of targets) {
+      const store = this.openContent(target.dbPath)
+      out.push(...this.proceduralFor(store).matchProcedures(query, { scopeIds: target.scopeIds, limit }))
+    }
+    return out.sort((a, b) => b.score - a.score).slice(0, limit)
+  }
+
+  /** Apprentissage : enregistre le résultat d'exécution d'une procédure. */
+  recordProcedureExecution(instanceId: string, procedureId: string, outcome: 'success' | 'failure', errorOutput?: string): boolean {
+    this.assertOpen()
+    const db = this.registry.dbForInstance(instanceId)
+    if (!db) return false
+    return this.proceduralFor(this.openContent(db.path)).recordExecution({ procedureId, outcome, errorOutput }).applied
+  }
+
+  listProcedures(instanceId: string): ProceduralProcedure[] {
+    this.assertOpen()
+    const db = this.registry.dbForInstance(instanceId)
+    if (!db || !existsSync(db.path)) return []
+    return this.proceduralFor(this.openContent(db.path)).listProcedures()
+  }
+
+  // ---------------------------------------------------------- feedback (couches 7-8)
+
+  /** Renforce/atténue des faits selon leur usage réel dans une réponse. */
+  reinforceFacts(instanceId: string, factIds: string[], used: boolean): void {
+    this.assertOpen()
+    const db = this.registry.dbForInstance(instanceId)
+    if (!db) return
+    this.feedbackFor(this.openContent(db.path)).reinforce(factIds, { used })
+  }
+
+  /** Domaines d'expertise de l'agent (où il « sait » le plus). */
+  topExpertise(instanceId: string, limit = 10): Array<{ domain: string; level: number; evidence_count: number }> {
+    this.assertOpen()
+    const db = this.registry.dbForInstance(instanceId)
+    if (!db || !existsSync(db.path)) return []
+    return this.feedbackFor(this.openContent(db.path)).topDomains(limit)
+  }
+
+  // ---------------------------------------------------------- clusters (couche 16)
+
+  rebuildClusters(instanceId: string): { clusters: number } {
+    this.assertOpen()
+    const db = this.registry.dbForInstance(instanceId)
+    if (!db || !existsSync(db.path)) return { clusters: 0 }
+    const r = this.clusterFor(this.openContent(db.path)).rebuild()
+    return { clusters: r.clusters }
+  }
+
+  listClusters(instanceId: string, minSize = 3): Array<{ id: string; label: string; size: number }> {
+    this.assertOpen()
+    const db = this.registry.dbForInstance(instanceId)
+    if (!db || !existsSync(db.path)) return []
+    return this.clusterFor(this.openContent(db.path))
+      .listClusters({ minSize })
+      .map(c => ({ id: c.id, label: c.label, size: c.size }))
   }
 
   /**

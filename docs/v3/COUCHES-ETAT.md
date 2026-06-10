@@ -19,14 +19,14 @@ observations) et c'est là qu'on continue.
 | # | Couche | État | Note |
 |---|---|---|---|
 | 1 | db (schéma) | ✅ | schéma gouverné registry + contenu, FTS, triggers |
-| 2 | scoring (+hot-tier) | 🟡 | scoring récence/confiance/usage/lifecycle/boost contexte fait ; **hot-tier** pas porté |
-| 3 | selective (dedup/contradiction) | 🟡 | dedup exact+near fait ; **détection de contradiction** sémantique pas portée |
+| 2 | scoring (+hot-tier) | ✅ | scoring complet + **hot-tier** (fait récemment accédé = chaud) [vague 6] |
+| 3 | selective (dedup/contradiction) | 🟡→ | dedup fait ; **contradiction** en cours (vague 6) |
 | 4 | lifecycle | ✅ | active/dormant/archived + review |
 | 5 | budget (cap tokens) | ✅ | cap dur global (corrige le bug legacy) |
-| 6 | procedural | 🟡 | table + **import** faits ; moteur (matching trigger, recordExecution) pas porté |
-| 7 | feedback | ⚪ | renforcement par retour d'usage |
-| 8 | expertise | ⚪ | niveau de maîtrise par domaine |
-| 9 | context-tree | 🟡 | `active_context` (projet/client courant) fait ; arbre de contexte legacy non |
+| 6 | procedural | 🟡→ | table + import ; **moteur en cours** (vague 6) |
+| 7 | feedback | 🟡→ | **en cours** (vague 6) |
+| 8 | expertise | 🟡→ | **en cours** (vague 6) |
+| 9 | context-tree | ✅ | projet→client→org résolu, boost sur l'arbre [vague 6] |
 | 10 | config/identity | ✅ | config.toml + identités/instances |
 | 11 | WAL | ✅ | source de vérité, replay au boot, cleanup borné |
 
@@ -36,9 +36,9 @@ observations) et c'est là qu'on continue.
 |---|---|---|---|
 | 12 | embeddings (index) | ✅ | sqlite-vec + indexer + recall hybride |
 | 13 | graph (entités/relations) | ✅ | + expansion au recall + decay |
-| 14 | **topics (thèmes)** | 🟡 | table + import ; **PAS de génération/classement auto** ← *le manque que tu signales* |
+| 14 | **topics (thèmes)** | ✅ | classement auto entité-first + UI Thèmes + puces dans Revue/Mémoire [vague 5] |
 | 15 | observations | ✅ | agrégation par sujet |
-| 16 | fact-clusters | ⚪ | regroupement de faits proches |
+| 16 | fact-clusters | 🟡→ | **en cours** (vague 6) |
 | 17 | continuous | 🟡 | capture en continu (captureTurn) faite ; modes legacy non |
 | 18 | revision | ⚪ | révision proactive des faits obsolètes |
 
@@ -54,7 +54,7 @@ observations) et c'est là qu'on continue.
 
 | # | Couche | État | Note |
 |---|---|---|---|
-| 22 | **patterns (récurrences)** | ⚪ | **détecte les faits récurrents pour les consolider** ← *le manque que tu signales* |
+| 22 | **patterns (récurrences)** | ✅ | détection des récurrences + UI Récurrences (consolider/écarter) [vague 5] |
 | 23 | auto-skill | ⚪ | crée des compétences/procédures depuis les patterns |
 | 24 | revision (mutations) | ⚪ | applique les révisions (supersede) sur validation |
 
