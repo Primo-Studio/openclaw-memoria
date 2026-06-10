@@ -18,6 +18,7 @@ import type {
   MemoryScope,
   Organization,
   Pairing,
+  Project,
   ScopeKind,
   ScopePolicy,
   SecretAccess,
@@ -98,6 +99,29 @@ export class RegistryStore {
       )
       .run(scope.id, scope.type, scope.name, scope.owner_user_id, scope.org_id, scope.client_org_id, scope.project_id, scope.created_at)
     return scope
+  }
+
+  createProject(name: string, ownerOrgId: string, clientOrgId?: string | null): Project {
+    const project: Project = {
+      id: newId(),
+      name,
+      owner_org_id: ownerOrgId,
+      client_org_id: clientOrgId ?? null,
+      status: 'active',
+      created_at: nowISO(),
+    }
+    this.db
+      .prepare('INSERT INTO projects (id, name, owner_org_id, client_org_id, status, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(project.id, project.name, project.owner_org_id, project.client_org_id, project.status, project.created_at)
+    return project
+  }
+
+  ownCompany(): Organization | null {
+    return (
+      (this.db.prepare("SELECT * FROM organizations WHERE org_type = 'own_company' LIMIT 1").get() as
+        | Organization
+        | undefined) ?? null
+    )
   }
 
   createOrganization(name: string, orgType: Organization['org_type'], parentOrgId?: string | null): Organization {

@@ -75,15 +75,27 @@ export interface FtsHit {
 
 const SENSITIVITY_ORDER: Record<Sensitivity, number> = { normal: 0, sensitive: 1, critical: 2 }
 
-/** Échappe une requête utilisateur en expression FTS5 sûre (tokens cités, OR). */
-export function toFtsQuery(query: string): string | null {
-  const tokens = query
-    .toLowerCase()
+/** Tokens significatifs d'une requête (≥3 caractères : élimine les stop-words FR/EN courts). */
+export function queryTokens(query: string): string[] {
+  return normalizeText(query)
     .split(/[^\p{L}\p{N}_-]+/u)
     .map(t => t.trim())
-    .filter(t => t.length > 1)
+    .filter(t => t.length > 2)
+}
+
+/** Échappe une requête utilisateur en expression FTS5 sûre (tokens cités, OR). */
+export function toFtsQuery(query: string): string | null {
+  const tokens = queryTokens(query)
   if (tokens.length === 0) return null
   return tokens.map(t => `"${t.replaceAll('"', '')}"`).join(' OR ')
+}
+
+/** Normalisation commune requête/texte (minuscules + sans diacritiques, aligné sur unicode61). */
+export function normalizeText(text: string): string {
+  return text
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{M}+/gu, '')
 }
 
 export class ContentStore {
@@ -197,7 +209,19 @@ export class ContentStore {
       LIMIT ?
     `
     const rows = this.db.prepare(sql).all(match, ...params, limit) as Array<FactRow & { fts_relevance: number }>
-    return rows.map(r => ({ row: r, relevance: Math.max(0, r.fts_relevance) }))
+
+    // Pertinence COMPARABLE INTER-DB (le fan-out fusionne plusieurs DB dont
+    // les stats bm25 divergent) : couverture de requête en facteur dominant,
+    // bm25 normalisé localement comme simple départage.
+    const tokens = queryTokens(query)
+    const maxBm25 = Math.max(...rows.map(r => Math.max(0, r.fts_relevance)), 1e-9)
+    return rows.map(r => {
+      const text = normalizeText(r.fact)
+      const matched = tokens.filter(t => text.includes(t)).length
+      const coverage = tokens.length > 0 ? matched / tokens.length : 0
+      const bm25Norm = Math.max(0, r.fts_relevance) / maxBm25
+      return { row: r, relevance: coverage * (0.3 + 0.7 * bm25Norm) }
+    })
   }
 
   /** Marque l'usage en recall (compteurs + dernier accès). */
