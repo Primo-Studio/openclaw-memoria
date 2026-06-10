@@ -9,6 +9,7 @@ import { hostname } from 'node:os'
 import { relative } from 'node:path'
 import DatabaseCtor from 'better-sqlite3'
 import { importLegacyCognition } from '../migration/import-cognition.js'
+import { importTranscripts } from '../migration/import-transcripts.js'
 import {
   ensureStorageTree,
   resolveStorageRoot,
@@ -483,6 +484,41 @@ export class Memoria {
     } finally {
       legacy.close()
     }
+  }
+
+  /**
+   * Importe des transcripts (Claude Code / Codex / Markdown) vers la mémoire
+   * d'une instance, en QUARANTAINE (faits dormants + revue). Réutilise le LLM
+   * d'extraction du profil. Idempotent par hash de fichier.
+   */
+  async importTranscripts(
+    instanceId: string,
+    files: string[],
+    opts: { sinceDate?: string; maxWindowsPerFile?: number; dryRun?: boolean } = {},
+  ): Promise<import('../migration/import-transcripts.js').ImportTranscriptsReport> {
+    this.assertOpen()
+    this.mustInstance(instanceId)
+    const { extraction } = await this.ensureProfile()
+    const report = await importTranscripts({
+      files,
+      memoria: this,
+      instanceId,
+      extraction,
+      sinceDate: opts.sinceDate,
+      maxWindowsPerFile: opts.maxWindowsPerFile,
+      dryRun: opts.dryRun,
+    })
+    if (!opts.dryRun && report.facts_quarantined > 0) {
+      this.registry.audit({
+        actor_type: 'user',
+        actor_id: 'local',
+        action: 'import_transcripts',
+        target_id_hash: sha256Hex(instanceId),
+        scope_id: null,
+        reason: `quarantined=${report.facts_quarantined};files=${report.files_read}`,
+      })
+    }
+    return report
   }
 
   /** Decay du graphe (job quotidien) sur toutes les DB de contenu. */
