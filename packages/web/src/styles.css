@@ -881,3 +881,14 @@ input[type='search']:focus {
 .proc-steps li { margin: 0.15rem 0; }
 
 .agent-expertise { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; font-size: 0.78rem; }
+
+/* --------------------------------------------------------------- aperçu agents (dashboard) */
+
+.overview-block { margin-top: 1.5rem; }
+.overview-block h2 { font-size: 1.05rem; margin-bottom: 0.8rem; }
+.overview-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 0.8rem; }
+.overview-card { padding: 1rem; border-radius: 12px; border: 1px solid var(--border, #2a2a3d); background: var(--card, #1c1c2b); }
+.overview-head { font-size: 1.05rem; margin-bottom: 0.5rem; }
+.overview-stats { display: flex; flex-wrap: wrap; gap: 0.8rem; color: var(--muted, #9a9ab0); font-size: 0.85rem; }
+.overview-stats b { color: var(--text, #e8e8f0); font-size: 1.05rem; }
+.overview-expertise { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; margin-top: 0.7rem; font-size: 0.76rem; }

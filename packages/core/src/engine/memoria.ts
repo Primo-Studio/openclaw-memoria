@@ -1399,6 +1399,36 @@ export class Memoria {
     })
   }
 
+  /** Synthèse par agent : ce que chacun sait (souvenirs, thèmes, procédures, maîtrise). */
+  agentOverview(): Array<{
+    instance: string
+    type: string
+    facts: number
+    themes: number
+    procedures: number
+    expertise: string[]
+  }> {
+    this.assertOpen()
+    const out: ReturnType<Memoria['agentOverview']> = []
+    for (const inst of this.registry.listInstances()) {
+      if (inst.revoked_at) continue
+      const assistant = this.registry.getAssistant(inst.assistant_id)
+      if (assistant?.type === 'generic') continue
+      const db = this.registry.dbForInstance(inst.id)
+      if (!db || !existsSync(db.path)) continue
+      const store = this.openContent(db.path)
+      out.push({
+        instance: inst.id,
+        type: assistant?.type ?? 'generic',
+        facts: store.countFacts(),
+        themes: this.topicFor(store, null).listTopics({ minFacts: 2 }).length,
+        procedures: this.proceduralFor(store).listProcedures().length,
+        expertise: this.feedbackFor(store).topDomains(4).map(d => d.domain),
+      })
+    }
+    return out
+  }
+
   stats(): { facts: number; databases: number; instances: number } {
     this.assertOpen()
     let facts = 0

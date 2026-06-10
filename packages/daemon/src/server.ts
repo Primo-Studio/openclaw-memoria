@@ -291,6 +291,10 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         sendJson(res, 200, memoria.stats())
         return
       }
+      case 'GET /v1/admin/overview': {
+        sendJson(res, 200, { agents: memoria.agentOverview() })
+        return
+      }
       case 'GET /v1/admin/doctor': {
         sendJson(res, 200, memoria.doctor())
         return

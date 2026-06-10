@@ -34,6 +34,20 @@ export interface Stats {
   instances: number
 }
 
+export interface AgentOverview {
+  instance: string
+  type: string
+  facts: number
+  themes: number
+  procedures: number
+  expertise: string[]
+}
+
+export async function getOverview(): Promise<AgentOverview[]> {
+  const res = await request<{ agents: AgentOverview[] }>('GET', '/v1/admin/overview')
+  return res.agents
+}
+
 export interface DoctorDatabase {
   kind: string
   path: string

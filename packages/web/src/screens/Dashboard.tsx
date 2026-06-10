@@ -2,8 +2,14 @@
  * Tableau de bord — l'état de la mémoire en un coup d'œil :
  * santé (doctor), compteurs (stats), souvenirs en attente de traitement (WAL).
  */
-import { getDoctor, getStats, type DoctorReport, type Stats } from '../api'
+import { getDoctor, getOverview, getStats, type AgentOverview, type DoctorReport, type Stats } from '../api'
 import { ErrorBanner, Spinner, formatBytes, useLoad } from '../components/ui'
+
+const AGENT_LABELS: Record<string, string> = {
+  'claude-code': 'Claude Code',
+  codex: 'Codex',
+  openclaw: 'OpenClaw',
+}
 
 const DB_KIND_LABELS: Record<string, string> = {
   registry: 'Registre',
@@ -13,8 +19,8 @@ const DB_KIND_LABELS: Record<string, string> = {
 
 export function Dashboard({ onConnect }: { onConnect: () => void }) {
   const { state, reload } = useLoad(async () => {
-    const [stats, doctor] = await Promise.all([getStats(), getDoctor()])
-    return { stats, doctor }
+    const [stats, doctor, overview] = await Promise.all([getStats(), getDoctor(), getOverview().catch(() => [])])
+    return { stats, doctor, overview }
   })
 
   return (
@@ -28,12 +34,24 @@ export function Dashboard({ onConnect }: { onConnect: () => void }) {
 
       {state.status === 'loading' && <Spinner />}
       {state.status === 'error' && <ErrorBanner message={state.message} onRetry={reload} />}
-      {state.status === 'ready' && <DashboardBody stats={state.data.stats} doctor={state.data.doctor} onConnect={onConnect} />}
+      {state.status === 'ready' && (
+        <DashboardBody stats={state.data.stats} doctor={state.data.doctor} overview={state.data.overview} onConnect={onConnect} />
+      )}
     </section>
   )
 }
 
-function DashboardBody({ stats, doctor, onConnect }: { stats: Stats; doctor: DoctorReport; onConnect: () => void }) {
+function DashboardBody({
+  stats,
+  doctor,
+  overview,
+  onConnect,
+}: {
+  stats: Stats
+  doctor: DoctorReport
+  overview: AgentOverview[]
+  onConnect: () => void
+}) {
   const walPending = doctor.databases.reduce((sum, db) => sum + (db.wal_pending ?? 0), 0)
 
   return (
@@ -59,6 +77,32 @@ function DashboardBody({ stats, doctor, onConnect }: { stats: Stats; doctor: Doc
           <button type="button" className="btn btn-primary btn-big" onClick={onConnect}>
             Connecter votre premier agent
           </button>
+        </div>
+      )}
+
+      {overview.length > 0 && (
+        <div className="overview-block">
+          <h2>Vos agents et ce qu’ils savent</h2>
+          <div className="overview-grid">
+            {overview.map(a => (
+              <div key={a.instance} className="overview-card">
+                <div className="overview-head">
+                  <strong>{AGENT_LABELS[a.type] ?? a.type}</strong>
+                </div>
+                <div className="overview-stats">
+                  <span><b>{a.facts}</b> souvenirs</span>
+                  <span><b>{a.themes}</b> thèmes</span>
+                  {a.procedures > 0 && <span><b>{a.procedures}</b> procédures</span>}
+                </div>
+                {a.expertise.length > 0 && (
+                  <div className="overview-expertise">
+                    <span className="muted">maîtrise :</span>
+                    {a.expertise.map(d => <span key={d} className="badge badge-theme">{d}</span>)}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
