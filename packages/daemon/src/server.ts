@@ -212,6 +212,51 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         sendJson(res, 200, { clusters: memoria.listClusters(instance) })
         return
       }
+      case 'GET /v1/admin/self_observations': {
+        const instance = url.searchParams.get('instance')
+        if (!instance) throw new HttpError(400, 'instance requise')
+        sendJson(res, 200, { observations: memoria.selfObservations(instance) })
+        return
+      }
+      case 'POST /v1/admin/derive_self': {
+        const body = await readJson(req)
+        sendJson(res, 200, memoria.deriveSelfObservations(String(body['instance'] ?? '')))
+        return
+      }
+      case 'POST /v1/admin/dialectic': {
+        const body = await readJson(req)
+        const instance = String(body['instance'] ?? '')
+        const question = String(body['question'] ?? '')
+        if (!instance || !question) throw new HttpError(400, 'instance et question requis')
+        sendJson(res, 200, await memoria.dialectic(instance, question))
+        return
+      }
+      case 'GET /v1/admin/revisions': {
+        const instance = url.searchParams.get('instance')
+        if (!instance) throw new HttpError(400, 'instance requise')
+        sendJson(res, 200, { proposals: memoria.listRevisions(instance) })
+        return
+      }
+      case 'POST /v1/admin/propose_revisions': {
+        const body = await readJson(req)
+        sendJson(res, 200, await memoria.proposeRevisions(String(body['instance'] ?? '')))
+        return
+      }
+      case 'POST /v1/admin/revision_decision': {
+        const body = await readJson(req)
+        const instance = String(body['instance'] ?? '')
+        const id = String(body['id'] ?? '')
+        const decision = body['decision'] === 'accept' ? 'accept' : 'dismiss'
+        if (!instance || !id) throw new HttpError(400, 'instance et id requis')
+        sendJson(res, 200, memoria.decideRevision(instance, id, decision))
+        return
+      }
+      case 'GET /v1/admin/skill_proposals': {
+        const instance = url.searchParams.get('instance')
+        if (!instance) throw new HttpError(400, 'instance requise')
+        sendJson(res, 200, { skills: memoria.proposeSkills(instance) })
+        return
+      }
       case 'POST /v1/admin/review/approve': {
         const body = await readJson(req)
         sendJson(res, 200, memoria.reviewDecision((body['ids'] as string[]) ?? [], 'accepted'))

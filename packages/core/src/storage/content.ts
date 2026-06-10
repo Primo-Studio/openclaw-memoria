@@ -12,6 +12,8 @@ import { patternMigrations } from '../cognition/patterns.js'
 import { proceduralMigrations } from '../cognition/procedural.js'
 import { feedbackMigrations } from '../cognition/feedback.js'
 import { clusterMigrations } from '../cognition/clusters.js'
+import { selfObservationMigrations } from '../cognition/self-observation.js'
+import { revisionMigrations } from '../cognition/revision.js'
 import { loadVecExtension } from '../vector/vec-table.js'
 import { fromJsonArray, newId, nowISO, toJson } from '../util.js'
 import type { Fact, LifecycleState, Sensitivity, Visibility, WalEntry } from '../types.js'
@@ -129,6 +131,8 @@ export class ContentStore {
       ...proceduralMigrations,
       ...feedbackMigrations,
       ...clusterMigrations,
+      ...selfObservationMigrations,
+      ...revisionMigrations,
     ])
   }
 

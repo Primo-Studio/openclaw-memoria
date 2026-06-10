@@ -28,10 +28,18 @@ import {
   ProceduralEngine,
   FeedbackEngine,
   ClusterEngine,
+  SelfObservationEngine,
+  RevisionEngine,
+  AutoSkillEngine,
+  MarkdownSync,
+  dialectic,
   type TopicSummary,
   type Pattern,
   type ProcedureMatch,
   type ProceduralProcedure,
+  type SelfObservation,
+  type RevisionProposal,
+  type DialecticResult,
 } from '../cognition/index.js'
 import { estimateTokens, newId, sha256Hex } from '../util.js'
 import { createSecretProvider, RegexRedactor } from '../secrets/index.js'
@@ -104,6 +112,8 @@ export class Memoria {
   private readonly proceduralEngines = new WeakMap<ContentStore, ProceduralEngine>()
   private readonly feedbackEngines = new WeakMap<ContentStore, FeedbackEngine>()
   private readonly clusterEngines = new WeakMap<ContentStore, ClusterEngine>()
+  private readonly selfObsEngines = new WeakMap<ContentStore, SelfObservationEngine>()
+  private readonly revisionEngines = new WeakMap<ContentStore, RevisionEngine>()
 
   private constructor(resolved: ResolvedConfig, opts: MemoriaInitOptions) {
     this.resolved = resolved
@@ -589,6 +599,112 @@ export class Memoria {
       this.clusterEngines.set(store, engine)
     }
     return engine
+  }
+
+  private selfObsFor(store: ContentStore): SelfObservationEngine {
+    let engine = this.selfObsEngines.get(store)
+    if (!engine) {
+      engine = new SelfObservationEngine({ store })
+      this.selfObsEngines.set(store, engine)
+    }
+    return engine
+  }
+
+  private revisionFor(store: ContentStore): RevisionEngine {
+    let engine = this.revisionEngines.get(store)
+    if (!engine) {
+      engine = new RevisionEngine({ store })
+      this.revisionEngines.set(store, engine)
+    }
+    return engine
+  }
+
+  // ---------------------------------------------------- couches profondes (vague 7)
+
+  /** Self-observation (couche 19) : l'agent observe son propre comportement. */
+  selfObservations(instanceId: string, kind?: SelfObservation['kind']): SelfObservation[] {
+    this.assertOpen()
+    const db = this.registry.dbForInstance(instanceId)
+    if (!db || !existsSync(db.path)) return []
+    return this.selfObsFor(this.openContent(db.path)).list(kind ? { kind } : {})
+  }
+
+  /** Dérive forces/faiblesses/habitudes depuis procédures + patterns (opt-in, propose). */
+  deriveSelfObservations(instanceId: string): { proposed: number } {
+    this.assertOpen()
+    const db = this.registry.dbForInstance(instanceId)
+    if (!db || !existsSync(db.path)) return { proposed: 0 }
+    const store = this.openContent(db.path)
+    const procedures = this.proceduralFor(store).listProcedures().map(p => ({
+      name: p.name,
+      success_count: p.success_count,
+      failure_count: p.failure_count,
+    }))
+    const patterns = this.patternFor(store).listProposed().map(p => ({ description: p.label, occurrences: p.occurrences }))
+    const r = this.selfObsFor(store).deriveFromHistory({ procedures, patterns }, { instanceId })
+    return { proposed: r.proposed.length }
+  }
+
+  /** Dialectic (couche 21) : confronte les points de vue de la mémoire (opt-in, lecture seule). */
+  async dialectic(instanceId: string, question: string, limit = 12): Promise<DialecticResult> {
+    this.assertOpen()
+    const instance = this.mustInstance(instanceId)
+    const targets = this.resolveReadTargets(instance)
+    // Sur la DB privée (la principale) ; scopes autorisés transmis pour l'anti-fuite.
+    const store = this.openContent(this.paths.assistantDb(instanceId))
+    const scopeIds = targets.flatMap(t => t.scopeIds)
+    return dialectic(store, question, { limit, scopeIds })
+  }
+
+  /** Revision (couches 18/24) : propose le ménage de la mémoire (contradits/doublons), sans rien modifier. */
+  async proposeRevisions(instanceId: string, limit = 100): Promise<{ proposed: number }> {
+    this.assertOpen()
+    const db = this.registry.dbForInstance(instanceId)
+    if (!db || !existsSync(db.path)) return { proposed: 0 }
+    const r = await this.revisionFor(this.openContent(db.path)).propose({ limit })
+    return { proposed: r.proposals.length }
+  }
+
+  listRevisions(instanceId: string): RevisionProposal[] {
+    this.assertOpen()
+    const db = this.registry.dbForInstance(instanceId)
+    if (!db || !existsSync(db.path)) return []
+    return this.revisionFor(this.openContent(db.path)).listProposals()
+  }
+
+  /** Applique (supersède) ou écarte une proposition de révision — SUR VALIDATION explicite. */
+  decideRevision(instanceId: string, proposalId: string, decision: 'accept' | 'dismiss'): { ok: boolean } {
+    this.assertOpen()
+    const db = this.registry.dbForInstance(instanceId)
+    if (!db) return { ok: false }
+    const engine = this.revisionFor(this.openContent(db.path))
+    const ok = decision === 'accept' ? engine.accept(proposalId).applied : engine.dismiss(proposalId)
+    this.registry.audit({
+      actor_type: 'user',
+      actor_id: 'local',
+      action: `revision_${decision}`,
+      target_id_hash: sha256Hex(proposalId),
+      scope_id: null,
+      reason: null,
+    })
+    return { ok }
+  }
+
+  /** Auto-skill (couche 23) : propose des procédures consolidées depuis les récurrences (sur validation). */
+  proposeSkills(instanceId: string): Array<{ label: string; steps: string[]; source: string }> {
+    this.assertOpen()
+    const db = this.registry.dbForInstance(instanceId)
+    if (!db || !existsSync(db.path)) return []
+    const proposals = new AutoSkillEngine({ store: this.openContent(db.path) }).propose()
+    return proposals.map(p => ({ label: p.label, steps: p.steps, source: p.source }))
+  }
+
+  /** Markdown sync (couche 20, opt-in) : exporte la mémoire d'une instance en .md lisibles. */
+  exportMarkdown(instanceId: string, outDir: string, byTopic = true): { files: string[]; facts: number } {
+    this.assertOpen()
+    const db = this.registry.dbForInstance(instanceId)
+    if (!db || !existsSync(db.path)) return { files: [], facts: 0 }
+    return new MarkdownSync({ store: this.openContent(db.path), outDir }).export({ byTopic })
   }
 
   // ---------------------------------------------------------- procédures (couche 6)
