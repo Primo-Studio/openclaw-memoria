@@ -10,9 +10,9 @@ daemon local, MCP multi-agent, pairing, connexion/déconnexion 1 commande, UI we
 migration + import (Koda + transcripts), partage gouverné, choix du moteur d'IA, recall hybride
 sqlite-vec, app bureau Tauri. **C'est le gros du travail et c'est livré.**
 
-Sur les 24 **couches cognitives** héritées : **8 faites, 6 partielles, ~10 à faire**. La fondation
-(bucket A) est quasi complète ; la profondeur cognitive (B/C/D) est commencée (embeddings, graphe,
-observations) et c'est là qu'on continue.
+Sur les 24 **couches cognitives** héritées : **23 faites** (vagues 5-7), seule `continuous` (17)
+reste partielle (la capture en continu marche, les modes legacy non). Toutes les autres sont portées
+avec leurs corrections, testées, et la plupart visibles dans l'UI.
 
 ## Bucket A — Actif (fondation, tourne toujours) — 11 couches
 
@@ -40,23 +40,23 @@ observations) et c'est là qu'on continue.
 | 15 | observations | ✅ | agrégation par sujet |
 | 16 | fact-clusters | ✅ | regroupement structurel (Koda 52 clusters) [vague 6] |
 | 17 | continuous | 🟡 | capture en continu (captureTurn) faite ; modes legacy non |
-| 18 | revision | 🟡→ | **en cours** (vague 7) |
+| 18 | revision | ✅ | propose contradits/doublons, supersède sur validation [vague 7] |
 
 ## Bucket C — Opt-in — 3 couches
 
 | # | Couche | État | Note |
 |---|---|---|---|
-| 19 | self-observation | 🟡→ | **en cours** (vague 7) |
-| 20 | markdown sync | 🟡→ | **en cours** (vague 7) |
-| 21 | dialectic | 🟡→ | **en cours** (vague 7) |
+| 19 | self-observation | ✅ | forces/faiblesses dérivées des procédures, UI sur Agents [vague 7] |
+| 20 | markdown sync | ✅ | export .md par thème + commande `memoria export` [vague 7] |
+| 21 | dialectic | ✅ | pour/contre/nuance depuis la mémoire (outil opt-in) [vague 7] |
 
 ## Bucket D — Sur validation — 3 couches
 
 | # | Couche | État | Note |
 |---|---|---|---|
 | 22 | **patterns (récurrences)** | ✅ | détection des récurrences + UI Récurrences (consolider/écarter) [vague 5] |
-| 23 | auto-skill | 🟡→ | **en cours** (vague 7) |
-| 24 | revision (mutations) | 🟡→ | **en cours** (vague 7) |
+| 23 | auto-skill | ✅ | propose des procédures depuis les récurrences [vague 7] |
+| 24 | revision (mutations) | ✅ | applique la supersession sur validation [vague 7] |
 
 ## Le manque que tu as identifié (juste !)
 
