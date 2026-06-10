@@ -5,13 +5,26 @@
  */
 export const MCP_VERSION = '0.1.0'
 
-export { connect, registrationSnippets } from './connect.js'
-export type { ConnectOptions, ConnectResult, PairingCompleter, RegistrationSnippets } from './connect.js'
+export { connect } from './connect.js'
+export type { ConnectOptions, ConnectResult, PairingCompleter } from './connect.js'
+export { disconnect } from './disconnect.js'
+export type { DisconnectOptions, DisconnectResult } from './disconnect.js'
+export {
+  autoRegister,
+  autoUnregister,
+  serveInvocation,
+  registerClaudeCode,
+  registerCodex,
+  registerOpenClaw,
+} from './register.js'
+export type { HostKind, RegisterResult } from './register.js'
 export { ActiveContextTracker } from './context.js'
 export type { DetectedRepo, SetContextInput } from './context.js'
 export {
   credentialsPath,
   defaultCredentialsDir,
+  deleteCredentials,
+  listCredentials,
   loadCredentials,
   saveCredentials,
 } from './credentials.js'

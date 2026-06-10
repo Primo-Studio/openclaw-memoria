@@ -41,7 +41,7 @@ export class DaemonClient {
     }
   }
 
-  async completePairing(code: string): Promise<{ assistant_instance_id: string; instance_token: string }> {
+  async completePairing(code: string): Promise<{ assistant_instance_id: string; instance_token: string; assistant_type?: string }> {
     return this.post('/v1/pairing/complete', { code })
   }
 

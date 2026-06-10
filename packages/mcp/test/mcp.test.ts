@@ -216,11 +216,12 @@ describe('buildServer handlers', () => {
 })
 
 describe('connect (pairing)', () => {
-  it('ensureDaemon → completePairing → credentials 600 + snippets FR', async () => {
+  it('ensureDaemon → completePairing → credentials 600 + auto-register', async () => {
     const completePairing = vi.fn(async (code: string) => {
       expect(code).toBe('ABCD-2345')
-      return { assistant_instance_id: 'claude-code-abc123', instance_token: 'tok-xyz' }
+      return { assistant_instance_id: 'claude-code-abc123', instance_token: 'tok-xyz', assistant_type: 'claude-code' }
     })
+    const registrar = vi.fn(() => ({ host: 'claude-code' as const, registered: true, detail: 'enregistré' }))
 
     const result = await connect({
       code: ' ABCD-2345 ', // trim vérifié
@@ -228,24 +229,22 @@ describe('connect (pairing)', () => {
       credentialsDir: join(root, 'credentials'),
       ensure: async () => ({ port: 4242 }),
       clientFor: () => ({ completePairing }),
+      registrar,
     })
 
     expect(completePairing).toHaveBeenCalledOnce()
     expect(result.instanceId).toBe('claude-code-abc123')
+    expect(result.assistantType).toBe('claude-code')
     expect(statSync(result.credentialsPath).mode & 0o777).toBe(0o600)
 
     const saved = JSON.parse(readFileSync(result.credentialsPath, 'utf8')) as InstanceCredentials
     expect(saved.instance_token).toBe('tok-xyz')
     expect(saved.storage_root).toBe(join(root, 'data'))
+    expect(saved.assistant_type).toBe('claude-code')
 
-    expect(result.snippets.claudeCode).toBe(
-      'claude mcp add memoria -- npx -y @memoria/mcp serve --instance claude-code-abc123',
-    )
-    expect(result.snippets.codexToml).toContain('[mcp_servers.memoria]')
-    expect(result.snippets.codexToml).toContain('"--instance", "claude-code-abc123"')
+    expect(registrar).toHaveBeenCalledWith('claude-code', 'claude-code-abc123')
+    expect(result.registration?.registered).toBe(true)
     expect(result.message).toContain('Agent connecté à Memoria')
-    expect(result.message).toContain(result.snippets.claudeCode)
-    expect(result.message).toContain('~/.codex/config.toml')
   })
 
   it('code vide → erreur explicite', async () => {

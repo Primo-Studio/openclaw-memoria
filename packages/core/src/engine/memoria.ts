@@ -157,7 +157,7 @@ export class Memoria {
     }
   }
 
-  completePairing(code: string): { assistant_instance_id: string; instance_token: string } | null {
+  completePairing(code: string): { assistant_instance_id: string; instance_token: string; assistant_type: string } | null {
     this.assertOpen()
     const result = this.registry.completePairing(code)
     if (!result) return null
@@ -169,7 +169,12 @@ export class Memoria {
       scope_id: null,
       reason: null,
     })
-    return { assistant_instance_id: result.instance.id, instance_token: result.token }
+    const assistant = this.registry.getAssistant(result.instance.assistant_id)
+    return {
+      assistant_instance_id: result.instance.id,
+      instance_token: result.token,
+      assistant_type: assistant?.type ?? 'generic',
+    }
   }
 
   revokeInstance(instanceId: string): void {

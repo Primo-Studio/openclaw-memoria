@@ -3,7 +3,7 @@
  * Le token d'instance est un secret local : fichier chmod 600, dossier chmod 700.
  * Le répertoire est injectable pour les tests (jamais le vrai HOME en test).
  */
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
@@ -11,6 +11,27 @@ export interface InstanceCredentials {
   instance_token: string
   storage_root: string
   created_at: string
+  /** Type d'hôte (claude-code/codex/openclaw) — pour le désenregistrement. */
+  assistant_type?: string
+}
+
+/** Liste les instances ayant des credentials locaux. */
+export function listCredentials(dir: string = defaultCredentialsDir()): string[] {
+  if (!existsSync(dir)) return []
+  try {
+    return readdirSync(dir)
+      .filter(f => f.endsWith('.json'))
+      .map(f => f.slice(0, -'.json'.length))
+  } catch {
+    return []
+  }
+}
+
+export function deleteCredentials(instanceId: string, dir: string = defaultCredentialsDir()): boolean {
+  const p = credentialsPath(instanceId, dir)
+  if (!existsSync(p)) return false
+  rmSync(p, { force: true })
+  return true
 }
 
 export function defaultCredentialsDir(): string {
@@ -53,6 +74,7 @@ export function loadCredentials(
       instance_token: parsed.instance_token,
       storage_root: parsed.storage_root,
       created_at: typeof parsed.created_at === 'string' ? parsed.created_at : '',
+      assistant_type: typeof parsed.assistant_type === 'string' ? parsed.assistant_type : undefined,
     }
   } catch (err) {
     // anti « mort silencieuse » : un fichier corrompu doit se voir
