@@ -12,6 +12,8 @@
  * thread Node → zéro contention inter-process par construction.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
+import { existsSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import {
   Memoria,
   newToken,
@@ -211,7 +213,9 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
           machine: body['machine'] as string | undefined,
           profile: (body['profile'] as string | undefined) ?? null,
         })
-        sendJson(res, 200, result)
+        // Tant que @memoria/mcp n'est pas publié sur npm, la commande npx ne
+        // marche pas : on la remplace par le binaire LOCAL s'il existe.
+        sendJson(res, 200, { ...result, command: localConnectCommand(result.pairing_code) ?? result.command })
         return
       }
       case 'POST /v1/admin/revoke': {
@@ -337,6 +341,21 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
 }
 
 // ----------------------------------------------------------------- helpers
+
+/**
+ * Commande de connexion LOCALE : `node <repo>/packages/mcp/dist/bin.js connect
+ * --code XXXX`. Le bin MCP est voisin du daemon dans le monorepo. Retourne null
+ * si introuvable (paquet publié npm → on garde la forme npx).
+ */
+function localConnectCommand(code: string): string | null {
+  try {
+    const binPath = fileURLToPath(new URL('../../mcp/dist/bin.js', import.meta.url))
+    if (existsSync(binPath)) return `${process.execPath} ${binPath} connect --code ${code}`
+  } catch {
+    /* ignore */
+  }
+  return null
+}
 
 function bearerToken(req: IncomingMessage): string | null {
   const header = req.headers.authorization
