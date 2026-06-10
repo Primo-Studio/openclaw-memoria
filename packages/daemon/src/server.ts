@@ -123,6 +123,20 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         sendJson(res, 200, { facts })
         return
       }
+      case 'GET /v1/admin/review': {
+        sendJson(res, 200, { items: memoria.listReview() })
+        return
+      }
+      case 'POST /v1/admin/review/approve': {
+        const body = await readJson(req)
+        sendJson(res, 200, memoria.reviewDecision((body['ids'] as string[]) ?? [], 'accepted'))
+        return
+      }
+      case 'POST /v1/admin/review/reject': {
+        const body = await readJson(req)
+        sendJson(res, 200, memoria.reviewDecision((body['ids'] as string[]) ?? [], 'rejected'))
+        return
+      }
       case 'GET /v1/admin/capture_mode': {
         sendJson(res, 200, { mode: memoria.getCaptureMode() })
         return

@@ -57,6 +57,8 @@ export interface InsertFactInput {
   visibility?: Visibility
   tags?: string[]
   entity_ids?: string[]
+  /** 'dormant' = en attente de revue (review-first) — exclu du recall par défaut. */
+  lifecycle_state?: LifecycleState
 }
 
 export interface FtsSearchOptions {
@@ -133,7 +135,7 @@ export class ContentStore {
       visibility: input.visibility ?? 'private',
       tags: toJson(input.tags ?? []),
       entity_ids: toJson(input.entity_ids ?? []),
-      lifecycle_state: 'active',
+      lifecycle_state: input.lifecycle_state ?? 'active',
       superseded: 0,
       superseded_by: null,
       usefulness: 0,

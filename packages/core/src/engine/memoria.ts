@@ -16,7 +16,7 @@ import {
 } from '../config.js'
 import { RegistryStore } from '../storage/registry.js'
 import { ContentStore, rowToFact, type FactRow } from '../storage/content.js'
-import { estimateTokens, sha256Hex } from '../util.js'
+import { estimateTokens, newId, sha256Hex } from '../util.js'
 import { createSecretProvider, RegexRedactor } from '../secrets/index.js'
 import type { SecretProvider } from '../secrets/types.js'
 import { resolveLlmProfile } from '../llm/index.js'
@@ -322,10 +322,6 @@ export class Memoria {
     if (mode === 'incognito') {
       return { appended: 0, processed: 0, facts_created: 0, deferred: 0, failed: 0, abandoned: 0, mode }
     }
-    if (mode === 'review-first' && !this.warnedReviewFirst) {
-      this.warnedReviewFirst = true
-      console.warn('[memoria] capture_mode=review-first pas encore actif : capture en auto-privé (voir docs/v3/TODO.md)')
-    }
     const pipeline = await this.ensurePipeline()
     const result = await pipeline.captureTurn(input)
     return { ...result, mode }
@@ -364,7 +360,7 @@ export class Memoria {
           if (!scope) throw new Error(`scope privé introuvable pour l'instance ${id}`)
           return scope.id
         },
-        storeFact: input => this.storeFact({ ...input, source: input.source ?? 'capture' }),
+        storeFact: input => this.storeCaptured(input),
         audit: entry => this.registry.audit(entry),
         redactor: this.redactor,
         secretSink: s => {
@@ -377,7 +373,119 @@ export class Memoria {
     return this.pipelinePromise
   }
 
-  private warnedReviewFirst = false
+  /**
+   * Écriture issue de la CAPTURE : en mode review-first le fait naît DORMANT
+   * (invisible au recall) + entre en file de revue ; l'approbation l'active.
+   */
+  private storeCaptured(input: StoreFactInput): Fact {
+    const fact = this.storeFact({ ...input, source: input.source ?? 'capture' })
+    if (this.getCaptureMode() !== 'review-first') return fact
+
+    const store = this.openContent(this.paths.assistantDb(input.instance))
+    store.db.prepare("UPDATE facts SET lifecycle_state = 'dormant' WHERE id = ?").run(fact.id)
+    const sourceId = this.ensureReviewSource(store, input.instance)
+    store.db
+      .prepare(
+        `INSERT INTO memory_import_items (id, source_id, target_memory_id, target_type, proposed_scope_id, status, confidence)
+         VALUES (?, ?, ?, 'fact', ?, 'pending', ?)`,
+      )
+      .run(newId(), sourceId, fact.id, fact.scope_id, fact.confidence)
+    return { ...fact, lifecycle_state: 'dormant' }
+  }
+
+  /** Source unique « capture-review » par instance (provenance des items en revue). */
+  private ensureReviewSource(store: ContentStore, instanceId: string): string {
+    const hash = sha256Hex(`capture-review:${instanceId}`)
+    const existing = store.db.prepare('SELECT id FROM memory_sources WHERE source_hash = ?').get(hash) as
+      | { id: string }
+      | undefined
+    if (existing) return existing.id
+    const id = newId()
+    store.db
+      .prepare(
+        `INSERT INTO memory_sources (id, source_type, source_path, source_hash, imported_at, metadata)
+         VALUES (?, 'capture-review', NULL, ?, ?, ?)`,
+      )
+      .run(id, hash, new Date().toISOString(), JSON.stringify({ instance: instanceId }))
+    return id
+  }
+
+  /** File de revue : items pending (capture review-first ET quarantaine d'import). */
+  listReview(opts: { limit?: number } = {}): Array<{
+    id: string
+    fact_id: string
+    content: string
+    category: string
+    confidence: number
+    source_type: string
+    source_db: string
+    created_at: string
+  }> {
+    this.assertOpen()
+    const limit = Math.min(opts.limit ?? 100, 500)
+    const out: ReturnType<Memoria['listReview']> = []
+    for (const entry of this.registry.listDbs()) {
+      if (entry.kind === 'registry' || !existsSync(entry.path)) continue
+      const store = this.openContent(entry.path)
+      const rows = store.db
+        .prepare(
+          `SELECT i.id, i.target_memory_id AS fact_id, i.confidence, s.source_type,
+                  f.fact AS content, f.category, f.created_at
+           FROM memory_import_items i
+           JOIN memory_sources s ON s.id = i.source_id
+           JOIN facts f ON f.id = i.target_memory_id
+           WHERE i.status = 'pending' AND i.target_type = 'fact'
+           ORDER BY f.created_at DESC LIMIT ?`,
+        )
+        .all(limit) as Array<Omit<ReturnType<Memoria['listReview']>[number], 'source_db'>>
+      for (const row of rows) out.push({ ...row, source_db: relative(this.paths.root, entry.path) })
+    }
+    return out.slice(0, limit)
+  }
+
+  /** Approuve (active) ou rejette (hard-delete) des items de revue. */
+  reviewDecision(itemIds: string[], decision: 'accepted' | 'rejected'): { updated: number } {
+    this.assertOpen()
+    if (itemIds.length === 0) return { updated: 0 }
+    let updated = 0
+    for (const entry of this.registry.listDbs()) {
+      if (entry.kind === 'registry' || !existsSync(entry.path)) continue
+      const store = this.openContent(entry.path)
+      const placeholders = itemIds.map(() => '?').join(',')
+      const rows = store.db
+        .prepare(
+          `SELECT id, target_memory_id FROM memory_import_items WHERE id IN (${placeholders}) AND status = 'pending'`,
+        )
+        .all(...itemIds) as Array<{ id: string; target_memory_id: string }>
+      if (rows.length === 0) continue
+      const tx = store.db.transaction(() => {
+        const factIds = rows.map(r => r.target_memory_id)
+        if (decision === 'accepted') {
+          const fp = factIds.map(() => '?').join(',')
+          store.db.prepare(`UPDATE facts SET lifecycle_state = 'active' WHERE id IN (${fp})`).run(...factIds)
+        } else {
+          store.hardDeleteFacts(factIds)
+        }
+        const ip = rows.map(() => '?').join(',')
+        store.db
+          .prepare(
+            `UPDATE memory_import_items SET status = ?, reviewed_by = 'local', reviewed_at = ? WHERE id IN (${ip})`,
+          )
+          .run(decision, new Date().toISOString(), ...rows.map(r => r.id))
+      })
+      tx()
+      updated += rows.length
+      this.registry.audit({
+        actor_type: 'user',
+        actor_id: 'local',
+        action: `review_${decision}`,
+        target_id_hash: sha256Hex(rows.map(r => r.target_memory_id).sort().join(',')),
+        scope_id: null,
+        reason: `items=${rows.length}`,
+      })
+    }
+    return { updated }
+  }
 
   /** Hard-delete gouverné (spec §11). */
   forget(filter: ForgetFilter): { deleted: number } {
