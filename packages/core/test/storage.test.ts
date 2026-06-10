@@ -99,8 +99,11 @@ describe('WAL buffer — borné (anti table illimitée du legacy)', () => {
 })
 
 describe('garde réseau', () => {
-  it('détecte les chemins réseau/synchronisés notoires', () => {
-    expect(isOnNetworkVolume('/Volumes/NAS-QNAP/memoria/data')).toBe(true)
+  it('détecte les chemins réseau/synchronisés notoires (selon la plateforme)', () => {
+    if (process.platform === 'darwin') {
+      // /Volumes/* n'a de sens que sur macOS — la garde est gated par plateforme
+      expect(isOnNetworkVolume('/Volumes/NAS-QNAP/memoria/data')).toBe(true)
+    }
     expect(isOnNetworkVolume(`${process.env['HOME']}/Library/Mobile Documents/com~apple~CloudDocs/memoria`)).toBe(true)
     expect(isOnNetworkVolume(`${process.env['HOME']}/Dropbox/memoria`)).toBe(true)
     expect(isOnNetworkVolume(dir)).toBe(false)
