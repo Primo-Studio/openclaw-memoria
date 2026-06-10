@@ -19,8 +19,19 @@
 |---|---|---|---|---|
 | **Koda** | OpenClaw | **Mac Studio** (`192.168.1.98`, user `primostudio`) | `~/.openclaw/workspace/memory/memoria.db` (33 Mo, 3573 faits) | ✅ **Rapatriée + adoptée** dans la mémoire privée Koda (instance `405290ba`), 1917 embeddings réindexés |
 | **Sol** | OpenClaw | **Mac mini** (⚠️ NE PAS confondre avec Koda) | à localiser (`~/.openclaw/workspace/memory/memoria.db` probable) | ⚪ à récupérer |
-| Claude Code | claude-code | postes divers (ce MacBook : instance `72615d82`) | native Claude Code (transcripts) + capture Memoria en cours | 🟡 connecté ici, mémoire propre qui se construit |
-| Codex | codex | postes divers | `~/.codex/` (sessions/transcripts) | ⚪ à récupérer (importeur transcripts v1.5) |
+| Claude Code | claude-code | ce MacBook (instance `72615d82`) | transcripts `~/.claude/projects/*/*.jsonl` (122 fichiers) | ✅ **connecté MCP** (✔), mémoire en cours ; transcripts à importer |
+| Codex | codex | ce MacBook (instance `0b5322e1`) | `~/.codex/sessions/**/rollout-*.jsonl` (37) + `history.jsonl` | ✅ **connecté MCP** (config.toml auto), transcripts à importer |
+| Sol | OpenClaw | Mac mini | à localiser | ⚪ à récupérer (pas pour le moment — décision Néto) |
+
+**Connexion / déconnexion (simplifiées 2026-06-10)** : `node <repo>/packages/mcp/dist/bin.js connect --code XXXX`
+fait TOUT (pairing + enregistrement MCP auto selon le type d'agent). `… disconnect [--instance <id>]`
+retire l'enregistrement + révoque + nettoie. La commande exacte est affichée par `memoria pair <type>`
+et par l'UI web (écran Agents).
+
+**Note partage (Néto 2026-06-10)** : Claude Code et Codex ont déjà, dans leurs transcripts, des faits
+sur Néto / sa structure / ses clients — **à partager** (scope `user`/`org`) car ils bossent pour lui.
+Après import (quarantaine), utiliser `suggestIdentityFacts` + `shareFacts` pour remonter ces faits au
+partagé, sur décision de Néto.
 
 ## Procédure de récupération (validée sur Koda)
 
