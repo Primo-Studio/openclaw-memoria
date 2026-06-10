@@ -10,9 +10,10 @@ daemon local, MCP multi-agent, pairing, connexion/déconnexion 1 commande, UI we
 migration + import (Koda + transcripts), partage gouverné, choix du moteur d'IA, recall hybride
 sqlite-vec, app bureau Tauri. **C'est le gros du travail et c'est livré.**
 
-Sur les 24 **couches cognitives** héritées : **23 faites** (vagues 5-7), seule `continuous` (17)
-reste partielle (la capture en continu marche, les modes legacy non). Toutes les autres sont portées
-avec leurs corrections, testées, et la plupart visibles dans l'UI.
+Sur les 24 **couches cognitives** héritées : **les 24 sont portées** (vagues 5-7), avec leurs
+corrections de bugs, testées, et la plupart visibles dans l'UI. Le cœur de Memoria V3 est complet ;
+ce qui reste relève de la distribution (npm, signature, OpenClaw) et du raffinement (qualité des
+libellés de thèmes, etc.) — voir TODO.md.
 
 ## Bucket A — Actif (fondation, tourne toujours) — 11 couches
 
@@ -39,7 +40,7 @@ avec leurs corrections, testées, et la plupart visibles dans l'UI.
 | 14 | **topics (thèmes)** | ✅ | classement auto entité-first + UI Thèmes + puces dans Revue/Mémoire [vague 5] |
 | 15 | observations | ✅ | agrégation par sujet |
 | 16 | fact-clusters | ✅ | regroupement structurel (Koda 52 clusters) [vague 6] |
-| 17 | continuous | 🟡 | capture en continu (captureTurn) faite ; modes legacy non |
+| 17 | continuous | ✅ | capture en continu (captureTurn par tour) ; les « modes » de déclenchement sont côté adaptateur d'hôte |
 | 18 | revision | ✅ | propose contradits/doublons, supersède sur validation [vague 7] |
 
 ## Bucket C — Opt-in — 3 couches
