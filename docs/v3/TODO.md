@@ -36,13 +36,21 @@ npm install && npm run build && npm test   # doit être 100% vert AVANT toute mo
 
 ## Reste à faire (ordre conseillé)
 
-### Import des mémoires Claude Code / Codex (EN COURS)
-- [ ] **Importeur de transcripts** (workflow `memoria-transcript-importer` lancé 2026-06-10) :
-      parsers Claude Code/Codex/Markdown + extraction LLM → faits en quarantaine (revue). Une fois
-      rendu : intégrer `Memoria.importTranscripts` + route daemon + tests, puis **lancer l'import réel**
-      des 122 transcripts Claude Code + 37 sessions Codex de ce MacBook.
-- [ ] Après import : `suggestIdentityFacts` sur chaque agent → proposer à Néto de **partager** les
-      faits sur lui / sa structure / ses clients vers les scopes `user`/`org` (ils bossent pour lui).
+### Import des mémoires Claude Code / Codex
+- [x] ~~Importeur de transcripts~~ **FAIT + INTÉGRÉ** : `Memoria.importTranscripts` (parsers Claude
+      Code/Codex/Markdown, idempotent, quarantaine review-first, anti-fuite multi-instance testée).
+- [x] ~~Import réel échantillon~~ FAIT : 10 transcripts récents → 208 faits en quarantaine (preuve E2E).
+- [ ] ⚠️ **QUALITÉ D'EXTRACTION** : qwen2.5:3b (local) extrait trop granulaire (détails de tâche au
+      lieu de faits durables). Avant le **bulk import** (931 fenêtres = 122 CC + 41 Codex), choisir :
+      - **Haiku** (profil `local-plus-cloud`, clé Anthropic présente) : bien meilleur, ~$1 pour tout
+        le corpus. Recommandé pour la qualité. → `memoria` setLlmProfile + relancer l'import.
+      - **qwen local** : gratuit mais bruité → prévoir un gros tri en Revue.
+      Commande : `Memoria.importTranscripts(instanceId, files, {maxWindowsPerFile})`. Exclure le bruit
+      `**/subagents/**` et `agent-*.jsonl` (voir `/tmp/real-import-sample.mjs`).
+- [ ] Après bulk import : `suggestIdentityFacts` sur Claude Code + Codex → proposer à Néto de
+      **partager** les faits sur lui / sa structure / ses clients vers `user`/`org` (ils bossent pour lui).
+- [ ] Améliorer le prompt d'extraction transcripts (plus sélectif) OU post-filtrer les faits trop
+      spécifiques à une tâche ponctuelle.
 
 ### UI manquante
 - [ ] **Écran Partage** (matrice scopes × agents) : API prête (`GET /v1/admin/scopes`, `POST /share`,
