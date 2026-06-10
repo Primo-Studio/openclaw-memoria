@@ -22,6 +22,14 @@ export type { Migration } from './storage/migrations.js'
 export { isOnNetworkVolume } from './storage/network-guard.js'
 export { openDatabase } from './storage/sqlite.js'
 export * from './types.js'
+export * from './secrets/types.js'
+export * from './secrets/index.js'
+export * from './llm/provider.js'
+export * from './llm/index.js'
+export * from './engine/selective.js'
+export * from './engine/wal.js'
+export * from './engine/capture.js'
+export * from './migration/index.js'
 export {
   estimateTokens,
   newId,

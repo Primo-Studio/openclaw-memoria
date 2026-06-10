@@ -12,7 +12,16 @@
  * thread Node → zéro contention inter-process par construction.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
-import { Memoria, newToken, nowISO, type CaptureMode, type ForgetFilter, type RecallInput, type StoreFactInput } from '@memoria/core'
+import {
+  Memoria,
+  newToken,
+  nowISO,
+  type CaptureMode,
+  type CaptureTurnInput,
+  type ForgetFilter,
+  type RecallInput,
+  type StoreFactInput,
+} from '@memoria/core'
 import { findUiDist, serveUi } from './static.js'
 import { acquireLock, clearDaemonState, writeDaemonState, type DaemonState } from './state.js'
 
@@ -185,6 +194,20 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         sendJson(res, 200, result)
         return
       }
+      case 'POST /v1/memory/capture_turn': {
+        const body = await readJson(req)
+        const messages = body['messages']
+        if (!Array.isArray(messages) || messages.length === 0) {
+          throw new HttpError(400, 'messages requis (tableau {role, content})')
+        }
+        const result = await memoria.captureTurn({
+          instance: instanceId,
+          messages: messages as CaptureTurnInput['messages'],
+          active_context: body['active_context'] as CaptureTurnInput['active_context'],
+        })
+        sendJson(res, 200, result)
+        return
+      }
       default:
         throw new HttpError(404, `route mémoire inconnue : ${route}`)
     }
@@ -214,6 +237,21 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     started_at: nowISO(),
   }
   writeDaemonState(storageRoot, state)
+
+  // Rejeu du WAL au boot (spec §6.2) : best-effort, jamais bloquant pour le
+  // démarrage — sans LLM dispo les entrées restent pending (visibles au doctor).
+  void memoria
+    .replayWal()
+    .then(replayed => {
+      const totals = replayed.reduce(
+        (acc, r) => ({ processed: acc.processed + r.summary.processed, facts: acc.facts + r.summary.facts_created }),
+        { processed: 0, facts: 0 },
+      )
+      if (totals.processed > 0) {
+        console.log(`[memoria-daemon] WAL rejoué : ${totals.processed} entrées → ${totals.facts} faits`)
+      }
+    })
+    .catch((err: unknown) => console.warn('[memoria-daemon] rejeu WAL en échec :', (err as Error).message))
 
   const close = async (): Promise<void> => {
     await new Promise<void>((resolveClose) => server.close(() => resolveClose()))

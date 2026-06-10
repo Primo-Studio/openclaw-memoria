@@ -17,6 +17,12 @@ import {
 import { RegistryStore } from '../storage/registry.js'
 import { ContentStore, rowToFact, type FactRow } from '../storage/content.js'
 import { estimateTokens, sha256Hex } from '../util.js'
+import { createSecretProvider, RegexRedactor } from '../secrets/index.js'
+import type { SecretProvider } from '../secrets/types.js'
+import { resolveLlmProfile } from '../llm/index.js'
+import type { EmbeddingProvider, LlmProvider } from '../llm/provider.js'
+import { CapturePipeline, type CaptureTurnInput, type CaptureTurnResult } from './capture.js'
+import type { WalReplaySummary } from './wal.js'
 import { passesClientIsolation, scoreFact } from './scoring.js'
 import type {
   AssistantInstance,
@@ -49,6 +55,14 @@ export interface PairAssistantResult {
 
 export interface MemoriaInitOptions extends ResolveOptions {
   userDisplayName?: string
+  /**
+   * Override du profil LLM (tests, daemon piloté). `undefined` = résolution
+   * automatique (Ollama/Anthropic selon config) au premier captureTurn.
+   * `{ extraction: null }` = capture sans LLM (WAL seul).
+   */
+  llm?: { extraction: LlmProvider | null; embeddings?: EmbeddingProvider | null }
+  /** Coffre forcé (tests : 'aes-vault' pour ne jamais toucher le Keychain réel). */
+  secretsVault?: 'keychain-macos' | 'aes-vault'
 }
 
 const DEFAULT_TOKEN_BUDGET = 1500
@@ -61,19 +75,26 @@ export class Memoria {
   private readonly pool = new Map<string, ContentStore>()
   private closed = false
 
-  private constructor(resolved: ResolvedConfig, userDisplayName?: string) {
+  private readonly secretProvider: SecretProvider
+  private readonly redactor = new RegexRedactor()
+  private readonly llmOverride: MemoriaInitOptions['llm']
+  private pipelinePromise: Promise<CapturePipeline> | null = null
+
+  private constructor(resolved: ResolvedConfig, opts: MemoriaInitOptions) {
     this.resolved = resolved
     this.paths = storagePaths(resolved.storageRoot)
     ensureStorageTree(resolved.storageRoot)
     this.registry = new RegistryStore(this.paths.registry)
-    this.registry.bootstrap(userDisplayName)
+    this.registry.bootstrap(opts.userDisplayName)
     this.registry.registerDb({ kind: 'registry', path: this.paths.registry, assistant_instance_id: null, scope_id: null })
+    this.secretProvider = createSecretProvider(this.paths.secretsDir, { force: opts.secretsVault })
+    this.llmOverride = opts.llm
   }
 
   /** Point d'entrée unique. `Memoria.init({ storageRoot })` pour les tests/daemon. */
   static init(opts: MemoriaInitOptions = {}): Memoria {
     const resolved = resolveStorageRoot(opts)
-    return new Memoria(resolved, opts.userDisplayName)
+    return new Memoria(resolved, opts)
   }
 
   // ------------------------------------------------------------ identité & connexion
@@ -289,6 +310,74 @@ export class Memoria {
       scopes_searched: searchTargets.flatMap(t => t.scopeNames),
     }
   }
+
+  /**
+   * Capture WAL-first (spec §6.2) : redaction → WAL → extraction → dédup →
+   * store. Respecte le capture_mode global : `incognito` = AUCUNE écriture.
+   */
+  async captureTurn(input: CaptureTurnInput): Promise<CaptureTurnResult & { mode: CaptureMode }> {
+    this.assertOpen()
+    this.mustInstance(input.instance)
+    const mode = this.getCaptureMode()
+    if (mode === 'incognito') {
+      return { appended: 0, processed: 0, facts_created: 0, deferred: 0, failed: 0, abandoned: 0, mode }
+    }
+    if (mode === 'review-first' && !this.warnedReviewFirst) {
+      this.warnedReviewFirst = true
+      console.warn('[memoria] capture_mode=review-first pas encore actif : capture en auto-privé (voir docs/v3/TODO.md)')
+    }
+    const pipeline = await this.ensurePipeline()
+    const result = await pipeline.captureTurn(input)
+    return { ...result, mode }
+  }
+
+  /** Rejeu du WAL au boot (daemon) : aucune entrée pending n'est oubliée. */
+  async replayWal(): Promise<Array<{ instance: string; summary: WalReplaySummary }>> {
+    this.assertOpen()
+    const pipeline = await this.ensurePipeline()
+    const out: Array<{ instance: string; summary: WalReplaySummary }> = []
+    for (const inst of this.registry.listInstances()) {
+      if (inst.revoked_at) continue
+      const db = this.registry.dbForInstance(inst.id)
+      if (!db || !existsSync(db.path)) continue
+      const summary = await pipeline.replayAtBoot(inst.id)
+      out.push({ instance: inst.id, summary })
+    }
+    return out
+  }
+
+  /** Pipeline de capture construit une fois (résolution LLM comprise). */
+  private ensurePipeline(): Promise<CapturePipeline> {
+    this.pipelinePromise ??= (async () => {
+      let extraction: LlmProvider | null
+      if (this.llmOverride !== undefined) {
+        extraction = this.llmOverride.extraction
+      } else {
+        const profile = await resolveLlmProfile(this.resolved.config)
+        extraction = profile.extraction
+      }
+      return new CapturePipeline({
+        openStore: id => this.openContent(this.paths.assistantDb(id)),
+        // ID du scope (pas le nom) : findDuplicate compare facts.scope_id
+        defaultScope: id => {
+          const scope = this.registry.getScopeByName(`private:${id}`)
+          if (!scope) throw new Error(`scope privé introuvable pour l'instance ${id}`)
+          return scope.id
+        },
+        storeFact: input => this.storeFact({ ...input, source: input.source ?? 'capture' }),
+        audit: entry => this.registry.audit(entry),
+        redactor: this.redactor,
+        secretSink: s => {
+          this.secretProvider.set(s.name, s.value)
+          this.registry.upsertSecretRef(s.name, this.secretProvider.locationFor(s.name), s.kind)
+        },
+        extraction,
+      })
+    })()
+    return this.pipelinePromise
+  }
+
+  private warnedReviewFirst = false
 
   /** Hard-delete gouverné (spec §11). */
   forget(filter: ForgetFilter): { deleted: number } {

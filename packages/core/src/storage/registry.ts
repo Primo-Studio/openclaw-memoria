@@ -361,6 +361,25 @@ export class RegistryStore {
     )
   }
 
+  // ------------------------------------------------------------------ secret refs
+
+  /** Référence de secret (la VALEUR vit au coffre, jamais ici). Upsert par nom. */
+  upsertSecretRef(name: string, location: string, service?: string | null): void {
+    this.db
+      .prepare(
+        `INSERT INTO secret_refs (id, name, service, location, scope_id, allowed_assistants, sensitivity, last_verified_at, created_at)
+         VALUES (?, ?, ?, ?, NULL, '[]', 'critical', ?, ?)
+         ON CONFLICT(name) DO UPDATE SET location = excluded.location, last_verified_at = excluded.last_verified_at`,
+      )
+      .run(newId(), name, service ?? null, location, nowISO(), nowISO())
+  }
+
+  listSecretRefs(): Array<{ name: string; service: string | null; location: string; created_at: string }> {
+    return this.db
+      .prepare('SELECT name, service, location, created_at FROM secret_refs ORDER BY created_at DESC')
+      .all() as Array<{ name: string; service: string | null; location: string; created_at: string }>
+  }
+
   // ------------------------------------------------------------------ settings
 
   getSetting(key: string): string | null {
