@@ -20,6 +20,18 @@
 **Benchmark recall (juge du produit)** : ✅ vert — anti-fuite inter-clients = 0 sur batterie de 5 requêtes,
 défaut sûr sans contexte, pas de sur-masquage, dormant explicite, cap tokens. `packages/core/test/benchmark.test.ts`.
 
+## 🟢 INSTALLATION RÉELLE (machine de Néto, 2026-06-10)
+
+- Daemon actif sur `~/.memoria/data` (port/admin_token dans `~/.memoria/data/daemon.json`).
+- **Claude Code connecté** : serveur MCP `memoria` enregistré en scope user
+  (`claude mcp list` → ✔ Connected). Outils : memoria_recall / memoria_store_fact /
+  memoria_capture_turn / memoria_set_context / memoria_get_context.
+- Instance : `72615d82-7ee6-4a2e-82d7-24887fef1d59` (credentials chmod 600 dans `~/.memoria/credentials/`).
+- E2E réel validé : capture → extraction qwen2.5:3b (~3 s) → recall ; secret jamais en clair.
+- UI web : `http://127.0.0.1:<port>/ui/#token=<admin_token>` (les deux valeurs dans daemon.json).
+- ⚠️ Le daemon pointe sur le build du repo (`packages/daemon/dist`) — relancer après un rebuild
+  (`memoria stop && memoria start`). Auto-démarrage launchd : TODO.
+
 ## Journal de session
 
 ### 2026-06-10 — Session 1 (kickoff)
