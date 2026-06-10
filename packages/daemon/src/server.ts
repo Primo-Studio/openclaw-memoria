@@ -194,6 +194,24 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         sendJson(res, 200, memoria.decidePattern(instance, id, decision))
         return
       }
+      case 'GET /v1/admin/procedures': {
+        const instance = url.searchParams.get('instance')
+        if (!instance) throw new HttpError(400, 'instance requise')
+        sendJson(res, 200, { procedures: memoria.listProcedures(instance) })
+        return
+      }
+      case 'GET /v1/admin/expertise': {
+        const instance = url.searchParams.get('instance')
+        if (!instance) throw new HttpError(400, 'instance requise')
+        sendJson(res, 200, { domains: memoria.topExpertise(instance) })
+        return
+      }
+      case 'GET /v1/admin/clusters': {
+        const instance = url.searchParams.get('instance')
+        if (!instance) throw new HttpError(400, 'instance requise')
+        sendJson(res, 200, { clusters: memoria.listClusters(instance) })
+        return
+      }
       case 'POST /v1/admin/review/approve': {
         const body = await readJson(req)
         sendJson(res, 200, memoria.reviewDecision((body['ids'] as string[]) ?? [], 'accepted'))

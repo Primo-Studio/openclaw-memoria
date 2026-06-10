@@ -3,7 +3,7 @@
  * PAIRING_TTL_MS côté core) et révoquer un accès, avec confirmation.
  */
 import { useEffect, useState, type ReactNode } from 'react'
-import { getAgents, pairAgent, revokeAgent, type AgentEntry, type AgentType, type PairResult } from '../api'
+import { getAgents, getExpertise, pairAgent, revokeAgent, type AgentEntry, type AgentType, type ExpertiseDomain, type PairResult } from '../api'
 import {
   ConfirmButton,
   CopyButton,
@@ -155,6 +155,7 @@ function AgentList({ agents, onRevoke }: { agents: AgentEntry[]; onRevoke: (id: 
                 {instance.last_seen_at ? `Vu le ${formatDate(instance.last_seen_at)}` : `Ajouté le ${formatDate(instance.created_at)}`}
               </span>
             </div>
+            {!revoked && !pending && <AgentExpertise instanceId={instance.id} />}
             {!revoked && (
               <ConfirmButton label="Révoquer" confirmLabel="Confirmer la révocation ?" onConfirm={() => onRevoke(instance.id)} />
             )}
@@ -162,6 +163,23 @@ function AgentList({ agents, onRevoke }: { agents: AgentEntry[]; onRevoke: (id: 
         )
       })}
     </ul>
+  )
+}
+
+/** Domaines de maîtrise de l'agent (couche 8) — affichés en puces sur sa ligne. */
+function AgentExpertise({ instanceId }: { instanceId: string }) {
+  const [domains, setDomains] = useState<ExpertiseDomain[]>([])
+  useEffect(() => {
+    getExpertise(instanceId)
+      .then(d => setDomains(d.slice(0, 4)))
+      .catch(() => setDomains([]))
+  }, [instanceId])
+  if (domains.length === 0) return null
+  return (
+    <div className="agent-expertise" title="Domaines de maîtrise">
+      <span className="muted">maîtrise :</span>
+      {domains.map(d => <span key={d.domain} className="badge badge-theme">{d.domain}</span>)}
+    </div>
   )
 }
 

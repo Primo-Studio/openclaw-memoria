@@ -866,3 +866,18 @@ input[type='search']:focus {
   color: var(--accent, #e85a1f);
   border: 1px solid color-mix(in srgb, var(--accent, #e85a1f) 40%, transparent);
 }
+
+/* --------------------------------------------------------------- procédures & expertise */
+
+.proc-list { list-style: none; padding: 0; display: grid; gap: 0.7rem; }
+.proc-card { padding: 0.9rem 1rem; border-radius: 10px; border: 1px solid var(--border, #2a2a3d); background: var(--card, #1c1c2b); }
+.proc-head { display: flex; align-items: center; gap: 0.7rem; justify-content: space-between; }
+.proc-rate { font-size: 0.78rem; padding: 0.1rem 0.5rem; border-radius: 6px; }
+.rate-ok { background: color-mix(in srgb, var(--ok, #3fb96a) 22%, transparent); color: var(--ok, #3fb96a); }
+.rate-mid { background: color-mix(in srgb, var(--warn, #d8a01f) 22%, transparent); color: var(--warn, #d8a01f); }
+.rate-low { background: color-mix(in srgb, var(--err, #e0524d) 22%, transparent); color: var(--err, #e0524d); }
+.proc-desc { margin: 0.3rem 0; font-size: 0.86rem; }
+.proc-steps { margin: 0.4rem 0 0; padding-left: 1.2rem; font-size: 0.84rem; color: var(--muted, #9a9ab0); }
+.proc-steps li { margin: 0.15rem 0; }
+
+.agent-expertise { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; font-size: 0.78rem; }

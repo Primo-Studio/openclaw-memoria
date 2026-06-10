@@ -323,6 +323,37 @@ export async function decidePattern(instance: string, patternId: string, decisio
   await request<unknown>('POST', '/v1/admin/pattern_decision', { instance, id: patternId, decision })
 }
 
+// ------------------------------------------------------------ procédures (couche 6)
+
+export interface Procedure {
+  id: string
+  name: string
+  description: string
+  steps: string[]
+  trigger_patterns: string[]
+  success_count: number
+  failure_count: number
+  quality_score: number
+}
+
+export async function getProcedures(instance: string): Promise<Procedure[]> {
+  const res = await request<{ procedures: Procedure[] }>('GET', `/v1/admin/procedures?instance=${encodeURIComponent(instance)}`)
+  return res.procedures
+}
+
+// ------------------------------------------------------------ expertise (couche 8)
+
+export interface ExpertiseDomain {
+  domain: string
+  level: number
+  evidence_count: number
+}
+
+export async function getExpertise(instance: string): Promise<ExpertiseDomain[]> {
+  const res = await request<{ domains: ExpertiseDomain[] }>('GET', `/v1/admin/expertise?instance=${encodeURIComponent(instance)}`)
+  return res.domains
+}
+
 // ------------------------------------------------------------ capture & revue
 
 export type CaptureMode = 'auto-private' | 'review-first' | 'incognito'

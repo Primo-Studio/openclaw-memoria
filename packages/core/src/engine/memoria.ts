@@ -639,6 +639,26 @@ export class Memoria {
     return this.feedbackFor(this.openContent(db.path)).topDomains(limit)
   }
 
+  /**
+   * Amorce l'expertise depuis les thèmes existants : l'agent « maîtrise » les
+   * sujets sur lesquels il a accumulé le plus de souvenirs. Le signal d'usage
+   * (reinforce) l'affinera ensuite. Idempotent (recalcul complet).
+   */
+  bootstrapExpertise(instanceId: string): { domains: number } {
+    this.assertOpen()
+    const db = this.registry.dbForInstance(instanceId)
+    if (!db || !existsSync(db.path)) return { domains: 0 }
+    const store = this.openContent(db.path)
+    const feedback = this.feedbackFor(store)
+    const topics = this.topicFor(store, null).listTopics({ minFacts: 3 })
+    let domains = 0
+    for (const t of topics.slice(0, 30)) {
+      feedback.updateExpertise(t.name, Math.log1p(t.fact_count))
+      domains++
+    }
+    return { domains }
+  }
+
   // ---------------------------------------------------------- clusters (couche 16)
 
   rebuildClusters(instanceId: string): { clusters: number } {

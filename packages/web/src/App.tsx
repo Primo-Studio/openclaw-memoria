@@ -12,12 +12,13 @@ import { Memory } from './screens/Memory'
 import { Review } from './screens/Review'
 import { Themes } from './screens/Themes'
 import { Patterns } from './screens/Patterns'
+import { Procedures } from './screens/Procedures'
 import { Sharing } from './screens/Sharing'
 import { Audit } from './screens/Audit'
 import { Onboarding } from './screens/Onboarding'
 import { Settings } from './screens/Settings'
 
-type ScreenId = 'dashboard' | 'agents' | 'memory' | 'themes' | 'patterns' | 'review' | 'sharing' | 'audit' | 'settings'
+type ScreenId = 'dashboard' | 'agents' | 'memory' | 'themes' | 'patterns' | 'procedures' | 'review' | 'sharing' | 'audit' | 'settings'
 
 const NAV: Array<{ id: ScreenId; label: string }> = [
   { id: 'dashboard', label: 'Tableau de bord' },
@@ -25,6 +26,7 @@ const NAV: Array<{ id: ScreenId; label: string }> = [
   { id: 'memory', label: 'Mémoire' },
   { id: 'themes', label: 'Thèmes' },
   { id: 'patterns', label: 'Récurrences' },
+  { id: 'procedures', label: 'Procédures' },
   { id: 'review', label: 'Revue' },
   { id: 'sharing', label: 'Partage' },
   { id: 'audit', label: 'Journal' },
@@ -83,6 +85,7 @@ export function App() {
         {screen === 'memory' && <Memory />}
         {screen === 'themes' && <Themes />}
         {screen === 'patterns' && <Patterns />}
+        {screen === 'procedures' && <Procedures />}
         {screen === 'review' && <Review />}
         {screen === 'sharing' && <Sharing />}
         {screen === 'audit' && <Audit />}
