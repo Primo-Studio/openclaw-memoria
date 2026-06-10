@@ -860,3 +860,9 @@ input[type='search']:focus {
 .pattern-label { font-weight: 600; margin: 0.2rem 0; }
 .pattern-canonical { font-style: italic; font-size: 0.86rem; margin: 0.2rem 0 0.7rem; }
 .pattern-actions { display: flex; gap: 0.5rem; }
+
+.badge-theme {
+  background: color-mix(in srgb, var(--accent, #e85a1f) 22%, transparent);
+  color: var(--accent, #e85a1f);
+  border: 1px solid color-mix(in srgb, var(--accent, #e85a1f) 40%, transparent);
+}

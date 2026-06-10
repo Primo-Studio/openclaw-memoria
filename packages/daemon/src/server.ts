@@ -163,6 +163,37 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         sendJson(res, 200, { candidates: memoria.suggestIdentityFacts(instance) })
         return
       }
+      case 'GET /v1/admin/topics': {
+        const instance = url.searchParams.get('instance')
+        if (!instance) throw new HttpError(400, 'instance requise')
+        const minFacts = url.searchParams.has('min_facts') ? Number(url.searchParams.get('min_facts')) : 1
+        sendJson(res, 200, { topics: memoria.listTopics(instance, minFacts) })
+        return
+      }
+      case 'GET /v1/admin/topic_facts': {
+        const instance = url.searchParams.get('instance')
+        const topic = url.searchParams.get('topic')
+        if (!instance || !topic) throw new HttpError(400, 'instance et topic requis')
+        sendJson(res, 200, { facts: memoria.topicFacts(instance, topic) })
+        return
+      }
+      case 'GET /v1/admin/patterns': {
+        const instance = url.searchParams.get('instance')
+        if (!instance) throw new HttpError(400, 'instance requise')
+        // détection à la demande (puis liste des propositions)
+        memoria.detectPatterns(instance)
+        sendJson(res, 200, { patterns: memoria.listPatterns(instance) })
+        return
+      }
+      case 'POST /v1/admin/pattern_decision': {
+        const body = await readJson(req)
+        const instance = String(body['instance'] ?? '')
+        const id = String(body['id'] ?? '')
+        const decision = body['decision'] === 'accept' ? 'accept' : 'dismiss'
+        if (!instance || !id) throw new HttpError(400, 'instance et id requis')
+        sendJson(res, 200, memoria.decidePattern(instance, id, decision))
+        return
+      }
       case 'POST /v1/admin/review/approve': {
         const body = await readJson(req)
         sendJson(res, 200, memoria.reviewDecision((body['ids'] as string[]) ?? [], 'accepted'))

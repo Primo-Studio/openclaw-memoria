@@ -21,7 +21,7 @@ import {
 import { RegistryStore } from '../storage/registry.js'
 import { ContentStore, rowToFact, type FactRow, type FtsHit, type FtsSearchOptions } from '../storage/content.js'
 import { EmbeddingIndexer, hybridSearchFacts } from '../vector/index.js'
-import { CognitionEngine } from '../cognition/index.js'
+import { CognitionEngine, TopicEngine, PatternEngine, type TopicSummary, type Pattern } from '../cognition/index.js'
 import { estimateTokens, newId, sha256Hex } from '../util.js'
 import { createSecretProvider, RegexRedactor } from '../secrets/index.js'
 import type { SecretProvider } from '../secrets/types.js'
@@ -88,6 +88,8 @@ export class Memoria {
   private profilePromise: Promise<{ extraction: LlmProvider | null; embeddings: EmbeddingProvider | null }> | null = null
   private readonly indexers = new WeakMap<ContentStore, EmbeddingIndexer>()
   private readonly cognitionEngines = new WeakMap<ContentStore, CognitionEngine>()
+  private readonly topicEngines = new WeakMap<ContentStore, TopicEngine>()
+  private readonly patternEngines = new WeakMap<ContentStore, PatternEngine>()
 
   private constructor(resolved: ResolvedConfig, opts: MemoriaInitOptions) {
     this.resolved = resolved
@@ -453,8 +455,78 @@ export class Memoria {
         const r = await engine.processFact(row.id)
         if (r.processed) processed++
       }
+      // TOPICS : ranger les faits par thème APRÈS que les entités existent (entité-first).
+      await this.topicFor(store, extraction).assignPending(2000)
     }
     return { processed }
+  }
+
+  /** Thèmes (couche 14) : liste des sujets d'une instance, triés par importance. */
+  listTopics(instanceId: string, minFacts = 1): TopicSummary[] {
+    this.assertOpen()
+    const db = this.registry.dbForInstance(instanceId)
+    if (!db || !existsSync(db.path)) return []
+    return this.topicFor(this.openContent(db.path), null).listTopics({ minFacts })
+  }
+
+  topicFacts(instanceId: string, topicId: string, limit = 50): Array<{ id: string; fact: string; category: string; created_at: string }> {
+    this.assertOpen()
+    const db = this.registry.dbForInstance(instanceId)
+    if (!db || !existsSync(db.path)) return []
+    return this.topicFor(this.openContent(db.path), null)
+      .factsForTopic(topicId, { limit })
+      .map(f => ({ id: f.id, fact: f.fact, category: f.category, created_at: f.created_at }))
+  }
+
+  /** Récurrences (couche 22) : détecte + liste les patterns proposés d'une instance. */
+  detectPatterns(instanceId: string, minOccurrences = 3): { proposed: number } {
+    this.assertOpen()
+    const db = this.registry.dbForInstance(instanceId)
+    if (!db || !existsSync(db.path)) return { proposed: 0 }
+    const result = this.patternFor(this.openContent(db.path)).detect({ minOccurrences })
+    return { proposed: result.proposed.length }
+  }
+
+  listPatterns(instanceId: string): Pattern[] {
+    this.assertOpen()
+    const db = this.registry.dbForInstance(instanceId)
+    if (!db || !existsSync(db.path)) return []
+    return this.patternFor(this.openContent(db.path)).listProposed()
+  }
+
+  decidePattern(instanceId: string, patternId: string, decision: 'accept' | 'dismiss'): { ok: boolean } {
+    this.assertOpen()
+    const db = this.registry.dbForInstance(instanceId)
+    if (!db || !existsSync(db.path)) return { ok: false }
+    const engine = this.patternFor(this.openContent(db.path))
+    const result = decision === 'accept' ? engine.accept(patternId) : engine.dismiss(patternId)
+    this.registry.audit({
+      actor_type: 'user',
+      actor_id: 'local',
+      action: `pattern_${decision}`,
+      target_id_hash: sha256Hex(patternId),
+      scope_id: null,
+      reason: null,
+    })
+    return { ok: result !== null }
+  }
+
+  private topicFor(store: ContentStore, llm: import('../llm/provider.js').LlmProvider | null): TopicEngine {
+    let engine = this.topicEngines.get(store)
+    if (!engine) {
+      engine = new TopicEngine({ store, llm })
+      this.topicEngines.set(store, engine)
+    }
+    return engine
+  }
+
+  private patternFor(store: ContentStore): PatternEngine {
+    let engine = this.patternEngines.get(store)
+    if (!engine) {
+      engine = new PatternEngine({ store })
+      this.patternEngines.set(store, engine)
+    }
+    return engine
   }
 
   /**
@@ -674,6 +746,7 @@ export class Memoria {
     source_type: string
     source_db: string
     created_at: string
+    topics: string[]
   }> {
     this.assertOpen()
     const limit = Math.min(opts.limit ?? 100, 500)
@@ -681,6 +754,7 @@ export class Memoria {
     for (const entry of this.registry.listDbs()) {
       if (entry.kind === 'registry' || !existsSync(entry.path)) continue
       const store = this.openContent(entry.path)
+      const topicEngine = this.topicFor(store, null)
       const rows = store.db
         .prepare(
           `SELECT i.id, i.target_memory_id AS fact_id, i.confidence, s.source_type,
@@ -691,8 +765,14 @@ export class Memoria {
            WHERE i.status = 'pending' AND i.target_type = 'fact'
            ORDER BY f.created_at DESC LIMIT ?`,
         )
-        .all(limit) as Array<Omit<ReturnType<Memoria['listReview']>[number], 'source_db'>>
-      for (const row of rows) out.push({ ...row, source_db: relative(this.paths.root, entry.path) })
+        .all(limit) as Array<Omit<ReturnType<Memoria['listReview']>[number], 'source_db' | 'topics'>>
+      for (const row of rows) {
+        out.push({
+          ...row,
+          source_db: relative(this.paths.root, entry.path),
+          topics: topicEngine.topicsForFact(row.fact_id).map(t => t.name),
+        })
+      }
     }
     return out.slice(0, limit)
   }
@@ -999,6 +1079,9 @@ export class Memoria {
         ids = rows.map(r => r.id)
       }
       if (ids.length === 0) continue
+      // Nettoyer thèmes + récurrences AVANT le hard-delete (lisent fact_topics).
+      this.topicFor(store, null).onForget(ids)
+      this.patternFor(store).onForget(ids)
       const n = store.hardDeleteFacts(ids)
       deleted += n
       if (n > 0) {
@@ -1021,7 +1104,7 @@ export class Memoria {
    * Navigation admin dans la mémoire (UI web) : faits d'une instance (sa DB
    * privée) ou de toutes les DB, récents d'abord ou filtrés FTS.
    */
-  browseFacts(opts: { instance?: string; q?: string; limit?: number } = {}): Array<Fact & { source_db: string }> {
+  browseFacts(opts: { instance?: string; q?: string; limit?: number } = {}): Array<Fact & { source_db: string; topics: string[] }> {
     this.assertOpen()
     const limit = Math.min(opts.limit ?? 50, 200)
     const targets: string[] = []
@@ -1033,19 +1116,25 @@ export class Memoria {
         if (entry.kind !== 'registry' && existsSync(entry.path)) targets.push(entry.path)
       }
     }
-    const out: Array<Fact & { source_db: string }> = []
+    const out: Array<Fact & { source_db: string; topics: string[] }> = []
     for (const path of targets) {
       const store = this.openContent(path)
       const label = relative(this.paths.root, path)
+      const topicEngine = this.topicFor(store, null)
+      const withTopics = (row: FactRow): Fact & { source_db: string; topics: string[] } => ({
+        ...rowToFact(row),
+        source_db: label,
+        topics: topicEngine.topicsForFact(row.id).map(t => t.name),
+      })
       if (opts.q) {
         for (const hit of store.searchFacts(opts.q, { limit, includeDormant: true, maxSensitivity: 'critical' })) {
-          out.push({ ...rowToFact(hit.row), source_db: label })
+          out.push(withTopics(hit.row))
         }
       } else {
         const rows = store.db
           .prepare('SELECT * FROM facts ORDER BY created_at DESC LIMIT ?')
           .all(limit) as FactRow[]
-        for (const row of rows) out.push({ ...rowToFact(row), source_db: label })
+        for (const row of rows) out.push(withTopics(row))
       }
     }
     out.sort((a, b) => (a.created_at < b.created_at ? 1 : -1))

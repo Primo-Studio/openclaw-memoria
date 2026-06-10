@@ -39,7 +39,9 @@ export function Themes() {
     setTopics(null)
     setActive(null)
     setFacts(null)
-    getTopics(instance)
+    // On met en avant les thèmes consistants (≥2 souvenirs) ; les thèmes à 1
+    // souvenir forment une longue queue qu'on n'affiche pas par défaut.
+    getTopics(instance, 2)
       .then(setTopics)
       .catch(err => {
         setTopics([])

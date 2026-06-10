@@ -96,6 +96,9 @@ export function Review() {
             <li key={item.id} className="fact-card">
               <p className="fact-content">{item.content}</p>
               <div className="fact-meta">
+                {(item.topics ?? []).map(t => (
+                  <span key={t} className="badge badge-theme" title="rangé dans ce thème">{t}</span>
+                ))}
                 <span className="badge badge-muted">{item.category}</span>
                 <span className="badge badge-muted">
                   {item.source_type === 'capture-review' ? 'capture' : 'import'}

@@ -7,6 +7,8 @@ import { openDatabase } from './sqlite.js'
 import { runMigrations } from './migrations.js'
 import { contentMigrations } from './content-schema.js'
 import { cognitionMigrations } from './cognition-schema.js'
+import { topicMigrations } from '../cognition/topics.js'
+import { patternMigrations } from '../cognition/patterns.js'
 import { loadVecExtension } from '../vector/vec-table.js'
 import { fromJsonArray, newId, nowISO, toJson } from '../util.js'
 import type { Fact, LifecycleState, Sensitivity, Visibility, WalEntry } from '../types.js'
@@ -114,9 +116,9 @@ export class ContentStore {
     this.path = path
     this.journalMode = opened.journalMode
     this.onNetworkVolume = opened.onNetworkVolume
-    // Tronc + cognition (versions ≥10, sans collision) : toute DB de contenu
-    // a le schéma cognitif d'office (entités/relations/observations).
-    runMigrations(this.db, [...contentMigrations, ...cognitionMigrations])
+    // Tronc + cognition (≥10) + topics (20-29) + patterns (30-39), sans
+    // collision : toute DB de contenu a le schéma cognitif complet d'office.
+    runMigrations(this.db, [...contentMigrations, ...cognitionMigrations, ...topicMigrations, ...patternMigrations])
   }
 
   insertFact(input: InsertFactInput): Fact {

@@ -83,6 +83,8 @@ export interface AdminFact {
   scope_name?: string
   sensitivity?: string
   created_at: string
+  /** Thèmes (sujets) du fait — affichés en puces. Présent une fois la couche topics câblée. */
+  topics?: string[]
 }
 
 export class ApiError extends Error {
@@ -344,6 +346,8 @@ export interface ReviewItem {
   source_type: string
   source_db: string
   created_at: string
+  /** Thèmes où le souvenir sera rangé (affichés en puces). */
+  topics?: string[]
 }
 
 export async function getReview(): Promise<ReviewItem[]> {

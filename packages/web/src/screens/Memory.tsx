@@ -152,6 +152,9 @@ function MemoryBrowser({ agents }: { agents: AgentEntry[] }) {
               <li key={fact.id} className="fact-card">
                 <p className="fact-content">{fact.fact}</p>
                 <div className="fact-meta">
+                  {(fact.topics ?? []).map(t => (
+                    <span key={t} className="badge badge-theme" title="thème">{t}</span>
+                  ))}
                   <span className="badge badge-muted">{fact.category}</span>
                   <span className="badge badge-muted">{scopeLabel(fact)}</span>
                   <span className="muted">{formatDate(fact.created_at)}</span>
