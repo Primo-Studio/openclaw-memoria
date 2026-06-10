@@ -38,3 +38,21 @@
    (768d) + `qwen2.5:3b` téléchargés au kickoff. Clé Anthropic dispo (`~/.anthropic/api_key`)
    pour le profil cloud (Haiku 4.5). Le défaut legacy `gpt-5.4-nano` (modèle inexistant) est
    banni du code V3.
+
+## 2026-06-10 (session 2) — Choix du moteur d'IA par l'utilisateur (Néto)
+
+- **Principe (cahier des charges §14)** : c'est **l'utilisateur qui choisit** son provider et son
+  modèle d'extraction, avec des **recommandations** pour ne pas être perdu. Local pour qui veut du
+  local, cloud pour les autres. Réglages → sélecteur provider+modèle.
+- **Providers supportés** : Ollama (local, gratuit), **OpenAI** (recommandé, `gpt-4o-mini` par
+  défaut), Anthropic (Haiku), **OpenRouter** (une clé, des centaines de modèles). L'utilisateur peut
+  mettre sa propre clé.
+- **Clés** : pattern fichier chmod 600 par provider — `~/.anthropic/api_key`, `~/.openai/api_key`,
+  `~/.openrouter/api_key` (+ env `OPENAI_API_KEY`/`OPENROUTER_API_KEY`/`ANTHROPIC_API_KEY`).
+  Clé OpenAI de Néto fournie 2026-06-10 → sécurisée dans `~/.openai/api_key`. (Avertir 1× sur la
+  rotation puis avancer — cf. règle mémoire.)
+- **Qualité d'extraction des transcripts** : qwen2.5:3b trop granulaire → **gpt-4o-mini** retenu
+  pour le bulk import (faits durables propres, ~0,3 € pour tout le corpus). Choix `config.llm.extraction
+  = {provider:'openai', model:'gpt-4o-mini'}`.
+- gpt-5*/o-series : API exige `max_completion_tokens` (pas `max_tokens`) + pas de `temperature`
+  custom — géré dans `OpenAiProvider`.
