@@ -92,10 +92,10 @@ Sources : `legacy/openclaw.d.ts`, `legacy/openclaw.plugin.json`, `legacy/index.t
 |---|---|---|
 | `before_prompt_build` | recall — retourne `{ prependContext }` | `legacy/recall.ts:362,386` |
 | `message_received` | continuous learning (buffer + urgence) | `legacy/continuous.ts:122` |
-| `llm_output` | continuous learning (extraction périodique) | `legacy/continuous.ts` (header :9) |
-| `after_tool_call` | capture procédurale temps réel | `legacy/procedural-hooks.ts:14` |
+| `llm_output` | continuous learning (extraction périodique) | `legacy/continuous.ts:208` (annoncé header :9) |
+| `after_tool_call` | capture procédurale temps réel | `legacy/procedural-hooks.ts:39` (doc du hook :14) |
 | `agent_end` | capture session + auto-skill | `legacy/capture.ts:43`, `legacy/index.ts:359` |
-| `after_compaction` | capture pré-perte de contexte | `legacy/capture.ts` (header :2) |
+| `after_compaction` | capture pré-perte de contexte | `legacy/capture.ts:253` (header :2) |
 
 - **Workspace** : `legacy/index.ts:56` lit `process.env.OPENCLAW_WORKSPACE ||
   ~/.openclaw/workspace`. ⚠️ `OPENCLAW_WORKSPACE` n'apparaît **plus nulle part** dans le dist

@@ -1,0 +1,4 @@
+# Artefacts de build Rust/Tauri
+src-tauri/target/
+# Schémas de capacités générés par tauri-build
+src-tauri/gen/

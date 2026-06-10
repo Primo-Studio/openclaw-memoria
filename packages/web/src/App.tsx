@@ -1,22 +1,31 @@
 /**
- * App — coquille de navigation (4 écrans) + écran d'accueil quand
+ * App — coquille de navigation (5 écrans) + sélecteur de mode de capture
+ * toujours visible (pause = exigence spec §13) + écran d'accueil quand
  * aucun token admin n'est présent (l'UI s'ouvre normalement via le CLI
  * `memoria`, qui passe le token dans l'URL).
  */
-import { useState } from 'react'
-import { hasToken } from './api'
+import { useCallback, useEffect, useState } from 'react'
+import { getCaptureMode, hasToken, setCaptureMode, type CaptureMode } from './api'
 import { Dashboard } from './screens/Dashboard'
 import { Agents } from './screens/Agents'
 import { Memory } from './screens/Memory'
+import { Review } from './screens/Review'
 import { Audit } from './screens/Audit'
 
-type ScreenId = 'dashboard' | 'agents' | 'memory' | 'audit'
+type ScreenId = 'dashboard' | 'agents' | 'memory' | 'review' | 'audit'
 
 const NAV: Array<{ id: ScreenId; label: string }> = [
   { id: 'dashboard', label: 'Tableau de bord' },
   { id: 'agents', label: 'Agents' },
   { id: 'memory', label: 'Mémoire' },
+  { id: 'review', label: 'Revue' },
   { id: 'audit', label: 'Journal' },
+]
+
+const MODES: Array<{ id: CaptureMode; label: string; hint: string }> = [
+  { id: 'auto-private', label: 'Capture auto', hint: 'Les agents mémorisent en privé automatiquement.' },
+  { id: 'review-first', label: 'Revue d’abord', hint: 'Chaque souvenir attend votre validation (écran Revue).' },
+  { id: 'incognito', label: 'Pause', hint: 'Plus aucune capture — rien n’est écrit nulle part.' },
 ]
 
 export function App() {
@@ -45,14 +54,61 @@ export function App() {
             </button>
           ))}
         </nav>
+        <CaptureModeSwitch />
         <div className="sidebar-foot muted">100 % local — rien ne quitte cette machine.</div>
       </aside>
       <main className="content">
         {screen === 'dashboard' && <Dashboard onConnect={() => setScreen('agents')} />}
         {screen === 'agents' && <Agents />}
         {screen === 'memory' && <Memory />}
+        {screen === 'review' && <Review />}
         {screen === 'audit' && <Audit />}
       </main>
+    </div>
+  )
+}
+
+/** Pause/capture toujours accessible, quel que soit l'écran (spec §13). */
+function CaptureModeSwitch() {
+  const [mode, setMode] = useState<CaptureMode | null>(null)
+
+  useEffect(() => {
+    getCaptureMode()
+      .then(setMode)
+      .catch(() => setMode(null))
+  }, [])
+
+  const change = useCallback((next: CaptureMode) => {
+    setMode(next) // optimiste — l'échec remet l'état réel
+    setCaptureMode(next).catch(() => {
+      getCaptureMode()
+        .then(setMode)
+        .catch(() => setMode(null))
+    })
+  }, [])
+
+  if (mode === null) return null
+
+  const current = MODES.find(m => m.id === mode)
+  return (
+    <div className="capture-switch">
+      <span className="field-label">Capture</span>
+      <div className="capture-options" role="radiogroup" aria-label="Mode de capture">
+        {MODES.map(m => (
+          <button
+            key={m.id}
+            type="button"
+            role="radio"
+            aria-checked={mode === m.id}
+            title={m.hint}
+            className={`capture-option${mode === m.id ? ' capture-active' : ''}${m.id === 'incognito' && mode === m.id ? ' capture-paused' : ''}`}
+            onClick={() => change(m.id)}
+          >
+            {m.label}
+          </button>
+        ))}
+      </div>
+      {current && <p className="muted capture-hint">{current.hint}</p>}
     </div>
   )
 }

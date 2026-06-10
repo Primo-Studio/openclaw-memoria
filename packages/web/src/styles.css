@@ -724,3 +724,53 @@ input[type='search']:focus {
   text-align: center;
   margin: 0.6rem 0;
 }
+
+/* --------------------------------------------------------------- capture & revue */
+
+.capture-switch {
+  padding: 0.75rem 1rem;
+  border-top: 1px solid var(--border, #2a2a3d);
+}
+
+.capture-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-top: 0.4rem;
+}
+
+.capture-option {
+  text-align: left;
+  padding: 0.35rem 0.6rem;
+  border-radius: 8px;
+  border: 1px solid var(--border, #2a2a3d);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.capture-option:hover {
+  border-color: var(--accent, #e85a1f);
+}
+
+.capture-active {
+  border-color: var(--accent, #e85a1f);
+  background: color-mix(in srgb, var(--accent, #e85a1f) 18%, transparent);
+}
+
+.capture-paused {
+  border-color: #d8a01f;
+  background: color-mix(in srgb, #d8a01f 22%, transparent);
+}
+
+.capture-hint {
+  margin: 0.45rem 0 0;
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+
+.review-bulk {
+  display: flex;
+  gap: 0.5rem;
+}

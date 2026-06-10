@@ -198,3 +198,39 @@ export async function forgetFacts(ids: string[]): Promise<number> {
   const res = await request<{ deleted: number }>('POST', '/v1/admin/forget', { ids })
   return res.deleted
 }
+
+// ------------------------------------------------------------ capture & revue
+
+export type CaptureMode = 'auto-private' | 'review-first' | 'incognito'
+
+export async function getCaptureMode(): Promise<CaptureMode> {
+  const res = await request<{ mode: CaptureMode }>('GET', '/v1/admin/capture_mode')
+  return res.mode
+}
+
+export async function setCaptureMode(mode: CaptureMode): Promise<void> {
+  await request<{ mode: CaptureMode }>('POST', '/v1/admin/capture_mode', { mode })
+}
+
+/** Item en attente de revue (capture review-first ou quarantaine d'import). */
+export interface ReviewItem {
+  id: string
+  fact_id: string
+  content: string
+  category: string
+  confidence: number
+  source_type: string
+  source_db: string
+  created_at: string
+}
+
+export async function getReview(): Promise<ReviewItem[]> {
+  const res = await request<{ items: ReviewItem[] }>('GET', '/v1/admin/review')
+  return res.items
+}
+
+export async function reviewDecision(ids: string[], decision: 'approve' | 'reject'): Promise<number> {
+  if (ids.length === 0) return 0
+  const res = await request<{ updated: number }>('POST', `/v1/admin/review/${decision}`, { ids })
+  return res.updated
+}
