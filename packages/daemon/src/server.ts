@@ -171,6 +171,24 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         sendJson(res, 200, memoria.reviewDecision((body['ids'] as string[]) ?? [], 'rejected'))
         return
       }
+      case 'GET /v1/admin/providers': {
+        sendJson(res, 200, await memoria.detectProviders())
+        return
+      }
+      case 'GET /v1/admin/llm_profile': {
+        sendJson(res, 200, { profile: memoria.getLlmProfile() })
+        return
+      }
+      case 'POST /v1/admin/llm_profile': {
+        const body = await readJson(req)
+        const profile = String(body['profile'] ?? '')
+        if (!['100-local', 'local-plus-cloud', 'cloud'].includes(profile)) {
+          throw new HttpError(400, `profil inconnu : ${profile}`)
+        }
+        memoria.setLlmProfile(profile)
+        sendJson(res, 200, { profile })
+        return
+      }
       case 'GET /v1/admin/capture_mode': {
         sendJson(res, 200, { mode: memoria.getCaptureMode() })
         return

@@ -7,9 +7,12 @@
 import { existsSync, statSync } from 'node:fs'
 import { hostname } from 'node:os'
 import { relative } from 'node:path'
+import DatabaseCtor from 'better-sqlite3'
+import { importLegacyCognition } from '../migration/import-cognition.js'
 import {
   ensureStorageTree,
   resolveStorageRoot,
+  saveConfigFile,
   storagePaths,
   type ResolveOptions,
   type ResolvedConfig,
@@ -17,6 +20,7 @@ import {
 import { RegistryStore } from '../storage/registry.js'
 import { ContentStore, rowToFact, type FactRow, type FtsHit, type FtsSearchOptions } from '../storage/content.js'
 import { EmbeddingIndexer, hybridSearchFacts } from '../vector/index.js'
+import { CognitionEngine } from '../cognition/index.js'
 import { estimateTokens, newId, sha256Hex } from '../util.js'
 import { createSecretProvider, RegexRedactor } from '../secrets/index.js'
 import type { SecretProvider } from '../secrets/types.js'
@@ -82,6 +86,7 @@ export class Memoria {
   private pipelinePromise: Promise<CapturePipeline> | null = null
   private profilePromise: Promise<{ extraction: LlmProvider | null; embeddings: EmbeddingProvider | null }> | null = null
   private readonly indexers = new WeakMap<ContentStore, EmbeddingIndexer>()
+  private readonly cognitionEngines = new WeakMap<ContentStore, CognitionEngine>()
 
   private constructor(resolved: ResolvedConfig, opts: MemoriaInitOptions) {
     this.resolved = resolved
@@ -304,6 +309,51 @@ export class Memoria {
       }
     }
 
+    // --- Expansion graphe (bucket B au recall, §6.1 étape 4) : SQL pur, 0 LLM.
+    // L'anti-fuite est garantie par expandEntities (bornée aux scopes autorisés).
+    if (input.expand_graph !== false && candidates.length > 0) {
+      const existing = new Set(candidates.map(c => c.item.id))
+      const storeScopes = new Map<ContentStore, { scopeIds: string[]; dbPath: string }>()
+      for (const target of searchTargets) {
+        storeScopes.set(this.openContent(target.dbPath), { scopeIds: target.scopeIds, dbPath: target.dbPath })
+      }
+      const seedsByStore = new Map<ContentStore, string[]>()
+      for (const c of candidates) {
+        const arr = seedsByStore.get(c.store) ?? []
+        if (arr.length < 8) arr.push(c.item.id)
+        seedsByStore.set(c.store, arr)
+      }
+      for (const [store, seeds] of seedsByStore) {
+        const meta = storeScopes.get(store)
+        if (!meta || seeds.length === 0) continue
+        const expanded = this.cognitionFor(store, null).expandEntities(seeds, meta.scopeIds, { maxHops: 2, maxFacts: 8 })
+        for (const ex of expanded) {
+          if (existing.has(ex.fact_id)) continue
+          const row = store.db.prepare('SELECT * FROM facts WHERE id = ?').get(ex.fact_id) as FactRow | undefined
+          if (!row) continue
+          if (!passesClientIsolation(row, input.active_context)) continue
+          // relevance dérivée du lien graphe, fortement escomptée (un voisin n'est
+          // jamais aussi pertinent qu'un hit direct) ; on garde recency/confiance.
+          const parts = scoreFact(row, Math.min(0.4, ex.score) * 0.5, input.active_context, now)
+          if (parts.total <= 0) continue
+          existing.add(ex.fact_id)
+          candidates.push({
+            store,
+            item: {
+              kind: 'fact',
+              id: row.id,
+              content: row.fact,
+              category: row.category,
+              scope_id: row.scope_id,
+              source_db: relative(this.paths.root, meta.dbPath),
+              score: parts.total,
+              created_at: row.created_at,
+            },
+          })
+        }
+      }
+    }
+
     candidates.sort((a, b) => b.item.score - a.item.score)
 
     // CAP DUR de tokens (corrige format.ts legacy : aucun cap global)
@@ -356,13 +406,101 @@ export class Memoria {
     }
     const pipeline = await this.ensurePipeline()
     const result = await pipeline.captureTurn(input)
-    // Indexation vectorielle ASYNC (bucket B) — jamais dans le chemin de réponse.
+    // Bucket B ASYNC (jamais dans le chemin de réponse) : embeddings + cognition.
     if (result.facts_created > 0) {
       void this.indexEmbeddings(input.instance).catch((err: unknown) =>
         console.warn('[memoria] indexation embeddings en échec :', (err as Error).message),
       )
+      void this.processCognition(input.instance).catch((err: unknown) =>
+        console.warn('[memoria] traitement cognitif en échec :', (err as Error).message),
+      )
     }
     return { ...result, mode }
+  }
+
+  /**
+   * Traite les faits sans graphe (entités/relations/observations) d'une
+   * instance. Async, bucket B — appelé après capture (fire-and-forget) et au
+   * boot du daemon. LLM d'extraction optionnel (heuristique sinon).
+   */
+  async processCognition(instanceId?: string): Promise<{ processed: number }> {
+    this.assertOpen()
+    const { extraction } = await this.ensureProfile()
+    const targets = instanceId
+      ? [this.registry.dbForInstance(instanceId)].filter(Boolean)
+      : this.registry.listDbs().filter(e => e.kind !== 'registry')
+    let processed = 0
+    for (const entry of targets) {
+      if (!entry || !existsSync(entry.path)) continue
+      const store = this.openContent(entry.path)
+      const engine = this.cognitionFor(store, extraction)
+      // faits actifs sans entité encore liée
+      const pending = store.db
+        .prepare(
+          `SELECT f.id FROM facts f
+           WHERE f.superseded = 0
+             AND NOT EXISTS (SELECT 1 FROM fact_entities fe WHERE fe.fact_id = f.id)
+           LIMIT 2000`,
+        )
+        .all() as Array<{ id: string }>
+      for (const row of pending) {
+        const r = await engine.processFact(row.id)
+        if (r.processed) processed++
+      }
+    }
+    return { processed }
+  }
+
+  /**
+   * Importe le graphe cognitif (entités/relations/observations/topics) d'une
+   * base legacy v3.34 vers la mémoire PRIVÉE d'une instance. Complète
+   * `importLegacyDb` (qui ne ramène que faits + procédures). La base legacy est
+   * ouverte en lecture seule. Idempotent.
+   */
+  importCognitionInto(legacyPath: string, instanceId: string): import('../migration/import-cognition.js').ImportCognitionReport {
+    this.assertOpen()
+    this.mustInstance(instanceId)
+    const privateScope = this.registry.getScopeByName(`private:${instanceId}`)
+    if (!privateScope) throw new Error(`scope privé introuvable pour l'instance ${instanceId}`)
+    const store = this.openContent(this.paths.assistantDb(instanceId))
+    const legacy = new DatabaseCtor(legacyPath, { readonly: true })
+    try {
+      const report = importLegacyCognition({ legacyDb: legacy, targetStore: store, scopeId: privateScope.id })
+      this.registry.audit({
+        actor_type: 'user',
+        actor_id: 'local',
+        action: 'import_cognition',
+        target_id_hash: sha256Hex(instanceId),
+        scope_id: privateScope.id,
+        reason: `entities=${report.entities_imported};relations=${report.relations_imported};observations=${report.observations_imported}`,
+      })
+      return report
+    } finally {
+      legacy.close()
+    }
+  }
+
+  /** Decay du graphe (job quotidien) sur toutes les DB de contenu. */
+  decayCognition(): { decayed: number; pruned: number } {
+    this.assertOpen()
+    let decayed = 0
+    let pruned = 0
+    for (const entry of this.registry.listDbs()) {
+      if (entry.kind === 'registry' || !existsSync(entry.path)) continue
+      const r = this.cognitionFor(this.openContent(entry.path), null).decay()
+      decayed += r.decayed
+      pruned += r.pruned
+    }
+    return { decayed, pruned }
+  }
+
+  private cognitionFor(store: ContentStore, llm: import('../llm/provider.js').LlmProvider | null): CognitionEngine {
+    let engine = this.cognitionEngines.get(store)
+    if (!engine) {
+      engine = new CognitionEngine({ store, llm })
+      this.cognitionEngines.set(store, engine)
+    }
+    return engine
   }
 
   /**
@@ -871,6 +1009,69 @@ export class Memoria {
     }
     out.sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
     return out.slice(0, limit)
+  }
+
+  /**
+   * Détection des moteurs d'IA disponibles (onboarding/réglages §14) :
+   * Ollama (modèles présents), LM Studio, clé Anthropic. Sans réseau bloquant.
+   */
+  async detectProviders(): Promise<{
+    ollama: { available: boolean; models: string[]; base_url: string }
+    lmstudio: { available: boolean }
+    anthropic: { available: boolean }
+  }> {
+    this.assertOpen()
+    const { OllamaProvider, resolveAnthropicApiKey, DEFAULT_OLLAMA_BASE_URL } = await import('../llm/index.js')
+    const ollamaBase = DEFAULT_OLLAMA_BASE_URL
+    let ollamaModels: string[] = []
+    let ollamaUp = false
+    try {
+      const res = await fetch(`${ollamaBase}/api/tags`, { signal: AbortSignal.timeout(1500) })
+      if (res.ok) {
+        ollamaUp = true
+        const data = (await res.json()) as { models?: Array<{ name: string }> }
+        ollamaModels = (data.models ?? []).map(m => m.name)
+      }
+    } catch {
+      ollamaUp = false
+    }
+    let lmstudio = false
+    try {
+      lmstudio = (await fetch('http://127.0.0.1:1234/v1/models', { signal: AbortSignal.timeout(1000) })).ok
+    } catch {
+      lmstudio = false
+    }
+    void OllamaProvider
+    const anthropic = resolveAnthropicApiKey({}) !== null
+    return {
+      ollama: { available: ollamaUp, models: ollamaModels, base_url: ollamaBase },
+      lmstudio: { available: lmstudio },
+      anthropic: { available: anthropic },
+    }
+  }
+
+  /** Profil LLM courant (config). */
+  getLlmProfile(): string {
+    this.assertOpen()
+    return this.resolved.config.llm?.profile ?? '100-local'
+  }
+
+  /** Change le profil LLM et le persiste dans config.toml. */
+  setLlmProfile(profile: string): void {
+    this.assertOpen()
+    this.resolved.config.llm = { ...this.resolved.config.llm, profile }
+    saveConfigFile(this.resolved.config, this.resolved.configPath)
+    // invalide la résolution mémoïsée → re-résolue au prochain usage
+    this.profilePromise = null
+    this.pipelinePromise = null
+    this.registry.audit({
+      actor_type: 'user',
+      actor_id: 'local',
+      action: `set_llm_profile:${profile}`,
+      target_id_hash: null,
+      scope_id: null,
+      reason: null,
+    })
   }
 
   /** Mode de capture global : auto-private (défaut) | review-first | incognito (pause). */

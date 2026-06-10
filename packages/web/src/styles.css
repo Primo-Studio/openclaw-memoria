@@ -774,3 +774,23 @@ input[type='search']:focus {
   display: flex;
   gap: 0.5rem;
 }
+
+/* --------------------------------------------------------------- onboarding & réglages */
+
+.ob-card { max-width: 540px; }
+.ob-step { text-align: left; min-height: 180px; }
+.ob-lead { font-size: 1.1rem; font-weight: 600; }
+.ob-providers { list-style: none; padding: 0; display: grid; gap: 0.6rem; }
+.ob-providers li {
+  padding: 0.6rem 0.8rem; border-radius: 10px;
+  border: 1px solid var(--border, #2a2a3d);
+}
+.ob-providers li.ok { border-color: var(--ok, #3fb96a); }
+.ob-providers li.off { opacity: 0.7; }
+.ob-types { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.6rem 0 1rem; }
+
+.settings-block {
+  padding: 1rem 0;
+  border-bottom: 1px solid var(--border, #2a2a3d);
+}
+.settings-block h2 { font-size: 1rem; margin: 0 0 0.6rem; }

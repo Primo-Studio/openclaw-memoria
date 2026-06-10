@@ -31,6 +31,8 @@ export * from './engine/wal.js'
 export * from './engine/capture.js'
 export * from './migration/index.js'
 export * from './vector/index.js'
+export * from './cognition/index.js'
+export { importLegacyCognition } from './migration/import-cognition.js'
 export {
   estimateTokens,
   newId,

@@ -199,6 +199,29 @@ export async function forgetFacts(ids: string[]): Promise<number> {
   return res.deleted
 }
 
+// ------------------------------------------------------------ moteurs d'IA (§14)
+
+export type LlmProfile = '100-local' | 'local-plus-cloud' | 'cloud'
+
+export interface ProvidersStatus {
+  ollama: { available: boolean; models: string[]; base_url?: string }
+  anthropic: { available: boolean }
+  lmstudio: { available: boolean }
+}
+
+/** Détection Ollama/Anthropic/LM Studio. Route « contrat » : 404 → null géré par l'appelant. */
+export async function getProviders(): Promise<ProvidersStatus> {
+  return request<ProvidersStatus>('GET', '/v1/admin/providers')
+}
+
+export async function getLlmProfile(): Promise<LlmProfile> {
+  return (await request<{ profile: LlmProfile }>('GET', '/v1/admin/llm_profile')).profile
+}
+
+export async function setLlmProfile(profile: LlmProfile): Promise<void> {
+  await request<{ profile: LlmProfile }>('POST', '/v1/admin/llm_profile', { profile })
+}
+
 // ------------------------------------------------------------ capture & revue
 
 export type CaptureMode = 'auto-private' | 'review-first' | 'incognito'

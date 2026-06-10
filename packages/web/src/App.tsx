@@ -5,14 +5,16 @@
  * `memoria`, qui passe le token dans l'URL).
  */
 import { useCallback, useEffect, useState } from 'react'
-import { getCaptureMode, hasToken, setCaptureMode, type CaptureMode } from './api'
+import { getAgents, getCaptureMode, hasToken, setCaptureMode, type CaptureMode } from './api'
 import { Dashboard } from './screens/Dashboard'
 import { Agents } from './screens/Agents'
 import { Memory } from './screens/Memory'
 import { Review } from './screens/Review'
 import { Audit } from './screens/Audit'
+import { Onboarding } from './screens/Onboarding'
+import { Settings } from './screens/Settings'
 
-type ScreenId = 'dashboard' | 'agents' | 'memory' | 'review' | 'audit'
+type ScreenId = 'dashboard' | 'agents' | 'memory' | 'review' | 'audit' | 'settings'
 
 const NAV: Array<{ id: ScreenId; label: string }> = [
   { id: 'dashboard', label: 'Tableau de bord' },
@@ -20,6 +22,7 @@ const NAV: Array<{ id: ScreenId; label: string }> = [
   { id: 'memory', label: 'Mémoire' },
   { id: 'review', label: 'Revue' },
   { id: 'audit', label: 'Journal' },
+  { id: 'settings', label: 'Réglages' },
 ]
 
 const MODES: Array<{ id: CaptureMode; label: string; hint: string }> = [
@@ -32,8 +35,19 @@ export function App() {
   // Le token est adopté avant le rendu (main.tsx) ; sa présence ne change plus ensuite.
   const [authed] = useState(hasToken)
   const [screen, setScreen] = useState<ScreenId>('dashboard')
+  // null = on ne sait pas encore (chargement) ; true = 0 agent → onboarding.
+  const [onboarding, setOnboarding] = useState<boolean | null>(null)
+
+  useEffect(() => {
+    if (!authed) return
+    getAgents()
+      .then(agents => setOnboarding(agents.length === 0))
+      .catch(() => setOnboarding(false))
+  }, [authed])
 
   if (!authed) return <Welcome />
+  if (onboarding === null) return <div className="welcome"><div className="spinner" aria-hidden /></div>
+  if (onboarding) return <Onboarding onDone={() => setOnboarding(false)} />
 
   return (
     <div className="layout">
@@ -63,6 +77,7 @@ export function App() {
         {screen === 'memory' && <Memory />}
         {screen === 'review' && <Review />}
         {screen === 'audit' && <Audit />}
+        {screen === 'settings' && <Settings />}
       </main>
     </div>
   )

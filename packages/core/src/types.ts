@@ -264,6 +264,8 @@ export interface RecallInput {
   limit?: number
   /** Cap dur de tokens injectés (anti-bruit, corrige format.ts legacy). */
   token_budget?: number
+  /** Expansion graphe (voisins par entités partagées). Défaut activé. */
+  expand_graph?: boolean
 }
 
 export interface RecallItem {

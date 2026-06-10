@@ -6,6 +6,7 @@ import type { Database } from 'better-sqlite3'
 import { openDatabase } from './sqlite.js'
 import { runMigrations } from './migrations.js'
 import { contentMigrations } from './content-schema.js'
+import { cognitionMigrations } from './cognition-schema.js'
 import { fromJsonArray, newId, nowISO, toJson } from '../util.js'
 import type { Fact, LifecycleState, Sensitivity, Visibility, WalEntry } from '../types.js'
 
@@ -112,7 +113,9 @@ export class ContentStore {
     this.path = path
     this.journalMode = opened.journalMode
     this.onNetworkVolume = opened.onNetworkVolume
-    runMigrations(this.db, contentMigrations)
+    // Tronc + cognition (versions ≥10, sans collision) : toute DB de contenu
+    // a le schéma cognitif d'office (entités/relations/observations).
+    runMigrations(this.db, [...contentMigrations, ...cognitionMigrations])
   }
 
   insertFact(input: InsertFactInput): Fact {
