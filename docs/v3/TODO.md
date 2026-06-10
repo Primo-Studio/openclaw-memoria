@@ -37,20 +37,18 @@ npm install && npm run build && npm test   # doit être 100% vert AVANT toute mo
 ## Reste à faire (ordre conseillé)
 
 ### Import des mémoires Claude Code / Codex
-- [x] ~~Importeur de transcripts~~ **FAIT + INTÉGRÉ** : `Memoria.importTranscripts` (parsers Claude
-      Code/Codex/Markdown, idempotent, quarantaine review-first, anti-fuite multi-instance testée).
-- [x] ~~Import réel échantillon~~ FAIT : 10 transcripts récents → 208 faits en quarantaine (preuve E2E).
-- [ ] ⚠️ **QUALITÉ D'EXTRACTION** : qwen2.5:3b (local) extrait trop granulaire (détails de tâche au
-      lieu de faits durables). Avant le **bulk import** (931 fenêtres = 122 CC + 41 Codex), choisir :
-      - **Haiku** (profil `local-plus-cloud`, clé Anthropic présente) : bien meilleur, ~$1 pour tout
-        le corpus. Recommandé pour la qualité. → `memoria` setLlmProfile + relancer l'import.
-      - **qwen local** : gratuit mais bruité → prévoir un gros tri en Revue.
-      Commande : `Memoria.importTranscripts(instanceId, files, {maxWindowsPerFile})`. Exclure le bruit
-      `**/subagents/**` et `agent-*.jsonl` (voir `/tmp/real-import-sample.mjs`).
-- [ ] Après bulk import : `suggestIdentityFacts` sur Claude Code + Codex → proposer à Néto de
-      **partager** les faits sur lui / sa structure / ses clients vers `user`/`org` (ils bossent pour lui).
-- [ ] Améliorer le prompt d'extraction transcripts (plus sélectif) OU post-filtrer les faits trop
-      spécifiques à une tâche ponctuelle.
+- [x] ~~Importeur de transcripts~~ **FAIT + INTÉGRÉ** : `Memoria.importTranscripts`.
+- [x] ~~Bulk import RÉEL avec gpt-4o-mini~~ **FAIT 2026-06-10** : **2266 faits en quarantaine**
+      (Claude Code 1021, Codex 1245) en ~28 min. Échantillon qwen nettoyé avant. Idempotent.
+- [x] ~~Providers OpenAI/OpenRouter + choix utilisateur~~ FAIT (Réglages UI + clés par fichier).
+- [ ] **Approuver/trier la quarantaine** : 2266 faits dormants à valider. Options pour Néto :
+      - Écran Revue « Tout approuver » par agent (chaque agent récupère SA mémoire active). Le plus
+        rapide ; un peu de bruit (gpt-4o-mini extrait parfois de l'éphémère) mais ranké au recall.
+      - Tri sélectif si Néto préfère.
+- [ ] **Partager les faits sur Néto** : écran Partage → par agent, `suggestIdentityFacts` (50 candidats
+      réels/agent : préférences, identité, conventions) → cocher → `shareFacts` vers `user`. Reste
+      la décision de Néto.
+- [ ] (optionnel) prompt d'extraction encore plus sélectif / post-filtre de l'éphémère résiduel.
 
 ### UI manquante
 - [ ] **Écran Partage** (matrice scopes × agents) : API prête (`GET /v1/admin/scopes`, `POST /share`,
