@@ -1,6 +1,6 @@
 import { storagePaths, type ResolveOptions, type ResolvedConfig } from '../config.js';
 import { RegistryStore } from '../storage/registry.js';
-import type { AssistantInstance, AssistantType, DoctorReport, Fact, ForgetFilter, RecallInput, RecallResult, StoreFactInput } from '../types.js';
+import type { AssistantInstance, AssistantType, CaptureMode, DoctorReport, Fact, ForgetFilter, RecallInput, RecallResult, StoreFactInput } from '../types.js';
 export interface PairAssistantInput {
     type: AssistantType;
     display_name?: string;
@@ -45,6 +45,20 @@ export declare class Memoria {
     forget(filter: ForgetFilter): {
         deleted: number;
     };
+    /**
+     * Navigation admin dans la mémoire (UI web) : faits d'une instance (sa DB
+     * privée) ou de toutes les DB, récents d'abord ou filtrés FTS.
+     */
+    browseFacts(opts?: {
+        instance?: string;
+        q?: string;
+        limit?: number;
+    }): Array<Fact & {
+        source_db: string;
+    }>;
+    /** Mode de capture global : auto-private (défaut) | review-first | incognito (pause). */
+    getCaptureMode(): CaptureMode;
+    setCaptureMode(mode: CaptureMode): void;
     listAgents(): Array<{
         instance: AssistantInstance;
         assistant_type: string;

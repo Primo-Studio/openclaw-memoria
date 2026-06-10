@@ -20,6 +20,8 @@ export interface DaemonOptions {
     configPath?: string;
     /** Port d'écoute ; 0 = éphémère (persisté dans daemon.json). */
     port?: number;
+    /** Dossier dist de l'UI web (défaut : auto-détection @memoria/web/dist). */
+    uiDist?: string;
 }
 export interface RunningDaemon {
     state: DaemonState;

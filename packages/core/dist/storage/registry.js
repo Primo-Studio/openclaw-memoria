@@ -251,6 +251,17 @@ export class RegistryStore {
             .prepare("SELECT * FROM db_registry WHERE assistant_instance_id = ? AND kind = 'assistant'")
             .get(instanceId) ?? null);
     }
+    // ------------------------------------------------------------------ settings
+    getSetting(key) {
+        const row = this.db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
+        return row?.value ?? null;
+    }
+    setSetting(key, value) {
+        this.db
+            .prepare(`INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
+            .run(key, value, nowISO());
+    }
     // ------------------------------------------------------------------ audit
     /** Audit NEUTRE : action + hash — jamais de contenu (spec §11). */
     audit(entry) {

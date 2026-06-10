@@ -50,6 +50,8 @@ export declare class RegistryStore {
     listDbs(): DbRegistryEntry[];
     dbForScope(scopeId: string): DbRegistryEntry | null;
     dbForInstance(instanceId: string): DbRegistryEntry | null;
+    getSetting(key: string): string | null;
+    setSetting(key: string, value: string): void;
     /** Audit NEUTRE : action + hash — jamais de contenu (spec §11). */
     audit(entry: Omit<AuditEntry, 'id' | 'ts'>): void;
     auditTail(limit?: number): AuditEntry[];

@@ -13,6 +13,7 @@
  */
 import { createServer } from 'node:http';
 import { Memoria, newToken, nowISO } from '@memoria/core';
+import { findUiDist, serveUi } from './static.js';
 import { acquireLock, clearDaemonState, writeDaemonState } from './state.js';
 export const DAEMON_VERSION = '0.1.0';
 class HttpError extends Error {
@@ -38,13 +39,16 @@ export async function startDaemon(opts = {}) {
             sendJson(res, status, { error: err.message ?? 'erreur interne' });
         });
     });
+    const uiDist = findUiDist(opts.uiDist);
     async function handle(req, res) {
         const url = new URL(req.url ?? '/', 'http://127.0.0.1');
         const route = `${req.method} ${url.pathname}`;
         if (route === 'GET /v1/health') {
-            sendJson(res, 200, { ok: true, version: DAEMON_VERSION, daemon_id: daemonId });
+            sendJson(res, 200, { ok: true, version: DAEMON_VERSION, daemon_id: daemonId, ui: Boolean(uiDist) });
             return;
         }
+        if (req.method === 'GET' && uiDist && serveUi(url.pathname, uiDist, res))
+            return;
         if (route === 'POST /v1/pairing/complete') {
             const body = await readJson(req);
             const code = String(body['code'] ?? '');
@@ -58,7 +62,7 @@ export async function startDaemon(opts = {}) {
         if (url.pathname.startsWith('/v1/admin/')) {
             if (token !== adminToken)
                 throw new HttpError(401, 'token admin requis');
-            await handleAdmin(route, req, res);
+            await handleAdmin(route, url, req, res);
             return;
         }
         if (url.pathname.startsWith('/v1/memory/')) {
@@ -72,8 +76,31 @@ export async function startDaemon(opts = {}) {
         }
         throw new HttpError(404, `route inconnue : ${route}`);
     }
-    async function handleAdmin(route, req, res) {
+    async function handleAdmin(route, url, req, res) {
         switch (route) {
+            case 'GET /v1/admin/facts': {
+                const facts = memoria.browseFacts({
+                    instance: url.searchParams.get('instance') ?? undefined,
+                    q: url.searchParams.get('q') ?? undefined,
+                    limit: url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : undefined,
+                });
+                sendJson(res, 200, { facts });
+                return;
+            }
+            case 'GET /v1/admin/capture_mode': {
+                sendJson(res, 200, { mode: memoria.getCaptureMode() });
+                return;
+            }
+            case 'POST /v1/admin/capture_mode': {
+                const body = await readJson(req);
+                const mode = String(body['mode'] ?? '');
+                if (!['auto-private', 'review-first', 'incognito'].includes(mode)) {
+                    throw new HttpError(400, `mode de capture inconnu : ${mode}`);
+                }
+                memoria.setCaptureMode(mode);
+                sendJson(res, 200, { mode });
+                return;
+            }
             case 'POST /v1/admin/pair': {
                 const body = await readJson(req);
                 const result = memoria.pairAssistant({

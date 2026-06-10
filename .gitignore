@@ -1,3 +1,9 @@
 node_modules/
 *.db
 install.sh.bak-v34
+
+# worktrees agents / état session
+.claude/
+node_modules/
+dist/
+*.tsbuildinfo

@@ -9,7 +9,7 @@ import { hostname } from 'node:os';
 import { relative } from 'node:path';
 import { ensureStorageTree, resolveStorageRoot, storagePaths, } from '../config.js';
 import { RegistryStore } from '../storage/registry.js';
-import { ContentStore } from '../storage/content.js';
+import { ContentStore, rowToFact } from '../storage/content.js';
 import { estimateTokens, sha256Hex } from '../util.js';
 import { passesClientIsolation, scoreFact } from './scoring.js';
 const DEFAULT_TOKEN_BUDGET = 1500;
@@ -294,6 +294,63 @@ export class Memoria {
         return { deleted };
     }
     // -------------------------------------------------------------------- admin
+    /**
+     * Navigation admin dans la mémoire (UI web) : faits d'une instance (sa DB
+     * privée) ou de toutes les DB, récents d'abord ou filtrés FTS.
+     */
+    browseFacts(opts = {}) {
+        this.assertOpen();
+        const limit = Math.min(opts.limit ?? 50, 200);
+        const targets = [];
+        if (opts.instance) {
+            const db = this.registry.dbForInstance(opts.instance);
+            if (db)
+                targets.push(db.path);
+        }
+        else {
+            for (const entry of this.registry.listDbs()) {
+                if (entry.kind !== 'registry' && existsSync(entry.path))
+                    targets.push(entry.path);
+            }
+        }
+        const out = [];
+        for (const path of targets) {
+            const store = this.openContent(path);
+            const label = relative(this.paths.root, path);
+            if (opts.q) {
+                for (const hit of store.searchFacts(opts.q, { limit, includeDormant: true, maxSensitivity: 'critical' })) {
+                    out.push({ ...rowToFact(hit.row), source_db: label });
+                }
+            }
+            else {
+                const rows = store.db
+                    .prepare('SELECT * FROM facts ORDER BY created_at DESC LIMIT ?')
+                    .all(limit);
+                for (const row of rows)
+                    out.push({ ...rowToFact(row), source_db: label });
+            }
+        }
+        out.sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+        return out.slice(0, limit);
+    }
+    /** Mode de capture global : auto-private (défaut) | review-first | incognito (pause). */
+    getCaptureMode() {
+        this.assertOpen();
+        const raw = this.registry.getSetting('capture_mode');
+        return raw === 'review-first' || raw === 'incognito' ? raw : 'auto-private';
+    }
+    setCaptureMode(mode) {
+        this.assertOpen();
+        this.registry.setSetting('capture_mode', mode);
+        this.registry.audit({
+            actor_type: 'user',
+            actor_id: 'local',
+            action: `set_capture_mode:${mode}`,
+            target_id_hash: null,
+            scope_id: null,
+            reason: null,
+        });
+    }
     listAgents() {
         this.assertOpen();
         return this.registry.listInstances().map(instance => {

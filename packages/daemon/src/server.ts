@@ -12,7 +12,8 @@
  * thread Node → zéro contention inter-process par construction.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
-import { Memoria, newToken, nowISO, type ForgetFilter, type RecallInput, type StoreFactInput } from '@memoria/core'
+import { Memoria, newToken, nowISO, type CaptureMode, type ForgetFilter, type RecallInput, type StoreFactInput } from '@memoria/core'
+import { findUiDist, serveUi } from './static.js'
 import { acquireLock, clearDaemonState, writeDaemonState, type DaemonState } from './state.js'
 
 export const DAEMON_VERSION = '0.1.0'
@@ -22,6 +23,8 @@ export interface DaemonOptions {
   configPath?: string
   /** Port d'écoute ; 0 = éphémère (persisté dans daemon.json). */
   port?: number
+  /** Dossier dist de l'UI web (défaut : auto-détection @memoria/web/dist). */
+  uiDist?: string
 }
 
 export interface RunningDaemon {
@@ -59,14 +62,18 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     })
   })
 
+  const uiDist = findUiDist(opts.uiDist)
+
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1')
     const route = `${req.method} ${url.pathname}`
 
     if (route === 'GET /v1/health') {
-      sendJson(res, 200, { ok: true, version: DAEMON_VERSION, daemon_id: daemonId })
+      sendJson(res, 200, { ok: true, version: DAEMON_VERSION, daemon_id: daemonId, ui: Boolean(uiDist) })
       return
     }
+
+    if (req.method === 'GET' && uiDist && serveUi(url.pathname, uiDist, res)) return
 
     if (route === 'POST /v1/pairing/complete') {
       const body = await readJson(req)
@@ -81,7 +88,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
 
     if (url.pathname.startsWith('/v1/admin/')) {
       if (token !== adminToken) throw new HttpError(401, 'token admin requis')
-      await handleAdmin(route, req, res)
+      await handleAdmin(route, url, req, res)
       return
     }
 
@@ -96,8 +103,31 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     throw new HttpError(404, `route inconnue : ${route}`)
   }
 
-  async function handleAdmin(route: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
+  async function handleAdmin(route: string, url: URL, req: IncomingMessage, res: ServerResponse): Promise<void> {
     switch (route) {
+      case 'GET /v1/admin/facts': {
+        const facts = memoria.browseFacts({
+          instance: url.searchParams.get('instance') ?? undefined,
+          q: url.searchParams.get('q') ?? undefined,
+          limit: url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : undefined,
+        })
+        sendJson(res, 200, { facts })
+        return
+      }
+      case 'GET /v1/admin/capture_mode': {
+        sendJson(res, 200, { mode: memoria.getCaptureMode() })
+        return
+      }
+      case 'POST /v1/admin/capture_mode': {
+        const body = await readJson(req)
+        const mode = String(body['mode'] ?? '') as CaptureMode
+        if (!['auto-private', 'review-first', 'incognito'].includes(mode)) {
+          throw new HttpError(400, `mode de capture inconnu : ${mode}`)
+        }
+        memoria.setCaptureMode(mode)
+        sendJson(res, 200, { mode })
+        return
+      }
       case 'POST /v1/admin/pair': {
         const body = await readJson(req)
         const result = memoria.pairAssistant({
