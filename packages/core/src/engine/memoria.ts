@@ -562,6 +562,81 @@ export class Memoria {
     return { updated }
   }
 
+  /**
+   * Adopte la quarantaine (`legacy_to_review`) vers la mémoire PRIVÉE d'une
+   * instance : les souvenirs hérités deviennent réellement à elle et
+   * recallables. Déplacement (copie dans la DB privée + retrait de la
+   * quarantaine), pas duplication. Réversible via le backup d'import.
+   */
+  adoptLegacyInto(instanceId: string, opts: { reindex?: boolean } = {}): { facts: number; procedures: number } {
+    this.assertOpen()
+    const instance = this.mustInstance(instanceId)
+    const legacyScope = this.registry.getScopeByName('legacy_to_review')
+    if (!legacyScope) return { facts: 0, procedures: 0 }
+    const legacyDbEntry = this.registry.dbForScope(legacyScope.id)
+    if (!legacyDbEntry || !existsSync(legacyDbEntry.path)) return { facts: 0, procedures: 0 }
+
+    const source = this.openContent(legacyDbEntry.path)
+    const targetPath = this.paths.assistantDb(instanceId)
+    const target = this.openContent(targetPath)
+    const privateScope = this.registry.getScopeByName(`private:${instanceId}`)
+    if (!privateScope) throw new Error(`scope privé introuvable pour l'instance ${instanceId}`)
+
+    const factRows = source.db.prepare('SELECT * FROM facts').all() as FactRow[]
+    const procRows = source.db.prepare('SELECT * FROM procedures').all() as Array<Record<string, unknown>>
+
+    const factCols = source.db.pragma('table_info(facts)') as Array<{ name: string }>
+    const procCols = source.db.pragma('table_info(procedures)') as Array<{ name: string }>
+    const factColNames = factCols.map(c => c.name)
+    const procColNames = procCols.map(c => c.name)
+
+    const insertFact = target.db.prepare(
+      `INSERT OR IGNORE INTO facts (${factColNames.join(',')}) VALUES (${factColNames.map(c => '@' + c).join(',')})`,
+    )
+    const insertProc = procColNames.length
+      ? target.db.prepare(
+          `INSERT OR IGNORE INTO procedures (${procColNames.join(',')}) VALUES (${procColNames.map(c => '@' + c).join(',')})`,
+        )
+      : null
+
+    const move = target.db.transaction(() => {
+      let f = 0
+      for (const row of factRows) {
+        insertFact.run({ ...row, scope_id: privateScope.id, assistant_instance_id: instanceId, visibility: 'private', lifecycle_state: 'active' })
+        f++
+      }
+      let p = 0
+      if (insertProc) {
+        for (const row of procRows) {
+          insertProc.run({ ...row, scope_id: privateScope.id, assistant_instance_id: instanceId })
+          p++
+        }
+      }
+      return { f, p }
+    })
+    const moved = move()
+
+    // Vide la quarantaine (le backup d'import reste la sécurité de rollback)
+    source.db.exec('DELETE FROM memory_import_items; DELETE FROM facts; DELETE FROM procedures; DELETE FROM memory_sources;')
+
+    this.registry.audit({
+      actor_type: 'user',
+      actor_id: 'local',
+      action: 'adopt_legacy',
+      target_id_hash: sha256Hex(instanceId),
+      scope_id: privateScope.id,
+      reason: `facts=${moved.f};procedures=${moved.p}`,
+    })
+
+    if (opts.reindex) {
+      void this.indexEmbeddings(instanceId).catch((err: unknown) =>
+        console.warn('[memoria] réindexation post-adoption en échec :', (err as Error).message),
+      )
+    }
+    void instance
+    return { facts: moved.f, procedures: moved.p }
+  }
+
   /** Hard-delete gouverné (spec §11). */
   forget(filter: ForgetFilter): { deleted: number } {
     this.assertOpen()

@@ -47,12 +47,17 @@ npm install && npm run build && npm test   # doit être 100% vert AVANT toute mo
       Claude Code de Néto est enregistrée).
 
 ### P4 — import & vectoriel
-- [ ] **Migration RÉELLE** : récupérer `memoria.db` (mémoire Koda) sur le **Mac Studio de Néto**
-      (même réseau — lui demander, il guidera). La passer dans `importLegacyDb` (vague 2), vérifier
-      counts + recall de contrôle, garder le backup.
+- [x] ~~Migration RÉELLE de Koda~~ **FAIT 2026-06-10** : `memoria.db` du Mac Studio (3573 faits)
+      rapatriée, importée, **adoptée dans la mémoire privée de Koda** (instance `405290ba`),
+      1917 embeddings réindexés (nomic-embed-text). Backup dans `~/.memoria/data/backups/`.
+      `adoptLegacyInto()` + route daemon `/v1/admin/adopt_legacy`.
+- [ ] **Récupérer les AUTRES agents** → voir `docs/v3/AGENTS-RESEAU.md` : **Sol** sur la **Mac mini**
+      (autre agent OpenClaw, à NE PAS confondre avec Koda), Codex (`~/.codex/`), autres Claude Code.
+      Procédure validée sur Koda documentée dans AGENTS-RESEAU.md.
+- [ ] **Partage identité Néto** : remonter les faits « sur Néto » de la mémoire privée Koda vers le
+      scope `user` partagé — sur décision de Néto, via l'UI partage (P5).
+- [x] ~~`sqlite-vec` + recall hybride~~ FAIT (vague 3).
 - [ ] Importeurs Markdown + transcripts génériques (spec §7.2) ; spécifiques Claude Code/Codex en v1.5.
-- [ ] `sqlite-vec` : table `vec_index`, embeddings via Ollama `nomic-embed-text` (768d, déjà pull),
-      recall hybride FTS+vecteur, réindex via `embedding_jobs`, garde dimensions (déjà dans le schéma).
       Mesurer au benchmark (le recall hybride doit battre FTS seul).
 - [ ] Job async d'embedding post-capture (bucket B).
 

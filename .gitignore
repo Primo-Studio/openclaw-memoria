@@ -7,3 +7,7 @@ install.sh.bak-v34
 node_modules/
 dist/
 *.tsbuildinfo
+
+# snapshots de migration (bases legacy rapatriées — ne pas committer)
+.koda-import/
+.*-import/

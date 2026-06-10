@@ -127,6 +127,13 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         sendJson(res, 200, { items: memoria.listReview() })
         return
       }
+      case 'POST /v1/admin/adopt_legacy': {
+        const body = await readJson(req)
+        const instanceId = String(body['instance'] ?? '')
+        if (!instanceId) throw new HttpError(400, 'instance requise')
+        sendJson(res, 200, memoria.adoptLegacyInto(instanceId, { reindex: body['reindex'] !== false }))
+        return
+      }
       case 'POST /v1/admin/review/approve': {
         const body = await readJson(req)
         sendJson(res, 200, memoria.reviewDecision((body['ids'] as string[]) ?? [], 'accepted'))
