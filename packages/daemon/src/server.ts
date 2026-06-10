@@ -178,7 +178,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         return
       }
       case 'GET /v1/admin/llm_profile': {
-        sendJson(res, 200, { profile: memoria.getLlmProfile() })
+        sendJson(res, 200, memoria.getLlmProfile())
         return
       }
       case 'POST /v1/admin/llm_profile': {
@@ -189,6 +189,16 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         }
         memoria.setLlmProfile(profile)
         sendJson(res, 200, { profile })
+        return
+      }
+      case 'POST /v1/admin/llm_extraction': {
+        const body = await readJson(req)
+        const provider = String(body['provider'] ?? '')
+        if (!['ollama', 'anthropic', 'openai', 'openrouter'].includes(provider)) {
+          throw new HttpError(400, `provider inconnu : ${provider}`)
+        }
+        memoria.setExtractionProvider(provider, body['model'] as string | undefined)
+        sendJson(res, 200, { provider, model: body['model'] ?? null })
         return
       }
       case 'GET /v1/admin/capture_mode': {

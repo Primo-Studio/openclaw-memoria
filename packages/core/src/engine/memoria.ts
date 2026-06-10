@@ -1060,9 +1060,11 @@ export class Memoria {
     ollama: { available: boolean; models: string[]; base_url: string }
     lmstudio: { available: boolean }
     anthropic: { available: boolean }
+    openai: { available: boolean }
+    openrouter: { available: boolean }
   }> {
     this.assertOpen()
-    const { OllamaProvider, resolveAnthropicApiKey, DEFAULT_OLLAMA_BASE_URL } = await import('../llm/index.js')
+    const { resolveAnthropicApiKey, resolveOpenAiApiKey, DEFAULT_OLLAMA_BASE_URL } = await import('../llm/index.js')
     const ollamaBase = DEFAULT_OLLAMA_BASE_URL
     let ollamaModels: string[] = []
     let ollamaUp = false
@@ -1082,37 +1084,52 @@ export class Memoria {
     } catch {
       lmstudio = false
     }
-    void OllamaProvider
-    const anthropic = resolveAnthropicApiKey({}) !== null
     return {
       ollama: { available: ollamaUp, models: ollamaModels, base_url: ollamaBase },
       lmstudio: { available: lmstudio },
-      anthropic: { available: anthropic },
+      anthropic: { available: resolveAnthropicApiKey({}) !== null },
+      openai: { available: resolveOpenAiApiKey({ flavor: 'openai' }) !== null },
+      openrouter: { available: resolveOpenAiApiKey({ flavor: 'openrouter' }) !== null },
     }
   }
 
-  /** Profil LLM courant (config). */
-  getLlmProfile(): string {
+  /** Profil LLM courant (config) + choix explicite d'extraction s'il existe. */
+  getLlmProfile(): { profile: string; extraction?: { provider?: string; model?: string } } {
     this.assertOpen()
-    return this.resolved.config.llm?.profile ?? '100-local'
+    return {
+      profile: this.resolved.config.llm?.profile ?? '100-local',
+      extraction: this.resolved.config.llm?.extraction,
+    }
   }
 
-  /** Change le profil LLM et le persiste dans config.toml. */
+  /** Change le profil LLM (raccourci) et le persiste. */
   setLlmProfile(profile: string): void {
     this.assertOpen()
-    this.resolved.config.llm = { ...this.resolved.config.llm, profile }
+    // Choisir un profil raccourci efface le choix explicite de provider.
+    this.resolved.config.llm = { ...this.resolved.config.llm, profile, extraction: undefined }
+    this.persistLlmConfig(`set_llm_profile:${profile}`)
+  }
+
+  /**
+   * Choix EXPLICITE du provider/modèle d'extraction (« l'utilisateur décide »).
+   * provider ∈ ollama|anthropic|openai|openrouter.
+   */
+  setExtractionProvider(provider: string, model?: string): void {
+    this.assertOpen()
+    this.resolved.config.llm = {
+      ...this.resolved.config.llm,
+      profile: 'custom',
+      extraction: { provider, ...(model ? { model } : {}) },
+    }
+    this.persistLlmConfig(`set_extraction:${provider}${model ? `:${model}` : ''}`)
+  }
+
+  private persistLlmConfig(action: string): void {
     saveConfigFile(this.resolved.config, this.resolved.configPath)
     // invalide la résolution mémoïsée → re-résolue au prochain usage
     this.profilePromise = null
     this.pipelinePromise = null
-    this.registry.audit({
-      actor_type: 'user',
-      actor_id: 'local',
-      action: `set_llm_profile:${profile}`,
-      target_id_hash: null,
-      scope_id: null,
-      reason: null,
-    })
+    this.registry.audit({ actor_type: 'user', actor_id: 'local', action, target_id_hash: null, scope_id: null, reason: null })
   }
 
   /** Mode de capture global : auto-private (défaut) | review-first | incognito (pause). */

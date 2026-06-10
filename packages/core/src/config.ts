@@ -18,8 +18,15 @@ export interface MemoriaConfig {
     port?: number
   }
   llm?: {
-    /** Profil : '100-local' | 'local-plus-cloud' | 'cloud'. */
+    /** Profil raccourci : '100-local' | 'local-plus-cloud' | 'cloud' | 'custom'. */
     profile?: string
+    /**
+     * Choix EXPLICITE du provider/modèle d'extraction (prioritaire sur le
+     * profil si présent). provider ∈ ollama|anthropic|openai|openrouter.
+     */
+    extraction?: { provider?: string; model?: string }
+    /** Choix explicite des embeddings (provider ollama uniquement en V1). */
+    embeddings?: { provider?: string; model?: string }
   }
 }
 
