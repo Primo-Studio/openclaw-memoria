@@ -7,6 +7,7 @@ import { openDatabase } from './sqlite.js'
 import { runMigrations } from './migrations.js'
 import { contentMigrations } from './content-schema.js'
 import { cognitionMigrations } from './cognition-schema.js'
+import { loadVecExtension } from '../vector/vec-table.js'
 import { fromJsonArray, newId, nowISO, toJson } from '../util.js'
 import type { Fact, LifecycleState, Sensitivity, Visibility, WalEntry } from '../types.js'
 
@@ -262,8 +263,11 @@ export class ContentStore {
           .prepare("SELECT name FROM sqlite_master WHERE name LIKE 'vec\\_index\\_%' ESCAPE '\\'")
           .all() as Array<{ name: string }>
       ).filter(t => /^vec_index_\d+$/.test(t.name))
-      for (const t of vecTables) {
-        this.db.prepare(`DELETE FROM "${t.name}" WHERE fact_id IN (${placeholders})`).run(...all)
+      // L'accès aux tables vec0 exige l'extension chargée dans CETTE connexion.
+      if (vecTables.length > 0 && loadVecExtension(this.db)) {
+        for (const t of vecTables) {
+          this.db.prepare(`DELETE FROM "${t.name}" WHERE fact_id IN (${placeholders})`).run(...all)
+        }
       }
       const r = this.db.prepare(`DELETE FROM facts WHERE id IN (${placeholders})`).run(...all)
       n = r.changes
