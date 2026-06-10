@@ -282,6 +282,9 @@ export class Memoria {
     const budget = input.token_budget ?? DEFAULT_TOKEN_BUDGET
     const limit = input.limit ?? DEFAULT_RECALL_LIMIT
 
+    // CONTEXT-TREE (couche 9) : un contexte « projet » remonte sa hiérarchie
+    // (projet → client → organisation) → le boost s'applique à tous les niveaux.
+    const context = this.expandContextTree(input.active_context)
     const searchTargets = this.resolveReadTargets(instance)
     const now = Date.now()
     const candidates: Array<{ item: RecallItem; store: ContentStore }> = []
@@ -298,8 +301,8 @@ export class Memoria {
       totalFound += hits.length
       for (const hit of hits) {
         // FILTRE DUR anti-fuite inter-clients — jamais un boost, une exclusion.
-        if (!passesClientIsolation(hit.row, input.active_context)) continue
-        const parts = scoreFact(hit.row, hit.relevance, input.active_context, now)
+        if (!passesClientIsolation(hit.row, context)) continue
+        const parts = scoreFact(hit.row, hit.relevance, context, now)
         if (parts.total <= 0) continue
         candidates.push({
           store,
@@ -339,10 +342,10 @@ export class Memoria {
           if (existing.has(ex.fact_id)) continue
           const row = store.db.prepare('SELECT * FROM facts WHERE id = ?').get(ex.fact_id) as FactRow | undefined
           if (!row) continue
-          if (!passesClientIsolation(row, input.active_context)) continue
+          if (!passesClientIsolation(row, context)) continue
           // relevance dérivée du lien graphe, fortement escomptée (un voisin n'est
           // jamais aussi pertinent qu'un hit direct) ; on garde recency/confiance.
-          const parts = scoreFact(row, Math.min(0.4, ex.score) * 0.5, input.active_context, now)
+          const parts = scoreFact(row, Math.min(0.4, ex.score) * 0.5, context, now)
           if (parts.total <= 0) continue
           existing.add(ex.fact_id)
           candidates.push({
@@ -509,6 +512,24 @@ export class Memoria {
       reason: null,
     })
     return { ok: result !== null }
+  }
+
+  /**
+   * Context-tree (couche 9) : complète un contexte partiel via la hiérarchie du
+   * registre. Déclarer un projet remonte implicitement son client et son
+   * organisation → le boost de pertinence s'applique à tout l'arbre, et les
+   * faits du client du projet redeviennent visibles (cohérent : le projet EST
+   * pour ce client).
+   */
+  private expandContextTree(context: import('../types.js').ActiveContext | undefined): import('../types.js').ActiveContext | undefined {
+    if (!context?.project_id) return context
+    const project = this.registry.getProject(context.project_id)
+    if (!project) return context
+    return {
+      ...context,
+      client_org_id: context.client_org_id ?? project.client_org_id ?? undefined,
+      org_id: context.org_id ?? project.owner_org_id,
+    }
   }
 
   private topicFor(store: ContentStore, llm: import('../llm/provider.js').LlmProvider | null): TopicEngine {

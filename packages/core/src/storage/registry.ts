@@ -116,6 +116,10 @@ export class RegistryStore {
     return project
   }
 
+  getProject(id: string): Project | null {
+    return (this.db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as Project | undefined) ?? null
+  }
+
   ownCompany(): Organization | null {
     return (
       (this.db.prepare("SELECT * FROM organizations WHERE org_type = 'own_company' LIMIT 1").get() as

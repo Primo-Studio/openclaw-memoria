@@ -1,7 +1,7 @@
 /**
  * Scoring GLOBAL du recall (spec §6.1, étape 3) :
  *   score = pertinence(FTS/cosine) × récence × confiance × usage × lifecycle
- *           × BOOST(active_context)
+ *           × hot-tier × BOOST(active_context)
  * Le boost de contexte est une PERTINENCE, jamais une permission — le filtre
  * dur d'exclusion s'applique AVANT (pré-filtre SQL + filtre client).
  */
@@ -14,12 +14,15 @@ export interface ScoreParts {
   confidence: number
   usage: number
   lifecycle: number
+  /** Couche 2 « hot-tier » : un fait consulté récemment est « chaud ». */
+  hot: number
   boost: number
   total: number
 }
 
 const RECENCY_HALF_LIFE_DAYS = 90
 const RECENCY_FLOOR = 0.15
+const HOT_HALF_LIFE_DAYS = 3 // un accès « refroidit » en ~3 jours
 
 export function scoreFact(row: FactRow, relevance: number, context: ActiveContext | undefined, now: number): ScoreParts {
   const ageDays = Math.max(0, (now - Date.parse(row.created_at)) / 86_400_000)
@@ -27,6 +30,15 @@ export function scoreFact(row: FactRow, relevance: number, context: ActiveContex
   const confidence = clamp(row.confidence, 0.05, 1)
   const usage = 1 + Math.log1p(row.used_count + 0.5 * row.recall_count) * 0.15
   const lifecycle = row.lifecycle_state === 'active' ? 1 : row.lifecycle_state === 'dormant' ? 0.3 : 0
+
+  // HOT-TIER (couche 2) : boost transitoire des faits récemment ACCÉDÉS.
+  // Le recall met à jour last_accessed_at ; un fait « chaud » remonte un temps,
+  // puis refroidit (≠ récence de création, qui est figée).
+  let hot = 1
+  if (row.last_accessed_at) {
+    const sinceAccess = Math.max(0, (now - Date.parse(row.last_accessed_at)) / 86_400_000)
+    hot = 1 + 0.5 * Math.exp((-Math.LN2 * sinceAccess) / HOT_HALF_LIFE_DAYS)
+  }
 
   let boost = 1
   if (context) {
@@ -36,8 +48,8 @@ export function scoreFact(row: FactRow, relevance: number, context: ActiveContex
   }
   boost *= row.relevance_weight
 
-  const total = relevance * recency * confidence * usage * lifecycle * boost
-  return { relevance, recency, confidence, usage, lifecycle, boost, total }
+  const total = relevance * recency * confidence * usage * lifecycle * hot * boost
+  return { relevance, recency, confidence, usage, lifecycle, hot, boost, total }
 }
 
 /**
