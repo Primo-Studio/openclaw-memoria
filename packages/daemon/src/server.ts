@@ -204,7 +204,9 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       }
       case 'POST /v1/memory/recall': {
         const body = await readJson(req)
-        const result = memoria.recall({ ...(body as Omit<RecallInput, 'instance'>), instance: instanceId })
+        // Hybride FTS+vectoriel quand un provider d'embeddings est disponible —
+        // sinon strictement équivalent au recall FTS.
+        const result = await memoria.recallSemantic({ ...(body as Omit<RecallInput, 'instance'>), instance: instanceId })
         sendJson(res, 200, result)
         return
       }
@@ -264,8 +266,13 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       if (totals.processed > 0) {
         console.log(`[memoria-daemon] WAL rejoué : ${totals.processed} entrées → ${totals.facts} faits`)
       }
+      // rattrapage d'indexation vectorielle (faits jamais embedés)
+      return memoria.indexEmbeddings()
     })
-    .catch((err: unknown) => console.warn('[memoria-daemon] rejeu WAL en échec :', (err as Error).message))
+    .then(r => {
+      if (r.indexed > 0) console.log(`[memoria-daemon] embeddings indexés : ${r.indexed}`)
+    })
+    .catch((err: unknown) => console.warn('[memoria-daemon] rejeu/indexation au boot en échec :', (err as Error).message))
 
   const close = async (): Promise<void> => {
     await new Promise<void>((resolveClose) => server.close(() => resolveClose()))

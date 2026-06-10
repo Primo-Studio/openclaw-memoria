@@ -252,6 +252,16 @@ export class ContentStore {
       this.db.prepare(`DELETE FROM embeddings WHERE owner_type = 'fact' AND owner_id IN (${placeholders})`).run(...all)
       this.db.prepare(`DELETE FROM fact_topics WHERE fact_id IN (${placeholders})`).run(...all)
       this.db.prepare(`DELETE FROM memory_projection WHERE fact_id IN (${placeholders})`).run(...all)
+      // index vectoriels — UNIQUEMENT les tables virtuelles vec_index_<dims>
+      // (PAS leurs shadow tables vec_index_N_chunks/_rowids/…)
+      const vecTables = (
+        this.db
+          .prepare("SELECT name FROM sqlite_master WHERE name LIKE 'vec\\_index\\_%' ESCAPE '\\'")
+          .all() as Array<{ name: string }>
+      ).filter(t => /^vec_index_\d+$/.test(t.name))
+      for (const t of vecTables) {
+        this.db.prepare(`DELETE FROM "${t.name}" WHERE fact_id IN (${placeholders})`).run(...all)
+      }
       const r = this.db.prepare(`DELETE FROM facts WHERE id IN (${placeholders})`).run(...all)
       n = r.changes
       return n

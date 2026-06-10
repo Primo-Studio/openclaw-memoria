@@ -15,7 +15,8 @@ import {
   type ResolvedConfig,
 } from '../config.js'
 import { RegistryStore } from '../storage/registry.js'
-import { ContentStore, rowToFact, type FactRow } from '../storage/content.js'
+import { ContentStore, rowToFact, type FactRow, type FtsHit, type FtsSearchOptions } from '../storage/content.js'
+import { EmbeddingIndexer, hybridSearchFacts } from '../vector/index.js'
 import { estimateTokens, newId, sha256Hex } from '../util.js'
 import { createSecretProvider, RegexRedactor } from '../secrets/index.js'
 import type { SecretProvider } from '../secrets/types.js'
@@ -79,6 +80,8 @@ export class Memoria {
   private readonly redactor = new RegexRedactor()
   private readonly llmOverride: MemoriaInitOptions['llm']
   private pipelinePromise: Promise<CapturePipeline> | null = null
+  private profilePromise: Promise<{ extraction: LlmProvider | null; embeddings: EmbeddingProvider | null }> | null = null
+  private readonly indexers = new WeakMap<ContentStore, EmbeddingIndexer>()
 
   private constructor(resolved: ResolvedConfig, opts: MemoriaInitOptions) {
     this.resolved = resolved
@@ -233,6 +236,35 @@ export class Memoria {
    */
   recall(input: RecallInput): RecallResult {
     this.assertOpen()
+    return this.performRecall(input, (store, query, searchOpts) => store.searchFacts(query, searchOpts))
+  }
+
+  /**
+   * Recall HYBRIDE (FTS + vectoriel, spec §10) : embedde la requête puis fusion
+   * RRF par DB. Sans provider d'embeddings / sans extension vec / en cas
+   * d'échec d'embedding → identique à recall() (dégradation annoncée).
+   */
+  async recallSemantic(input: RecallInput): Promise<RecallResult> {
+    this.assertOpen()
+    const provider = await this.ensureEmbeddings()
+    if (!provider) return this.recall(input)
+    let queryVector: Float32Array | undefined
+    try {
+      queryVector = (await provider.embed([input.query]))[0]
+    } catch (err) {
+      console.warn('[memoria] embedding de requête en échec — recall FTS seul :', (err as Error).message)
+    }
+    if (!queryVector) return this.recall(input)
+    const vec = queryVector
+    return this.performRecall(input, (store, query, searchOpts) =>
+      hybridSearchFacts(store, query, { ...searchOpts, queryVector: vec, dimensions: provider.dimensions }),
+    )
+  }
+
+  private performRecall(
+    input: RecallInput,
+    search: (store: ContentStore, query: string, opts: FtsSearchOptions) => FtsHit[],
+  ): RecallResult {
     const instance = this.mustInstance(input.instance)
     const budget = input.token_budget ?? DEFAULT_TOKEN_BUDGET
     const limit = input.limit ?? DEFAULT_RECALL_LIMIT
@@ -244,7 +276,7 @@ export class Memoria {
 
     for (const target of searchTargets) {
       const store = this.openContent(target.dbPath)
-      const hits = store.searchFacts(input.query, {
+      const hits = search(store, input.query, {
         limit: 50,
         includeDormant: input.include_dormant ?? false,
         maxSensitivity: 'sensitive',
@@ -324,7 +356,40 @@ export class Memoria {
     }
     const pipeline = await this.ensurePipeline()
     const result = await pipeline.captureTurn(input)
+    // Indexation vectorielle ASYNC (bucket B) — jamais dans le chemin de réponse.
+    if (result.facts_created > 0) {
+      void this.indexEmbeddings(input.instance).catch((err: unknown) =>
+        console.warn('[memoria] indexation embeddings en échec :', (err as Error).message),
+      )
+    }
     return { ...result, mode }
+  }
+
+  /**
+   * Indexe les faits sans embedding (une instance, ou toutes). Appelé après
+   * chaque capture (fire-and-forget) et au boot du daemon. Sans provider
+   * d'embeddings → no-op.
+   */
+  async indexEmbeddings(instanceId?: string): Promise<{ indexed: number }> {
+    this.assertOpen()
+    const provider = await this.ensureEmbeddings()
+    if (!provider) return { indexed: 0 }
+    let indexed = 0
+    const targets = instanceId
+      ? [this.registry.dbForInstance(instanceId)].filter(Boolean)
+      : this.registry.listDbs().filter(e => e.kind !== 'registry')
+    for (const entry of targets) {
+      if (!entry || !existsSync(entry.path)) continue
+      const store = this.openContent(entry.path)
+      let indexer = this.indexers.get(store)
+      if (!indexer) {
+        indexer = new EmbeddingIndexer({ store, provider })
+        this.indexers.set(store, indexer)
+      }
+      const run = await indexer.runAll()
+      indexed += run.indexed
+    }
+    return { indexed }
   }
 
   /** Rejeu du WAL au boot (daemon) : aucune entrée pending n'est oubliée. */
@@ -342,16 +407,26 @@ export class Memoria {
     return out
   }
 
+  /** Profil LLM résolu UNE fois (override tests/daemon > résolution auto). */
+  private ensureProfile(): Promise<{ extraction: LlmProvider | null; embeddings: EmbeddingProvider | null }> {
+    this.profilePromise ??= (async () => {
+      if (this.llmOverride !== undefined) {
+        return { extraction: this.llmOverride.extraction, embeddings: this.llmOverride.embeddings ?? null }
+      }
+      const profile = await resolveLlmProfile(this.resolved.config)
+      return { extraction: profile.extraction, embeddings: profile.embeddings }
+    })()
+    return this.profilePromise
+  }
+
+  private async ensureEmbeddings(): Promise<EmbeddingProvider | null> {
+    return (await this.ensureProfile()).embeddings
+  }
+
   /** Pipeline de capture construit une fois (résolution LLM comprise). */
   private ensurePipeline(): Promise<CapturePipeline> {
     this.pipelinePromise ??= (async () => {
-      let extraction: LlmProvider | null
-      if (this.llmOverride !== undefined) {
-        extraction = this.llmOverride.extraction
-      } else {
-        const profile = await resolveLlmProfile(this.resolved.config)
-        extraction = profile.extraction
-      }
+      const { extraction } = await this.ensureProfile()
       return new CapturePipeline({
         openStore: id => this.openContent(this.paths.assistantDb(id)),
         // ID du scope (pas le nom) : findDuplicate compare facts.scope_id

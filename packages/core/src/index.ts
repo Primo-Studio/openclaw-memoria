@@ -30,6 +30,7 @@ export * from './engine/selective.js'
 export * from './engine/wal.js'
 export * from './engine/capture.js'
 export * from './migration/index.js'
+export * from './vector/index.js'
 export {
   estimateTokens,
   newId,
