@@ -158,6 +158,15 @@ export function Settings() {
         <h2>Capture</h2>
         <p className="muted">Mode (auto / revue / pause) : barre latérale, toujours accessible.</p>
       </div>
+
+      <div className="settings-block">
+        <h2>Export Markdown</h2>
+        <p className="muted">
+          Chaque agent peut exporter sa mémoire en fichiers <code>.md</code> lisibles (un par thème),
+          dans <code>&lt;stockage&gt;/exports/&lt;agent&gt;/</code> — pratique pour relire ou versionner.
+          Lancez <code>memoria export</code> depuis le terminal.
+        </p>
+      </div>
     </section>
   )
 }

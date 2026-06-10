@@ -368,6 +368,51 @@ export async function getExpertise(instance: string): Promise<ExpertiseDomain[]>
   return res.domains
 }
 
+// ------------------------------------------------------------ révisions (couche 18/24)
+
+export interface RevisionProposal {
+  id: string
+  fact_id: string
+  kind: string
+  reason: string
+  replacement_fact_id: string | null
+  status: string
+}
+
+export async function getRevisions(instance: string): Promise<RevisionProposal[]> {
+  const res = await request<{ proposals: RevisionProposal[] }>('GET', `/v1/admin/revisions?instance=${encodeURIComponent(instance)}`)
+  return res.proposals
+}
+
+export async function proposeRevisions(instance: string): Promise<number> {
+  const res = await request<{ proposed: number }>('POST', '/v1/admin/propose_revisions', { instance })
+  return res.proposed
+}
+
+export async function decideRevision(instance: string, id: string, decision: 'accept' | 'dismiss'): Promise<void> {
+  await request<unknown>('POST', '/v1/admin/revision_decision', { instance, id, decision })
+}
+
+// ------------------------------------------------------------ self-observation (couche 19)
+
+export interface SelfObservation {
+  id: string
+  observation: string
+  kind: string
+  evidence_count: number
+  confidence: number
+}
+
+export async function getSelfObservations(instance: string): Promise<SelfObservation[]> {
+  const res = await request<{ observations: SelfObservation[] }>('GET', `/v1/admin/self_observations?instance=${encodeURIComponent(instance)}`)
+  return res.observations
+}
+
+export async function deriveSelf(instance: string): Promise<number> {
+  const res = await request<{ proposed: number }>('POST', '/v1/admin/derive_self', { instance })
+  return res.proposed
+}
+
 // ------------------------------------------------------------ capture & revue
 
 export type CaptureMode = 'auto-private' | 'review-first' | 'incognito'

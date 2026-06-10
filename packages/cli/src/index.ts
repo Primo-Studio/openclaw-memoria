@@ -15,6 +15,7 @@ import { AgentsCommand, RevokeCommand } from './commands/agents.js'
 import { AuditCommand } from './commands/audit.js'
 import { DaemonCommand, StartCommand, StopCommand } from './commands/daemon.js'
 import { DoctorCommand } from './commands/doctor.js'
+import { ExportCommand } from './commands/export.js'
 import { ForgetCommand } from './commands/forget.js'
 import { InitCommand } from './commands/init.js'
 import { PairCommand } from './commands/pair.js'
@@ -27,6 +28,7 @@ export {
   AuditCommand,
   DaemonCommand,
   DoctorCommand,
+  ExportCommand,
   ForgetCommand,
   InitCommand,
   PairCommand,
@@ -126,6 +128,7 @@ export function buildCli(): Cli {
   cli.register(StartCommand)
   cli.register(StopCommand)
   cli.register(DoctorCommand)
+  cli.register(ExportCommand)
   cli.register(PairCommand)
   cli.register(AgentsCommand)
   cli.register(RevokeCommand)

@@ -3,7 +3,7 @@
  * PAIRING_TTL_MS côté core) et révoquer un accès, avec confirmation.
  */
 import { useEffect, useState, type ReactNode } from 'react'
-import { getAgents, getExpertise, pairAgent, revokeAgent, type AgentEntry, type AgentType, type ExpertiseDomain, type PairResult } from '../api'
+import { deriveSelf, getAgents, getExpertise, getSelfObservations, pairAgent, revokeAgent, type AgentEntry, type AgentType, type ExpertiseDomain, type PairResult, type SelfObservation } from '../api'
 import {
   ConfirmButton,
   CopyButton,
@@ -166,19 +166,40 @@ function AgentList({ agents, onRevoke }: { agents: AgentEntry[]; onRevoke: (id: 
   )
 }
 
-/** Domaines de maîtrise de l'agent (couche 8) — affichés en puces sur sa ligne. */
+/** Domaines de maîtrise + forces/faiblesses de l'agent (couches 8 + 19). */
 function AgentExpertise({ instanceId }: { instanceId: string }) {
   const [domains, setDomains] = useState<ExpertiseDomain[]>([])
+  const [self, setSelf] = useState<SelfObservation[]>([])
   useEffect(() => {
     getExpertise(instanceId)
       .then(d => setDomains(d.slice(0, 4)))
       .catch(() => setDomains([]))
+    // analyse fraîche du comportement puis lecture
+    deriveSelf(instanceId)
+      .catch(() => 0)
+      .then(() => getSelfObservations(instanceId))
+      .then(o => setSelf(o.slice(0, 3)))
+      .catch(() => setSelf([]))
   }, [instanceId])
-  if (domains.length === 0) return null
+  if (domains.length === 0 && self.length === 0) return null
   return (
-    <div className="agent-expertise" title="Domaines de maîtrise">
-      <span className="muted">maîtrise :</span>
-      {domains.map(d => <span key={d.domain} className="badge badge-theme">{d.domain}</span>)}
+    <div className="agent-insights">
+      {domains.length > 0 && (
+        <div className="agent-expertise" title="Domaines de maîtrise">
+          <span className="muted">maîtrise :</span>
+          {domains.map(d => <span key={d.domain} className="badge badge-theme">{d.domain}</span>)}
+        </div>
+      )}
+      {self.length > 0 && (
+        <div className="agent-self">
+          {self.map(o => (
+            <span key={o.id} className={`badge ${o.kind === 'weakness' ? 'badge-warn' : 'badge-muted'}`} title={o.kind}>
+              {o.kind === 'strength' ? '✓ ' : o.kind === 'weakness' ? '⚠ ' : '• '}
+              {o.observation.length > 60 ? o.observation.slice(0, 57) + '…' : o.observation}
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

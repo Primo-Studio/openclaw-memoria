@@ -892,3 +892,7 @@ input[type='search']:focus {
 .overview-stats { display: flex; flex-wrap: wrap; gap: 0.8rem; color: var(--muted, #9a9ab0); font-size: 0.85rem; }
 .overview-stats b { color: var(--text, #e8e8f0); font-size: 1.05rem; }
 .overview-expertise { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; margin-top: 0.7rem; font-size: 0.76rem; }
+
+.agent-insights { display: flex; flex-direction: column; gap: 0.35rem; }
+.agent-self { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+.agent-self .badge { font-size: 0.72rem; max-width: 100%; }
