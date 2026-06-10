@@ -4,7 +4,16 @@
 > (`PLAN-Memoria-v3-2026-06-03.md` §15), adaptée par la décision kickoff
 > (monorepo direct, Phase 0 fusionnée dans le port).
 
-**Dernière mise à jour :** 2026-06-10 (session 1, en cours)
+**Dernière mise à jour :** 2026-06-10 (session 2 — vagues 5-7 livrées, 24 couches portées)
+
+## 🏁 État global : les 24 couches cognitives sont portées
+
+Fondation V3 complète (daemon/MCP/UI/secrets/migration/partage/providers/desktop) + **24 couches**
+(voir `COUCHES-ETAT.md`). **355 tests verts, CI verte.** UI à 11 écrans. 3 agents connectés en réel
+(Claude Code, Codex, Koda) avec mémoire, thèmes, procédures, expertise, récurrences, révisions.
+Reste : distribution (npm/signature/OpenClaw) + raffinements (voir `TODO.md`).
+
+
 
 | Phase | Contenu | État |
 |---|---|---|
