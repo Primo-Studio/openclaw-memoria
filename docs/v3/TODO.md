@@ -31,13 +31,20 @@ npm install && npm run build && npm test   # doit être 100% vert AVANT toute mo
       `POST /v1/admin/capture_mode` (existe).
 
 ### P2/P3 — compléments après intégration
+- [x] ~~Intégration vague 2~~ FAIT (commit « vague 2 intégrée + capture bout-en-bout »).
+- [x] ~~Mode review-first~~ FAIT : faits dormants + file de revue, écran UI « Revue »,
+      sélecteur de capture (auto/revue/pause) toujours visible dans la sidebar.
 - [ ] `getSecretRef` / `secret_access` de bout en bout (engine → daemon → MCP `memoria_get_secret_ref`).
-- [ ] Mode `review-first` : faits extraits → `memory_import_items` (pending) au lieu de facts,
-      écran « Revue » dans l'UI.
 - [ ] Onboarding UI complet (<60 s, spec §13) : choix emplacement stockage + détection
       Ollama/LM Studio/clé Anthropic + téléchargement modèles avec barres de progression (spec §14).
 - [ ] `memoria stop` propre via route admin shutdown (actuellement SIGTERM sur PID).
+- [ ] Auto-démarrage du daemon au login (launchd plist macOS) — actuellement il faut
+      `memoria start` après un reboot, et relancer après un rebuild du repo.
 - [ ] Renommer le repo `openclaw-memoria` → `memoria` (décision Néto, à la release).
+- [ ] Publier les packages npm (@memoria/* ou @primo-studio/memoria) — tant que ce n'est pas fait,
+      les snippets `npx -y @memoria/mcp` imprimés par pair/connect ne marchent PAS tels quels :
+      utiliser `node ~/openclaw-memoria/packages/mcp/dist/bin.js …` (c'est ainsi que l'instance
+      Claude Code de Néto est enregistrée).
 
 ### P4 — import & vectoriel
 - [ ] **Migration RÉELLE** : récupérer `memoria.db` (mémoire Koda) sur le **Mac Studio de Néto**
@@ -60,9 +67,12 @@ npm install && npm run build && npm test   # doit être 100% vert AVANT toute mo
 - [ ] Bucket C opt-in : self-observation, markdown sync, dialectic (outil CLI).
 - [ ] Bucket D validation : patterns (superseding), auto-skill. JAMAIS dans le chemin bloquant.
 - [ ] Hot-tier scoring (legacy `recall.ts:136` l'ignorait — le port-map a la recette).
-- [ ] **Adaptateur OpenClaw** : ⚠️ D'ABORD diagnostiquer ce qui a cassé avec le nouvel OpenClaw
-      (API plugin vs MCP) — tâche jamais faite. Si le nouvel OpenClaw parle MCP, l'adaptateur
-      est peut-être juste une config.
+- [ ] **Adaptateur OpenClaw** : diagnostic ✅ FAIT → `docs/v3/DIAG-OPENCLAW.md`. Conclusion :
+      OpenClaw parle MCP nativement (`openclaw mcp set memoria '{"command":"memoria-mcp",…}'`)
+      → étape 1 triviale. Étape 2 = adaptateur hooks mince (~200 lignes, prependContext sur
+      before_prompt_build + capture fire-and-forget sur agent_end) dans packages/adapters/openclaw.
+      ⚠️ Avant : récupérer sur le Mac Studio `openclaw --version` + `openclaw plugins doctor`
+      (confirme la cause exacte de la casse v3.34 : ABI better-sqlite3 / config rejetée / bug npm).
 
 ### Desktop (Tauri) — décision Néto : ne pas repousser
 - [ ] rustup/cargo INSTALLÉS sur cette machine (stable). Architecture cible : Tauri v2, UI = build
