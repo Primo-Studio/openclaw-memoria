@@ -12,10 +12,10 @@
 | P1 — Fondation | core (schéma registry+contenu, storeFact/recall/forget), resolveStorageRoot, daemon singleton HTTP+token | ✅ fait (migration v3.34 en vague 2) |
 | P2 — Sécurité & WAL | WAL source de vérité (replay boot), redaction secrets, SecretProvider (Keychain+AES), audit neutre | 🟡 vague 2 en cours (audit neutre ✅) |
 | P3 — MCP + UI | pairing ✅ (code TTL→token), serveur MCP, UI web, benchmark anti-fuite v1 ✅ | 🟡 vague 2 en cours |
-| P4 — Import + vectoriel | importeur OpenClaw → quarantaine+provenance (vague 2), sqlite-vec, recall hybride | 🟡 partiel |
-| P5 — Partage gouverné | topics permissionnables, org/client/projet actifs, partage par référence, hard-delete complet ✅ (facts), backup/restore | ⚪ à faire |
-| P6 — Couches avancées | graph avancé+decay, observations/clusters batch, 3D UMAP, couches D sur validation, adaptateur OpenClaw (⚠️ diagnostiquer la casse OpenClaw d'abord) | ⚪ à faire |
-| Tauri | apps/desktop (double-clic non-dev) — rustup installé, toolchain prête | ⚪ à faire |
+| P4 — Import + vectoriel | importeur OpenClaw ✅ (quarantaine+provenance+rollback), **sqlite-vec + recall hybride RRF ✅** (recallSemantic, indexation auto post-capture + boot), reste : importeurs MD/transcripts | 🟢 quasi fait |
+| P5 — Partage gouverné | review-first ✅ (file de revue + UI), topics permissionnables, org/client/projet actifs (logique core ✅, UI à faire), partage par référence, hard-delete ✅ (facts+FTS+vec), backup/restore | 🟡 partiel |
+| P6 — Couches avancées | graph avancé+decay, observations/clusters batch, 3D UMAP, couches D sur validation. **Diagnostic OpenClaw ✅** (`DIAG-OPENCLAW.md`) : MCP natif → adaptateur quasi trivial | 🟡 prérequis fait |
+| Tauri | **Lanceur complet ✅** (lib.rs 9 tests, page de lancement, cargo check vert) — reste : bundle signé/notarisé, Node embarqué v1.5 | 🟢 quasi fait |
 
 **Benchmark recall (juge du produit)** : ✅ vert — anti-fuite inter-clients = 0 sur batterie de 5 requêtes,
 défaut sûr sans contexte, pas de sur-masquage, dormant explicite, cap tokens. `packages/core/test/benchmark.test.ts`.
@@ -49,4 +49,11 @@ défaut sûr sans contexte, pas de sur-masquage, dormant explicite, cap tokens. 
   service statique UI /ui/, boot-test CI.
 - **Benchmark recall v1 vert** (a déjà attrapé un vrai bug de conception : bm25 non comparable
   inter-DB → scoring couverture-dominant).
-- Vague 2 lancée (7 agents, worktrees) : secrets, LLM, capture/WAL, MCP, CLI, web, migration legacy.
+- Vague 2 intégrée (7 pistes) : secrets, LLM, capture/WAL, MCP, CLI, web, migration legacy. Capture
+  câblée bout-en-bout, E2E réel qwen2.5:3b validé (3 faits/3 s, secret jamais en clair).
+- Review-first actif (faits dormants + file de revue + écran UI + sélecteur pause).
+- Vague 3 : **recall hybride sqlite-vec** (RRF, permissions jamais contournées, synonymes retrouvés
+  — validé en réel avec nomic-embed-text via le daemon), **lanceur Tauri** (9 tests Rust),
+  **diagnostic OpenClaw** (MCP natif confirmé → P6 simplifié).
+- CI GitHub : fix garde réseau platform-aware (matrice ubuntu+macos × Node 20/22/24).
+- **Installé en réel** : daemon + MCP Claude Code ✔ Connected + premiers souvenirs capturés.
