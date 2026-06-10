@@ -134,6 +134,33 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         sendJson(res, 200, memoria.adoptLegacyInto(instanceId, { reindex: body['reindex'] !== false }))
         return
       }
+      case 'GET /v1/admin/scopes': {
+        sendJson(res, 200, { scopes: memoria.listScopesWithAccess(), assistants: memoria.registry.listAssistants() })
+        return
+      }
+      case 'POST /v1/admin/share': {
+        const body = await readJson(req)
+        const factIds = (body['fact_ids'] as string[]) ?? []
+        const targetScope = String(body['target_scope'] ?? '')
+        if (!targetScope) throw new HttpError(400, 'target_scope requis')
+        sendJson(res, 200, memoria.shareFacts(factIds, targetScope))
+        return
+      }
+      case 'POST /v1/admin/policy': {
+        const body = await readJson(req)
+        const assistantId = String(body['assistant_id'] ?? '')
+        const scopeId = String(body['scope_id'] ?? '')
+        if (!assistantId || !scopeId) throw new HttpError(400, 'assistant_id et scope_id requis')
+        memoria.setScopeAccess(assistantId, scopeId, body as Record<string, never>)
+        sendJson(res, 200, { ok: true })
+        return
+      }
+      case 'GET /v1/admin/identity_candidates': {
+        const instance = url.searchParams.get('instance')
+        if (!instance) throw new HttpError(400, 'instance requise')
+        sendJson(res, 200, { candidates: memoria.suggestIdentityFacts(instance) })
+        return
+      }
       case 'POST /v1/admin/review/approve': {
         const body = await readJson(req)
         sendJson(res, 200, memoria.reviewDecision((body['ids'] as string[]) ?? [], 'accepted'))

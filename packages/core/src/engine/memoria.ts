@@ -637,6 +637,148 @@ export class Memoria {
     return { facts: moved.f, procedures: moved.p }
   }
 
+  // ------------------------------------------------------------------ partage
+
+  /**
+   * Promeut des faits vers un scope PARTAGÉ (`user`/`org`/…) : ils quittent la
+   * mémoire privée de leur agent et deviennent recallables par tout agent
+   * autorisé sur ce scope (spec §11, partage gouverné). Déplacement, pas copie.
+   */
+  shareFacts(factIds: string[], targetScopeRef: string): { shared: number; scope: string } {
+    this.assertOpen()
+    if (factIds.length === 0) return { shared: 0, scope: targetScopeRef }
+    const scope = this.registry.getScope(targetScopeRef) ?? this.registry.getScopeByName(targetScopeRef)
+    if (!scope) throw new Error(`scope cible inconnu : ${targetScopeRef}`)
+    if (scope.type === 'private' || scope.type === 'legacy_to_review') {
+      throw new Error(`partage interdit vers un scope ${scope.type}`)
+    }
+    const targetPath = this.sharedDbPathPublic(scope)
+    const target = this.openContent(targetPath)
+    this.registry.registerDb({ kind: 'shared', path: targetPath, assistant_instance_id: null, scope_id: scope.id })
+
+    const idSet = new Set(factIds)
+    let shared = 0
+    for (const entry of this.registry.listDbs()) {
+      if (entry.kind === 'registry' || entry.path === targetPath || !existsSync(entry.path)) continue
+      const store = this.openContent(entry.path)
+      const placeholders = [...idSet].map(() => '?').join(',')
+      const rows = store.db.prepare(`SELECT * FROM facts WHERE id IN (${placeholders})`).all(...idSet) as FactRow[]
+      if (rows.length === 0) continue
+      const cols = (store.db.pragma('table_info(facts)') as Array<{ name: string }>).map(c => c.name)
+      const insert = target.db.prepare(
+        `INSERT OR IGNORE INTO facts (${cols.join(',')}) VALUES (${cols.map(c => '@' + c).join(',')})`,
+      )
+      const tx = target.db.transaction(() => {
+        for (const row of rows) {
+          insert.run({
+            ...row,
+            scope_id: scope.id,
+            visibility: 'shared',
+            org_id: scope.org_id ?? row.org_id,
+            client_org_id: scope.client_org_id ?? row.client_org_id,
+            project_id: scope.project_id ?? row.project_id,
+          })
+          shared++
+        }
+      })
+      tx()
+      store.hardDeleteFacts(rows.map(r => r.id))
+    }
+    if (shared > 0) {
+      this.registry.audit({
+        actor_type: 'user',
+        actor_id: 'local',
+        action: 'share_facts',
+        target_id_hash: sha256Hex([...idSet].sort().join(',')),
+        scope_id: scope.id,
+        reason: `shared=${shared}`,
+      })
+    }
+    return { shared, scope: scope.name }
+  }
+
+  /** Scopes + agents qui peuvent les lire (matrice de partage UI). */
+  listScopesWithAccess(): Array<{ id: string; type: string; name: string; readers: string[]; facts: number }> {
+    this.assertOpen()
+    return this.registry.listScopes().map(scope => {
+      const readers = this.registry
+        .listAssistants()
+        .filter(a => this.registry.getPolicy(a.id, scope.id)?.can_read)
+        .map(a => a.id)
+      let facts = 0
+      const dbEntry = scope.type === 'private' ? null : this.registry.dbForScope(scope.id)
+      if (dbEntry && existsSync(dbEntry.path)) {
+        facts = (this.openContent(dbEntry.path).db.prepare('SELECT COUNT(*) AS c FROM facts WHERE scope_id = ?').get(scope.id) as { c: number }).c
+      }
+      return { id: scope.id, type: scope.type, name: scope.name, readers, facts }
+    })
+  }
+
+  /** Accorde/retire à un assistant l'accès à un scope (matrice de partage). */
+  setScopeAccess(
+    assistantId: string,
+    scopeId: string,
+    perms: { can_read?: boolean; can_write?: boolean; can_share?: boolean; secret_access?: 'none' | 'refs_only' | 'value_on_request' },
+  ): void {
+    this.assertOpen()
+    const current = this.registry.getPolicy(assistantId, scopeId)
+    this.registry.setPolicy({
+      assistant_id: assistantId,
+      scope_id: scopeId,
+      can_read: perms.can_read ?? current?.can_read ?? false,
+      can_write: perms.can_write ?? current?.can_write ?? false,
+      can_share: perms.can_share ?? current?.can_share ?? false,
+      secret_access: perms.secret_access ?? current?.secret_access ?? 'none',
+    })
+    this.registry.audit({
+      actor_type: 'user',
+      actor_id: 'local',
+      action: 'set_scope_access',
+      target_id_hash: sha256Hex(`${assistantId}:${scopeId}`),
+      scope_id: scopeId,
+      reason: JSON.stringify(perms),
+    })
+  }
+
+  /**
+   * Repère, dans la mémoire d'une instance, les faits qui parlent de
+   * l'utilisateur (identité/préférences) — candidats à promouvoir vers `user`.
+   * Ne décide RIEN : retourne des propositions que l'utilisateur valide.
+   */
+  suggestIdentityFacts(instanceId: string, limit = 50): Array<{ id: string; content: string; category: string; score: number }> {
+    this.assertOpen()
+    const db = this.registry.dbForInstance(instanceId)
+    if (!db || !existsSync(db.path)) return []
+    const store = this.openContent(db.path)
+    const rows = store.db.prepare('SELECT * FROM facts WHERE superseded = 0').all() as FactRow[]
+    const user = this.registry.bootstrap().user
+    const nameTokens = user.display_name.toLowerCase().split(/\s+/).filter(t => t.length > 2)
+    const cues = [
+      ...nameTokens,
+      'utilisateur', 'préfère', 'prefere', 'aime', 'déteste', 'deteste', 'veut', 'identité', 'identity',
+      'son nom', 'mon nom', 'email', 'courriel', 'téléphone', 'adresse', 'anniversaire', 'langue',
+      'pompeu', 'neto', 'primo',
+    ]
+    const identityCats = new Set(['identity', 'preference', 'profil', 'profile', 'user', 'savoir'])
+    const scored = rows
+      .map(r => {
+        const text = r.fact.toLowerCase()
+        let score = 0
+        for (const cue of cues) if (text.includes(cue)) score += cue.length > 4 ? 2 : 1
+        if (identityCats.has(r.category.toLowerCase())) score += 1
+        return { id: r.id, content: r.fact, category: r.category, score }
+      })
+      .filter(c => c.score >= 2)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit)
+    return scored
+  }
+
+  /** Variante publique de sharedDbPath (utilisée par shareFacts). */
+  private sharedDbPathPublic(scope: MemoryScope): string {
+    return this.sharedDbPath(scope)
+  }
+
   /** Hard-delete gouverné (spec §11). */
   forget(filter: ForgetFilter): { deleted: number } {
     this.assertOpen()
