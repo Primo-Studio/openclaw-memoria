@@ -13,8 +13,8 @@
 | P2 — Sécurité & WAL | WAL source de vérité (replay boot), redaction secrets, SecretProvider (Keychain+AES), audit neutre | 🟡 vague 2 en cours (audit neutre ✅) |
 | P3 — MCP + UI | pairing ✅ (code TTL→token), serveur MCP, UI web, benchmark anti-fuite v1 ✅ | 🟡 vague 2 en cours |
 | P4 — Import + vectoriel | importeur OpenClaw ✅ (quarantaine+provenance+rollback), **sqlite-vec + recall hybride RRF ✅** (recallSemantic, indexation auto post-capture + boot), reste : importeurs MD/transcripts | 🟢 quasi fait |
-| P5 — Partage gouverné | review-first ✅ (file de revue + UI), topics permissionnables, org/client/projet actifs (logique core ✅, UI à faire), partage par référence, hard-delete ✅ (facts+FTS+vec), backup/restore | 🟡 partiel |
-| P6 — Couches avancées | graph avancé+decay, observations/clusters batch, 3D UMAP, couches D sur validation. **Diagnostic OpenClaw ✅** (`DIAG-OPENCLAW.md`) : MCP natif → adaptateur quasi trivial | 🟡 prérequis fait |
+| P5 — Partage gouverné | review-first ✅, **partage par référence ✅** (shareFacts/setScopeAccess/suggestIdentityFacts + routes), hard-delete ✅. Reste : UI matrice de partage, topics permissionnables, backup/restore | 🟢 cœur fait |
+| P6 — Couches avancées | **graph/entités/relations/observations ✅** (CognitionEngine async + expansion graphe au recall + decay), import cognitif legacy ✅. Reste : clusters, 3D UMAP, couches D sur validation, adaptateur OpenClaw. **Diag OpenClaw ✅** | 🟢 gros morceau fait |
 | Tauri | **Memoria.app + DMG construits et lancés ✅** (lib.rs 9 tests, page de lancement, icns) — reste : signature/notarisation (process Igara), Node embarqué v1.5 | 🟢 fait (non signé) |
 
 **Benchmark recall (juge du produit)** : ✅ vert — anti-fuite inter-clients = 0 sur batterie de 5 requêtes,
@@ -59,3 +59,14 @@ défaut sûr sans contexte, pas de sur-masquage, dormant explicite, cap tokens. 
 - **Installé en réel** : daemon + MCP Claude Code ✔ Connected + premiers souvenirs capturés.
 - **Memoria.app construite (DMG inclus) et lancée avec succès** : check Node → daemon → UI.
   DMG : `apps/desktop/src-tauri/target/release/bundle/dmg/Memoria_0.1.0_aarch64.dmg`.
+
+### Session 2 (suite) — Koda + cognition + partage
+- **Mémoire de Koda récupérée** (Mac Studio `192.168.1.98`) : 3515 faits + 364 procédures adoptés
+  dans sa mémoire privée + **3038 entités + 3329 relations + 1920 observations** (graphe cognitif)
+  importées depuis le backup. 1917 embeddings réindexés. Voir `docs/v3/AGENTS-RESEAU.md`.
+- **Partage gouverné par référence** : `shareFacts` (privé→user/org), `setScopeAccess` (matrice),
+  `suggestIdentityFacts` (propose les faits sur l'utilisateur, ne décide pas).
+- **Couches cognitives bucket B** : graph/entités/relations/observations, async post-capture,
+  **expansion graphe au recall** (anti-fuite garantie), decay quotidien.
+- **UI Onboarding** (<60 s, détection providers) + **Réglages** (profil LLM, stockage).
+- 179 tests verts. Reste à faire : voir `TODO.md` (UI partage, OpenClaw, clusters/3D, publication npm).
