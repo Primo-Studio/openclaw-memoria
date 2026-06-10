@@ -1,48 +1,83 @@
 /**
- * Réglages (spec §14) : profil LLM, emplacement de stockage, mode de capture
- * (rappel — le sélecteur principal vit dans la barre latérale). Les routes
- * /v1/admin/llm_profile sont des « contrats » : 404 → « non disponible »,
- * jamais de crash.
+ * Réglages (spec §14) : choix du MOTEUR D'IA d'extraction — l'utilisateur
+ * décide (provider + modèle), avec recommandations pour ne pas être perdu.
+ * Local pour qui veut du local ; cloud (OpenAI/Anthropic/OpenRouter) sinon.
+ * + emplacement de stockage. Routes « contrat » : 404 → « non disponible ».
  */
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   ApiError,
   getDoctor,
   getLlmProfile,
-  setLlmProfile,
+  getProviders,
+  setExtractionProvider,
   type DoctorReport,
-  type LlmProfile,
+  type LlmConfig,
+  type LlmProviderName,
+  type ProvidersStatus,
 } from '../api'
 
-const PROFILES: Array<{ id: LlmProfile; label: string; hint: string }> = [
-  { id: '100-local', label: '100 % local', hint: 'Ollama uniquement — rien ne sort de la machine.' },
-  { id: 'local-plus-cloud', label: 'Local + cloud', hint: 'Local par défaut, Claude (Anthropic) pour les tâches fines.' },
-  { id: 'cloud', label: 'Cloud', hint: 'Claude pour l’extraction (votre clé), embeddings locaux.' },
+interface ProviderChoice {
+  id: LlmProviderName
+  label: string
+  models: string[]
+  /** Modèle conseillé (1er). */
+  recommended: string
+  hint: string
+  local: boolean
+}
+
+const PROVIDERS: ProviderChoice[] = [
+  { id: 'ollama', label: 'Ollama (local)', models: ['qwen2.5:3b', 'gemma3:4b', 'llama3.1:8b'], recommended: 'qwen2.5:3b', hint: '100 % local, gratuit, rien ne sort de la machine. Qualité correcte.', local: true },
+  { id: 'openai', label: 'OpenAI', models: ['gpt-4o-mini', 'gpt-5-mini', 'gpt-4.1-mini'], recommended: 'gpt-4o-mini', hint: 'Excellente qualité d’extraction pour un coût minime. Recommandé.', local: false },
+  { id: 'anthropic', label: 'Anthropic (Claude)', models: ['claude-haiku-4-5-20251001'], recommended: 'claude-haiku-4-5-20251001', hint: 'Haiku : rapide et précis. Cloud, votre clé.', local: false },
+  { id: 'openrouter', label: 'OpenRouter', models: ['openai/gpt-4o-mini', 'anthropic/claude-3.5-haiku', 'google/gemini-flash-1.5'], recommended: 'openai/gpt-4o-mini', hint: 'Une seule clé, des centaines de modèles. Pour les utilisateurs avancés.', local: false },
 ]
 
 export function Settings() {
   const [doctor, setDoctor] = useState<DoctorReport | null>(null)
-  const [profile, setProfile] = useState<LlmProfile | null>(null)
-  const [profileUnavailable, setProfileUnavailable] = useState(false)
+  const [config, setConfig] = useState<LlmConfig | null>(null)
+  const [providers, setProviders] = useState<ProvidersStatus | null>(null)
+  const [unavailable, setUnavailable] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  const refresh = useCallback(async () => {
+    try {
+      const [c, p] = await Promise.all([getLlmProfile(), getProviders()])
+      setConfig(c)
+      setProviders(p)
+      setUnavailable(false)
+    } catch {
+      setUnavailable(true)
+    }
+  }, [])
 
   useEffect(() => {
     getDoctor().then(setDoctor).catch(() => setDoctor(null))
-    getLlmProfile()
-      .then(p => { setProfile(p); setProfileUnavailable(false) })
-      .catch(() => setProfileUnavailable(true))
-  }, [])
+    void refresh()
+  }, [refresh])
 
-  const change = async (next: LlmProfile) => {
-    const prev = profile
-    setProfile(next)
-    try {
-      await setLlmProfile(next)
-      setError(null)
-    } catch (err) {
-      setProfile(prev)
-      setError(err instanceof ApiError ? err.message : 'Changement impossible.')
-    }
+  const choose = useCallback(
+    async (provider: LlmProviderName, model: string) => {
+      setBusy(true)
+      try {
+        await setExtractionProvider(provider, model)
+        await refresh()
+        setError(null)
+      } catch (err) {
+        setError(err instanceof ApiError ? err.message : 'Changement impossible.')
+      } finally {
+        setBusy(false)
+      }
+    },
+    [refresh],
+  )
+
+  const current = config?.extraction
+  const availabilityOf = (id: LlmProviderName): boolean | undefined => {
+    if (!providers) return undefined
+    return id === 'ollama' ? providers.ollama.available : providers[id]?.available
   }
 
   return (
@@ -50,34 +85,63 @@ export function Settings() {
       <header className="screen-head">
         <div>
           <h1>Réglages</h1>
-          <p className="muted">Moteur d’IA et emplacement de votre mémoire — tout reste local.</p>
+          <p className="muted">Choisis ton moteur d’IA et où vit ta mémoire — tout reste sous ton contrôle.</p>
         </div>
       </header>
 
       {error && <div className="error-banner">{error}</div>}
 
       <div className="settings-block">
-        <h2>Moteur d’IA</h2>
-        {profileUnavailable ? (
-          <p className="muted">Réglage du profil non disponible sur ce service.</p>
-        ) : profile === null ? (
+        <h2>Moteur d’extraction</h2>
+        <p className="muted">
+          Le modèle qui transforme les conversations en souvenirs durables. Choisis selon tes
+          priorités : <strong>local</strong> (gratuit, privé) ou <strong>cloud</strong> (meilleure qualité).
+        </p>
+        {unavailable ? (
+          <p className="muted">Réglage du moteur non disponible sur ce service.</p>
+        ) : !providers || !config ? (
           <div className="spinner-row"><span className="spinner" aria-hidden /> Chargement…</div>
         ) : (
-          <div className="capture-options" role="radiogroup" aria-label="Profil LLM">
-            {PROFILES.map(p => (
-              <button
-                key={p.id}
-                type="button"
-                role="radio"
-                aria-checked={profile === p.id}
-                className={`capture-option${profile === p.id ? ' capture-active' : ''}`}
-                onClick={() => void change(p.id)}
-              >
-                <strong>{p.label}</strong>
-                <div className="muted" style={{ fontSize: '0.75rem' }}>{p.hint}</div>
-              </button>
-            ))}
+          <div className="provider-list">
+            {PROVIDERS.map(p => {
+              const avail = availabilityOf(p.id)
+              const isCurrent = current?.provider === p.id
+              return (
+                <div key={p.id} className={`provider-card${isCurrent ? ' provider-current' : ''}`}>
+                  <div className="provider-head">
+                    <strong>{p.label}</strong>
+                    {p.id === 'openai' && <span className="badge-reco">recommandé</span>}
+                    <span className={`dot ${avail ? 'dot-ok' : 'dot-warn'}`} title={avail ? 'détecté' : 'clé/serveur absent'} />
+                  </div>
+                  <p className="muted provider-hint">{p.hint}</p>
+                  {avail === false && (
+                    <p className="provider-missing">
+                      {p.local ? 'Ollama non détecté (lance « ollama serve »).' : `Clé absente — place-la dans ~/.${p.id}/api_key (chmod 600).`}
+                    </p>
+                  )}
+                  <div className="provider-models">
+                    {p.models.map(model => (
+                      <button
+                        key={model}
+                        type="button"
+                        disabled={busy || avail === false}
+                        className={`capture-option${isCurrent && current?.model === model ? ' capture-active' : ''}`}
+                        onClick={() => void choose(p.id, model)}
+                        title={model === p.recommended ? 'conseillé' : ''}
+                      >
+                        {model}{model === p.recommended ? ' ★' : ''}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )
+            })}
           </div>
+        )}
+        {config?.extraction && (
+          <p className="muted" style={{ marginTop: '0.8rem' }}>
+            Actuel : <strong>{config.extraction.provider}</strong> / {config.extraction.model ?? '(défaut)'}
+          </p>
         )}
       </div>
 
@@ -85,17 +149,14 @@ export function Settings() {
         <h2>Emplacement de stockage</h2>
         <pre className="command">{doctor?.storage_root ?? '~/.memoria/data'}</pre>
         <p className="muted">
-          Dossier qui contient toutes vos mémoires (chiffrées pour les secrets). Pour le déplacer,
-          modifiez <code>~/.memoria/config.toml</code> puis redémarrez le service.
+          Toutes tes mémoires (chiffrées pour les secrets). Pour déplacer : édite
+          <code> ~/.memoria/config.toml </code> puis redémarre le service.
         </p>
       </div>
 
       <div className="settings-block">
         <h2>Capture</h2>
-        <p className="muted">
-          Le mode de capture (automatique / revue d’abord / pause) se règle dans la barre latérale,
-          toujours accessible.
-        </p>
+        <p className="muted">Mode (auto / revue / pause) : barre latérale, toujours accessible.</p>
       </div>
     </section>
   )

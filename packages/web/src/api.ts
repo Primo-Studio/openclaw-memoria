@@ -207,19 +207,33 @@ export interface ProvidersStatus {
   ollama: { available: boolean; models: string[]; base_url?: string }
   anthropic: { available: boolean }
   lmstudio: { available: boolean }
+  openai: { available: boolean }
+  openrouter: { available: boolean }
 }
 
-/** Détection Ollama/Anthropic/LM Studio. Route « contrat » : 404 → null géré par l'appelant. */
+/** Détection des moteurs. Route « contrat » : 404 → géré par l'appelant. */
 export async function getProviders(): Promise<ProvidersStatus> {
   return request<ProvidersStatus>('GET', '/v1/admin/providers')
 }
 
-export async function getLlmProfile(): Promise<LlmProfile> {
-  return (await request<{ profile: LlmProfile }>('GET', '/v1/admin/llm_profile')).profile
+export type LlmProviderName = 'ollama' | 'anthropic' | 'openai' | 'openrouter'
+
+export interface LlmConfig {
+  profile: string
+  extraction?: { provider?: string; model?: string }
+}
+
+export async function getLlmProfile(): Promise<LlmConfig> {
+  return request<LlmConfig>('GET', '/v1/admin/llm_profile')
 }
 
 export async function setLlmProfile(profile: LlmProfile): Promise<void> {
   await request<{ profile: LlmProfile }>('POST', '/v1/admin/llm_profile', { profile })
+}
+
+/** Choix explicite du provider/modèle d'extraction (« l'utilisateur décide »). */
+export async function setExtractionProvider(provider: LlmProviderName, model?: string): Promise<void> {
+  await request<unknown>('POST', '/v1/admin/llm_extraction', { provider, ...(model ? { model } : {}) })
 }
 
 // ------------------------------------------------------------ partage (§11)

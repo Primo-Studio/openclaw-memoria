@@ -809,3 +809,20 @@ input[type='search']:focus {
 .identity-panel { margin-top: 0.8rem; border-top: 1px solid var(--border, #2a2a3d); padding-top: 0.6rem; }
 .identity-card label { display: flex; gap: 0.6rem; align-items: flex-start; cursor: pointer; }
 .identity-card input { margin-top: 0.2rem; accent-color: var(--accent, #e85a1f); }
+
+/* --------------------------------------------------------------- choix provider IA */
+
+.provider-list { display: grid; gap: 0.7rem; }
+.provider-card {
+  padding: 0.8rem 1rem; border-radius: 10px;
+  border: 1px solid var(--border, #2a2a3d);
+}
+.provider-current { border-color: var(--accent, #e85a1f); background: color-mix(in srgb, var(--accent, #e85a1f) 10%, transparent); }
+.provider-head { display: flex; align-items: center; gap: 0.6rem; }
+.badge-reco {
+  font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.04em;
+  background: var(--accent, #e85a1f); color: white; padding: 0.1rem 0.4rem; border-radius: 6px;
+}
+.provider-hint { margin: 0.3rem 0 0.5rem; font-size: 0.82rem; }
+.provider-missing { color: var(--warn, #d8a01f); font-size: 0.78rem; margin: 0 0 0.5rem; }
+.provider-models { display: flex; flex-wrap: wrap; gap: 0.4rem; }
