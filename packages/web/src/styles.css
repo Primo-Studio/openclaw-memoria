@@ -794,3 +794,18 @@ input[type='search']:focus {
   border-bottom: 1px solid var(--border, #2a2a3d);
 }
 .settings-block h2 { font-size: 1rem; margin: 0 0 0.6rem; }
+
+/* --------------------------------------------------------------- partage */
+
+.share-matrix { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+.share-matrix th, .share-matrix td {
+  padding: 0.5rem 0.7rem; text-align: left;
+  border-bottom: 1px solid var(--border, #2a2a3d);
+}
+.share-matrix thead th { color: var(--muted, #9a9ab0); font-weight: 600; }
+.share-cell { text-align: center; }
+.share-cell input { width: 18px; height: 18px; accent-color: var(--accent, #e85a1f); cursor: pointer; }
+
+.identity-panel { margin-top: 0.8rem; border-top: 1px solid var(--border, #2a2a3d); padding-top: 0.6rem; }
+.identity-card label { display: flex; gap: 0.6rem; align-items: flex-start; cursor: pointer; }
+.identity-card input { margin-top: 0.2rem; accent-color: var(--accent, #e85a1f); }

@@ -222,6 +222,50 @@ export async function setLlmProfile(profile: LlmProfile): Promise<void> {
   await request<{ profile: LlmProfile }>('POST', '/v1/admin/llm_profile', { profile })
 }
 
+// ------------------------------------------------------------ partage (§11)
+
+export interface ScopeAccess {
+  id: string
+  type: string
+  name: string
+  readers: string[] // assistant_id autorisés en lecture
+  facts: number
+}
+
+export interface AssistantInfo {
+  id: string
+  type: string
+  display_name: string
+}
+
+export async function getScopes(): Promise<{ scopes: ScopeAccess[]; assistants: AssistantInfo[] }> {
+  return request<{ scopes: ScopeAccess[]; assistants: AssistantInfo[] }>('GET', '/v1/admin/scopes')
+}
+
+export async function setPolicy(
+  assistantId: string,
+  scopeId: string,
+  perms: { can_read?: boolean; can_write?: boolean; can_share?: boolean },
+): Promise<void> {
+  await request<{ ok: boolean }>('POST', '/v1/admin/policy', { assistant_id: assistantId, scope_id: scopeId, ...perms })
+}
+
+export async function shareFacts(factIds: string[], targetScope: string): Promise<{ shared: number; scope: string }> {
+  return request<{ shared: number; scope: string }>('POST', '/v1/admin/share', { fact_ids: factIds, target_scope: targetScope })
+}
+
+export interface IdentityCandidate {
+  id: string
+  content: string
+  category: string
+  score: number
+}
+
+export async function getIdentityCandidates(instance: string): Promise<IdentityCandidate[]> {
+  const res = await request<{ candidates: IdentityCandidate[] }>('GET', `/v1/admin/identity_candidates?instance=${encodeURIComponent(instance)}`)
+  return res.candidates
+}
+
 // ------------------------------------------------------------ capture & revue
 
 export type CaptureMode = 'auto-private' | 'review-first' | 'incognito'

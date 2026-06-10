@@ -10,17 +10,19 @@ import { Dashboard } from './screens/Dashboard'
 import { Agents } from './screens/Agents'
 import { Memory } from './screens/Memory'
 import { Review } from './screens/Review'
+import { Sharing } from './screens/Sharing'
 import { Audit } from './screens/Audit'
 import { Onboarding } from './screens/Onboarding'
 import { Settings } from './screens/Settings'
 
-type ScreenId = 'dashboard' | 'agents' | 'memory' | 'review' | 'audit' | 'settings'
+type ScreenId = 'dashboard' | 'agents' | 'memory' | 'review' | 'sharing' | 'audit' | 'settings'
 
 const NAV: Array<{ id: ScreenId; label: string }> = [
   { id: 'dashboard', label: 'Tableau de bord' },
   { id: 'agents', label: 'Agents' },
   { id: 'memory', label: 'Mémoire' },
   { id: 'review', label: 'Revue' },
+  { id: 'sharing', label: 'Partage' },
   { id: 'audit', label: 'Journal' },
   { id: 'settings', label: 'Réglages' },
 ]
@@ -76,6 +78,7 @@ export function App() {
         {screen === 'agents' && <Agents />}
         {screen === 'memory' && <Memory />}
         {screen === 'review' && <Review />}
+        {screen === 'sharing' && <Sharing />}
         {screen === 'audit' && <Audit />}
         {screen === 'settings' && <Settings />}
       </main>
