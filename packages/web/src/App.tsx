@@ -10,17 +10,21 @@ import { Dashboard } from './screens/Dashboard'
 import { Agents } from './screens/Agents'
 import { Memory } from './screens/Memory'
 import { Review } from './screens/Review'
+import { Themes } from './screens/Themes'
+import { Patterns } from './screens/Patterns'
 import { Sharing } from './screens/Sharing'
 import { Audit } from './screens/Audit'
 import { Onboarding } from './screens/Onboarding'
 import { Settings } from './screens/Settings'
 
-type ScreenId = 'dashboard' | 'agents' | 'memory' | 'review' | 'sharing' | 'audit' | 'settings'
+type ScreenId = 'dashboard' | 'agents' | 'memory' | 'themes' | 'patterns' | 'review' | 'sharing' | 'audit' | 'settings'
 
 const NAV: Array<{ id: ScreenId; label: string }> = [
   { id: 'dashboard', label: 'Tableau de bord' },
   { id: 'agents', label: 'Agents' },
   { id: 'memory', label: 'Mémoire' },
+  { id: 'themes', label: 'Thèmes' },
+  { id: 'patterns', label: 'Récurrences' },
   { id: 'review', label: 'Revue' },
   { id: 'sharing', label: 'Partage' },
   { id: 'audit', label: 'Journal' },
@@ -77,6 +81,8 @@ export function App() {
         {screen === 'dashboard' && <Dashboard onConnect={() => setScreen('agents')} />}
         {screen === 'agents' && <Agents />}
         {screen === 'memory' && <Memory />}
+        {screen === 'themes' && <Themes />}
+        {screen === 'patterns' && <Patterns />}
         {screen === 'review' && <Review />}
         {screen === 'sharing' && <Sharing />}
         {screen === 'audit' && <Audit />}

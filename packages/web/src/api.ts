@@ -280,6 +280,47 @@ export async function getIdentityCandidates(instance: string): Promise<IdentityC
   return res.candidates
 }
 
+// ------------------------------------------------------------ thèmes (topics)
+
+export interface Topic {
+  id: string
+  name: string
+  fact_count: number
+  importance_score: number
+  keywords: string[]
+}
+
+export async function getTopics(instance: string, minFacts = 1): Promise<Topic[]> {
+  const res = await request<{ topics: Topic[] }>('GET', `/v1/admin/topics?instance=${encodeURIComponent(instance)}&min_facts=${minFacts}`)
+  return res.topics
+}
+
+export async function getTopicFacts(instance: string, topicId: string): Promise<AdminFact[]> {
+  const res = await request<{ facts: AdminFact[] }>('GET', `/v1/admin/topic_facts?instance=${encodeURIComponent(instance)}&topic=${encodeURIComponent(topicId)}`)
+  return res.facts
+}
+
+// ------------------------------------------------------------ récurrences (patterns)
+
+export interface Pattern {
+  id: string
+  label: string
+  canonical_fact: string
+  occurrences: number
+  confidence: number
+  kind: string
+  status: string
+}
+
+export async function getPatterns(instance: string): Promise<Pattern[]> {
+  const res = await request<{ patterns: Pattern[] }>('GET', `/v1/admin/patterns?instance=${encodeURIComponent(instance)}`)
+  return res.patterns
+}
+
+export async function decidePattern(instance: string, patternId: string, decision: 'accept' | 'dismiss'): Promise<void> {
+  await request<unknown>('POST', '/v1/admin/pattern_decision', { instance, id: patternId, decision })
+}
+
 // ------------------------------------------------------------ capture & revue
 
 export type CaptureMode = 'auto-private' | 'review-first' | 'incognito'

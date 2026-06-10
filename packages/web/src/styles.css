@@ -826,3 +826,37 @@ input[type='search']:focus {
 .provider-hint { margin: 0.3rem 0 0.5rem; font-size: 0.82rem; }
 .provider-missing { color: var(--warn, #d8a01f); font-size: 0.78rem; margin: 0 0 0.5rem; }
 .provider-models { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+
+/* --------------------------------------------------------------- thèmes & récurrences */
+
+.agent-select {
+  background: var(--card, #1c1c2b); color: inherit;
+  border: 1px solid var(--border, #2a2a3d); border-radius: 8px;
+  padding: 0.4rem 0.7rem; font-size: 0.9rem;
+}
+
+.theme-cloud { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; }
+.theme-tile {
+  display: inline-flex; align-items: center; gap: 0.5rem;
+  padding: 0.5rem 0.9rem; border-radius: 999px;
+  border: 1px solid var(--border, #2a2a3d); background: var(--card, #1c1c2b);
+  color: inherit; cursor: pointer; line-height: 1.1;
+}
+.theme-tile:hover { border-color: var(--accent, #e85a1f); }
+.theme-active { border-color: var(--accent, #e85a1f); background: color-mix(in srgb, var(--accent, #e85a1f) 16%, transparent); }
+.theme-name { font-weight: 600; }
+.theme-count {
+  font-size: 0.72em; opacity: 0.8;
+  background: color-mix(in srgb, var(--accent, #e85a1f) 30%, transparent);
+  border-radius: 999px; padding: 0.05em 0.5em;
+}
+.theme-detail { margin-top: 1.5rem; border-top: 1px solid var(--border, #2a2a3d); padding-top: 1rem; }
+.theme-keywords { display: flex; flex-wrap: wrap; gap: 0.3rem; margin: 0.4rem 0 0.8rem; }
+
+.pattern-list { list-style: none; padding: 0; display: grid; gap: 0.7rem; }
+.pattern-card { padding: 0.9rem 1rem; border-radius: 10px; border: 1px solid var(--border, #2a2a3d); background: var(--card, #1c1c2b); }
+.pattern-head { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.4rem; }
+.badge-accent { background: color-mix(in srgb, var(--accent, #e85a1f) 25%, transparent); color: var(--accent, #e85a1f); padding: 0.1rem 0.5rem; border-radius: 6px; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.03em; }
+.pattern-label { font-weight: 600; margin: 0.2rem 0; }
+.pattern-canonical { font-style: italic; font-size: 0.86rem; margin: 0.2rem 0 0.7rem; }
+.pattern-actions { display: flex; gap: 0.5rem; }
