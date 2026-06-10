@@ -20,12 +20,12 @@ observations) et c'est là qu'on continue.
 |---|---|---|---|
 | 1 | db (schéma) | ✅ | schéma gouverné registry + contenu, FTS, triggers |
 | 2 | scoring (+hot-tier) | ✅ | scoring complet + **hot-tier** (fait récemment accédé = chaud) [vague 6] |
-| 3 | selective (dedup/contradiction) | 🟡→ | dedup fait ; **contradiction** en cours (vague 6) |
+| 3 | selective (dedup/contradiction) | ✅ | dedup + **détection de contradiction** (port/valeurs/négation) [vague 6] |
 | 4 | lifecycle | ✅ | active/dormant/archived + review |
 | 5 | budget (cap tokens) | ✅ | cap dur global (corrige le bug legacy) |
-| 6 | procedural | 🟡→ | table + import ; **moteur en cours** (vague 6) |
-| 7 | feedback | 🟡→ | **en cours** (vague 6) |
-| 8 | expertise | 🟡→ | **en cours** (vague 6) |
+| 6 | procedural | ✅ | moteur match + recordExecution (failure_reasons), UI Procédures [vague 6] |
+| 7 | feedback | ✅ | reinforce par usage réel (relevance_weight) [vague 6] |
+| 8 | expertise | ✅ | domaines de maîtrise par agent + UI sur Agents [vague 6] |
 | 9 | context-tree | ✅ | projet→client→org résolu, boost sur l'arbre [vague 6] |
 | 10 | config/identity | ✅ | config.toml + identités/instances |
 | 11 | WAL | ✅ | source de vérité, replay au boot, cleanup borné |
@@ -38,25 +38,25 @@ observations) et c'est là qu'on continue.
 | 13 | graph (entités/relations) | ✅ | + expansion au recall + decay |
 | 14 | **topics (thèmes)** | ✅ | classement auto entité-first + UI Thèmes + puces dans Revue/Mémoire [vague 5] |
 | 15 | observations | ✅ | agrégation par sujet |
-| 16 | fact-clusters | 🟡→ | **en cours** (vague 6) |
+| 16 | fact-clusters | ✅ | regroupement structurel (Koda 52 clusters) [vague 6] |
 | 17 | continuous | 🟡 | capture en continu (captureTurn) faite ; modes legacy non |
-| 18 | revision | ⚪ | révision proactive des faits obsolètes |
+| 18 | revision | 🟡→ | **en cours** (vague 7) |
 
 ## Bucket C — Opt-in — 3 couches
 
 | # | Couche | État | Note |
 |---|---|---|---|
-| 19 | self-observation | ⚪ | l'agent observe son propre comportement |
-| 20 | markdown sync | ⚪ | miroir .md de la mémoire |
-| 21 | dialectic | ⚪ | confrontation de points de vue (outil) |
+| 19 | self-observation | 🟡→ | **en cours** (vague 7) |
+| 20 | markdown sync | 🟡→ | **en cours** (vague 7) |
+| 21 | dialectic | 🟡→ | **en cours** (vague 7) |
 
 ## Bucket D — Sur validation — 3 couches
 
 | # | Couche | État | Note |
 |---|---|---|---|
 | 22 | **patterns (récurrences)** | ✅ | détection des récurrences + UI Récurrences (consolider/écarter) [vague 5] |
-| 23 | auto-skill | ⚪ | crée des compétences/procédures depuis les patterns |
-| 24 | revision (mutations) | ⚪ | applique les révisions (supersede) sur validation |
+| 23 | auto-skill | 🟡→ | **en cours** (vague 7) |
+| 24 | revision (mutations) | 🟡→ | **en cours** (vague 7) |
 
 ## Le manque que tu as identifié (juste !)
 
