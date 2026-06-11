@@ -207,6 +207,67 @@ export async function deleteAgent(assistantInstanceId: string): Promise<boolean>
   return res.deleted
 }
 
+// --------------------------------- agents sur cette machine (détection / connexion 1 clic / import)
+
+export type DetectedAgentKind = 'claude-code' | 'codex' | 'openclaw' | 'cursor'
+
+export interface DetectedLegacyDb {
+  path: string
+  fact_count: number
+}
+
+export interface DetectedAgent {
+  kind: DetectedAgentKind
+  name: string
+  installed: boolean
+  data_found: { transcript_files?: number; legacy_db?: DetectedLegacyDb }
+  already_connected: string | null
+}
+
+/** Détecte les assistants présents sur la machine (CLI, données importables, déjà connectés). */
+export async function detectMachineAgents(): Promise<DetectedAgent[]> {
+  const res = await request<{ agents: DetectedAgent[] }>('GET', '/v1/admin/agents_detect')
+  return res.agents
+}
+
+export interface ConnectAgentResult {
+  instance_id: string
+  credentials_path: string
+  registered: { host: string; registered: boolean; detail: string }
+  restart_hint: string | null
+}
+
+/** Connexion 1 CLIC : pairing en processus + credentials + enregistrement MCP automatique. */
+export async function connectAgent(kind: DetectedAgentKind, name?: string): Promise<ConnectAgentResult> {
+  return request<ConnectAgentResult>('POST', '/v1/admin/agents_connect', { kind, ...(name ? { name } : {}) })
+}
+
+export interface ImportJobStatus {
+  state: 'idle' | 'running' | 'done' | 'error'
+  kind: 'transcripts' | 'legacy' | null
+  instance_id: string | null
+  progress: { files_done: number; files_total: number; facts_imported: number }
+  error: string | null
+  errors: string[]
+  started_at: string | null
+  finished_at: string | null
+}
+
+/** Démarre un job d'import (un seul à la fois — 409 sinon). */
+export async function startImport(input: {
+  instance_id: string
+  kind: 'transcripts' | 'legacy'
+  legacy_path?: string
+  max_windows_per_file?: number
+}): Promise<ImportJobStatus> {
+  return request<ImportJobStatus>('POST', '/v1/admin/import_start', input)
+}
+
+/** Statut du job d'import en cours (polling ~1 s). */
+export async function getImportStatus(): Promise<ImportJobStatus> {
+  return request<ImportJobStatus>('GET', '/v1/admin/import_status')
+}
+
 /** Recherche dans la mémoire d'un agent. `q` vide = derniers souvenirs. */
 export async function searchFacts(instance: string, q: string): Promise<AdminFact[]> {
   const params = new URLSearchParams({ instance, q })

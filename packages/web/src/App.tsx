@@ -91,7 +91,7 @@ export function App() {
       </aside>
       <main className="content">
         {screen === 'dashboard' && <Dashboard onConnect={() => setScreen('agents')} />}
-        {screen === 'agents' && <Agents />}
+        {screen === 'agents' && <Agents onOpenReview={() => setScreen('review')} />}
         {screen === 'memory' && <Memory />}
         {screen === 'themes' && <Themes />}
         {screen === 'patterns' && <Patterns />}
