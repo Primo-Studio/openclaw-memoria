@@ -46,6 +46,11 @@ export interface FactRow {
   created_at: string
   updated_at: string
   last_accessed_at: string | null
+  /** Provenance & LWW pour la synchro inter-machines (colonnes v2 ; optionnelles côté types pour les fixtures). */
+  origin_machine_id?: string | null
+  origin_rev?: number
+  content_hash?: string | null
+  deleted_at?: string | null
 }
 
 export interface InsertFactInput {
@@ -68,6 +73,10 @@ export interface InsertFactInput {
   entity_ids?: string[]
   /** 'dormant' = en attente de revue (review-first) — exclu du recall par défaut. */
   lifecycle_state?: LifecycleState
+  /** Provenance synchro (posée par l'engine pour les scopes partagés). */
+  origin_machine_id?: string | null
+  origin_rev?: number
+  content_hash?: string | null
 }
 
 export interface FtsSearchOptions {
@@ -188,6 +197,10 @@ export class ContentStore {
       created_at: ts,
       updated_at: ts,
       last_accessed_at: null,
+      origin_machine_id: input.origin_machine_id ?? null,
+      origin_rev: input.origin_rev ?? 0,
+      content_hash: input.content_hash ?? null,
+      deleted_at: null,
     }
     this.db
       .prepare(
@@ -197,14 +210,16 @@ export class ContentStore {
           sensitivity, visibility, tags, entity_ids,
           lifecycle_state, superseded, superseded_by,
           usefulness, recall_count, used_count, relevance_weight,
-          created_at, updated_at, last_accessed_at
+          created_at, updated_at, last_accessed_at,
+          origin_machine_id, origin_rev, content_hash, deleted_at
         ) VALUES (
           @id, @fact, @category, @fact_type, @confidence, @source,
           @assistant_instance_id, @user_id, @org_id, @client_org_id, @project_id, @topic_id, @scope_id,
           @sensitivity, @visibility, @tags, @entity_ids,
           @lifecycle_state, @superseded, @superseded_by,
           @usefulness, @recall_count, @used_count, @relevance_weight,
-          @created_at, @updated_at, @last_accessed_at
+          @created_at, @updated_at, @last_accessed_at,
+          @origin_machine_id, @origin_rev, @content_hash, @deleted_at
         )`,
       )
       .run(row)
@@ -214,6 +229,84 @@ export class ContentStore {
   getFact(id: string): Fact | null {
     const row = this.db.prepare('SELECT * FROM facts WHERE id = ?').get(id) as FactRow | undefined
     return row ? rowToFact(row) : null
+  }
+
+  // ----------------------------------------------------------- synchro (SyncStore)
+
+  /** Champs nécessaires au LWW d'un fait local (provenance). */
+  getMergeFields(id: string): { id: string; origin_rev: number; updated_at: string; origin_machine_id: string | null } | undefined {
+    const r = this.db.prepare('SELECT id, origin_rev, updated_at, origin_machine_id FROM facts WHERE id = ?').get(id) as
+      | { id: string; origin_rev: number | null; updated_at: string; origin_machine_id: string | null }
+      | undefined
+    if (!r) return undefined
+    return { id: r.id, origin_rev: r.origin_rev ?? 0, updated_at: r.updated_at, origin_machine_id: r.origin_machine_id }
+  }
+
+  /** Premier fait actif partageant ce hash de contenu (dédup inter-machines). */
+  findIdByContentHash(hash: string): string | null {
+    const r = this.db.prepare('SELECT id FROM facts WHERE content_hash = ? AND deleted_at IS NULL LIMIT 1').get(hash) as { id: string } | undefined
+    return r?.id ?? null
+  }
+
+  /**
+   * Insère ou met à jour un fait reçu par synchro. La TÉLÉMÉTRIE LOCALE
+   * (recall_count, used_count, usefulness, relevance_weight, last_accessed_at)
+   * n'est JAMAIS écrasée — elle reste propre à chaque machine (SYNC §3.3 #4).
+   */
+  upsertSyncedFact(f: {
+    id: string; fact: string; category: string; fact_type: string; confidence: number; source: string
+    scope_id: string; sensitivity: string; visibility: string; tags: string; entity_ids: string
+    lifecycle_state: string; superseded: number; superseded_by: string | null
+    origin_machine_id: string | null; origin_rev: number; content_hash: string | null; deleted_at: string | null
+    created_at: string; updated_at: string
+  }): void {
+    const exists = this.db.prepare('SELECT 1 FROM facts WHERE id = ?').get(f.id)
+    if (exists) {
+      this.db
+        .prepare(
+          `UPDATE facts SET fact=@fact, category=@category, fact_type=@fact_type, confidence=@confidence, source=@source,
+             scope_id=@scope_id, sensitivity=@sensitivity, visibility=@visibility, tags=@tags, entity_ids=@entity_ids,
+             lifecycle_state=@lifecycle_state, superseded=@superseded, superseded_by=@superseded_by,
+             origin_machine_id=@origin_machine_id, origin_rev=@origin_rev, content_hash=@content_hash,
+             deleted_at=@deleted_at, updated_at=@updated_at WHERE id=@id`,
+        )
+        .run(f)
+    } else {
+      this.db
+        .prepare(
+          `INSERT INTO facts (
+            id, fact, category, fact_type, confidence, source,
+            assistant_instance_id, user_id, org_id, client_org_id, project_id, topic_id, scope_id,
+            sensitivity, visibility, tags, entity_ids,
+            lifecycle_state, superseded, superseded_by,
+            usefulness, recall_count, used_count, relevance_weight,
+            created_at, updated_at, last_accessed_at,
+            origin_machine_id, origin_rev, content_hash, deleted_at
+          ) VALUES (
+            @id, @fact, @category, @fact_type, @confidence, @source,
+            NULL, NULL, NULL, NULL, NULL, NULL, @scope_id,
+            @sensitivity, @visibility, @tags, @entity_ids,
+            @lifecycle_state, @superseded, @superseded_by,
+            0, 0, 0, 1.0,
+            @created_at, @updated_at, NULL,
+            @origin_machine_id, @origin_rev, @content_hash, @deleted_at
+          )`,
+        )
+        .run(f)
+    }
+  }
+
+  /** Suppression propagée = tombstone (jamais de DELETE dur, sinon résurrection). */
+  applyTombstone(t: { id: string; deleted_at: string; origin_machine_id: string | null; origin_rev: number; updated_at: string }): boolean {
+    const exists = this.db.prepare('SELECT 1 FROM facts WHERE id = ?').get(t.id)
+    if (!exists) return false
+    this.db
+      .prepare(
+        `UPDATE facts SET deleted_at=@deleted_at, lifecycle_state='archived', superseded=1,
+           origin_machine_id=@origin_machine_id, origin_rev=@origin_rev, updated_at=@updated_at WHERE id=@id`,
+      )
+      .run(t)
+    return true
   }
 
   countFacts(): number {

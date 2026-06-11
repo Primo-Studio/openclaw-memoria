@@ -51,6 +51,8 @@ import type { EmbeddingProvider, LlmProvider } from '../llm/provider.js'
 import { CapturePipeline, type CaptureTurnInput, type CaptureTurnResult } from './capture.js'
 import type { WalReplaySummary } from './wal.js'
 import { passesClientIsolation, scoreFact } from './scoring.js'
+import { localMachineId, nextRev } from '../sync/clock.js'
+import { contentHash } from '../sync/merge.js'
 import type {
   AssistantInstance,
   AssistantType,
@@ -408,6 +410,19 @@ export class Memoria {
     // AVANT le stockage. La valeur détectée part au coffre, jamais dans facts.
     const content = this.redactBeforeStore(input.content)
 
+    // PROVENANCE (synchro) : les faits d'un scope PARTAGÉ portent l'origine
+    // (machine + révision logique) + un hash de contenu, pour la convergence LWW
+    // inter-machines. Les faits privés n'en ont pas besoin (jamais synchronisés).
+    const shared = scope.type !== 'private'
+    const category = input.category ?? 'general'
+    const provenance = shared
+      ? {
+          origin_machine_id: localMachineId(this.registry),
+          origin_rev: nextRev(this.registry),
+          content_hash: contentHash({ fact: content, category, scope_id: scope.id }),
+        }
+      : {}
+
     const store = this.storeForScope(scope, instance)
     const fact = store.insertFact({
       fact: content,
@@ -423,6 +438,7 @@ export class Memoria {
       sensitivity: input.sensitivity,
       tags: input.tags,
       visibility: scope.type === 'private' ? 'private' : 'shared',
+      ...provenance,
     })
     this.registry.audit({
       actor_type: 'assistant',

@@ -204,4 +204,19 @@ export const contentMigrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 2,
+    name: 'content-sync-provenance',
+    up(db) {
+      // SYNCHRO INTER-MACHINES (SYNC-INTER-MACHINES.md §3.2) : provenance + LWW.
+      // ALTER additifs (DB v1 existante préservée).
+      const cols = (db.pragma('table_info(facts)') as Array<{ name: string }>).map(c => c.name)
+      if (!cols.includes('origin_machine_id')) db.exec('ALTER TABLE facts ADD COLUMN origin_machine_id TEXT')
+      if (!cols.includes('origin_rev')) db.exec('ALTER TABLE facts ADD COLUMN origin_rev INTEGER NOT NULL DEFAULT 0')
+      if (!cols.includes('content_hash')) db.exec('ALTER TABLE facts ADD COLUMN content_hash TEXT')
+      if (!cols.includes('deleted_at')) db.exec('ALTER TABLE facts ADD COLUMN deleted_at TEXT')
+      db.exec('CREATE INDEX IF NOT EXISTS idx_facts_origin ON facts(origin_machine_id, origin_rev)')
+      db.exec('CREATE INDEX IF NOT EXISTS idx_facts_content_hash ON facts(content_hash)')
+    },
+  },
 ]

@@ -196,6 +196,11 @@ export interface Fact {
   created_at: string
   updated_at: string
   last_accessed_at: string | null
+  /** Provenance synchro (présente sur les faits de scopes partagés). */
+  origin_machine_id?: string | null
+  origin_rev?: number
+  content_hash?: string | null
+  deleted_at?: string | null
 }
 
 export interface Procedure {

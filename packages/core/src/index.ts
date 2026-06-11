@@ -43,6 +43,9 @@ export * from './engine/capture.js'
 export * from './migration/index.js'
 export * from './vector/index.js'
 export * from './cognition/index.js'
+export { localMachineId, nextRev, currentRev } from './sync/clock.js'
+export { winner, contentHash, applyDelta } from './sync/merge.js'
+export type { MergeFields, SyncFact, Tombstone, SyncStore, ApplyReport } from './sync/merge.js'
 export { importLegacyCognition } from './migration/import-cognition.js'
 export {
   estimateTokens,
