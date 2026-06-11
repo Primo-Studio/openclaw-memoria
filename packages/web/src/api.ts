@@ -459,6 +459,18 @@ export async function getScopeFacts(scopeId: string): Promise<AdminFact[]> {
   return res.facts
 }
 
+// ------------------------------------------------------------ options (couches opt-in)
+
+export async function getOptions(): Promise<Record<string, boolean>> {
+  const res = await request<{ options: Record<string, boolean> }>('GET', '/v1/admin/options')
+  return res.options
+}
+
+export async function setOption(key: string, enabled: boolean): Promise<Record<string, boolean>> {
+  const res = await request<{ options: Record<string, boolean> }>('POST', '/v1/admin/options', { key, enabled })
+  return res.options
+}
+
 // ------------------------------------------------------------ capture & revue
 
 export type CaptureMode = 'auto-private' | 'review-first' | 'incognito'

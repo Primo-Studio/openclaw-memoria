@@ -917,3 +917,11 @@ input[type='search']:focus {
 .scope-link:hover { color: var(--accent, #e85a1f); }
 .scope-content { margin-top: 0.8rem; }
 .theme-toolbar { display: flex; gap: 0.5rem; align-items: center; }
+
+/* --------------------------------------------------------------- options */
+
+.options-list { display: grid; gap: 0.7rem; margin-top: 0.6rem; }
+.option-row { display: flex; gap: 0.7rem; align-items: flex-start; cursor: pointer; }
+.option-row input { margin-top: 0.2rem; width: 18px; height: 18px; accent-color: var(--accent, #e85a1f); flex: none; }
+.option-row span { display: flex; flex-direction: column; gap: 0.15rem; }
+.option-hint { font-size: 0.78rem; }

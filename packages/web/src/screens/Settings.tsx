@@ -5,17 +5,28 @@
  * + emplacement de stockage. Routes « contrat » : 404 → « non disponible ».
  */
 import { useCallback, useEffect, useState } from 'react'
+import { useCallback as useCb } from 'react'
 import {
   ApiError,
   getDoctor,
   getLlmProfile,
+  getOptions,
   getProviders,
   setExtractionProvider,
+  setOption,
   type DoctorReport,
   type LlmConfig,
   type LlmProviderName,
   type ProvidersStatus,
 } from '../api'
+
+const OPTIONS: Array<{ key: string; label: string; hint: string }> = [
+  { key: 'auto_themes_ai', label: 'Affiner les thèmes avec l’IA', hint: 'Donne automatiquement des noms clairs aux thèmes (coûte quelques appels au moteur configuré).' },
+  { key: 'auto_patterns', label: 'Détecter les récurrences', hint: 'Repère automatiquement ce qui revient souvent (écran Récurrences).' },
+  { key: 'auto_revision', label: 'Proposer le ménage', hint: 'Détecte automatiquement contradictions et doublons (écran Révisions).' },
+  { key: 'auto_self_observation', label: 'Auto-observation des agents', hint: 'L’agent dégage ses forces/faiblesses depuis son historique (écran Agents).' },
+  { key: 'markdown_export', label: 'Export Markdown automatique', hint: 'Tient à jour un miroir .md de la mémoire dans <stockage>/exports/.' },
+]
 
 interface ProviderChoice {
   id: LlmProviderName
@@ -160,13 +171,66 @@ export function Settings() {
       </div>
 
       <div className="settings-block">
+        <h2>Options</h2>
+        <p className="muted">
+          Couches avancées de Memoria. Désactivées par défaut : activez-les quand vous voulez.
+          Activer une option la fait tourner tout de suite, puis à chaque démarrage.
+        </p>
+        <OptionsPanel onError={setError} />
+      </div>
+
+      <div className="settings-block">
         <h2>Export Markdown</h2>
         <p className="muted">
-          Chaque agent peut exporter sa mémoire en fichiers <code>.md</code> lisibles (un par thème),
-          dans <code>&lt;stockage&gt;/exports/&lt;agent&gt;/</code> — pratique pour relire ou versionner.
-          Lancez <code>memoria export</code> depuis le terminal.
+          Aussi disponible à la demande : <code>memoria export</code> depuis le terminal (un fichier
+          <code> .md </code> par thème).
         </p>
       </div>
     </section>
+  )
+}
+
+function OptionsPanel({ onError }: { onError: (m: string) => void }) {
+  const [options, setOptions] = useState<Record<string, boolean> | null>(null)
+  const [busy, setBusy] = useState<string | null>(null)
+
+  useEffect(() => {
+    getOptions().then(setOptions).catch(() => setOptions(null))
+  }, [])
+
+  const toggle = useCb(
+    async (key: string, enabled: boolean) => {
+      setBusy(key)
+      setOptions(prev => (prev ? { ...prev, [key]: enabled } : prev)) // optimiste
+      try {
+        setOptions(await setOption(key, enabled))
+      } catch (err) {
+        onError(err instanceof ApiError ? err.message : 'Changement impossible.')
+        getOptions().then(setOptions).catch(() => {})
+      } finally {
+        setBusy(null)
+      }
+    },
+    [onError],
+  )
+
+  if (options === null) return <p className="muted">Options non disponibles.</p>
+  return (
+    <div className="options-list">
+      {OPTIONS.map(o => (
+        <label key={o.key} className="option-row">
+          <input
+            type="checkbox"
+            checked={options[o.key] ?? false}
+            disabled={busy === o.key}
+            onChange={e => void toggle(o.key, e.target.checked)}
+          />
+          <span>
+            <strong>{o.label}</strong>
+            <span className="muted option-hint">{o.hint}</span>
+          </span>
+        </label>
+      ))}
+    </div>
   )
 }

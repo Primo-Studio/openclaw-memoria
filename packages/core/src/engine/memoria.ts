@@ -6,7 +6,7 @@
  */
 import { existsSync, statSync } from 'node:fs'
 import { hostname } from 'node:os'
-import { relative } from 'node:path'
+import { join, relative } from 'node:path'
 import DatabaseCtor from 'better-sqlite3'
 import { importLegacyCognition } from '../migration/import-cognition.js'
 import { importTranscripts } from '../migration/import-transcripts.js'
@@ -1484,6 +1484,73 @@ export class Memoria {
     this.profilePromise = null
     this.pipelinePromise = null
     this.registry.audit({ actor_type: 'user', actor_id: 'local', action, target_id_hash: null, scope_id: null, reason: null })
+  }
+
+  // ------------------------------------------------------------ options (bucket C/D)
+
+  /**
+   * Options activables (couches opt-in / sur validation). OFF par défaut : ces
+   * couches ne tournent QUE sur demande. ON = elles tournent automatiquement
+   * (au boot du daemon + après les captures). L'utilisateur garde le contrôle.
+   */
+  getOptions(): Record<string, boolean> {
+    this.assertOpen()
+    const keys = ['auto_themes_ai', 'auto_self_observation', 'auto_revision', 'auto_patterns', 'markdown_export']
+    const out: Record<string, boolean> = {}
+    for (const k of keys) out[k] = this.registry.getSetting(`option.${k}`) === 'on'
+    return out
+  }
+
+  /** Active/désactive une option. L'activer la fait tourner UNE FOIS tout de suite. */
+  async setOption(key: string, enabled: boolean): Promise<void> {
+    this.assertOpen()
+    this.registry.setSetting(`option.${key}`, enabled ? 'on' : 'off')
+    this.registry.audit({ actor_type: 'user', actor_id: 'local', action: `option_${enabled ? 'on' : 'off'}:${key}`, target_id_hash: null, scope_id: null, reason: null })
+    if (enabled) await this.runOption(key)
+  }
+
+  /** Exécute une option sur toutes les instances actives (boot daemon + activation). */
+  async runOption(key: string): Promise<void> {
+    this.assertOpen()
+    for (const inst of this.registry.listInstances()) {
+      if (inst.revoked_at) continue
+      const db = this.registry.dbForInstance(inst.id)
+      if (!db || !existsSync(db.path)) continue
+      try {
+        switch (key) {
+          case 'auto_themes_ai':
+            await this.refineTopicLabels(inst.id)
+            break
+          case 'auto_self_observation':
+            this.deriveSelfObservations(inst.id)
+            break
+          case 'auto_revision':
+            await this.proposeRevisions(inst.id)
+            break
+          case 'auto_patterns':
+            this.detectPatterns(inst.id)
+            break
+          case 'markdown_export':
+            this.exportMarkdown(inst.id, join(this.paths.root, 'exports', inst.id), true)
+            break
+        }
+      } catch (err) {
+        console.warn(`[memoria] option ${key} sur ${inst.id} en échec :`, (err as Error).message)
+      }
+    }
+  }
+
+  /** Lance toutes les options ACTIVÉES (appelé au boot du daemon). */
+  async runEnabledOptions(): Promise<{ ran: string[] }> {
+    this.assertOpen()
+    const ran: string[] = []
+    for (const [key, on] of Object.entries(this.getOptions())) {
+      if (on) {
+        await this.runOption(key)
+        ran.push(key)
+      }
+    }
+    return { ran }
   }
 
   /** Mode de capture global : auto-private (défaut) | review-first | incognito (pause). */

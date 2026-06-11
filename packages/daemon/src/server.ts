@@ -295,6 +295,19 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         sendJson(res, 200, { provider, model: body['model'] ?? null })
         return
       }
+      case 'GET /v1/admin/options': {
+        sendJson(res, 200, { options: memoria.getOptions() })
+        return
+      }
+      case 'POST /v1/admin/options': {
+        const body = await readJson(req)
+        const key = String(body['key'] ?? '')
+        const enabled = body['enabled'] === true
+        if (!key) throw new HttpError(400, 'key requise')
+        await memoria.setOption(key, enabled)
+        sendJson(res, 200, { options: memoria.getOptions() })
+        return
+      }
       case 'GET /v1/admin/capture_mode': {
         sendJson(res, 200, { mode: memoria.getCaptureMode() })
         return
@@ -460,6 +473,11 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     })
     .then(r => {
       if (r.indexed > 0) console.log(`[memoria-daemon] embeddings indexés : ${r.indexed}`)
+      // options activées (couches opt-in qui tournent en auto)
+      return memoria.runEnabledOptions()
+    })
+    .then(o => {
+      if (o.ran.length > 0) console.log(`[memoria-daemon] options auto exécutées : ${o.ran.join(', ')}`)
     })
     .catch((err: unknown) => console.warn('[memoria-daemon] rejeu/indexation au boot en échec :', (err as Error).message))
 
