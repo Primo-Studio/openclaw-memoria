@@ -256,7 +256,7 @@ export { upsertObservation, getObservation, observationStats } from './observati
 export type { ObservationRow, UpsertObservationInput, ObservationStats } from './observations.js'
 export { cognitionMigrations, ensureCognitionSchema } from '../storage/cognition-schema.js'
 export { TopicEngine, topicMigrations, ensureTopicSchema, topicKeywords } from './topics.js'
-export type { TopicSummary, AssignResult, TopicEngineOptions } from './topics.js'
+export type { TopicSummary, AssignResult, TopicEngineOptions, TopicRelation, TopicGraph } from './topics.js'
 export { PatternEngine, patternMigrations, ensurePatternSchema, significantTokens } from './patterns.js'
 export type { Pattern, DetectOptions, DetectResult, ConsolidateResult, PatternEngineOptions } from './patterns.js'
 export { ProceduralEngine, proceduralMigrations, ensureProceduralSchema } from './procedural.js'

@@ -33,6 +33,23 @@ export interface AssignResult {
   created: boolean
 }
 
+/** Une arête du graphe des thèmes : deux thèmes liés + ce qui les relie. */
+export interface TopicRelation {
+  a: string
+  b: string
+  /** Poids = 2×faits partagés + entités partagées (fortes comptées double). */
+  weight: number
+  shared_facts: number
+  shared_entities: number
+  /** Quelques entités communes lisibles (« liés par : Néto, AutoCare »). */
+  via: string[]
+}
+
+export interface TopicGraph {
+  nodes: TopicSummary[]
+  edges: TopicRelation[]
+}
+
 export const topicMigrations: Migration[] = [
   {
     version: 20,
@@ -269,6 +286,82 @@ export class TopicEngine {
       .prepare('SELECT id, name, fact_count, importance_score, keywords FROM topics WHERE fact_count >= ? ORDER BY importance_score DESC')
       .all(min) as Array<{ id: string; name: string; fact_count: number; importance_score: number; keywords: string }>
     return rows.map(r => ({ ...r, keywords: fromJsonArray(r.keywords) }))
+  }
+
+  /**
+   * Graphe des thèmes : deux thèmes sont LIÉS s'ils partagent des faits (signal
+   * fort : un même souvenir range dans deux thèmes) ou des entités (Néto, un
+   * client, un projet apparaissent dans les deux). C'est le « où voir les
+   * relations entre thèmes » du panneau Réglages/Thèmes — purement lecture, 0 LLM.
+   */
+  relations(opts: { minFacts?: number; minWeight?: number; topNodes?: number; maxEdges?: number } = {}): TopicGraph {
+    // On borne le graphe pour qu'il reste LISIBLE : seuls les thèmes les plus
+    // importants (déjà triés par importance) entrent dans la carte, et on plafonne
+    // le nombre d'arêtes (les plus fortes d'abord). Sans ça, une grosse mémoire
+    // produit des centaines d'arêtes illisibles.
+    const topNodes = opts.topNodes ?? 28
+    const maxEdges = opts.maxEdges ?? 70
+    const nodes = this.listTopics({ minFacts: opts.minFacts ?? 2 }).slice(0, topNodes)
+    const keep = new Set(nodes.map(n => n.id))
+    const minWeight = opts.minWeight ?? 1
+
+    // 1) faits partagés (a < b pour ne compter chaque paire qu'une fois)
+    const sharedFacts = this.db
+      .prepare(
+        `SELECT ft1.topic_id AS a, ft2.topic_id AS b, COUNT(*) AS n
+         FROM fact_topics ft1 JOIN fact_topics ft2
+           ON ft1.fact_id = ft2.fact_id AND ft1.topic_id < ft2.topic_id
+         GROUP BY ft1.topic_id, ft2.topic_id`,
+      )
+      .all() as Array<{ a: string; b: string; n: number }>
+
+    // 2) entités partagées (+ noms lisibles, fortes comptées double, fortes d'abord
+    //    pour que « via » montre Néto/un client/un projet avant les entités faibles)
+    const sharedEnt = this.db
+      .prepare(
+        `SELECT te1.topic_id AS a, te2.topic_id AS b, e.name AS name,
+                CASE WHEN e.type IN ('person','company','project','client') THEN 2 ELSE 1 END AS strength
+         FROM topic_entities te1
+         JOIN topic_entities te2 ON te1.entity_id = te2.entity_id AND te1.topic_id < te2.topic_id
+         JOIN entities e ON e.id = te1.entity_id
+         ORDER BY strength DESC`,
+      )
+      .all() as Array<{ a: string; b: string; name: string; strength: number }>
+
+    const edges = new Map<string, TopicRelation>()
+    const key = (a: string, b: string): string => `${a}|${b}`
+    const ensure = (a: string, b: string): TopicRelation | null => {
+      if (!keep.has(a) || !keep.has(b)) return null
+      const k = key(a, b)
+      let e = edges.get(k)
+      if (!e) {
+        e = { a, b, weight: 0, shared_facts: 0, shared_entities: 0, via: [] }
+        edges.set(k, e)
+      }
+      return e
+    }
+
+    for (const r of sharedFacts) {
+      const e = ensure(r.a, r.b)
+      if (e) { e.shared_facts = r.n; e.weight += 2 * r.n }
+    }
+    const viaNoise = (name: string): boolean => name.length <= 2 || STOPWORDS.has(name.toLowerCase())
+    for (const r of sharedEnt) {
+      const e = ensure(r.a, r.b)
+      if (!e) continue
+      e.shared_entities += 1
+      e.weight += r.strength
+      if (e.via.length < 5 && !viaNoise(r.name) && !e.via.includes(r.name)) e.via.push(r.name)
+    }
+
+    const out = [...edges.values()]
+      .filter(e => e.weight >= minWeight)
+      .sort((x, y) => y.weight - x.weight)
+      .slice(0, maxEdges)
+    // ne garder que les nœuds réellement reliés (sinon des points isolés flottent)
+    const linked = new Set<string>()
+    for (const e of out) { linked.add(e.a); linked.add(e.b) }
+    return { nodes: nodes.filter(n => linked.has(n.id)), edges: out }
   }
 
   topicsForFact(factId: string): TopicSummary[] {

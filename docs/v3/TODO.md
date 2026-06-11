@@ -45,7 +45,14 @@ npm install && npm run build && npm test   # doit être 100% vert AVANT toute mo
 - **Lancement auto au login** : `control/autostart.ts` (LaunchAgent launchd, KeepAlive), `memoria autostart on|off`,
   route `POST /v1/admin/autostart`, toggle UI. macOS only (échoue proprement ailleurs).
 - **Route `GET /v1/admin/control`** : enabled + autostart status + storageInfo (pour l'UI).
-- Tests : `packages/core/test/control.test.ts` (9). Suite = **371 verts**. Smoke test daemon bout-en-bout OK.
+- **Relations entre thèmes** (demande Néto) : `TopicEngine.relations()` (graphe par faits/entités partagés,
+  borné 28 nœuds/70 arêtes, `via` = entités fortes d'abord, bruit filtré). `Memoria.topicRelations`,
+  route `GET /v1/admin/topic_relations`, vue SVG circulaire « Relations » dans l'écran Thèmes (0 dépendance).
+  Validé sur Koda : 23 nœuds, 70 arêtes réelles (JamBoard↔CoreBluetooth, RSMA↔Devis, Directus↔SEO).
+- **Recherche globale** : `Memoria.globalSearch` (tous agents d'un coup, résultat étiqueté de l'agent),
+  route `GET /v1/admin/search?q=`, option « 🔍 Toutes les mémoires » dans l'écran Mémoire.
+- Tests : `control.test.ts` (9) + `topics.test.ts` relations (3). Suite = **374 verts**. Daemon réel redémarré,
+  routes control/topic_relations/search vérifiées live.
 - **Audit OpenClaw 2026.6.5** (`DIAG-OPENCLAW-2026.6.5.md`) : ⚠️ **NOUVEAU gate `allowConversationAccess`
   bloque par défaut** les hooks de conversation (`llm_output`, `agent_end`) pour tout plugin non bundlé →
   **cause #1 plausible de la casse de capture v3.34**. L'install de l'adaptateur DOIT poser
@@ -72,6 +79,8 @@ npm install && npm run build && npm test   # doit être 100% vert AVANT toute mo
       `POST /policy`, `GET /identity_candidates`), il manque l'écran React.
 - [ ] Écran Organisations & projets (créer org client, projet, scopes) — logique core prête.
 - [ ] Onboarding : barres de progression de téléchargement des modèles Ollama (spec §14).
+- [x] ~~Vue relations entre thèmes~~ **FAIT** (onglet « Relations » écran Thèmes, graphe SVG).
+- [x] ~~Recherche globale (tous agents)~~ **FAIT** (option « Toutes les mémoires » écran Mémoire).
 
 ### Reconnecter OpenClaw (P6) — audit 2026.6.5 FAIT
 - [x] ~~Diagnostic compatibilité 2026.6.5~~ **FAIT** (`DIAG-OPENCLAW-2026.6.5.md`). MCP natif confirmé →

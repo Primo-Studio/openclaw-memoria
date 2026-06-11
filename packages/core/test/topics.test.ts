@@ -97,3 +97,66 @@ describe('TopicEngine', () => {
     expect(topics.topicsForFact(f1.id).length).toBeGreaterThan(0)
   })
 })
+
+/** Insère un topic « nu » (sans passer par assignFact) pour tester relations(). */
+function seedTopic(store: ContentStore, id: string, name: string, factCount: number): void {
+  const ts = new Date().toISOString()
+  store.db
+    .prepare(
+      `INSERT INTO topics (id, name, scope_id, sensitivity, importance_score, keywords, slug, fact_count, created_at, updated_at)
+       VALUES (?, ?, 's1', 'normal', ?, '[]', ?, ?, ?, ?)`,
+    )
+    .run(id, name, factCount, name.toLowerCase().replace(/\s+/g, '-'), factCount, ts, ts)
+}
+function seedEntity(store: ContentStore, id: string, name: string, type: string): void {
+  store.db.prepare('INSERT INTO entities (id, name, type, mention_count, created_at) VALUES (?, ?, ?, 1, ?)').run(id, name, type, new Date().toISOString())
+}
+function link(store: ContentStore, topicId: string, entityId: string): void {
+  store.db.prepare('INSERT OR IGNORE INTO topic_entities (topic_id, entity_id) VALUES (?, ?)').run(topicId, entityId)
+}
+
+describe('TopicEngine.relations (graphe des thèmes)', () => {
+  it('deux thèmes partageant des entités sont reliés ; « via » liste les fortes d’abord', () => {
+    seedTopic(store, 'A', 'Projet JamBoard', 3)
+    seedTopic(store, 'B', 'Projet AutoCare', 3)
+    seedTopic(store, 'C', 'Recette de cuisine', 2) // isolé, ne partage rien
+    seedEntity(store, 'e-neto', 'Néto', 'person') // forte
+    seedEntity(store, 'e-fb', 'Firebase', 'tool') // faible
+    seedEntity(store, 'e-jb', 'JamBoard', 'project')
+    seedEntity(store, 'e-ac', 'AutoCare', 'project')
+    link(store, 'A', 'e-neto'); link(store, 'A', 'e-fb'); link(store, 'A', 'e-jb')
+    link(store, 'B', 'e-neto'); link(store, 'B', 'e-fb'); link(store, 'B', 'e-ac')
+
+    const g = topics.relations({ minFacts: 2 })
+    const edge = g.edges.find(e => (e.a === 'A' && e.b === 'B') || (e.a === 'B' && e.b === 'A'))
+    expect(edge).toBeTruthy()
+    expect(edge!.shared_entities).toBe(2) // Néto + Firebase
+    expect(edge!.weight).toBe(3) // person(2) + tool(1)
+    expect(edge!.via[0]).toBe('Néto') // forte en tête
+    expect(edge!.via).toContain('Firebase')
+    // le thème isolé n'apparaît pas dans le graphe (aucune arête)
+    expect(g.nodes.find(n => n.id === 'C')).toBeUndefined()
+  })
+
+  it('un souvenir rangé dans deux thèmes crée un lien fort (shared_facts)', () => {
+    seedTopic(store, 'X', 'Migration Vercel', 2)
+    seedTopic(store, 'Y', 'Déploiement Hello-Primo', 2)
+    const f = store.insertFact({ fact: 'Le déploiement Vercel utilise le compte Hello-Primo', scope_id: 's1' })
+    store.db.prepare('INSERT INTO fact_topics (fact_id, topic_id) VALUES (?, ?)').run(f.id, 'X')
+    store.db.prepare('INSERT INTO fact_topics (fact_id, topic_id) VALUES (?, ?)').run(f.id, 'Y')
+
+    const g = topics.relations({ minFacts: 2 })
+    const edge = g.edges.find(e => (e.a === 'X' && e.b === 'Y') || (e.a === 'Y' && e.b === 'X'))
+    expect(edge).toBeTruthy()
+    expect(edge!.shared_facts).toBe(1)
+    expect(edge!.weight).toBeGreaterThanOrEqual(2) // faits partagés comptent double
+  })
+
+  it('respecte le plafond d’arêtes (maxEdges)', () => {
+    for (let i = 0; i < 6; i++) seedTopic(store, `T${i}`, `Thème ${i}`, 2)
+    seedEntity(store, 'hub', 'PivotCommun', 'concept')
+    for (let i = 0; i < 6; i++) link(store, `T${i}`, 'hub') // graphe complet → 15 arêtes
+    const g = topics.relations({ minFacts: 2, maxEdges: 5 })
+    expect(g.edges.length).toBe(5)
+  })
+})

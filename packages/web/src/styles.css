@@ -924,6 +924,26 @@ input[type='search']:focus {
 .scope-content { margin-top: 0.8rem; }
 .theme-toolbar { display: flex; gap: 0.5rem; align-items: center; }
 
+/* bascule d'affichage Tuiles / Relations */
+.view-switch { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.view-tab {
+  background: transparent; border: 0; color: var(--text-muted, #9a9ab0);
+  padding: 0.35rem 0.8rem; font-size: 0.85rem; cursor: pointer;
+}
+.view-tab + .view-tab { border-left: 1px solid var(--border); }
+.view-tab-active { background: var(--bg-raised); color: var(--text); }
+
+/* carte des relations entre thèmes (SVG) */
+.theme-graph-wrap { display: flex; gap: 1.5rem; flex-wrap: wrap; align-items: flex-start; margin-top: 1rem; }
+.theme-graph { width: min(560px, 100%); height: auto; flex: 1 1 360px; max-width: 560px; }
+.theme-node-label { fill: var(--text); font-size: 12px; pointer-events: none; }
+.theme-node circle { transition: fill-opacity 0.15s ease; }
+.theme-node:hover circle { fill-opacity: 1; }
+.theme-graph-legend { flex: 1 1 240px; min-width: 220px; }
+.theme-graph-legend h3 { font-size: 0.95rem; margin: 0 0 0.5rem; }
+.theme-graph-legend ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.45rem; }
+.theme-graph-legend li { font-size: 0.85rem; line-height: 1.35; }
+
 /* --------------------------------------------------------------- options */
 
 .options-list { display: grid; gap: 0.7rem; margin-top: 0.6rem; }

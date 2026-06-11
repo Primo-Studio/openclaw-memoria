@@ -214,6 +214,18 @@ export async function searchFacts(instance: string, q: string): Promise<AdminFac
   return res.facts
 }
 
+/** Souvenir étiqueté de l'agent dont il vient (recherche globale). */
+export interface GlobalFact extends AdminFact {
+  agent_type: string
+  instance: string | null
+}
+
+/** Recherche GLOBALE : mémoire de tous les agents d'un coup. */
+export async function searchAll(q: string): Promise<GlobalFact[]> {
+  const res = await request<{ facts: GlobalFact[] }>('GET', `/v1/admin/search?q=${encodeURIComponent(q)}`)
+  return res.facts
+}
+
 /** Oubli définitif (hard-delete) par identifiants de faits. */
 export async function forgetFacts(ids: string[]): Promise<number> {
   if (ids.length === 0) return 0
@@ -320,6 +332,25 @@ export async function getTopics(instance: string, minFacts = 1): Promise<Topic[]
 export async function getTopicFacts(instance: string, topicId: string): Promise<AdminFact[]> {
   const res = await request<{ facts: AdminFact[] }>('GET', `/v1/admin/topic_facts?instance=${encodeURIComponent(instance)}&topic=${encodeURIComponent(topicId)}`)
   return res.facts
+}
+
+export interface TopicRelation {
+  a: string
+  b: string
+  weight: number
+  shared_facts: number
+  shared_entities: number
+  via: string[]
+}
+
+export interface TopicGraph {
+  nodes: Topic[]
+  edges: TopicRelation[]
+}
+
+/** Graphe des thèmes liés (par faits/entités partagés). */
+export async function getTopicRelations(instance: string, minFacts = 2): Promise<TopicGraph> {
+  return request<TopicGraph>('GET', `/v1/admin/topic_relations?instance=${encodeURIComponent(instance)}&min_facts=${minFacts}`)
 }
 
 // ------------------------------------------------------------ récurrences (patterns)

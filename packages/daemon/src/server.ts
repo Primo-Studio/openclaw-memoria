@@ -137,6 +137,12 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         sendJson(res, 200, { facts })
         return
       }
+      case 'GET /v1/admin/search': {
+        const q = url.searchParams.get('q') ?? ''
+        const limit = url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : 80
+        sendJson(res, 200, { facts: memoria.globalSearch(q, limit) })
+        return
+      }
       case 'GET /v1/admin/review': {
         sendJson(res, 200, { items: memoria.listReview() })
         return
@@ -187,6 +193,13 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         const topic = url.searchParams.get('topic')
         if (!instance || !topic) throw new HttpError(400, 'instance et topic requis')
         sendJson(res, 200, { facts: memoria.topicFacts(instance, topic) })
+        return
+      }
+      case 'GET /v1/admin/topic_relations': {
+        const instance = url.searchParams.get('instance')
+        if (!instance) throw new HttpError(400, 'instance requise')
+        const minFacts = url.searchParams.has('min_facts') ? Number(url.searchParams.get('min_facts')) : 2
+        sendJson(res, 200, memoria.topicRelations(instance, minFacts))
         return
       }
       case 'GET /v1/admin/patterns': {

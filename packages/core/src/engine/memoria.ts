@@ -35,6 +35,7 @@ import {
   MarkdownSync,
   dialectic,
   type TopicSummary,
+  type TopicGraph,
   type Pattern,
   type ProcedureMatch,
   type ProceduralProcedure,
@@ -574,6 +575,14 @@ export class Memoria {
     return this.topicFor(this.openContent(db.path), null)
       .factsForTopic(topicId, { limit })
       .map(f => ({ id: f.id, fact: f.fact, category: f.category, created_at: f.created_at }))
+  }
+
+  /** Graphe des thèmes (couche 14) : qui est lié à qui, et par quoi. Lecture, 0 LLM. */
+  topicRelations(instanceId: string, minFacts = 2): TopicGraph {
+    this.assertOpen()
+    const db = this.registry.dbForInstance(instanceId)
+    if (!db || !existsSync(db.path)) return { nodes: [], edges: [] }
+    return this.topicFor(this.openContent(db.path), null).relations({ minFacts })
   }
 
   /** Récurrences (couche 22) : détecte + liste les patterns proposés d'une instance. */
@@ -1475,6 +1484,24 @@ export class Memoria {
     }
     out.sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
     return out.slice(0, limit)
+  }
+
+  /**
+   * Recherche GLOBALE : un seul champ qui interroge la mémoire de TOUS les agents
+   * (+ scopes partagés) d'un coup, chaque résultat étiqueté de l'agent dont il
+   * vient. « Où, chez n'importe quel agent, ai-je vu X ? » Lecture pure.
+   */
+  globalSearch(q: string, limit = 80): Array<Fact & { source_db: string; topics: string[]; agent_type: string; instance: string | null }> {
+    this.assertOpen()
+    // carte chemin-relatif → (type, instance) pour étiqueter les résultats
+    const byDb = new Map<string, { type: string; instance: string }>()
+    for (const a of this.listAgents()) {
+      if (a.db_path) byDb.set(relative(this.paths.root, a.db_path), { type: a.assistant_type, instance: a.instance.id })
+    }
+    return this.browseFacts({ q, limit }).map(f => {
+      const owner = byDb.get(f.source_db)
+      return { ...f, agent_type: owner?.type ?? 'partagé', instance: owner?.instance ?? null }
+    })
   }
 
   /**

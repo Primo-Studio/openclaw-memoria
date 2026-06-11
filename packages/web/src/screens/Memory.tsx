@@ -4,7 +4,7 @@
  * définitif fait par fait (POST /v1/admin/forget {ids}).
  */
 import { useState, type FormEvent } from 'react'
-import { forgetFacts, getAgents, searchFacts, type AdminFact, type AgentEntry } from '../api'
+import { forgetFacts, getAgents, searchAll, searchFacts, type AdminFact, type AgentEntry } from '../api'
 import {
   ConfirmButton,
   EmptyState,
@@ -16,11 +16,16 @@ import {
   useLoad,
 } from '../components/ui'
 
+/** Souvenir affiché : optionnellement étiqueté de l'agent (recherche globale). */
+type ShownFact = AdminFact & { agent_type?: string }
+
+const ALL = '__all__'
+
 type SearchState =
   | { status: 'idle' }
   | { status: 'loading' }
   | { status: 'error'; message: string }
-  | { status: 'ready'; facts: AdminFact[]; query: string }
+  | { status: 'ready'; facts: ShownFact[]; query: string }
 
 export function Memory() {
   const { state: agentsState, reload: reloadAgents } = useLoad(getAgents)
@@ -55,7 +60,8 @@ function MemoryBrowser({ agents }: { agents: AgentEntry[] }) {
 
   const runSearch = (q: string) => {
     setSearch({ status: 'loading' })
-    searchFacts(instanceId, q).then(
+    const p = instanceId === ALL ? searchAll(q) : searchFacts(instanceId, q)
+    p.then(
       facts => setSearch({ status: 'ready', facts, query: q }),
       (err: unknown) => {
         console.warn('memoria-ui : recherche mémoire échouée', err)
@@ -98,6 +104,7 @@ function MemoryBrowser({ agents }: { agents: AgentEntry[] }) {
               setSearch({ status: 'idle' })
             }}
           >
+            <option value={ALL}>🔍 Toutes les mémoires</option>
             {agents.map(({ instance, assistant_type }) => (
               <option key={instance.id} value={instance.id}>
                 {agentTypeLabel(assistant_type)} — {instance.machine_id}
@@ -107,7 +114,7 @@ function MemoryBrowser({ agents }: { agents: AgentEntry[] }) {
           </select>
         </label>
         <label className="field field-grow">
-          <span className="field-label">Rechercher dans sa mémoire</span>
+          <span className="field-label">{instanceId === ALL ? 'Rechercher dans toutes les mémoires' : 'Rechercher dans sa mémoire'}</span>
           <input
             type="search"
             value={query}
@@ -152,6 +159,9 @@ function MemoryBrowser({ agents }: { agents: AgentEntry[] }) {
               <li key={fact.id} className="fact-card">
                 <p className="fact-content">{fact.fact}</p>
                 <div className="fact-meta">
+                  {fact.agent_type && (
+                    <span className="badge badge-ok" title="agent source">{agentTypeLabel(fact.agent_type)}</span>
+                  )}
                   {(fact.topics ?? []).map(t => (
                     <span key={t} className="badge badge-theme" title="thème">{t}</span>
                   ))}
