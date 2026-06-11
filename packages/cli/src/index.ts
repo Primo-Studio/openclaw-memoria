@@ -27,6 +27,7 @@ import {
 import { DoctorCommand } from './commands/doctor.js'
 import { ExportCommand } from './commands/export.js'
 import { ForgetCommand } from './commands/forget.js'
+import { ImportCommand } from './commands/import.js'
 import { InitCommand } from './commands/init.js'
 import { PairCommand } from './commands/pair.js'
 import { StatsCommand } from './commands/stats.js'
@@ -153,6 +154,7 @@ export function buildCli(): Cli {
   cli.register(DeleteAgentCommand)
   cli.register(StatsCommand)
   cli.register(ForgetCommand)
+  cli.register(ImportCommand)
   cli.register(AuditCommand)
   cli.register(EnableCommand)
   cli.register(DisableCommand)

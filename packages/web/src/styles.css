@@ -1067,3 +1067,26 @@ input[type='search']:focus {
   position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
   font-size: 0.72rem; color: var(--text, #ececf4);
 }
+/* ------------------------------------------ agents sur cette machine (B4) */
+
+.machine-agents { margin-bottom: 1.4rem; }
+.machine-head { display: flex; align-items: center; gap: 0.8rem; margin-bottom: 0.7rem; }
+.machine-head h2 { margin: 0; font-size: 1.05rem; }
+.machine-grid { display: grid; gap: 0.9rem; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+.machine-card {
+  background: var(--bg-raised); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 0.9rem 1rem; display: flex; flex-direction: column; gap: 0.5rem;
+}
+.machine-card-head { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; }
+.machine-card-meta { font-size: 0.85rem; }
+.machine-card-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.machine-connect-ok { color: var(--ok, #3fb950); font-size: 0.85rem; margin: 0; }
+.machine-connect-warn { color: var(--warn, #d29922); font-size: 0.85rem; margin: 0; }
+.btn-link { background: none; border: 0; padding: 0; color: var(--accent, #e85a1f); cursor: pointer; text-decoration: underline; font-size: inherit; }
+
+.import-confirm, .import-progress, .import-done { display: flex; flex-direction: column; gap: 0.6rem; }
+.progress-track {
+  width: 100%; height: 10px; border-radius: 999px;
+  background: var(--bg); border: 1px solid var(--border); overflow: hidden;
+}
+.import-errors ul { margin: 0.4rem 0 0; padding-left: 1.2rem; }

@@ -63,6 +63,18 @@ export interface ImportTranscriptsInput {
   maxWindowsPerFile?: number
   /** Parse + compte sans AUCUNE écriture. */
   dryRun?: boolean
+  /**
+   * Progression (job d'import du daemon, CLI) : appelé après CHAQUE fichier,
+   * y compris ceux ignorés/en échec. Une exception du callback est loggée,
+   * jamais avalée, et n'interrompt pas l'import.
+   */
+  onProgress?: (progress: ImportTranscriptsProgress) => void
+}
+
+export interface ImportTranscriptsProgress {
+  filesDone: number
+  filesTotal: number
+  factsImported: number
 }
 
 export interface ImportTranscriptsReport {
@@ -190,6 +202,7 @@ export async function importTranscripts(input: ImportTranscriptsInput): Promise<
     )
     const seenInRun = new Set<string>()
 
+    let filesDone = 0
     for (const file of input.files) {
       try {
         await importOneFile(file, {
@@ -208,6 +221,12 @@ export async function importTranscripts(input: ImportTranscriptsInput): Promise<
         console.warn(`[memoria] import transcripts : ${msg}`)
         report.errors.push(msg)
       }
+      filesDone++
+      notifyProgress(input.onProgress, {
+        filesDone,
+        filesTotal: input.files.length,
+        factsImported: report.facts_quarantined,
+      })
     }
   } finally {
     store.close()
@@ -392,6 +411,19 @@ function quarantineFact(ctx: FileContext, sourceId: string, item: ExtractedFact)
        VALUES (?, ?, ?, 'fact', ?, 'pending', ?)`,
     )
     .run(newId(), sourceId, fact.id, scopeId, item.confidence)
+}
+
+/** Progression tolérante : un callback qui jette est loggé, l'import continue. */
+function notifyProgress(
+  cb: ImportTranscriptsInput['onProgress'],
+  progress: ImportTranscriptsProgress,
+): void {
+  if (!cb) return
+  try {
+    cb(progress)
+  } catch (err) {
+    console.warn(`[memoria] import transcripts : callback de progression en échec : ${(err as Error).message}`)
+  }
 }
 
 /** isAvailable tolérant : une exception du provider = indisponible (consigné), pas un crash. */

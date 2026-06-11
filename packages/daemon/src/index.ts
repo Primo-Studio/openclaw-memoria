@@ -4,6 +4,8 @@
  */
 export { startDaemon, DAEMON_VERSION } from './server.js'
 export type { DaemonOptions, RunningDaemon } from './server.js'
+export { ImportJobRunner } from './import-job.js'
+export type { ImportJobKind, ImportJobProgress, ImportJobState, ImportJobStatus } from './import-job.js'
 export { DaemonClient, ensureDaemon, daemonBinPath } from './client.js'
 export { currentVersion, pullAndBuild, scheduleRestart, repoRoot } from './update.js'
 export type { UpdateResult } from './update.js'

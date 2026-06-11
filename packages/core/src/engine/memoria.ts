@@ -1045,7 +1045,12 @@ export class Memoria {
   async importTranscripts(
     instanceId: string,
     files: string[],
-    opts: { sinceDate?: string; maxWindowsPerFile?: number; dryRun?: boolean } = {},
+    opts: {
+      sinceDate?: string
+      maxWindowsPerFile?: number
+      dryRun?: boolean
+      onProgress?: import('../migration/import-transcripts.js').ImportTranscriptsInput['onProgress']
+    } = {},
   ): Promise<import('../migration/import-transcripts.js').ImportTranscriptsReport> {
     this.assertOpen()
     this.mustInstance(instanceId)
@@ -1058,6 +1063,7 @@ export class Memoria {
       sinceDate: opts.sinceDate,
       maxWindowsPerFile: opts.maxWindowsPerFile,
       dryRun: opts.dryRun,
+      onProgress: opts.onProgress,
     })
     if (!opts.dryRun && report.facts_quarantined > 0) {
       this.registry.audit({
@@ -1135,6 +1141,23 @@ export class Memoria {
       out.push({ instance: inst.id, summary })
     }
     return out
+  }
+
+  /**
+   * Un moteur d'extraction est-il configuré ET joignable ? Sert de garde-fou
+   * AVANT de lancer un job d'import (422 côté daemon : « Configure d'abord un
+   * moteur d'intelligence ») — plutôt qu'un job qui tourne pour rien.
+   */
+  async hasExtraction(): Promise<boolean> {
+    this.assertOpen()
+    const { extraction } = await this.ensureProfile()
+    if (!extraction) return false
+    try {
+      return await extraction.isAvailable()
+    } catch (err) {
+      console.warn(`[memoria] disponibilité du moteur d'extraction : ${(err as Error).message}`)
+      return false
+    }
   }
 
   /** Profil LLM résolu UNE fois (override tests/daemon > résolution auto). */
@@ -1298,6 +1321,20 @@ export class Memoria {
       })
     }
     return { updated }
+  }
+
+  /**
+   * Nombre de faits encore en quarantaine legacy (`legacy_to_review`).
+   * Garde-fou des imports : le scope est UNIQUE — on refuse d'importer une 2e
+   * base legacy tant que la quarantaine n'est pas vidée (adoptLegacyInto).
+   */
+  legacyQuarantineCount(): number {
+    this.assertOpen()
+    const scope = this.registry.getScopeByName('legacy_to_review')
+    if (!scope) return 0
+    const entry = this.registry.dbForScope(scope.id)
+    if (!entry || !existsSync(entry.path)) return 0
+    return this.openContent(entry.path).countFacts()
   }
 
   /**
