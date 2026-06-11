@@ -34,6 +34,23 @@ npm install && npm run build && npm test   # doit être 100% vert AVANT toute mo
 - **Desktop** : Memoria.app + DMG construits.
 - **Agents connectés en réel** : Claude Code (`72615d82`), Codex (`0b5322e1`), Koda (`405290ba`, mémoire complète).
 
+## ✅ Session 3 (2026-06-11) — Contrôle & config + audit OpenClaw
+
+- **Kill-switch global** (`config.enabled`) : `memoria enable`/`disable` + engine `isEnabled/setEnabled`
+  + daemon no-op ANNONCÉ (`{disabled:true}`) sur capture/recall en pause + toggle UI Réglages.
+- **Suppression définitive d'agent** : `deleteInstance` (engine+registry), `memoria delete-agent --yes`,
+  route `POST /v1/admin/delete_agent`, bouton « Supprimer » (confirm) écran Agents. ≠ revoke (efface la DB privée).
+- **Déplacement du stockage (clé USB)** : `moveStorage` (rename même volume / cpSync+rm cross-volume) +
+  `memoria move --to <dir>` (arrête le daemon, déplace, réécrit `config.toml`). UI : commande affichée.
+- **Lancement auto au login** : `control/autostart.ts` (LaunchAgent launchd, KeepAlive), `memoria autostart on|off`,
+  route `POST /v1/admin/autostart`, toggle UI. macOS only (échoue proprement ailleurs).
+- **Route `GET /v1/admin/control`** : enabled + autostart status + storageInfo (pour l'UI).
+- Tests : `packages/core/test/control.test.ts` (9). Suite = **371 verts**. Smoke test daemon bout-en-bout OK.
+- **Audit OpenClaw 2026.6.5** (`DIAG-OPENCLAW-2026.6.5.md`) : ⚠️ **NOUVEAU gate `allowConversationAccess`
+  bloque par défaut** les hooks de conversation (`llm_output`, `agent_end`) pour tout plugin non bundlé →
+  **cause #1 plausible de la casse de capture v3.34**. L'install de l'adaptateur DOIT poser
+  `plugins.entries.memoria.hooks.allowConversationAccess=true`. L'auto-recall (`before_prompt_build`) survit.
+
 ## Reste à faire (ordre conseillé)
 
 ### Import des mémoires Claude Code / Codex
@@ -56,10 +73,14 @@ npm install && npm run build && npm test   # doit être 100% vert AVANT toute mo
 - [ ] Écran Organisations & projets (créer org client, projet, scopes) — logique core prête.
 - [ ] Onboarding : barres de progression de téléchargement des modèles Ollama (spec §14).
 
-### Reconnecter OpenClaw (P6)
-- [ ] Adaptateur OpenClaw : diagnostic fait (`DIAG-OPENCLAW.md`), MCP natif → `openclaw mcp set memoria`.
-      Adaptateur hooks mince (~200 lignes, prependContext + capture) dans `packages/adapters/openclaw`.
-      ⚠️ Avant : `openclaw plugins doctor` sur le Mac Studio pour confirmer la cause de la casse v3.34.
+### Reconnecter OpenClaw (P6) — audit 2026.6.5 FAIT
+- [x] ~~Diagnostic compatibilité 2026.6.5~~ **FAIT** (`DIAG-OPENCLAW-2026.6.5.md`). MCP natif confirmé →
+      `openclaw mcp set memoria '{"command":"node","args":["…/packages/mcp/dist/bin.js","serve","--instance","koda"]}'`.
+- [ ] **Adaptateur hooks mince** (~180-260 lignes, zéro dépendance native) dans `packages/adapters/openclaw` :
+      `before_prompt_build`→/recall (timeout dur 300 ms), `agent_end`/`llm_output`→/capture (fire-and-forget),
+      `before_compaction`/`session_end`→/flush (nouveaux hooks). **L'install DOIT poser
+      `hooks.allowConversationAccess=true`** sinon la capture est morte sans erreur (gate 2026.6.5).
+      Corriger aussi `event.toolCallCount` (absent du type `agent_end`). Install `--link`, garder zéro natif.
 
 ### Couches avancées restantes (P6)
 - [ ] Clusters (fact-clusters), carte 3D UMAP (opt-in), couches D sur validation (patterns/auto-skill).
@@ -70,7 +91,7 @@ npm install && npm run build && npm test   # doit être 100% vert AVANT toute mo
       utilisent le chemin local `node ~/openclaw-memoria/packages/mcp/dist/bin.js` (déjà géré par le
       daemon et connect). Après publication : repasser aux formes `npx -y @memoria/mcp`.
 - [ ] Signature/notarisation `Memoria.app` (process Igara), Node embarqué SEA (v1.5).
-- [ ] Auto-démarrage daemon au login (launchd plist macOS).
+- [x] ~~Auto-démarrage daemon au login (launchd plist macOS)~~ **FAIT** (`memoria autostart on` + toggle UI).
 - [ ] `getSecretRef`/`secret_access` de bout en bout (engine→daemon→MCP `memoria_get_secret_ref`).
 - [ ] Renommer le repo `openclaw-memoria` → `memoria` (à la release, décision Néto).
 - [ ] Récupérer **Sol** (Mac mini) quand Néto le voudra — procédure dans AGENTS-RESEAU.md.

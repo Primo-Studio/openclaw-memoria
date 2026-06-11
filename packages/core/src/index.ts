@@ -11,9 +11,19 @@ export {
   loadConfigFile,
   saveConfigFile,
   defaultStorageRoot,
+  moveStorage,
+  isEnabled,
+  setEnabled,
   DEFAULT_CONFIG_PATH,
 } from './config.js'
 export type { MemoriaConfig, ResolvedConfig, ResolveOptions } from './config.js'
+export {
+  AUTOSTART_LABEL,
+  autostartStatus,
+  enableAutostart,
+  disableAutostart,
+} from './control/autostart.js'
+export type { AutostartSpec, AutostartStatus } from './control/autostart.js'
 export { RegistryStore } from './storage/registry.js'
 export { ContentStore, toFtsQuery, queryTokens, normalizeText, isContentWord, rowToFact } from './storage/content.js'
 export type { FactRow, InsertFactInput, FtsHit, FtsSearchOptions } from './storage/content.js'

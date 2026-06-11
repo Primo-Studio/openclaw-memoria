@@ -104,3 +104,41 @@ export class RevokeCommand extends Command {
     }
   }
 }
+
+export class DeleteAgentCommand extends Command {
+  static override paths = [['delete-agent']]
+  static override usage = Command.Usage({
+    description: 'Supprime DÉFINITIVEMENT un agent : révoque + efface sa mémoire privée (irréversible, ≠ revoke).',
+  })
+
+  instanceId = Option.String({ required: true })
+  yes = Option.Boolean('--yes', false, { description: 'Confirme la suppression sans question.' })
+  storageRoot = Option.String('--storage-root', { description: 'Racine du stockage (défaut : résolution standard)' })
+  config = Option.String('--config', { description: 'Fichier de découverte (défaut : ~/.memoria/config.toml)' })
+
+  override async execute(): Promise<number> {
+    const opts = { storageRoot: this.storageRoot, configPath: this.config }
+    const out = this.context.stdout
+    if (!this.yes) {
+      return fail(
+        this.context.stderr,
+        `delete-agent : action IRRÉVERSIBLE (efface la mémoire privée de l’agent). Relance avec --yes pour confirmer.`,
+      )
+    }
+    try {
+      const daemon = await findAliveDaemon(opts)
+      let deleted: boolean
+      if (daemon) {
+        deleted = ((await daemon.client.deleteAgent(this.instanceId)) as { deleted: boolean }).deleted
+      } else {
+        out.write('⚠ note : daemon arrêté — suppression locale directe\n')
+        deleted = withLocalMemoria(opts, memoria => memoria.deleteInstance(this.instanceId).deleted)
+      }
+      if (!deleted) return fail(this.context.stderr, `delete-agent : instance inconnue « ${this.instanceId} » (voir memoria agents)`)
+      out.write(`✓ Agent supprimé définitivement : ${this.instanceId} (mémoire privée effacée).\n`)
+      return 0
+    } catch (err) {
+      return fail(this.context.stderr, `delete-agent : ${(err as Error).message}`)
+    }
+  }
+}

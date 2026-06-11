@@ -65,6 +65,20 @@ export class DaemonClient {
     return this.get('/v1/admin/audit')
   }
 
+  // --- contrôle (kill-switch, lancement auto, suppression d'agent) ---
+  async control(): Promise<unknown> {
+    return this.get('/v1/admin/control')
+  }
+  async setEnabled(enabled: boolean): Promise<{ enabled: boolean }> {
+    return this.post('/v1/admin/enabled', { enabled })
+  }
+  async setAutostart(enabled: boolean): Promise<unknown> {
+    return this.post('/v1/admin/autostart', { enabled })
+  }
+  async deleteAgent(instanceId: string): Promise<{ deleted: boolean }> {
+    return this.post('/v1/admin/delete_agent', { assistant_instance_id: instanceId })
+  }
+
   // --- mémoire (token d'instance) ---
   async storeFact(input: Record<string, unknown>): Promise<unknown> {
     return this.post('/v1/memory/store_fact', input)
@@ -100,6 +114,11 @@ async function handleResponse<T>(res: Response, path: string): Promise<T> {
     throw new Error(`daemon ${path} → ${res.status} : ${String(payload['error'] ?? 'erreur')}`)
   }
   return payload as T
+}
+
+/** Chemin absolu du bin daemon (`memoria-daemon`), pour le LaunchAgent. */
+export function daemonBinPath(): string {
+  return fileURLToPath(new URL('./bin.js', import.meta.url))
 }
 
 /**

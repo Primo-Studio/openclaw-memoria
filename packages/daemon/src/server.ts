@@ -17,6 +17,9 @@ import { timingSafeEqual } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import {
   Memoria,
+  autostartStatus,
+  disableAutostart,
+  enableAutostart,
   newToken,
   nowISO,
   type CaptureMode,
@@ -25,6 +28,7 @@ import {
   type RecallInput,
   type StoreFactInput,
 } from '@memoria/core'
+import { daemonBinPath } from './client.js'
 import { findUiDist, serveUi } from './static.js'
 import { acquireLock, clearDaemonState, writeDaemonState, type DaemonState } from './state.js'
 
@@ -399,12 +403,53 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         sendJson(res, 200, { entries: memoria.registry.auditTail(200) })
         return
       }
+      case 'GET /v1/admin/control': {
+        sendJson(res, 200, {
+          enabled: memoria.isEnabled(),
+          autostart: autostartStatus(),
+          storage: memoria.storageInfo(),
+        })
+        return
+      }
+      case 'POST /v1/admin/enabled': {
+        const body = await readJson(req)
+        const enabled = memoria.setEnabled(body['enabled'] === true)
+        sendJson(res, 200, { enabled })
+        return
+      }
+      case 'POST /v1/admin/autostart': {
+        const body = await readJson(req)
+        if (body['enabled'] === true) {
+          const args = [process.execPath, daemonBinPath(), '--storage-root', storageRoot]
+          sendJson(res, 200, { autostart: enableAutostart({ programArguments: args, workingDirectory: storageRoot }) })
+        } else {
+          sendJson(res, 200, { autostart: disableAutostart() })
+        }
+        return
+      }
+      case 'POST /v1/admin/delete_agent': {
+        const body = await readJson(req)
+        const instanceId = String(body['assistant_instance_id'] ?? '')
+        if (!instanceId) throw new HttpError(400, 'assistant_instance_id requis')
+        sendJson(res, 200, memoria.deleteInstance(instanceId))
+        return
+      }
       default:
         throw new HttpError(404, `route admin inconnue : ${route}`)
     }
   }
 
   async function handleMemory(route: string, req: IncomingMessage, res: ServerResponse, instanceId: string): Promise<void> {
+    // KILL-SWITCH (config.enabled = false) : Memoria est « en pause ». On reste
+    // joignable (l'agent ne casse pas) mais on ne lit ni n'écrit AUCUNE mémoire.
+    // Réponse no-op ANNONCÉE (disabled: true) — jamais un échec silencieux.
+    if (!memoria.isEnabled()) {
+      if (route === 'POST /v1/memory/recall') sendJson(res, 200, { items: [], disabled: true })
+      else if (route === 'POST /v1/memory/store_fact') sendJson(res, 200, { fact: null, disabled: true })
+      else if (route === 'POST /v1/memory/capture_turn') sendJson(res, 200, { captured: 0, facts: [], disabled: true })
+      else throw new HttpError(404, `route mémoire inconnue : ${route}`)
+      return
+    }
     switch (route) {
       case 'POST /v1/memory/store_fact': {
         const body = await readJson(req)

@@ -3,7 +3,7 @@
  * PAIRING_TTL_MS côté core) et révoquer un accès, avec confirmation.
  */
 import { useEffect, useState, type ReactNode } from 'react'
-import { deriveSelf, getAgents, getExpertise, getSelfObservations, pairAgent, revokeAgent, type AgentEntry, type AgentType, type ExpertiseDomain, type PairResult, type SelfObservation } from '../api'
+import { deleteAgent, deriveSelf, getAgents, getExpertise, getSelfObservations, pairAgent, revokeAgent, type AgentEntry, type AgentType, type ExpertiseDomain, type PairResult, type SelfObservation } from '../api'
 import {
   ConfirmButton,
   CopyButton,
@@ -62,6 +62,17 @@ export function Agents() {
     )
   }
 
+  const remove = (instanceId: string) => {
+    setActionError(null)
+    deleteAgent(instanceId).then(
+      () => reload(),
+      (err: unknown) => {
+        console.warn('memoria-ui : suppression échouée', err)
+        setActionError(humanError(err))
+      },
+    )
+  }
+
   return (
     <section>
       <header className="screen-head">
@@ -93,7 +104,7 @@ export function Agents() {
             }
           />
         ) : (
-          <AgentList agents={state.data} onRevoke={revoke} />
+          <AgentList agents={state.data} onRevoke={revoke} onDelete={remove} />
         ))}
 
       {flow.step === 'choose' && (
@@ -130,7 +141,7 @@ export function Agents() {
   )
 }
 
-function AgentList({ agents, onRevoke }: { agents: AgentEntry[]; onRevoke: (id: string) => void }) {
+function AgentList({ agents, onRevoke, onDelete }: { agents: AgentEntry[]; onRevoke: (id: string) => void; onDelete: (id: string) => void }) {
   if (agents.length === 0) return null
   return (
     <ul className="agent-list">
@@ -156,9 +167,16 @@ function AgentList({ agents, onRevoke }: { agents: AgentEntry[]; onRevoke: (id: 
               </span>
             </div>
             {!revoked && !pending && <AgentExpertise instanceId={instance.id} />}
-            {!revoked && (
-              <ConfirmButton label="Révoquer" confirmLabel="Confirmer la révocation ?" onConfirm={() => onRevoke(instance.id)} />
-            )}
+            <div className="agent-actions">
+              {!revoked && (
+                <ConfirmButton label="Révoquer" confirmLabel="Confirmer la révocation ?" onConfirm={() => onRevoke(instance.id)} />
+              )}
+              <ConfirmButton
+                label="Supprimer"
+                confirmLabel="Effacer la mémoire définitivement ?"
+                onConfirm={() => onDelete(instance.id)}
+              />
+            </div>
           </li>
         )
       })}

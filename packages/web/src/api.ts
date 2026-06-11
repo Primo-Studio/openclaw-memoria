@@ -201,6 +201,12 @@ export async function revokeAgent(assistantInstanceId: string): Promise<void> {
   await request<{ ok: boolean }>('POST', '/v1/admin/revoke', { assistant_instance_id: assistantInstanceId })
 }
 
+/** Suppression DÉFINITIVE d'un agent (révoque + efface sa mémoire privée). */
+export async function deleteAgent(assistantInstanceId: string): Promise<boolean> {
+  const res = await request<{ deleted: boolean }>('POST', '/v1/admin/delete_agent', { assistant_instance_id: assistantInstanceId })
+  return res.deleted
+}
+
 /** Recherche dans la mémoire d'un agent. `q` vide = derniers souvenirs. */
 export async function searchFacts(instance: string, q: string): Promise<AdminFact[]> {
   const params = new URLSearchParams({ instance, q })
@@ -507,4 +513,33 @@ export async function reviewDecision(ids: string[], decision: 'approve' | 'rejec
   if (ids.length === 0) return 0
   const res = await request<{ updated: number }>('POST', `/v1/admin/review/${decision}`, { ids })
   return res.updated
+}
+
+// ------------------------------------------------------------ contrôle (Réglages)
+
+export interface AutostartStatus {
+  supported: boolean
+  installed: boolean
+  loaded: boolean
+  plistPath: string
+}
+
+export interface ControlState {
+  enabled: boolean
+  autostart: AutostartStatus
+  storage: { root: string; config_path: string; on_network_volume: boolean }
+}
+
+export async function getControl(): Promise<ControlState> {
+  return request<ControlState>('GET', '/v1/admin/control')
+}
+
+export async function setEnabled(enabled: boolean): Promise<boolean> {
+  const res = await request<{ enabled: boolean }>('POST', '/v1/admin/enabled', { enabled })
+  return res.enabled
+}
+
+export async function setAutostart(enabled: boolean): Promise<AutostartStatus> {
+  const res = await request<{ autostart: AutostartStatus }>('POST', '/v1/admin/autostart', { enabled })
+  return res.autostart
 }

@@ -5,7 +5,7 @@
  * - `resolveStorageRoot()` UNIQUE : param explicite > config.toml > $MEMORIA_HOME > ~/.memoria/data.
  *   (Corrige le legacy : 8 chemins divergents, `cfg.workspacePath` ignoré par la DB.)
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml'
@@ -13,6 +13,12 @@ import { parse as parseToml, stringify as stringifyToml } from 'smol-toml'
 export interface MemoriaConfig {
   /** Racine du stockage (registry + DB + secrets + backups). */
   storage_path?: string
+  /**
+   * Kill-switch global (défaut true). À false : le daemon reste joignable pour
+   * l'admin/UI mais REFUSE capture et recall (les agents n'écrivent ni ne
+   * lisent de mémoire). Permet de « mettre Memoria en pause » sans tout fermer.
+   */
+  enabled?: boolean
   daemon?: {
     /** 0 = port auto (choisi au premier démarrage puis persisté). */
     port?: number
@@ -57,6 +63,19 @@ export function saveConfigFile(config: MemoriaConfig, configPath: string = DEFAU
   writeFileSync(configPath, stringifyToml(config as Record<string, unknown>), 'utf8')
 }
 
+/** Memoria actif ? (kill-switch). Absent = true par défaut. */
+export function isEnabled(configPath: string = DEFAULT_CONFIG_PATH): boolean {
+  return loadConfigFile(configPath).enabled !== false
+}
+
+/** Bascule le kill-switch et persiste. Retourne l'état effectif. */
+export function setEnabled(enabled: boolean, configPath: string = DEFAULT_CONFIG_PATH): boolean {
+  const config = loadConfigFile(configPath)
+  config.enabled = enabled
+  saveConfigFile(config, configPath)
+  return enabled
+}
+
 export interface ResolveOptions {
   /** Priorité 1 : chemin explicite (tests, daemon piloté). */
   storageRoot?: string
@@ -93,6 +112,47 @@ export function storagePaths(storageRoot: string) {
     daemonState: join(storageRoot, 'daemon.json'),
     daemonLock: join(storageRoot, 'daemon.lock'),
   } as const
+}
+
+/**
+ * Déplace TOUTE la mémoire vers un nouvel emplacement (ex. clé USB) et met à
+ * jour `config.toml` pour qu'il pointe dessus. Le daemon DOIT être arrêté.
+ * Idempotent-safe : refuse si la destination existe déjà non vide.
+ * Les chemins de DB en base sont relatifs au root via storagePaths → rien à
+ * réécrire dans registry (db_registry stocke des chemins absolus : on les
+ * recalcule au prochain boot via re-registerDb ; ici on déplace les fichiers).
+ */
+export function moveStorage(opts: {
+  from?: string
+  to: string
+  configPath?: string
+}): { from: string; to: string } {
+  const configPath = opts.configPath ?? DEFAULT_CONFIG_PATH
+  const resolved = resolveStorageRoot({ configPath })
+  const from = resolveAbs(opts.from ?? resolved.storageRoot)
+  const to = resolveAbs(opts.to)
+  if (from === to) return { from, to }
+  if (!existsSync(from)) throw new Error(`emplacement source introuvable : ${from}`)
+  if (existsSync(to) && readdirSync(to).length > 0) {
+    throw new Error(`destination déjà occupée : ${to} (choisis un dossier vide)`)
+  }
+  mkdirSync(dirname(to), { recursive: true })
+  // déplacement (rename si même volume, sinon copie récursive + suppression)
+  try {
+    renameSync(from, to)
+  } catch {
+    cpSync(from, to, { recursive: true })
+    rmSync(from, { recursive: true, force: true })
+  }
+  // mettre à jour le fichier de découverte
+  const config = loadConfigFile(configPath)
+  config.storage_path = to
+  saveConfigFile(config, configPath)
+  return { from, to }
+}
+
+function resolveAbs(p: string): string {
+  return resolve(p.replace(/^~(?=$|\/)/, homedir()))
 }
 
 export function ensureStorageTree(storageRoot: string): void {

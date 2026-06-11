@@ -4,9 +4,9 @@
  * doctor/stats. Capture pipeline (WAL→redaction→extraction) arrive en P2,
  * MCP/UI en P3 — voir docs/v3/STATUS.md.
  */
-import { existsSync, statSync } from 'node:fs'
+import { existsSync, rmSync, statSync } from 'node:fs'
 import { hostname } from 'node:os'
-import { join, relative } from 'node:path'
+import { dirname, join, relative } from 'node:path'
 import DatabaseCtor from 'better-sqlite3'
 import { importLegacyCognition } from '../migration/import-cognition.js'
 import { importTranscripts } from '../migration/import-transcripts.js'
@@ -19,6 +19,7 @@ import {
   type ResolvedConfig,
 } from '../config.js'
 import { RegistryStore } from '../storage/registry.js'
+import { isOnNetworkVolume } from '../storage/network-guard.js'
 import { ContentStore, rowToFact, type FactRow, type FtsHit, type FtsSearchOptions } from '../storage/content.js'
 import { EmbeddingIndexer, hybridSearchFacts } from '../vector/index.js'
 import {
@@ -215,6 +216,71 @@ export class Memoria {
       scope_id: null,
       reason: null,
     })
+  }
+
+  /**
+   * Supprime DÉFINITIVEMENT un agent : révoque, ferme et efface sa DB de mémoire
+   * privée, retire son scope privé et son enregistrement. Irréversible (≠ révoquer
+   * qui garde la mémoire). Audit neutre.
+   */
+  deleteInstance(instanceId: string): { deleted: boolean } {
+    this.assertOpen()
+    const instance = this.registry.getInstance(instanceId)
+    if (!instance) return { deleted: false }
+    const dbPath = this.paths.assistantDb(instanceId)
+    // fermer la connexion du pool avant d'effacer le fichier
+    const store = this.pool.get(dbPath)
+    if (store) {
+      store.close()
+      this.pool.delete(dbPath)
+    }
+    for (const suffix of ['', '-wal', '-shm']) rmSync(`${dbPath}${suffix}`, { force: true })
+    rmSync(dirname(dbPath), { recursive: true, force: true })
+    this.registry.deleteInstance(instanceId)
+    this.registry.audit({
+      actor_type: 'user',
+      actor_id: 'local',
+      action: 'delete_instance',
+      target_id_hash: sha256Hex(instanceId),
+      scope_id: null,
+      reason: null,
+    })
+    return { deleted: true }
+  }
+
+  // ------------------------------------------------------------ kill-switch & stockage
+
+  /** Memoria actif ? (kill-switch global). Absent = true par défaut. */
+  isEnabled(): boolean {
+    return this.resolved.config.enabled !== false
+  }
+
+  /**
+   * Bascule le kill-switch global et le persiste. À false, le daemon refuse
+   * capture ET recall (no-op annoncé) sans se fermer : « pause » de Memoria.
+   */
+  setEnabled(enabled: boolean): boolean {
+    this.assertOpen()
+    this.resolved.config.enabled = enabled
+    saveConfigFile(this.resolved.config, this.resolved.configPath)
+    this.registry.audit({
+      actor_type: 'user',
+      actor_id: 'local',
+      action: enabled ? 'memoria_enabled' : 'memoria_disabled',
+      target_id_hash: null,
+      scope_id: null,
+      reason: null,
+    })
+    return enabled
+  }
+
+  /** Emplacement courant de la mémoire (pour l'UI « déplacer vers clé USB »). */
+  storageInfo(): { root: string; config_path: string; on_network_volume: boolean } {
+    return {
+      root: this.paths.root,
+      config_path: this.resolved.configPath,
+      on_network_volume: isOnNetworkVolume(this.paths.root),
+    }
   }
 
   /** Authentifie un token d'instance (utilisé par le daemon). */

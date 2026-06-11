@@ -8,12 +8,16 @@ import { useCallback, useEffect, useState } from 'react'
 import { useCallback as useCb } from 'react'
 import {
   ApiError,
+  getControl,
   getDoctor,
   getLlmProfile,
   getOptions,
   getProviders,
+  setAutostart,
+  setEnabled,
   setExtractionProvider,
   setOption,
+  type ControlState,
   type DoctorReport,
   type LlmConfig,
   type LlmProviderName,
@@ -102,6 +106,8 @@ export function Settings() {
 
       {error && <div className="error-banner">{error}</div>}
 
+      <ControlPanel onError={setError} />
+
       <div className="settings-block">
         <h2>Moteur d’extraction</h2>
         <p className="muted">
@@ -160,8 +166,13 @@ export function Settings() {
         <h2>Emplacement de stockage</h2>
         <pre className="command">{doctor?.storage_root ?? '~/.memoria/data'}</pre>
         <p className="muted">
-          Toutes tes mémoires (chiffrées pour les secrets). Pour déplacer : édite
-          <code> ~/.memoria/config.toml </code> puis redémarre le service.
+          Toutes tes mémoires (chiffrées pour les secrets). Pour emporter Memoria sur une
+          <strong> clé USB</strong> (ou tout autre dossier), déplace-la depuis le terminal :
+        </p>
+        <pre className="command">memoria move --to /Volumes/MaCle/memoria</pre>
+        <p className="muted">
+          Le service s’arrête le temps du déplacement, met à jour la config, puis
+          <code> memoria start </code> le relance au nouvel emplacement.
         </p>
       </div>
 
@@ -187,6 +198,90 @@ export function Settings() {
         </p>
       </div>
     </section>
+  )
+}
+
+function ControlPanel({ onError }: { onError: (m: string) => void }) {
+  const [state, setState] = useState<ControlState | null>(null)
+  const [unavailable, setUnavailable] = useState(false)
+  const [busy, setBusy] = useState<string | null>(null)
+
+  useEffect(() => {
+    getControl().then(setState).catch(() => setUnavailable(true))
+  }, [])
+
+  const toggleEnabled = useCb(
+    async (enabled: boolean) => {
+      setBusy('enabled')
+      setState(prev => (prev ? { ...prev, enabled } : prev)) // optimiste
+      try {
+        const v = await setEnabled(enabled)
+        setState(prev => (prev ? { ...prev, enabled: v } : prev))
+      } catch (err) {
+        onError(err instanceof ApiError ? err.message : 'Changement impossible.')
+        getControl().then(setState).catch(() => {})
+      } finally {
+        setBusy(null)
+      }
+    },
+    [onError],
+  )
+
+  const toggleAutostart = useCb(
+    async (enabled: boolean) => {
+      setBusy('autostart')
+      try {
+        const a = await setAutostart(enabled)
+        setState(prev => (prev ? { ...prev, autostart: a } : prev))
+      } catch (err) {
+        onError(err instanceof ApiError ? err.message : 'Changement impossible.')
+        getControl().then(setState).catch(() => {})
+      } finally {
+        setBusy(null)
+      }
+    },
+    [onError],
+  )
+
+  if (unavailable) return null
+  if (state === null) return <div className="settings-block"><div className="spinner-row"><span className="spinner" aria-hidden /> Chargement…</div></div>
+
+  return (
+    <div className="settings-block">
+      <h2>Contrôle</h2>
+      <label className="option-row">
+        <input
+          type="checkbox"
+          checked={state.enabled}
+          disabled={busy === 'enabled'}
+          onChange={e => void toggleEnabled(e.target.checked)}
+        />
+        <span>
+          <strong>Memoria actif</strong>
+          <span className="muted option-hint">
+            {state.enabled
+              ? 'Capture et rappel des souvenirs en fonctionnement. Décoche pour mettre en pause sans tout fermer.'
+              : '⏸ En pause : les agents tournent mais n’écrivent ni ne lisent aucune mémoire.'}
+          </span>
+        </span>
+      </label>
+      <label className="option-row">
+        <input
+          type="checkbox"
+          checked={state.autostart.installed}
+          disabled={busy === 'autostart' || !state.autostart.supported}
+          onChange={e => void toggleAutostart(e.target.checked)}
+        />
+        <span>
+          <strong>Lancer au démarrage</strong>
+          <span className="muted option-hint">
+            {state.autostart.supported
+              ? 'Démarre Memoria automatiquement à chaque ouverture de session (launchd).'
+              : 'Disponible sur macOS uniquement pour l’instant.'}
+          </span>
+        </span>
+      </label>
+    </div>
   )
 }
 

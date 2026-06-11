@@ -230,6 +230,22 @@ export class RegistryStore {
       .run(id)
   }
 
+  /** Suppression DÉFINITIVE d'une instance + son scope privé + policies + pairings + enregistrement DB. */
+  deleteInstance(id: string): void {
+    const tx = this.db.transaction(() => {
+      const privateScope = this.getScopeByName(`private:${id}`)
+      this.db.prepare('DELETE FROM pairings WHERE assistant_instance_id = ?').run(id)
+      this.db.prepare('DELETE FROM db_registry WHERE assistant_instance_id = ?').run(id)
+      if (privateScope) {
+        this.db.prepare('DELETE FROM assistant_scope_policy WHERE scope_id = ?').run(privateScope.id)
+        this.db.prepare('DELETE FROM db_registry WHERE scope_id = ?').run(privateScope.id)
+        this.db.prepare('DELETE FROM memory_scopes WHERE id = ?').run(privateScope.id)
+      }
+      this.db.prepare('DELETE FROM assistant_instances WHERE id = ?').run(id)
+    })
+    tx()
+  }
+
   /** Authentifie un token d'instance → instance non révoquée, ou null. */
   verifyInstanceToken(token: string): AssistantInstance | null {
     const hash = sha256Hex(token)

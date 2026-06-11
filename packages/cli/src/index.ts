@@ -11,8 +11,9 @@ import type { Writable } from 'node:stream'
 import { Builtins, Cli } from 'clipanion/lib/advanced/index.js'
 import { Memoria, resolveStorageRoot } from '@memoria/core'
 import { DaemonClient, readDaemonState, type DaemonState } from '@memoria/daemon'
-import { AgentsCommand, RevokeCommand } from './commands/agents.js'
+import { AgentsCommand, DeleteAgentCommand, RevokeCommand } from './commands/agents.js'
 import { AuditCommand } from './commands/audit.js'
+import { AutostartCommand, DisableCommand, EnableCommand, MoveCommand } from './commands/control.js'
 import { DaemonCommand, StartCommand, StopCommand } from './commands/daemon.js'
 import { DoctorCommand } from './commands/doctor.js'
 import { ExportCommand } from './commands/export.js'
@@ -26,11 +27,16 @@ export const CLI_VERSION = '0.1.0'
 export {
   AgentsCommand,
   AuditCommand,
+  AutostartCommand,
   DaemonCommand,
+  DeleteAgentCommand,
+  DisableCommand,
   DoctorCommand,
+  EnableCommand,
   ExportCommand,
   ForgetCommand,
   InitCommand,
+  MoveCommand,
   PairCommand,
   RevokeCommand,
   StartCommand,
@@ -132,8 +138,13 @@ export function buildCli(): Cli {
   cli.register(PairCommand)
   cli.register(AgentsCommand)
   cli.register(RevokeCommand)
+  cli.register(DeleteAgentCommand)
   cli.register(StatsCommand)
   cli.register(ForgetCommand)
   cli.register(AuditCommand)
+  cli.register(EnableCommand)
+  cli.register(DisableCommand)
+  cli.register(AutostartCommand)
+  cli.register(MoveCommand)
   return cli
 }
