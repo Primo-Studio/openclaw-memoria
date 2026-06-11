@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url'
 import {
   Memoria,
   autostartStatus,
+  copyOpenClawKey,
   disableAutostart,
   enableAutostart,
   newToken,
@@ -26,8 +27,10 @@ import {
   type CaptureTurnInput,
   type ForgetFilter,
   type RecallInput,
+  type ReusableProvider,
   type StoreFactInput,
 } from '@memoria/core'
+import { OllamaPullJob } from './ollama-pull.js'
 import { daemonBinPath } from './client.js'
 import { currentVersion, pullAndBuild, scheduleRestart } from './update.js'
 import { findUiDist, serveUi } from './static.js'
@@ -42,6 +45,8 @@ export interface DaemonOptions {
   port?: number
   /** Dossier dist de l'UI web (défaut : auto-détection @memoria/web/dist). */
   uiDist?: string
+  /** URL du serveur Ollama (santé LLM + téléchargements) — injectable pour les tests. */
+  ollamaBaseUrl?: string
 }
 
 export interface RunningDaemon {
@@ -71,6 +76,8 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
 
   const adminToken = newToken()
   const daemonId = newToken().slice(0, 16)
+  // Un seul téléchargement de modèle Ollama à la fois (progression en mémoire).
+  const ollamaPull = new OllamaPullJob(opts.ollamaBaseUrl)
 
   const server = createServer((req, res) => {
     void handle(req, res).catch((err: unknown) => {
@@ -314,11 +321,52 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       case 'POST /v1/admin/llm_extraction': {
         const body = await readJson(req)
         const provider = String(body['provider'] ?? '')
-        if (!['ollama', 'anthropic', 'openai', 'openrouter'].includes(provider)) {
+        if (!['ollama', 'lmstudio', 'anthropic', 'openai', 'openrouter'].includes(provider)) {
           throw new HttpError(400, `provider inconnu : ${provider}`)
         }
-        memoria.setExtractionProvider(provider, body['model'] as string | undefined)
+        memoria.setExtractionProvider(provider, body['model'] as string | undefined, body['base_url'] as string | undefined)
         sendJson(res, 200, { provider, model: body['model'] ?? null })
+        return
+      }
+      case 'GET /v1/admin/llm_health': {
+        // LA source de vérité anti-mort-silencieuse : moteurs effectifs +
+        // raisons d'indisponibilité + WAL en attente + options détectées.
+        sendJson(res, 200, await memoria.llmHealth({ ollamaBaseUrl: opts.ollamaBaseUrl }))
+        return
+      }
+      case 'POST /v1/admin/ollama_pull': {
+        const body = await readJson(req)
+        const model = String(body['model'] ?? '').trim()
+        if (!model) throw new HttpError(400, 'model requis')
+        if (ollamaPull.status().running) {
+          throw new HttpError(409, `un téléchargement est déjà en cours (${ollamaPull.status().model ?? '?'})`)
+        }
+        ollamaPull.start(model)
+        sendJson(res, 200, { ok: true, model })
+        return
+      }
+      case 'GET /v1/admin/ollama_pull_status': {
+        sendJson(res, 200, ollamaPull.status())
+        return
+      }
+      case 'POST /v1/admin/openclaw_copy_key': {
+        // « Réutiliser ma config OpenClaw » : copie une clé API en clair vers
+        // ~/.<provider>/api_key (chmod 600). La valeur n'apparaît JAMAIS ici.
+        const body = await readJson(req)
+        const provider = String(body['provider'] ?? '')
+        if (!['openai', 'anthropic', 'openrouter'].includes(provider)) {
+          throw new HttpError(400, `provider invalide : ${provider}`)
+        }
+        const copied = copyOpenClawKey(provider as ReusableProvider)
+        memoria.registry.audit({
+          actor_type: 'user',
+          actor_id: 'local',
+          action: `openclaw_copy_key:${provider}`,
+          target_id_hash: null,
+          scope_id: null,
+          reason: `depuis ${copied.from}`,
+        })
+        sendJson(res, 200, { ok: true, provider, key_file: copied.keyFile })
         return
       }
       case 'GET /v1/admin/options': {

@@ -993,3 +993,77 @@ input[type='search']:focus {
 .option-row input { margin-top: 0.2rem; width: 18px; height: 18px; accent-color: var(--accent, #e85a1f); flex: none; }
 .option-row span { display: flex; flex-direction: column; gap: 0.15rem; }
 .option-hint { font-size: 0.78rem; }
+
+/* ------------------------------------------------ moteur d'intelligence (A4/A5) */
+
+/* bannière Dashboard : extraction indisponible (orange) / file en attente (rouge) */
+.llm-banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+  background: color-mix(in srgb, var(--warn, #d8a01f) 14%, transparent);
+  border: 1px solid var(--warn, #d8a01f);
+  border-radius: var(--radius, 10px);
+  padding: 0.9rem 1.1rem; margin-bottom: 1rem;
+}
+.llm-banner-critical {
+  background: color-mix(in srgb, var(--danger, #d84a3f) 14%, transparent);
+  border-color: var(--danger, #d84a3f);
+}
+.llm-banner p { margin: 0.25rem 0 0; font-size: 0.82rem; }
+.llm-banner .btn { flex: none; }
+
+/* résumé santé (Réglages, au-dessus des cartes provider) */
+.llm-summary {
+  background: var(--bg, #121220); border: 1px solid var(--border, #2a2a3d);
+  border-radius: var(--radius, 10px); padding: 0.7rem 1rem; margin: 0.6rem 0 0.9rem;
+  display: grid; gap: 0.3rem; font-size: 0.86rem;
+}
+.llm-summary p { margin: 0; }
+.llm-summary .ok { color: var(--ok, #3fb96a); }
+.llm-summary .warn { color: var(--warn, #d8a01f); }
+.llm-summary .ko { color: var(--danger, #d84a3f); }
+
+/* cartes de choix du moteur (onboarding) */
+.engine-grid { display: grid; gap: 0.5rem; margin: 0.8rem 0; }
+.engine-card {
+  display: flex; flex-direction: column; gap: 0.25rem; text-align: left;
+  background: var(--bg-raised, #1a1a2c); border: 1px solid var(--border, #2a2a3d);
+  border-radius: var(--radius, 10px); padding: 0.65rem 0.9rem;
+  color: inherit; font: inherit; cursor: pointer;
+}
+.engine-card:hover { border-color: var(--accent, #e85a1f); }
+.engine-active { border-color: var(--accent, #e85a1f); background: color-mix(in srgb, var(--accent, #e85a1f) 10%, transparent); }
+.engine-head { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; }
+.engine-hint { font-size: 0.78rem; }
+.engine-guide {
+  border-left: 3px solid var(--accent, #e85a1f);
+  padding: 0.5rem 0 0.5rem 0.9rem; margin: 0.6rem 0;
+  display: flex; flex-direction: column; gap: 0.5rem; align-items: flex-start;
+}
+.engine-guide p { margin: 0; }
+.engine-note { color: var(--ok, #3fb96a); font-size: 0.86rem; margin: 0.4rem 0 0; }
+.engine-test { margin-top: 0.6rem; display: flex; flex-direction: column; gap: 0.5rem; align-items: flex-start; }
+.engine-results { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.25rem; font-size: 0.86rem; }
+.engine-results .ok { color: var(--ok, #3fb96a); }
+.engine-results .ko { color: var(--danger, #d84a3f); }
+
+/* encart rouge mode dégradé */
+.degraded-box {
+  border: 1px solid var(--danger, #d84a3f);
+  background: color-mix(in srgb, var(--danger, #d84a3f) 12%, transparent);
+  border-radius: var(--radius, 10px); padding: 0.8rem 1rem; margin-top: 0.9rem;
+  display: flex; flex-direction: column; gap: 0.6rem; align-items: flex-start;
+}
+.degraded-box p { margin: 0; font-size: 0.85rem; }
+
+/* barre de progression des téléchargements Ollama */
+.pull-row { display: flex; flex-direction: column; gap: 0.35rem; align-items: flex-start; width: 100%; }
+.progress {
+  position: relative; width: 100%; max-width: 360px; height: 18px;
+  background: var(--bg, #121220); border: 1px solid var(--border, #2a2a3d);
+  border-radius: 999px; overflow: hidden;
+}
+.progress-fill { height: 100%; background: var(--accent, #e85a1f); transition: width 0.4s ease; }
+.progress-label {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  font-size: 0.72rem; color: var(--text, #ececf4);
+}

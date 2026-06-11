@@ -47,6 +47,7 @@ import { estimateTokens, newId, nowISO, sha256Hex } from '../util.js'
 import { createSecretProvider, RegexRedactor } from '../secrets/index.js'
 import type { SecretProvider } from '../secrets/types.js'
 import { resolveLlmProfile } from '../llm/index.js'
+import type { LlmOptions } from '../llm/detect.js'
 import type { EmbeddingProvider, LlmProvider } from '../llm/provider.js'
 import { CapturePipeline, type CaptureTurnInput, type CaptureTurnResult } from './capture.js'
 import type { WalReplaySummary } from './wal.js'
@@ -70,6 +71,24 @@ import type {
   RecallResult,
   StoreFactInput,
 } from '../types.js'
+
+/** État d'un moteur (extraction ou embeddings) dans le bilan de santé LLM. */
+export interface LlmEngineHealth {
+  provider: string
+  model: string
+  available: boolean
+  /** Pourquoi le moteur est indisponible — TOUJOURS présent quand available=false. */
+  reason?: string
+}
+
+/** Bilan de santé LLM (GET /v1/admin/llm_health) — anti-mort-silencieuse. */
+export interface LlmHealthReport {
+  extraction: LlmEngineHealth
+  embeddings: LlmEngineHealth
+  /** Entrées WAL en attente d'extraction, toutes instances confondues. */
+  wal_pending: number
+  options: LlmOptions
+}
 
 export interface PairAssistantInput {
   type: AssistantType
@@ -1683,13 +1702,14 @@ export class Memoria {
    */
   async detectProviders(): Promise<{
     ollama: { available: boolean; models: string[]; base_url: string }
-    lmstudio: { available: boolean }
+    lmstudio: { available: boolean; models: string[]; base_url: string }
     anthropic: { available: boolean }
     openai: { available: boolean }
     openrouter: { available: boolean }
   }> {
     this.assertOpen()
-    const { resolveAnthropicApiKey, resolveOpenAiApiKey, DEFAULT_OLLAMA_BASE_URL } = await import('../llm/index.js')
+    const { resolveAnthropicApiKey, resolveOpenAiApiKey, DEFAULT_OLLAMA_BASE_URL, DEFAULT_LMSTUDIO_BASE_URL, lmstudioListModels } =
+      await import('../llm/index.js')
     const ollamaBase = DEFAULT_OLLAMA_BASE_URL
     let ollamaModels: string[] = []
     let ollamaUp = false
@@ -1703,23 +1723,119 @@ export class Memoria {
     } catch {
       ollamaUp = false
     }
-    let lmstudio = false
-    try {
-      lmstudio = (await fetch('http://127.0.0.1:1234/v1/models', { signal: AbortSignal.timeout(1000) })).ok
-    } catch {
-      lmstudio = false
-    }
+    const lm = await lmstudioListModels()
     return {
       ollama: { available: ollamaUp, models: ollamaModels, base_url: ollamaBase },
-      lmstudio: { available: lmstudio },
+      lmstudio: { available: lm.up, models: lm.models, base_url: DEFAULT_LMSTUDIO_BASE_URL },
       anthropic: { available: resolveAnthropicApiKey({}) !== null },
       openai: { available: resolveOpenAiApiKey({ flavor: 'openai' }) !== null },
       openrouter: { available: resolveOpenAiApiKey({ flavor: 'openrouter' }) !== null },
     }
   }
 
+  /** Nombre TOTAL d'entrées WAL en attente d'extraction, toutes instances confondues. */
+  walPendingTotal(): number {
+    this.assertOpen()
+    let pending = 0
+    for (const entry of this.registry.listDbs()) {
+      if (entry.kind === 'registry' || !existsSync(entry.path)) continue
+      pending += this.openContent(entry.path).walPendingCount()
+    }
+    return pending
+  }
+
+  /**
+   * Santé LLM (GET /v1/admin/llm_health) — LA source de vérité anti-mort-
+   * silencieuse : moteur d'extraction/embeddings effectifs (résolution FRAÎCHE,
+   * pas le mémo : l'utilisateur vient peut-être de télécharger un modèle),
+   * entrées WAL en attente, et inventaire des options disponibles.
+   */
+  async llmHealth(opts: { ollamaBaseUrl?: string; lmstudioBaseUrl?: string } = {}): Promise<LlmHealthReport> {
+    this.assertOpen()
+    const {
+      DEFAULT_ANTHROPIC_MODEL,
+      DEFAULT_LOCAL_EXTRACTION_MODEL,
+      DEFAULT_OLLAMA_EMBEDDING_MODEL,
+      DEFAULT_OPENAI_MODEL,
+      DEFAULT_OPENROUTER_MODEL,
+      detectLlmOptions,
+      modelMatches,
+      resolveLlmProfile,
+    } = await import('../llm/index.js')
+
+    const options = await detectLlmOptions({ ollamaBaseUrl: opts.ollamaBaseUrl, lmstudioBaseUrl: opts.lmstudioBaseUrl })
+    const profile = await resolveLlmProfile(this.resolved.config, {
+      ollamaBaseUrl: opts.ollamaBaseUrl,
+      lmstudioBaseUrl: opts.lmstudioBaseUrl,
+    })
+
+    // ---- extraction : disponible (provider résolu) ou indisponible AVEC raison
+    let extraction: LlmEngineHealth
+    if (profile.extraction) {
+      extraction = { provider: profile.extraction.name, model: profile.extraction.model, available: true }
+    } else {
+      const explicit = this.resolved.config.llm?.extraction
+      const profileName = this.resolved.config.llm?.profile ?? '100-local'
+      const provider = explicit?.provider ?? (profileName === 'cloud' ? 'anthropic' : 'ollama')
+      const defaults: Record<string, string> = {
+        ollama: DEFAULT_LOCAL_EXTRACTION_MODEL,
+        lmstudio: '(premier modèle chargé)',
+        anthropic: DEFAULT_ANTHROPIC_MODEL,
+        openai: DEFAULT_OPENAI_MODEL,
+        openrouter: DEFAULT_OPENROUTER_MODEL,
+      }
+      const model = explicit?.model ?? defaults[provider] ?? '(inconnu)'
+      let reason: string
+      switch (provider) {
+        case 'ollama': {
+          if (!options.ollama.serverUp) {
+            reason = 'serveur Ollama injoignable — lance l’application Ollama (ou « ollama serve »)'
+          } else {
+            const wanted = explicit?.model ?? DEFAULT_LOCAL_EXTRACTION_MODEL
+            reason = options.ollama.models.some(m => modelMatches(m, wanted))
+              ? `modèle « ${wanted} » présent mais provider indisponible — vérifie les logs du service`
+              : `modèle « ${wanted} » non téléchargé — « ollama pull ${wanted} »`
+          }
+          break
+        }
+        case 'lmstudio':
+          reason = !options.lmstudio.available
+            ? 'LM Studio injoignable — démarre son serveur local (onglet Developer)'
+            : options.lmstudio.models.length === 0
+              ? 'aucun modèle chargé dans LM Studio'
+              : `modèle « ${explicit?.model ?? ''} » non chargé dans LM Studio`
+          break
+        case 'anthropic':
+        case 'openai':
+        case 'openrouter':
+          reason = `clé API absente — place-la dans ~/.${provider}/api_key (chmod 600)`
+          break
+        default:
+          reason = `provider inconnu : ${provider}`
+      }
+      extraction = { provider, model, available: false, reason }
+    }
+
+    // ---- embeddings : Ollama nomic-embed-text UNIQUEMENT en V1 — on le DIT
+    let embeddings: LlmEngineHealth
+    if (profile.embeddings) {
+      embeddings = { provider: profile.embeddings.name, model: profile.embeddings.model, available: true }
+    } else {
+      embeddings = {
+        provider: 'ollama',
+        model: DEFAULT_OLLAMA_EMBEDDING_MODEL,
+        available: false,
+        reason: options.ollama.serverUp
+          ? `Recherche sémantique : nécessite Ollama (${DEFAULT_OLLAMA_EMBEDDING_MODEL}) — « ollama pull ${DEFAULT_OLLAMA_EMBEDDING_MODEL} »`
+          : `Recherche sémantique : nécessite Ollama (${DEFAULT_OLLAMA_EMBEDDING_MODEL}) — serveur Ollama injoignable`,
+      }
+    }
+
+    return { extraction, embeddings, wal_pending: this.walPendingTotal(), options }
+  }
+
   /** Profil LLM courant (config) + choix explicite d'extraction s'il existe. */
-  getLlmProfile(): { profile: string; extraction?: { provider?: string; model?: string } } {
+  getLlmProfile(): { profile: string; extraction?: { provider?: string; model?: string; base_url?: string } } {
     this.assertOpen()
     return {
       profile: this.resolved.config.llm?.profile ?? '100-local',
@@ -1737,14 +1853,15 @@ export class Memoria {
 
   /**
    * Choix EXPLICITE du provider/modèle d'extraction (« l'utilisateur décide »).
-   * provider ∈ ollama|anthropic|openai|openrouter.
+   * provider ∈ ollama|lmstudio|anthropic|openai|openrouter. baseUrl : serveurs
+   * locaux OpenAI-compatibles (LM Studio) hors port par défaut.
    */
-  setExtractionProvider(provider: string, model?: string): void {
+  setExtractionProvider(provider: string, model?: string, baseUrl?: string): void {
     this.assertOpen()
     this.resolved.config.llm = {
       ...this.resolved.config.llm,
       profile: 'custom',
-      extraction: { provider, ...(model ? { model } : {}) },
+      extraction: { provider, ...(model ? { model } : {}), ...(baseUrl ? { base_url: baseUrl } : {}) },
     }
     this.persistLlmConfig(`set_extraction:${provider}${model ? `:${model}` : ''}`)
   }

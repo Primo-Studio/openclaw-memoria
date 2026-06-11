@@ -11,6 +11,7 @@ import {
   ApiError,
   getControl,
   getDoctor,
+  getLlmHealth,
   getLlmProfile,
   getOptions,
   getProviders,
@@ -30,6 +31,7 @@ import {
   type ControlState,
   type DoctorReport,
   type LlmConfig,
+  type LlmHealth,
   type LlmProviderName,
   type ProvidersStatus,
   type SyncStatus,
@@ -56,8 +58,10 @@ interface ProviderChoice {
 
 const PROVIDERS: ProviderChoice[] = [
   { id: 'ollama', label: 'Ollama (local)', models: ['qwen2.5:3b', 'gemma3:4b', 'llama3.1:8b'], recommended: 'qwen2.5:3b', hint: '100 % local, gratuit, rien ne sort de la machine. Qualité correcte.', local: true },
+  // models vide = liste dynamique (modèles réellement chargés dans LM Studio)
+  { id: 'lmstudio', label: 'LM Studio (local)', models: [], recommended: '', hint: '100 % local avec interface graphique. Utilise le modèle chargé dans LM Studio.', local: true },
   { id: 'openai', label: 'OpenAI', models: ['gpt-4o-mini', 'gpt-5-mini', 'gpt-4.1-mini'], recommended: 'gpt-4o-mini', hint: 'Excellente qualité d’extraction pour un coût minime. Recommandé.', local: false },
-  { id: 'anthropic', label: 'Anthropic (Claude)', models: ['claude-haiku-4-5-20251001'], recommended: 'claude-haiku-4-5-20251001', hint: 'Haiku : rapide et précis. Cloud, votre clé.', local: false },
+  { id: 'anthropic', label: 'Anthropic (Claude)', models: ['claude-haiku-4-5-20251001'], recommended: 'claude-haiku-4-5-20251001', hint: 'Haiku : rapide et précis. Cloud, ta clé.', local: false },
   { id: 'openrouter', label: 'OpenRouter', models: ['openai/gpt-4o-mini', 'anthropic/claude-3.5-haiku', 'google/gemini-flash-1.5'], recommended: 'openai/gpt-4o-mini', hint: 'Une seule clé, des centaines de modèles. Pour les utilisateurs avancés.', local: false },
 ]
 
@@ -65,15 +69,22 @@ export function Settings() {
   const [doctor, setDoctor] = useState<DoctorReport | null>(null)
   const [config, setConfig] = useState<LlmConfig | null>(null)
   const [providers, setProviders] = useState<ProvidersStatus | null>(null)
+  const [health, setHealth] = useState<LlmHealth | null>(null)
   const [unavailable, setUnavailable] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
   const refresh = useCallback(async () => {
     try {
-      const [c, p] = await Promise.all([getLlmProfile(), getProviders()])
+      const [c, p, h] = await Promise.all([
+        getLlmProfile(),
+        getProviders(),
+        // route « contrat » : absente → pas d'encart santé, le reste fonctionne
+        getLlmHealth().catch(() => null),
+      ])
       setConfig(c)
       setProviders(p)
+      setHealth(h)
       setUnavailable(false)
     } catch {
       setUnavailable(true)
@@ -130,6 +141,7 @@ export function Settings() {
           Le modèle qui transforme les conversations en souvenirs durables. Choisis selon tes
           priorités : <strong>local</strong> (gratuit, privé) ou <strong>cloud</strong> (meilleure qualité).
         </p>
+        {health && <LlmHealthSummary health={health} />}
         {unavailable ? (
           <p className="muted">Réglage du moteur non disponible sur ce service.</p>
         ) : !providers || !config ? (
@@ -139,6 +151,8 @@ export function Settings() {
             {PROVIDERS.map(p => {
               const avail = availabilityOf(p.id)
               const isCurrent = current?.provider === p.id
+              // LM Studio : on propose les modèles réellement chargés
+              const models = p.id === 'lmstudio' ? (health?.options.lmstudio.models ?? providers.lmstudio.models ?? []) : p.models
               return (
                 <div key={p.id} className={`provider-card${isCurrent ? ' provider-current' : ''}`}>
                   <div className="provider-head">
@@ -149,11 +163,18 @@ export function Settings() {
                   <p className="muted provider-hint">{p.hint}</p>
                   {avail === false && (
                     <p className="provider-missing">
-                      {p.local ? 'Ollama non détecté (lance « ollama serve »).' : `Clé absente — place-la dans ~/.${p.id}/api_key (chmod 600).`}
+                      {p.id === 'ollama'
+                        ? 'Ollama non détecté (lance l’application Ollama ou « ollama serve »).'
+                        : p.id === 'lmstudio'
+                          ? 'LM Studio non détecté — démarre son serveur local (onglet Developer, port 1234).'
+                          : `Clé absente — place-la dans ~/.${p.id}/api_key (chmod 600).`}
                     </p>
                   )}
+                  {p.id === 'lmstudio' && avail === true && models.length === 0 && (
+                    <p className="provider-missing">Aucun modèle chargé dans LM Studio — charge un modèle puis reviens ici.</p>
+                  )}
                   <div className="provider-models">
-                    {p.models.map(model => (
+                    {models.map(model => (
                       <button
                         key={model}
                         type="button"
@@ -214,6 +235,34 @@ export function Settings() {
         </p>
       </div>
     </section>
+  )
+}
+
+/**
+ * État de santé du moteur (llm_health) au-dessus des cartes provider :
+ * extraction, recherche sémantique, et file d'attente — l'utilisateur voit
+ * IMMÉDIATEMENT si Memoria apprend ou accumule en silence.
+ */
+function LlmHealthSummary({ health }: { health: LlmHealth }) {
+  return (
+    <div className="llm-summary">
+      <p className={health.extraction.available ? 'ok' : 'ko'}>
+        {health.extraction.available
+          ? `✓ Extraction prête (${health.extraction.provider} / ${health.extraction.model})`
+          : `✗ Extraction indisponible — ${health.extraction.reason ?? 'raison inconnue'}`}
+      </p>
+      <p className={health.embeddings.available ? 'ok' : 'warn'}>
+        {health.embeddings.available
+          ? `✓ Recherche sémantique prête (${health.embeddings.provider} / ${health.embeddings.model})`
+          : `⚠ ${health.embeddings.reason ?? 'Recherche sémantique indisponible'}`}
+      </p>
+      {health.wal_pending > 0 && (
+        <p className={health.extraction.available ? 'warn' : 'ko'}>
+          {health.wal_pending.toLocaleString('fr-FR')} souvenir{health.wal_pending > 1 ? 's' : ''} en attente d’extraction
+          {health.extraction.available ? ' (traitement au prochain passage).' : ' — ils seront traités dès qu’un moteur sera prêt.'}
+        </p>
+      )}
+    </div>
   )
 }
 

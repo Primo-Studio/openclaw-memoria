@@ -6,12 +6,16 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   ApiError,
   adoptTokenFromHash,
+  copyOpenClawKey,
   extractTokenFromHash,
   forgetFacts,
   getAgents,
+  getLlmHealth,
+  getOllamaPullStatus,
   getStats,
   pairAgent,
   searchFacts,
+  startOllamaPull,
 } from '../src/api'
 
 const TOKEN_KEY = 'memoria.admin_token'
@@ -167,5 +171,56 @@ describe('requêtes authentifiées', () => {
 
     await expect(forgetFacts([])).resolves.toBe(0)
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('santé LLM (anti-mort-silencieuse)', () => {
+  it('getLlmHealth lit GET /v1/admin/llm_health tel quel', async () => {
+    stubBrowser({ token: 'tok-admin' })
+    const health = {
+      extraction: { provider: 'ollama', model: 'qwen2.5:3b', available: false, reason: 'serveur Ollama injoignable' },
+      embeddings: { provider: 'ollama', model: 'nomic-embed-text', available: false, reason: 'nécessite Ollama' },
+      wal_pending: 7,
+      options: { ollama: { kind: 'ollama', available: false } },
+    }
+    const fetchMock = vi.fn(async () => jsonResponse(health))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(getLlmHealth()).resolves.toEqual(health)
+    const [url] = fetchMock.mock.calls[0] as unknown as [string]
+    expect(url).toBe('/v1/admin/llm_health')
+  })
+
+  it('startOllamaPull poste le modèle ; getOllamaPullStatus lit la progression', async () => {
+    stubBrowser({ token: 'tok-admin' })
+    const fetchMock = vi.fn(async () => jsonResponse({ ok: true, model: 'nomic-embed-text' }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await startOllamaPull('nomic-embed-text')
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
+    expect(url).toBe('/v1/admin/ollama_pull')
+    expect(JSON.parse(init.body as string)).toEqual({ model: 'nomic-embed-text' })
+
+    const status = { running: true, model: 'nomic-embed-text', percent: 42, status: 'pulling abc', error: null }
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(status)))
+    await expect(getOllamaPullStatus()).resolves.toEqual(status)
+  })
+
+  it('startOllamaPull propage le 409 « déjà en cours » en ApiError', async () => {
+    stubBrowser({ token: 'tok-admin' })
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ error: 'un téléchargement est déjà en cours (qwen2.5:3b)' }, 409)))
+    await expect(startOllamaPull('autre')).rejects.toMatchObject({ status: 409 })
+  })
+
+  it('copyOpenClawKey poste le provider et retourne le fichier écrit', async () => {
+    stubBrowser({ token: 'tok-admin' })
+    const fetchMock = vi.fn(async () => jsonResponse({ ok: true, provider: 'openrouter', key_file: '/home/x/.openrouter/api_key' }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const r = await copyOpenClawKey('openrouter')
+    expect(r.key_file).toBe('/home/x/.openrouter/api_key')
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
+    expect(url).toBe('/v1/admin/openclaw_copy_key')
+    expect(JSON.parse(init.body as string)).toEqual({ provider: 'openrouter' })
   })
 })

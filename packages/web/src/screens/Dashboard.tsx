@@ -1,8 +1,10 @@
 /**
  * Tableau de bord — l'état de la mémoire en un coup d'œil :
- * santé (doctor), compteurs (stats), souvenirs en attente de traitement (WAL).
+ * santé (doctor), compteurs (stats), souvenirs en attente de traitement (WAL),
+ * et ALERTE moteur d'extraction (anti-mort-silencieuse : si aucun moteur n'est
+ * disponible, on le dit en rouge, on ne laisse pas la file gonfler en silence).
  */
-import { getDoctor, getOverview, getStats, type AgentOverview, type DoctorReport, type Stats } from '../api'
+import { getDoctor, getLlmHealth, getOverview, getStats, type AgentOverview, type DoctorReport, type LlmHealth, type Stats } from '../api'
 import { ErrorBanner, Spinner, formatBytes, useLoad } from '../components/ui'
 
 const AGENT_LABELS: Record<string, string> = {
@@ -17,10 +19,16 @@ const DB_KIND_LABELS: Record<string, string> = {
   shared: 'Mémoire partagée',
 }
 
-export function Dashboard({ onConnect }: { onConnect: () => void }) {
+export function Dashboard({ onConnect, onConfigure }: { onConnect: () => void; onConfigure?: () => void }) {
   const { state, reload } = useLoad(async () => {
-    const [stats, doctor, overview] = await Promise.all([getStats(), getDoctor(), getOverview().catch(() => [])])
-    return { stats, doctor, overview }
+    const [stats, doctor, overview, llmHealth] = await Promise.all([
+      getStats(),
+      getDoctor(),
+      getOverview().catch(() => []),
+      // route « contrat » : absente sur un vieux service → pas de bannière
+      getLlmHealth().catch(() => null),
+    ])
+    return { stats, doctor, overview, llmHealth }
   })
 
   return (
@@ -35,7 +43,14 @@ export function Dashboard({ onConnect }: { onConnect: () => void }) {
       {state.status === 'loading' && <Spinner />}
       {state.status === 'error' && <ErrorBanner message={state.message} onRetry={reload} />}
       {state.status === 'ready' && (
-        <DashboardBody stats={state.data.stats} doctor={state.data.doctor} overview={state.data.overview} onConnect={onConnect} />
+        <DashboardBody
+          stats={state.data.stats}
+          doctor={state.data.doctor}
+          overview={state.data.overview}
+          llmHealth={state.data.llmHealth}
+          onConnect={onConnect}
+          onConfigure={onConfigure}
+        />
       )}
     </section>
   )
@@ -45,17 +60,23 @@ function DashboardBody({
   stats,
   doctor,
   overview,
+  llmHealth,
   onConnect,
+  onConfigure,
 }: {
   stats: Stats
   doctor: DoctorReport
   overview: AgentOverview[]
+  llmHealth: LlmHealth | null
   onConnect: () => void
+  onConfigure?: () => void
 }) {
   const walPending = doctor.databases.reduce((sum, db) => sum + (db.wal_pending ?? 0), 0)
 
   return (
     <>
+      <LlmBanner health={llmHealth} onConfigure={onConfigure} />
+
       <HealthCard doctor={doctor} />
 
       <div className="stat-grid">
@@ -136,6 +157,33 @@ function DashboardBody({
         </table>
       </details>
     </>
+  )
+}
+
+/**
+ * Bannière moteur d'extraction : visible UNIQUEMENT quand l'extraction est
+ * indisponible (avec le nombre de souvenirs en attente s'il y en a). Rien
+ * d'affiché quand tout va bien.
+ */
+function LlmBanner({ health, onConfigure }: { health: LlmHealth | null; onConfigure?: () => void }) {
+  if (!health || health.extraction.available) return null
+  const pending = health.wal_pending
+  return (
+    <div className={`llm-banner${pending > 0 ? ' llm-banner-critical' : ''}`}>
+      <div>
+        <strong>
+          ⚠️ {pending > 0
+            ? `${pending.toLocaleString('fr-FR')} souvenir${pending > 1 ? 's' : ''} en attente — aucun moteur d’extraction disponible.`
+            : 'Aucun moteur d’extraction disponible — Memoria enregistre mais n’apprend rien.'}
+        </strong>
+        {health.extraction.reason && <p className="muted">{health.extraction.reason}</p>}
+      </div>
+      {onConfigure && (
+        <button type="button" className="btn btn-primary" onClick={onConfigure}>
+          Configurer →
+        </button>
+      )}
+    </div>
   )
 }
 

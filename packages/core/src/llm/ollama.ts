@@ -10,6 +10,8 @@ import { assertVectorDimensions } from './embeddings-guard.js'
 export const DEFAULT_OLLAMA_BASE_URL = 'http://127.0.0.1:11434'
 export const DEFAULT_OLLAMA_EMBEDDING_MODEL = 'nomic-embed-text'
 export const DEFAULT_OLLAMA_EMBEDDING_DIMENSIONS = 768
+/** Modèle d'extraction local par défaut (spec §14). */
+export const DEFAULT_LOCAL_EXTRACTION_MODEL = 'qwen2.5:3b'
 
 const TAGS_TIMEOUT_MS = 1500
 
@@ -17,7 +19,8 @@ interface OllamaTagsResponse {
   models?: Array<{ name?: string; model?: string }>
 }
 
-function modelMatches(installed: string, wanted: string): boolean {
+/** « nomic-embed-text » matche « nomic-embed-text:latest » (exporté pour detect.ts). */
+export function modelMatches(installed: string, wanted: string): boolean {
   if (installed === wanted) return true
   // /api/tags liste « name:tag » — accepter « nomic-embed-text » pour « nomic-embed-text:latest »
   return !wanted.includes(':') && installed === `${wanted}:latest`
