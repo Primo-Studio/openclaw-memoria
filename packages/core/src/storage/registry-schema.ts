@@ -168,4 +168,34 @@ export const registryMigrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 3,
+    name: 'registry-person-identifiers',
+    up(db) {
+      // IDENTITÉ DE L'INTERLOCUTEUR (spec §5 persons, activée) : qui parle à
+      // l'agent ? Néto (owner) le plus souvent, mais aussi Badette, des
+      // stagiaires, un client… reconnus par un identifiant (numéro Telegram/
+      // WhatsApp, e-mail, handle). Un identifiant = AU PLUS une personne.
+      db.exec(`
+        CREATE TABLE person_identifiers (
+          id TEXT PRIMARY KEY,
+          person_id TEXT NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+          kind TEXT NOT NULL CHECK (kind IN ('phone','email','telegram','whatsapp','handle','other')),
+          value TEXT NOT NULL,
+          label TEXT,
+          created_at TEXT NOT NULL
+        );
+        -- Un même (kind,value) normalisé ne pointe que vers UNE personne.
+        CREATE UNIQUE INDEX idx_person_ident_unique ON person_identifiers(kind, value);
+        CREATE INDEX idx_person_ident_person ON person_identifiers(person_id);
+      `)
+      // Qualifie la personne (relation à Primo) + lien éventuel vers l'org et
+      // vers le human_user propriétaire (Néto = à la fois owner ET personne).
+      const cols = (db.pragma('table_info(persons)') as Array<{ name: string }>).map(c => c.name)
+      if (!cols.includes('relation')) db.exec("ALTER TABLE persons ADD COLUMN relation TEXT")
+      if (!cols.includes('org_id')) db.exec('ALTER TABLE persons ADD COLUMN org_id TEXT REFERENCES organizations(id)')
+      if (!cols.includes('user_id')) db.exec('ALTER TABLE persons ADD COLUMN user_id TEXT REFERENCES human_users(id)')
+      if (!cols.includes('updated_at')) db.exec("ALTER TABLE persons ADD COLUMN updated_at TEXT")
+    },
+  },
 ]

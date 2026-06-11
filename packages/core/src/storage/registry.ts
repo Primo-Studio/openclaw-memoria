@@ -18,6 +18,9 @@ import type {
   MemoryScope,
   Organization,
   Pairing,
+  Person,
+  PersonIdentifier,
+  PersonProfile,
   Project,
   ScopeKind,
   ScopePolicy,
@@ -25,6 +28,20 @@ import type {
 } from '../types.js'
 
 const PAIRING_TTL_MS = 10 * 60 * 1000 // 10 minutes
+
+/**
+ * Normalise un identifiant pour le matching d'interlocuteur :
+ * - téléphone/WhatsApp : ne garde que `+` et chiffres ;
+ * - e-mail/Telegram/handle : minuscule + trim, @ initial retiré pour les handles.
+ */
+export function normalizeIdentifier(kind: PersonIdentifier['kind'], value: string): string {
+  const v = value.trim()
+  if (!v) return ''
+  if (kind === 'phone' || kind === 'whatsapp') return v.replace(/[^\d+]/g, '')
+  if (kind === 'email') return v.toLowerCase()
+  if (kind === 'telegram' || kind === 'handle') return v.replace(/^@/, '').toLowerCase()
+  return v.toLowerCase()
+}
 
 export class RegistryStore {
   readonly db: Database
@@ -140,6 +157,100 @@ export class RegistryStore {
       .prepare('INSERT INTO organizations (id, name, org_type, parent_org_id, created_at) VALUES (?, ?, ?, ?, ?)')
       .run(org.id, org.name, org.org_type, org.parent_org_id, org.created_at)
     return org
+  }
+
+  // ---------------------------------------------------------------- personnes (interlocuteurs)
+
+  createPerson(input: { display_name: string; relation?: string | null; notes?: string | null; org_id?: string | null; user_id?: string | null }): Person {
+    const now = nowISO()
+    const p: Person = {
+      id: newId(),
+      display_name: input.display_name,
+      notes: input.notes ?? null,
+      relation: input.relation ?? null,
+      org_id: input.org_id ?? null,
+      user_id: input.user_id ?? null,
+      created_at: now,
+      updated_at: now,
+    }
+    this.db
+      .prepare('INSERT INTO persons (id, display_name, notes, relation, org_id, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(p.id, p.display_name, p.notes, p.relation, p.org_id, p.user_id, p.created_at, p.updated_at)
+    return p
+  }
+
+  updatePerson(id: string, patch: Partial<Pick<Person, 'display_name' | 'notes' | 'relation' | 'org_id'>>): Person | null {
+    const cur = this.getPersonRow(id)
+    if (!cur) return null
+    const next: Person = {
+      ...cur,
+      display_name: patch.display_name ?? cur.display_name,
+      notes: patch.notes !== undefined ? patch.notes : cur.notes,
+      relation: patch.relation !== undefined ? patch.relation : cur.relation,
+      org_id: patch.org_id !== undefined ? patch.org_id : cur.org_id,
+      updated_at: nowISO(),
+    }
+    this.db
+      .prepare('UPDATE persons SET display_name = ?, notes = ?, relation = ?, org_id = ?, updated_at = ? WHERE id = ?')
+      .run(next.display_name, next.notes, next.relation, next.org_id, next.updated_at, id)
+    return next
+  }
+
+  deletePerson(id: string): boolean {
+    const info = this.db.prepare('DELETE FROM persons WHERE id = ?').run(id)
+    return info.changes > 0
+  }
+
+  private getPersonRow(id: string): Person | null {
+    return (this.db.prepare('SELECT * FROM persons WHERE id = ?').get(id) as Person | undefined) ?? null
+  }
+
+  getPerson(id: string): PersonProfile | null {
+    const p = this.getPersonRow(id)
+    if (!p) return null
+    return { ...p, identifiers: this.identifiersOf(id) }
+  }
+
+  listPersons(): PersonProfile[] {
+    const rows = this.db.prepare('SELECT * FROM persons ORDER BY display_name COLLATE NOCASE').all() as Person[]
+    return rows.map(p => ({ ...p, identifiers: this.identifiersOf(p.id) }))
+  }
+
+  private identifiersOf(personId: string): PersonIdentifier[] {
+    return this.db.prepare('SELECT * FROM person_identifiers WHERE person_id = ? ORDER BY created_at').all(personId) as PersonIdentifier[]
+  }
+
+  addIdentifier(personId: string, kind: PersonIdentifier['kind'], value: string, label?: string | null): PersonIdentifier {
+    const normalized = normalizeIdentifier(kind, value)
+    if (!normalized) throw new Error('identifiant vide')
+    const ident: PersonIdentifier = {
+      id: newId(),
+      person_id: personId,
+      kind,
+      value: normalized,
+      label: label ?? null,
+      created_at: nowISO(),
+    }
+    // un identifiant = au plus une personne : on réattribue proprement si déjà pris
+    this.db.prepare('DELETE FROM person_identifiers WHERE kind = ? AND value = ?').run(kind, normalized)
+    this.db
+      .prepare('INSERT INTO person_identifiers (id, person_id, kind, value, label, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(ident.id, ident.person_id, ident.kind, ident.value, ident.label, ident.created_at)
+    return ident
+  }
+
+  removeIdentifier(id: string): boolean {
+    return this.db.prepare('DELETE FROM person_identifiers WHERE id = ?').run(id).changes > 0
+  }
+
+  /** Reconnaît un interlocuteur par un identifiant (Telegram/mail/tel…). */
+  findPersonByIdentifier(kind: PersonIdentifier['kind'], value: string): PersonProfile | null {
+    const normalized = normalizeIdentifier(kind, value)
+    if (!normalized) return null
+    const row = this.db.prepare('SELECT person_id FROM person_identifiers WHERE kind = ? AND value = ?').get(kind, normalized) as
+      | { person_id: string }
+      | undefined
+    return row ? this.getPerson(row.person_id) : null
   }
 
   getScope(id: string): MemoryScope | null {

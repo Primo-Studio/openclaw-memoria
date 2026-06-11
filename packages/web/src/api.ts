@@ -546,6 +546,69 @@ export async function reviewDecision(ids: string[], decision: 'approve' | 'rejec
   return res.updated
 }
 
+// ------------------------------------------------------------ personnes / interlocuteurs
+
+export interface PersonIdentifier {
+  id: string
+  person_id: string
+  kind: 'phone' | 'email' | 'telegram' | 'whatsapp' | 'handle' | 'other'
+  value: string
+  label: string | null
+  created_at: string
+}
+
+export interface PersonProfile {
+  id: string
+  display_name: string
+  notes: string | null
+  relation: string | null
+  org_id: string | null
+  user_id: string | null
+  created_at: string
+  updated_at: string | null
+  identifiers: PersonIdentifier[]
+}
+
+export async function getPersons(): Promise<PersonProfile[]> {
+  const res = await request<{ persons: PersonProfile[] }>('GET', '/v1/admin/persons')
+  return res.persons
+}
+
+export async function createPerson(input: { display_name: string; relation?: string; notes?: string }): Promise<PersonProfile> {
+  const res = await request<{ person: PersonProfile }>('POST', '/v1/admin/person', input)
+  return res.person
+}
+
+export async function updatePerson(id: string, patch: { display_name?: string; relation?: string | null; notes?: string | null }): Promise<PersonProfile> {
+  const res = await request<{ person: PersonProfile }>('POST', '/v1/admin/person_update', { id, ...patch })
+  return res.person
+}
+
+export async function deletePerson(id: string): Promise<boolean> {
+  const res = await request<{ deleted: boolean }>('POST', '/v1/admin/person_delete', { id })
+  return res.deleted
+}
+
+export async function addPersonIdentifier(personId: string, kind: PersonIdentifier['kind'], value: string, label?: string): Promise<PersonIdentifier> {
+  const res = await request<{ identifier: PersonIdentifier }>('POST', '/v1/admin/person_identifier', { person_id: personId, kind, value, label })
+  return res.identifier
+}
+
+export async function removePersonIdentifier(id: string): Promise<boolean> {
+  const res = await request<{ deleted: boolean }>('POST', '/v1/admin/person_identifier_delete', { id })
+  return res.deleted
+}
+
+export interface InterlocutorMatch {
+  person: PersonProfile
+  known: string[]
+}
+
+export async function identifyInterlocutor(input: { phone?: string; email?: string; telegram?: string; whatsapp?: string; handle?: string; name?: string }): Promise<InterlocutorMatch | null> {
+  const res = await request<{ match: InterlocutorMatch | null }>('POST', '/v1/admin/identify_interlocutor', input)
+  return res.match
+}
+
 // ------------------------------------------------------------ contrôle (Réglages)
 
 export interface AutostartStatus {

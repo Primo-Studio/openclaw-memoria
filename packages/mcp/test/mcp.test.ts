@@ -52,6 +52,10 @@ function fakeGateway(): DaemonGateway & { calls: Array<{ method: string; input: 
       calls.push({ method: 'captureTurn', input })
       return { queued: true }
     },
+    identifyInterlocutor: async input => {
+      calls.push({ method: 'identifyInterlocutor', input })
+      return { match: null }
+    },
   }
 }
 
@@ -162,6 +166,7 @@ describe('buildServer handlers', () => {
       },
       storeFact: async () => ({}),
       captureTurn: async () => ({}),
+      identifyInterlocutor: async () => ({ match: null }),
     }
     const { handlers } = buildServer({
       instanceId: 'i',
@@ -197,7 +202,7 @@ describe('buildServer handlers', () => {
     expect(getPayload.active_context.project_id).toBe('jamboard')
   })
 
-  it('le serveur MCP expose bien les 5 outils', () => {
+  it('le serveur MCP expose bien les 6 outils', () => {
     const { server } = buildServer({
       instanceId: 'i',
       tracker: new ActiveContextTracker(),
@@ -208,6 +213,7 @@ describe('buildServer handlers', () => {
     expect(Object.keys(tools).sort()).toEqual([
       'memoria_capture_turn',
       'memoria_get_context',
+      'memoria_identify_interlocutor',
       'memoria_recall',
       'memoria_set_context',
       'memoria_store_fact',

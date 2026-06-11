@@ -59,6 +59,9 @@ import type {
   Fact,
   ForgetFilter,
   MemoryScope,
+  Person,
+  PersonIdentifier,
+  PersonProfile,
   RecallInput,
   RecallItem,
   RecallResult,
@@ -282,6 +285,100 @@ export class Memoria {
       config_path: this.resolved.configPath,
       on_network_volume: isOnNetworkVolume(this.paths.root),
     }
+  }
+
+  // ------------------------------------------------------------ interlocuteurs (personnes)
+
+  listPersons(): PersonProfile[] {
+    this.assertOpen()
+    return this.registry.listPersons()
+  }
+
+  getPerson(id: string): PersonProfile | null {
+    this.assertOpen()
+    return this.registry.getPerson(id)
+  }
+
+  createPerson(input: { display_name: string; relation?: string | null; notes?: string | null; org_id?: string | null }): Person {
+    this.assertOpen()
+    const p = this.registry.createPerson(input)
+    this.registry.audit({ actor_type: 'user', actor_id: 'local', action: 'person_create', target_id_hash: sha256Hex(p.id), scope_id: null, reason: null })
+    return p
+  }
+
+  updatePerson(id: string, patch: Partial<Pick<Person, 'display_name' | 'notes' | 'relation' | 'org_id'>>): Person | null {
+    this.assertOpen()
+    return this.registry.updatePerson(id, patch)
+  }
+
+  deletePerson(id: string): boolean {
+    this.assertOpen()
+    const ok = this.registry.deletePerson(id)
+    if (ok) this.registry.audit({ actor_type: 'user', actor_id: 'local', action: 'person_delete', target_id_hash: sha256Hex(id), scope_id: null, reason: null })
+    return ok
+  }
+
+  addPersonIdentifier(personId: string, kind: PersonIdentifier['kind'], value: string, label?: string | null): PersonIdentifier {
+    this.assertOpen()
+    return this.registry.addIdentifier(personId, kind, value, label)
+  }
+
+  removePersonIdentifier(id: string): boolean {
+    this.assertOpen()
+    return this.registry.removeIdentifier(id)
+  }
+
+  /**
+   * Reconnaît l'interlocuteur courant via un ou plusieurs identifiants
+   * (Telegram/WhatsApp/mail/handle…). Renvoie la personne + ses faits connus
+   * pour que l'agent sache à QUI il parle. Aucun identifiant → null (= owner par défaut).
+   */
+  identifyInterlocutor(input: {
+    phone?: string
+    email?: string
+    telegram?: string
+    whatsapp?: string
+    handle?: string
+    name?: string
+  }): { person: PersonProfile; known: string[] } | null {
+    this.assertOpen()
+    const tries: Array<[PersonIdentifier['kind'], string | undefined]> = [
+      ['telegram', input.telegram],
+      ['whatsapp', input.whatsapp],
+      ['phone', input.phone],
+      ['email', input.email],
+      ['handle', input.handle],
+    ]
+    let person: PersonProfile | null = null
+    for (const [kind, value] of tries) {
+      if (!value) continue
+      person = this.registry.findPersonByIdentifier(kind, value)
+      if (person) break
+    }
+    // repli par nom exact (display_name) si aucun identifiant ne matche
+    if (!person && input.name) {
+      const match = this.registry.listPersons().find(p => p.display_name.toLowerCase() === input.name!.trim().toLowerCase())
+      if (match) person = match
+    }
+    if (!person) return null
+    return { person, known: this.knownAboutPerson(person.display_name) }
+  }
+
+  /** Faits connus mentionnant cette personne (cross-agent, scopes partagés). */
+  private knownAboutPerson(name: string, limit = 8): string[] {
+    const hits = this.globalSearch(name, limit)
+    return hits.map(h => h.fact)
+  }
+
+  /** Texte court « tu parles à X » pour l'injection de contexte (recall). */
+  describeInterlocutor(personId: string): string | null {
+    const p = this.registry.getPerson(personId)
+    if (!p) return null
+    const bits = [p.display_name]
+    if (p.relation) bits.push(`(${p.relation})`)
+    let line = `Tu parles à ${bits.join(' ')}.`
+    if (p.notes) line += ` ${p.notes}`
+    return line
   }
 
   /** Authentifie un token d'instance (utilisé par le daemon). */

@@ -370,6 +370,58 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         sendJson(res, 200, { agents: memoria.listAgents() })
         return
       }
+      case 'GET /v1/admin/persons': {
+        sendJson(res, 200, { persons: memoria.listPersons() })
+        return
+      }
+      case 'POST /v1/admin/person': {
+        const body = await readJson(req)
+        const displayName = String(body['display_name'] ?? '').trim()
+        if (!displayName) throw new HttpError(400, 'display_name requis')
+        sendJson(res, 200, {
+          person: memoria.createPerson({
+            display_name: displayName,
+            relation: (body['relation'] as string | null) ?? null,
+            notes: (body['notes'] as string | null) ?? null,
+            org_id: (body['org_id'] as string | null) ?? null,
+          }),
+        })
+        return
+      }
+      case 'POST /v1/admin/person_update': {
+        const body = await readJson(req)
+        const id = String(body['id'] ?? '')
+        if (!id) throw new HttpError(400, 'id requis')
+        const person = memoria.updatePerson(id, body as Record<string, never>)
+        if (!person) throw new HttpError(404, 'personne inconnue')
+        sendJson(res, 200, { person })
+        return
+      }
+      case 'POST /v1/admin/person_delete': {
+        const body = await readJson(req)
+        sendJson(res, 200, { deleted: memoria.deletePerson(String(body['id'] ?? '')) })
+        return
+      }
+      case 'POST /v1/admin/person_identifier': {
+        const body = await readJson(req)
+        const personId = String(body['person_id'] ?? '')
+        const kind = String(body['kind'] ?? '') as 'phone' | 'email' | 'telegram' | 'whatsapp' | 'handle' | 'other'
+        const value = String(body['value'] ?? '')
+        if (!personId || !kind || !value) throw new HttpError(400, 'person_id, kind et value requis')
+        if (!['phone', 'email', 'telegram', 'whatsapp', 'handle', 'other'].includes(kind)) throw new HttpError(400, `kind inconnu : ${kind}`)
+        sendJson(res, 200, { identifier: memoria.addPersonIdentifier(personId, kind, value, (body['label'] as string | null) ?? null) })
+        return
+      }
+      case 'POST /v1/admin/person_identifier_delete': {
+        const body = await readJson(req)
+        sendJson(res, 200, { deleted: memoria.removePersonIdentifier(String(body['id'] ?? '')) })
+        return
+      }
+      case 'POST /v1/admin/identify_interlocutor': {
+        const body = await readJson(req)
+        sendJson(res, 200, { match: memoria.identifyInterlocutor(body as Record<string, never>) })
+        return
+      }
       case 'GET /v1/admin/stats': {
         sendJson(res, 200, memoria.stats())
         return
@@ -490,6 +542,12 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
           active_context: body['active_context'] as CaptureTurnInput['active_context'],
         })
         sendJson(res, 200, result)
+        return
+      }
+      case 'POST /v1/memory/identify_interlocutor': {
+        // L'agent demande « à qui je parle ? » via un identifiant (Telegram/mail/tel…).
+        const body = await readJson(req)
+        sendJson(res, 200, { match: memoria.identifyInterlocutor(body as Record<string, never>) })
         return
       }
       default:

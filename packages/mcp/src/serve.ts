@@ -24,6 +24,7 @@ export interface DaemonGateway {
   recall(input: Record<string, unknown>): Promise<RecallResult>
   storeFact(input: Record<string, unknown>): Promise<unknown>
   captureTurn(input: Record<string, unknown>): Promise<unknown>
+  identifyInterlocutor(input: Record<string, unknown>): Promise<unknown>
 }
 
 /**
@@ -48,8 +49,15 @@ export class HttpDaemonGateway implements DaemonGateway {
     return this.client.storeFact(input)
   }
 
-  async captureTurn(input: Record<string, unknown>): Promise<unknown> {
-    const path = '/v1/memory/capture_turn'
+  captureTurn(input: Record<string, unknown>): Promise<unknown> {
+    return this.postMemory('/v1/memory/capture_turn', input)
+  }
+
+  identifyInterlocutor(input: Record<string, unknown>): Promise<unknown> {
+    return this.postMemory('/v1/memory/identify_interlocutor', input)
+  }
+
+  private async postMemory(path: string, input: Record<string, unknown>): Promise<unknown> {
     const res = await fetch(`${this.client.baseUrl}${path}`, {
       method: 'POST',
       headers: {
@@ -85,6 +93,7 @@ export interface ToolHandlers {
   captureTurn(args: { messages: CaptureMessage[] }): Promise<CallToolResult>
   setContext(args: SetContextInput): Promise<CallToolResult>
   getContext(): Promise<CallToolResult>
+  identifyInterlocutor(args: { phone?: string; email?: string; telegram?: string; whatsapp?: string; handle?: string; name?: string }): Promise<CallToolResult>
 }
 
 export interface BuiltServer {
@@ -97,6 +106,7 @@ const SERVER_INSTRUCTIONS = [
   '- Call memoria_recall at the START of a task to load relevant context (preferences, decisions, project facts).',
   '- Call memoria_store_fact whenever you learn a durable fact worth remembering (a decision, a preference, a stable project detail). Do not store transient chatter.',
   '- Call memoria_set_context when you switch project, client or repository, so recall and storage are scoped correctly.',
+  '- Call memoria_identify_interlocutor when the person speaking might not be the owner (e.g. a phone number or name appears) to learn who they are and how they relate to the user.',
   '- memoria_capture_turn lets you hand over full conversation turns for background extraction.',
 ].join('\n')
 
@@ -184,6 +194,14 @@ export function buildServer(opts: BuildServerOptions): BuiltServer {
       const detected = opts.tracker.autoDetect()
       return ok({ active_context: opts.tracker.current(), auto_detected_repo: detected })
     },
+
+    async identifyInterlocutor(args) {
+      try {
+        return ok(await withDaemon(g => g.identifyInterlocutor(args as Record<string, unknown>)))
+      } catch (err) {
+        return fail(err)
+      }
+    },
   }
 
   const server = new McpServer(
@@ -265,6 +283,23 @@ export function buildServer(opts: BuildServerOptions): BuiltServer {
       inputSchema: {},
     },
     async () => handlers.getContext(),
+  )
+
+  server.registerTool(
+    'memoria_identify_interlocutor',
+    {
+      description:
+        'Identify WHO you are talking to (the human on the other end) from an identifier — a phone number, email, Telegram/WhatsApp handle, or a name. Returns the matched person, their relation to the user (e.g. colleague, intern, client) and known facts about them. Call this at the start of a conversation when the speaker may not be the owner (Néto), so you address the right person and apply the right context. Returns no match when unknown (assume it is the owner).',
+      inputSchema: {
+        phone: z.string().optional().describe('Phone number (any format).'),
+        email: z.string().optional().describe('Email address.'),
+        telegram: z.string().optional().describe('Telegram handle or numeric id.'),
+        whatsapp: z.string().optional().describe('WhatsApp number.'),
+        handle: z.string().optional().describe('Generic handle/username.'),
+        name: z.string().optional().describe('Display name to match as a fallback.'),
+      },
+    },
+    async args => handlers.identifyInterlocutor(args),
   )
 
   return { server, handlers }

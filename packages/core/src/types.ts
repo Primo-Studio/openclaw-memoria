@@ -56,7 +56,28 @@ export interface Person {
   id: string
   display_name: string
   notes: string | null
+  /** Relation à Primo : « collaboratrice », « stagiaire », « client », « owner »… */
+  relation: string | null
+  org_id: string | null
+  /** Lié au human_user propriétaire si cette personne EST l'utilisateur (Néto). */
+  user_id: string | null
   created_at: string
+  updated_at: string | null
+}
+
+/** Identifiant qui permet de reconnaître un interlocuteur (Telegram, mail, tel…). */
+export interface PersonIdentifier {
+  id: string
+  person_id: string
+  kind: 'phone' | 'email' | 'telegram' | 'whatsapp' | 'handle' | 'other'
+  value: string
+  label: string | null
+  created_at: string
+}
+
+/** Personne + ses identifiants + rôles, pour l'UI et l'identification. */
+export interface PersonProfile extends Person {
+  identifiers: PersonIdentifier[]
 }
 
 export interface Organization {
@@ -236,6 +257,8 @@ export interface ActiveContext {
   client_org_id?: string | null
   repo_path?: string | null
   topic?: string | null
+  /** Qui parle à l'agent en ce moment (id de personne). null/absent = l'owner (Néto). */
+  interlocutor_person_id?: string | null
 }
 
 export type CaptureMode = 'auto-private' | 'review-first' | 'incognito'
