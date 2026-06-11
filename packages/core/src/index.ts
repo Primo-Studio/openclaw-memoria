@@ -2,7 +2,13 @@
  * @memoria/core — moteur Memoria, aucune dépendance d'hôte.
  */
 export { Memoria } from './engine/memoria.js'
-export type { MemoriaInitOptions, PairAssistantInput, PairAssistantResult } from './engine/memoria.js'
+export type {
+  LlmEngineHealth,
+  LlmHealthReport,
+  MemoriaInitOptions,
+  PairAssistantInput,
+  PairAssistantResult,
+} from './engine/memoria.js'
 export { scoreFact, passesClientIsolation } from './engine/scoring.js'
 export {
   resolveStorageRoot,

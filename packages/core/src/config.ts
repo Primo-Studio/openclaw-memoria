@@ -48,9 +48,11 @@ export interface MemoriaConfig {
     profile?: string
     /**
      * Choix EXPLICITE du provider/modèle d'extraction (prioritaire sur le
-     * profil si présent). provider ∈ ollama|anthropic|openai|openrouter.
+     * profil si présent). provider ∈ ollama|lmstudio|anthropic|openai|openrouter.
+     * base_url : serveurs locaux OpenAI-compatibles (LM Studio — défaut
+     * http://127.0.0.1:1234/v1) ou Ollama hors port standard.
      */
-    extraction?: { provider?: string; model?: string }
+    extraction?: { provider?: string; model?: string; base_url?: string }
     /** Choix explicite des embeddings (provider ollama uniquement en V1). */
     embeddings?: { provider?: string; model?: string }
   }

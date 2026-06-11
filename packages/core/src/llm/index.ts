@@ -8,7 +8,8 @@
 import type { MemoriaConfig } from '../config.js'
 import type { EmbeddingProvider, LlmProfile, LlmProvider } from './provider.js'
 import { AnthropicProvider } from './anthropic.js'
-import { OllamaEmbeddingProvider, OllamaProvider } from './ollama.js'
+import { DEFAULT_LOCAL_EXTRACTION_MODEL, OllamaEmbeddingProvider, OllamaProvider } from './ollama.js'
+import { LmStudioProvider } from './lmstudio.js'
 import {
   DEFAULT_OPENAI_MODEL,
   DEFAULT_OPENROUTER_MODEL,
@@ -24,13 +25,40 @@ export type {
 } from './provider.js'
 export { NullLlmProvider } from './provider.js'
 export {
+  DEFAULT_LOCAL_EXTRACTION_MODEL,
   DEFAULT_OLLAMA_BASE_URL,
   DEFAULT_OLLAMA_EMBEDDING_DIMENSIONS,
   DEFAULT_OLLAMA_EMBEDDING_MODEL,
   OllamaEmbeddingProvider,
   OllamaProvider,
+  modelMatches,
 } from './ollama.js'
 export type { OllamaEmbeddingProviderOptions, OllamaProviderOptions } from './ollama.js'
+export {
+  DEFAULT_LMSTUDIO_BASE_URL,
+  LMSTUDIO_AUTO_MODEL,
+  LmStudioProvider,
+  lmstudioListModels,
+} from './lmstudio.js'
+export type { LmStudioModelsResult, LmStudioProviderOptions } from './lmstudio.js'
+export {
+  copyOpenClawKey,
+  defaultHasCommand,
+  detectLlmOptions,
+  scanOpenClawCredentials,
+} from './detect.js'
+export type {
+  ApiKeyOption,
+  CopyOpenClawKeyResult,
+  DetectLlmOptionsInput,
+  LlmOptions,
+  LmStudioOption,
+  OllamaOption,
+  OpenClawKeyCandidate,
+  OpenClawOption,
+  OpenClawScan,
+  ReusableProvider,
+} from './detect.js'
 export {
   ANTHROPIC_API_VERSION,
   AnthropicProvider,
@@ -53,14 +81,13 @@ export {
 export type { OpenAiKeyOptions, OpenAiProviderOptions, OpenAiFlavor } from './openai.js'
 export { assertVectorDimensions, cosineSimilarity } from './embeddings-guard.js'
 
-/** Modèle d'extraction local par défaut (spec §14). */
-export const DEFAULT_LOCAL_EXTRACTION_MODEL = 'qwen2.5:3b'
-
 export type LlmProfileName = '100-local' | 'local-plus-cloud' | 'cloud'
 
 export interface ResolveLlmProfileOptions {
   /** URL du serveur Ollama (défaut http://127.0.0.1:11434). */
   ollamaBaseUrl?: string
+  /** URL du serveur LM Studio (défaut http://127.0.0.1:1234/v1). */
+  lmstudioBaseUrl?: string
   /** Environnement injectable pour les tests. */
   env?: NodeJS.ProcessEnv
   /** Chemin du fichier de clé Anthropic, injectable pour les tests. */
@@ -79,11 +106,15 @@ async function buildExplicitProvider(
   provider: string,
   model: string | undefined,
   opts: ResolveLlmProfileOptions,
+  baseUrl?: string,
 ): Promise<LlmProvider | null> {
   let p: LlmProvider | null = null
   switch (provider) {
     case 'ollama':
-      p = new OllamaProvider({ model: model ?? DEFAULT_LOCAL_EXTRACTION_MODEL, baseUrl: opts.ollamaBaseUrl })
+      p = new OllamaProvider({ model: model ?? DEFAULT_LOCAL_EXTRACTION_MODEL, baseUrl: baseUrl ?? opts.ollamaBaseUrl })
+      break
+    case 'lmstudio':
+      p = new LmStudioProvider({ ...(model ? { model } : {}), baseUrl: baseUrl ?? opts.lmstudioBaseUrl })
       break
     case 'anthropic':
       p = new AnthropicProvider({ env: opts.env, keyFilePath: opts.anthropicKeyFile, ...(model ? { model } : {}) })
@@ -124,7 +155,7 @@ export async function resolveLlmProfile(
   // 1) Choix EXPLICITE du provider/modèle (prioritaire) — le « l'utilisateur décide ».
   const explicit = config.llm?.extraction
   if (explicit?.provider) {
-    extraction = await buildExplicitProvider(explicit.provider, explicit.model, opts)
+    extraction = await buildExplicitProvider(explicit.provider, explicit.model, opts, explicit.base_url)
     if (extraction === null) {
       console.warn(`[memoria:llm] provider d'extraction « ${explicit.provider} » indisponible (clé/modèle ?) — repli profil`)
     }
