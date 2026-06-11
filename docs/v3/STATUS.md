@@ -4,14 +4,15 @@
 > (`PLAN-Memoria-v3-2026-06-03.md` §15), adaptée par la décision kickoff
 > (monorepo direct, Phase 0 fusionnée dans le port).
 
-**Dernière mise à jour :** 2026-06-10 (session 2 — vagues 5-7 livrées, 24 couches portées)
+**Dernière mise à jour :** 2026-06-11 (session 4 — réseau multi-machines + interlocuteur + install/update)
 
-## 🏁 État global : les 24 couches cognitives sont portées
+## 🏁 État global : produit complet, partage multi-machines opérationnel
 
 Fondation V3 complète (daemon/MCP/UI/secrets/migration/partage/providers/desktop) + **24 couches**
-(voir `COUCHES-ETAT.md`). **355 tests verts, CI verte.** UI à 11 écrans. 3 agents connectés en réel
-(Claude Code, Codex, Koda) avec mémoire, thèmes, procédures, expertise, récurrences, révisions.
-Reste : distribution (npm/signature/OpenClaw) + raffinements (voir `TODO.md`).
+(voir `COUCHES-ETAT.md`) + **adaptateur OpenClaw** (auto-recall/capture) + **synchro inter-machines**
+(hub-and-spoke, coffre partagé) + **identification d'interlocuteur** + **install 1-commande & bouton
+mise à jour**. **430 tests verts, CI verte.** UI à 14 écrans. 6 agents réels connectés.
+Reste : terrain (init hub Mac Studio + join iMac), relais NAS optionnel, distribution npm/signature.
 
 
 
@@ -79,3 +80,24 @@ défaut sûr sans contexte, pas de sur-masquage, dormant explicite, cap tokens. 
   **expansion graphe au recall** (anti-fuite garantie), decay quotidien.
 - **UI Onboarding** (<60 s, détection providers) + **Réglages** (profil LLM, stockage).
 - 179 tests verts. Reste à faire : voir `TODO.md` (UI partage, OpenClaw, clusters/3D, publication npm).
+
+### 2026-06-11 — Session 3 (contrôle + visualisation + OpenClaw)
+- **Contrôle & config** : kill-switch (pause Memoria), suppression définitive d'agent, déplacement
+  stockage (clé USB, `memoria move`), lancement auto au login (launchd, `memoria autostart`). CLI + routes + UI.
+- **Relations entre thèmes** (graphe SVG, écran Thèmes) + **recherche globale** (tous agents, écran Mémoire).
+- **Audit OpenClaw 2026.6.5** : cause racine de la casse capture v3.34 = gate `allowConversationAccess`
+  (bloque les hooks de conversation par défaut). `docs/v3/DIAG-OPENCLAW-2026.6.5.md`.
+- **Adaptateur OpenClaw livré** (`packages/adapter-openclaw`, zéro dépendance native) : `before_prompt_build`
+  →/recall, `agent_end`→/capture (fire-and-forget). `memoria connect` installe le plugin + pose le gate +
+  le token. **Validé E2E sur le daemon réel** (recall + capture + extraction gpt-4o-mini). 16 tests.
+
+### 2026-06-11 — Session 4 (réseau multi-machines + interlocuteur + install/update)
+- **Identification de l'interlocuteur** (écran Personnes) : `person_identifiers` (tel/mail/Telegram/
+  WhatsApp/handle), `identifyInterlocutor`, outil MCP `memoria_identify_interlocutor`. 7 tests.
+- **Synchro inter-machines** (design `SYNC-INTER-MACHINES.md`, hub-and-spoke) : provenance + LWW
+  déterministe (content v2), `SyncEngine` (pairing/HMAC/pull/push/coffre/bootstrap), second listener LAN
+  `/v1/sync/*` (admin/memory restent loopback), CLI `memoria sync *`, UI Réglages. Coffre inter-machines
+  (valeurs chiffrées GVK, jamais en clair sur le réseau). **Validé : 2 daemons réels sur HTTP.** 33 tests sync.
+- **Install + mise à jour** : `scripts/install-memoria.sh` (1 commande non-dev), bouton « Mise à jour »
+  UI + `memoria update` (git pull+build+redémarrage), `docs/v3/INSTALLATION-RESEAU.md`.
+- **430 tests verts.** Daemon réel : 6 agents, 5785 souvenirs. Terrain restant : init hub + join iMac.
