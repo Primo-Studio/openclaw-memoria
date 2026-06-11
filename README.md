@@ -4,7 +4,19 @@
 
 > *Human-machine memory is our memory. Local, ours, and it never starts from zero.*
 
-**Status: V3 in active development** on the `memoria-v1` branch — a ground-up rebuild of the former OpenClaw plugin (now archived in [`legacy/`](legacy/)). See [`docs/v3/STATUS.md`](docs/v3/STATUS.md) for live progress.
+**Status: public beta** — V3 in active development on the `memoria-v1` branch, a ground-up rebuild of the former OpenClaw plugin (now archived in [`legacy/`](legacy/)). See [`docs/v3/STATUS.md`](docs/v3/STATUS.md) for live progress.
+
+## Install (macOS)
+
+One command in the Terminal — requires [Node.js 22 LTS](https://nodejs.org):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Primo-Studio/openclaw-memoria/memoria-v1/scripts/install-memoria.sh | sh
+```
+
+The script checks prerequisites, installs Memoria, starts the local service (auto-start at login) and opens the web UI. From there the onboarding guides you: pick your intelligence engine (Ollama recommended — free and 100% local — or LM Studio, or an OpenAI/OpenRouter/Anthropic API key), detect the agents on your machine, connect them in one click and optionally import their existing memories. Reopen the UI anytime with `memoria ui`, update with `memoria update`.
+
+🌐 **Website:** [primo-studio.fr/app/memoria](https://primo-studio.fr/app/memoria) · 🐛 [Report a bug](https://github.com/Primo-Studio/openclaw-memoria/issues)
 
 ---
 
