@@ -242,7 +242,7 @@ describe('connect (pairing)', () => {
     expect(saved.storage_root).toBe(join(root, 'data'))
     expect(saved.assistant_type).toBe('claude-code')
 
-    expect(registrar).toHaveBeenCalledWith('claude-code', 'claude-code-abc123')
+    expect(registrar).toHaveBeenCalledWith('claude-code', 'claude-code-abc123', { token: 'tok-xyz', storageRoot: join(root, 'data') })
     expect(result.registration?.registered).toBe(true)
     expect(result.message).toContain('Agent connecté à Memoria')
   })

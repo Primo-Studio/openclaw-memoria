@@ -46,7 +46,7 @@ describe('connect', () => {
       registrar,
     })
     expect(res.assistantType).toBe('codex')
-    expect(registrar).toHaveBeenCalledWith('codex', 'inst-AAAA-BBBB')
+    expect(registrar).toHaveBeenCalledWith('codex', 'inst-AAAA-BBBB', { token: 'tok-123', storageRoot: dir })
     expect(res.registration?.registered).toBe(true)
     expect(res.message).toContain('connecté')
 

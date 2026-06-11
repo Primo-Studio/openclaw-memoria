@@ -82,14 +82,21 @@ npm install && npm run build && npm test   # doit être 100% vert AVANT toute mo
 - [x] ~~Vue relations entre thèmes~~ **FAIT** (onglet « Relations » écran Thèmes, graphe SVG).
 - [x] ~~Recherche globale (tous agents)~~ **FAIT** (option « Toutes les mémoires » écran Mémoire).
 
-### Reconnecter OpenClaw (P6) — audit 2026.6.5 FAIT
-- [x] ~~Diagnostic compatibilité 2026.6.5~~ **FAIT** (`DIAG-OPENCLAW-2026.6.5.md`). MCP natif confirmé →
-      `openclaw mcp set memoria '{"command":"node","args":["…/packages/mcp/dist/bin.js","serve","--instance","koda"]}'`.
-- [ ] **Adaptateur hooks mince** (~180-260 lignes, zéro dépendance native) dans `packages/adapters/openclaw` :
-      `before_prompt_build`→/recall (timeout dur 300 ms), `agent_end`/`llm_output`→/capture (fire-and-forget),
-      `before_compaction`/`session_end`→/flush (nouveaux hooks). **L'install DOIT poser
-      `hooks.allowConversationAccess=true`** sinon la capture est morte sans erreur (gate 2026.6.5).
-      Corriger aussi `event.toolCallCount` (absent du type `agent_end`). Install `--link`, garder zéro natif.
+### Reconnecter OpenClaw (P6) — FAIT (adaptateur livré + validé E2E)
+- [x] ~~Diagnostic compatibilité 2026.6.5~~ **FAIT** (`DIAG-OPENCLAW-2026.6.5.md`).
+- [x] ~~Adaptateur hooks mince~~ **FAIT** : `packages/adapter-openclaw` (zéro dépendance native).
+      `before_prompt_build`→`/v1/memory/recall` (timeout dur 400 ms → `prependContext`),
+      `agent_end`→`/v1/memory/capture_turn` (VRAI fire-and-forget, WAL persiste avant extraction).
+      Découverte du port via `daemon.json`, auth token d'instance. 12 tests de contrat.
+- [x] ~~Install auto + gate~~ **FAIT** : `memoria connect` (openclaw) pose le serveur MCP + lie le plugin
+      dans `~/.openclaw/extensions/memoria` + écrit `openclaw.json` avec **`allowConversationAccess=true`**
+      (sinon capture morte). `disconnect` nettoie. 4 tests (paths injectables). `event.toolCallCount` non lu (corrigé).
+- [x] ~~Validation bout-en-bout~~ **FAIT 2026-06-11** sur le daemon réel : recall injecte un fait semé,
+      `agent_end` capture une conversation, gpt-4o-mini extrait le fait, recallable juste après. Instance test supprimée.
+- [ ] **Reste (terrain)** : sur le Mac Studio, `openclaw plugins enable memoria` + `plugins inspect memoria`
+      (vérifier `allowConversationAccess: true`) + grep logs « blocked because non-bundled… » ; reconnecter Koda
+      avec son vrai token (re-pairing) et confirmer la capture en conditions réelles. Optionnel : hook `llm_output`
+      (continuous learning) + `after_compaction` (flush avant perte de contexte).
 
 ### Couches avancées restantes (P6)
 - [ ] Clusters (fact-clusters), carte 3D UMAP (opt-in), couches D sur validation (patterns/auto-skill).

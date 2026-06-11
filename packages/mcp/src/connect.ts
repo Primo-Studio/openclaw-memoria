@@ -22,8 +22,8 @@ export interface ConnectOptions {
   /** Injectables pour les tests (pas de vrai daemon, pas de réseau). */
   ensure?: (opts: { storageRoot?: string }) => Promise<Pick<DaemonState, 'port'>>
   clientFor?: (state: Pick<DaemonState, 'port'>) => PairingCompleter
-  /** Injectable pour les tests : enregistrement MCP. */
-  registrar?: (host: string, instanceId: string) => RegisterResult
+  /** Injectable pour les tests : enregistrement MCP + hooks. */
+  registrar?: (host: string, instanceId: string, opts: { token?: string; storageRoot?: string }) => RegisterResult
 }
 
 export interface ConnectResult {
@@ -66,7 +66,7 @@ export async function connect(opts: ConnectOptions): Promise<ConnectResult> {
   let registration: RegisterResult | null = null
   if (opts.register !== false) {
     const registrar = opts.registrar ?? autoRegister
-    registration = registrar(assistantType, done.assistant_instance_id)
+    registration = registrar(assistantType, done.assistant_instance_id, { token: done.instance_token, storageRoot })
   }
 
   const lines = [

@@ -4,6 +4,7 @@
     { "path": "packages/core" },
     { "path": "packages/daemon" },
     { "path": "packages/mcp" },
-    { "path": "packages/cli" }
+    { "path": "packages/cli" },
+    { "path": "packages/adapter-openclaw" }
   ]
 }
