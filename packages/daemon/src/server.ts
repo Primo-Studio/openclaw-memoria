@@ -340,6 +340,31 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         sendJson(res, 200, { agents: memoria.agentOverview() })
         return
       }
+      case 'GET /v1/admin/cognitive_stats': {
+        sendJson(res, 200, { stats: memoria.cognitiveStats() })
+        return
+      }
+      case 'GET /v1/admin/secrets': {
+        sendJson(res, 200, { secrets: memoria.listSecrets() })
+        return
+      }
+      case 'GET /v1/admin/shared_scopes': {
+        sendJson(res, 200, { scopes: memoria.listSharedScopes() })
+        return
+      }
+      case 'GET /v1/admin/scope_facts': {
+        const scope = url.searchParams.get('scope')
+        if (!scope) throw new HttpError(400, 'scope requis')
+        sendJson(res, 200, { facts: memoria.scopeFacts(scope) })
+        return
+      }
+      case 'POST /v1/admin/refine_topics': {
+        const body = await readJson(req)
+        const instance = String(body['instance'] ?? '')
+        if (!instance) throw new HttpError(400, 'instance requise')
+        sendJson(res, 200, await memoria.refineTopicLabels(instance))
+        return
+      }
       case 'GET /v1/admin/doctor': {
         sendJson(res, 200, memoria.doctor())
         return

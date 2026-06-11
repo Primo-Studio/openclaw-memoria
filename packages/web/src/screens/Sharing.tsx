@@ -12,9 +12,11 @@ import {
   ApiError,
   getAgents,
   getIdentityCandidates,
+  getScopeFacts,
   getScopes,
   setPolicy,
   shareFacts,
+  type AdminFact,
   type AgentEntry,
   type AssistantInfo,
   type IdentityCandidate,
@@ -27,6 +29,7 @@ export function Sharing() {
   const [agents, setAgents] = useState<AgentEntry[]>([])
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [exploring, setExploring] = useState<string | null>(null)
 
   const refresh = useCallback(async () => {
     try {
@@ -92,7 +95,11 @@ export function Sharing() {
             <tbody>
               {scopes.map(scope => (
                 <tr key={scope.id}>
-                  <td><strong>{scopeLabel(scope)}</strong></td>
+                  <td>
+                    <button type="button" className="scope-link" onClick={() => setExploring(exploring === scope.id ? null : scope.id)}>
+                      {scopeLabel(scope)} <span className="muted">{exploring === scope.id ? '▾' : '▸'}</span>
+                    </button>
+                  </td>
                   <td className="muted">{scope.facts}</td>
                   {assistants.map(a => {
                     const allowed = scope.readers.includes(a.id)
@@ -113,6 +120,7 @@ export function Sharing() {
             </tbody>
           </table>
         )}
+        {exploring && <ScopeContent scopeId={exploring} onError={setError} />}
       </div>
 
       <div className="settings-block">
@@ -126,6 +134,25 @@ export function Sharing() {
         ))}
       </div>
     </section>
+  )
+}
+
+/** Contenu d'un scope partagé (les souvenirs dans « Sur vous », « Entreprise »…). */
+function ScopeContent({ scopeId, onError }: { scopeId: string; onError: (m: string) => void }) {
+  const [facts, setFacts] = useState<AdminFact[] | null>(null)
+  useEffect(() => {
+    getScopeFacts(scopeId)
+      .then(setFacts)
+      .catch(err => onError(err instanceof ApiError ? err.message : 'Chargement impossible.'))
+  }, [scopeId, onError])
+  if (facts === null) return <div className="spinner-row"><span className="spinner" aria-hidden /> …</div>
+  if (facts.length === 0) return <p className="muted scope-content">Cette mémoire partagée est vide — rien n’y a encore été partagé.</p>
+  return (
+    <ul className="fact-list scope-content">
+      {facts.map(f => (
+        <li key={f.id} className="fact-card"><p className="fact-content">{f.fact}</p></li>
+      ))}
+    </ul>
   )
 }
 

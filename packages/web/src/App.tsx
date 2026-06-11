@@ -15,13 +15,15 @@ import { Patterns } from './screens/Patterns'
 import { Procedures } from './screens/Procedures'
 import { Revisions } from './screens/Revisions'
 import { Sharing } from './screens/Sharing'
+import { Vault } from './screens/Vault'
+import { System } from './screens/System'
 import { Audit } from './screens/Audit'
 import { Onboarding } from './screens/Onboarding'
 import { Settings } from './screens/Settings'
 
 type ScreenId =
   | 'dashboard' | 'agents' | 'memory' | 'themes' | 'patterns' | 'procedures'
-  | 'review' | 'revisions' | 'sharing' | 'audit' | 'settings'
+  | 'review' | 'revisions' | 'sharing' | 'vault' | 'system' | 'audit' | 'settings'
 
 const NAV: Array<{ id: ScreenId; label: string }> = [
   { id: 'dashboard', label: 'Tableau de bord' },
@@ -33,6 +35,8 @@ const NAV: Array<{ id: ScreenId; label: string }> = [
   { id: 'review', label: 'Revue' },
   { id: 'revisions', label: 'Révisions' },
   { id: 'sharing', label: 'Partage' },
+  { id: 'vault', label: 'Coffre' },
+  { id: 'system', label: 'Système' },
   { id: 'audit', label: 'Journal' },
   { id: 'settings', label: 'Réglages' },
 ]
@@ -93,6 +97,8 @@ export function App() {
         {screen === 'review' && <Review />}
         {screen === 'revisions' && <Revisions />}
         {screen === 'sharing' && <Sharing />}
+        {screen === 'vault' && <Vault />}
+        {screen === 'system' && <System />}
         {screen === 'audit' && <Audit />}
         {screen === 'settings' && <Settings />}
       </main>

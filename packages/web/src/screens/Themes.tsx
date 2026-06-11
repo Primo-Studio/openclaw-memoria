@@ -11,6 +11,7 @@ import {
   getAgents,
   getTopics,
   getTopicFacts,
+  refineTopics,
   type AdminFact,
   type AgentEntry,
   type Topic,
@@ -23,6 +24,7 @@ export function Themes() {
   const [active, setActive] = useState<Topic | null>(null)
   const [facts, setFacts] = useState<AdminFact[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [refining, setRefining] = useState(false)
 
   useEffect(() => {
     getAgents()
@@ -71,15 +73,37 @@ export function Themes() {
           <h1>Thèmes</h1>
           <p className="muted">Ce que chaque agent sait, rangé par sujet. Clique un thème pour voir ses souvenirs.</p>
         </div>
-        {agents.length > 0 && (
-          <select className="agent-select" value={instance} onChange={e => setInstance(e.target.value)}>
-            {agents.map(a => (
-              <option key={a.instance.id} value={a.instance.id}>
-                {a.assistant_type}
-              </option>
-            ))}
-          </select>
-        )}
+        <div className="theme-toolbar">
+          <button
+            type="button"
+            className="btn btn-ghost"
+            disabled={refining || !instance}
+            title="Donne des noms plus clairs aux thèmes avec l'IA configurée"
+            onClick={async () => {
+              setRefining(true)
+              try {
+                const n = await refineTopics(instance)
+                if (n > 0) setTopics(await getTopics(instance, 2))
+                else setError('Aucun moteur d’IA disponible pour affiner (voir Réglages).')
+              } catch (err) {
+                setError(err instanceof ApiError ? err.message : 'Affinage impossible.')
+              } finally {
+                setRefining(false)
+              }
+            }}
+          >
+            {refining ? 'Affinage…' : '✨ Affiner les libellés (IA)'}
+          </button>
+          {agents.length > 0 && (
+            <select className="agent-select" value={instance} onChange={e => setInstance(e.target.value)}>
+              {agents.map(a => (
+                <option key={a.instance.id} value={a.instance.id}>
+                  {a.assistant_type}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
       </header>
 
       {error && <div className="error-banner">{error}</div>}

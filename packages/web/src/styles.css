@@ -896,3 +896,24 @@ input[type='search']:focus {
 .agent-insights { display: flex; flex-direction: column; gap: 0.35rem; }
 .agent-self { display: flex; flex-wrap: wrap; gap: 0.3rem; }
 .agent-self .badge { font-size: 0.72rem; max-width: 100%; }
+
+/* --------------------------------------------------------------- système (couches) */
+
+.system-buckets { display: grid; gap: 1.5rem; }
+.system-bucket-head { display: flex; align-items: baseline; gap: 0.6rem; margin-bottom: 0.6rem; }
+.system-bucket-head h2 { font-size: 1rem; margin: 0; }
+.layer-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0.6rem; }
+.layer-card { padding: 0.7rem 0.85rem; border-radius: 10px; border: 1px solid var(--border, #2a2a3d); background: var(--card, #1c1c2b); }
+.layer-top { display: flex; align-items: center; gap: 0.5rem; }
+.layer-num { font-size: 0.7rem; width: 1.4rem; height: 1.4rem; flex: none; display: grid; place-items: center; border-radius: 50%; background: var(--border, #2a2a3d); color: var(--muted, #9a9ab0); }
+.layer-stat { margin-left: auto; font-weight: 700; color: var(--accent, #e85a1f); font-size: 0.9rem; }
+.layer-desc { margin: 0.35rem 0 0; font-size: 0.78rem; }
+
+/* coffre */
+.vault-explainer { padding: 0.9rem 1rem; border-radius: 10px; border: 1px solid var(--border, #2a2a3d); background: color-mix(in srgb, var(--ok, #3fb96a) 8%, var(--card, #1c1c2b)); font-size: 0.86rem; margin-bottom: 1rem; line-height: 1.5; }
+
+/* exploration des scopes */
+.scope-link { background: none; border: 0; color: inherit; cursor: pointer; font: inherit; font-weight: 600; padding: 0; }
+.scope-link:hover { color: var(--accent, #e85a1f); }
+.scope-content { margin-top: 0.8rem; }
+.theme-toolbar { display: flex; gap: 0.5rem; align-items: center; }

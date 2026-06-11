@@ -413,6 +413,52 @@ export async function deriveSelf(instance: string): Promise<number> {
   return res.proposed
 }
 
+// ------------------------------------------------------------ système (couches)
+
+export async function getCognitiveStats(): Promise<Record<string, number>> {
+  const res = await request<{ stats: Record<string, number> }>('GET', '/v1/admin/cognitive_stats')
+  return res.stats
+}
+
+export async function refineTopics(instance: string): Promise<number> {
+  const res = await request<{ refined: number }>('POST', '/v1/admin/refine_topics', { instance })
+  return res.refined
+}
+
+// ------------------------------------------------------------ coffre (secrets)
+
+export interface SecretRef {
+  name: string
+  service: string | null
+  location: string
+  created_at: string
+}
+
+export async function getSecrets(): Promise<SecretRef[]> {
+  const res = await request<{ secrets: SecretRef[] }>('GET', '/v1/admin/secrets')
+  return res.secrets
+}
+
+// ------------------------------------------------------------ mémoires partagées
+
+export interface SharedScope {
+  id: string
+  type: string
+  name: string
+  label: string
+  facts: number
+}
+
+export async function getSharedScopes(): Promise<SharedScope[]> {
+  const res = await request<{ scopes: SharedScope[] }>('GET', '/v1/admin/shared_scopes')
+  return res.scopes
+}
+
+export async function getScopeFacts(scopeId: string): Promise<AdminFact[]> {
+  const res = await request<{ facts: AdminFact[] }>('GET', `/v1/admin/scope_facts?scope=${encodeURIComponent(scopeId)}`)
+  return res.facts
+}
+
 // ------------------------------------------------------------ capture & revue
 
 export type CaptureMode = 'auto-private' | 'review-first' | 'incognito'

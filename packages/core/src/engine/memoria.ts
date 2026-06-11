@@ -41,7 +41,7 @@ import {
   type RevisionProposal,
   type DialecticResult,
 } from '../cognition/index.js'
-import { estimateTokens, newId, sha256Hex } from '../util.js'
+import { estimateTokens, newId, nowISO, sha256Hex } from '../util.js'
 import { createSecretProvider, RegexRedactor } from '../secrets/index.js'
 import type { SecretProvider } from '../secrets/types.js'
 import { resolveLlmProfile } from '../llm/index.js'
@@ -1543,6 +1543,119 @@ export class Memoria {
       })
     }
     return out
+  }
+
+  /**
+   * Stats vivantes des couches cognitives (écran « Système ») : compte réel par
+   * table, agrégé sur toutes les DB de contenu. Sert à RENDRE VISIBLES les 24
+   * couches et prouver qu'elles tournent.
+   */
+  cognitiveStats(): Record<string, number> {
+    this.assertOpen()
+    const tables = [
+      'facts', 'entities', 'relations', 'fact_entities', 'observations', 'topics', 'fact_topics',
+      'embeddings', 'procedures', 'patterns', 'fact_clusters', 'self_observations',
+      'revision_proposals', 'wal_buffer',
+    ]
+    const totals: Record<string, number> = {}
+    for (const t of tables) totals[t] = 0
+    for (const entry of this.registry.listDbs()) {
+      if (entry.kind === 'registry' || !existsSync(entry.path)) continue
+      const store = this.openContent(entry.path)
+      for (const t of tables) {
+        try {
+          const r = store.db.prepare(`SELECT COUNT(*) AS c FROM ${t}`).get() as { c: number }
+          totals[t]! += r.c
+        } catch {
+          /* table absente sur cette DB — ignore */
+        }
+      }
+    }
+    totals['secret_refs'] = this.registry.listSecretRefs().length
+    return totals
+  }
+
+  /** Coffre : références de secrets stockées (JAMAIS la valeur). */
+  listSecrets(): Array<{ name: string; service: string | null; location: string; created_at: string }> {
+    this.assertOpen()
+    return this.registry.listSecretRefs()
+  }
+
+  /**
+   * Mémoires PARTAGÉES (user/org/client/projet) + leur contenu explorable :
+   * c'est là que vivent « les infos sur moi », « l'entreprise », « ce qui est
+   * partagé ». Privé exclu (cf. écran Mémoire par agent).
+   */
+  listSharedScopes(): Array<{ id: string; type: string; name: string; label: string; facts: number }> {
+    this.assertOpen()
+    const LABELS: Record<string, string> = {
+      user: 'Sur vous',
+      org: 'Entreprise',
+      client: 'Client',
+      project: 'Projet',
+      shared_topic: 'Sujet partagé',
+    }
+    const out: ReturnType<Memoria['listSharedScopes']> = []
+    for (const scope of this.registry.listScopes()) {
+      if (scope.type === 'private' || scope.type === 'legacy_to_review') continue
+      const dbEntry = this.registry.dbForScope(scope.id)
+      let facts = 0
+      if (dbEntry && existsSync(dbEntry.path)) {
+        facts = (this.openContent(dbEntry.path).db.prepare('SELECT COUNT(*) AS c FROM facts WHERE scope_id = ?').get(scope.id) as { c: number }).c
+      }
+      out.push({ id: scope.id, type: scope.type, name: scope.name, label: LABELS[scope.type] ?? scope.name, facts })
+    }
+    return out
+  }
+
+  /** Souvenirs d'un scope partagé (contenu de « Sur vous », « Entreprise », un client…). */
+  scopeFacts(scopeId: string, limit = 100): Array<{ id: string; fact: string; category: string; created_at: string }> {
+    this.assertOpen()
+    const scope = this.registry.getScope(scopeId)
+    if (!scope) return []
+    const dbEntry = this.registry.dbForScope(scope.id)
+    if (!dbEntry || !existsSync(dbEntry.path)) return []
+    const rows = this.openContent(dbEntry.path).db
+      .prepare('SELECT id, fact, category, created_at FROM facts WHERE scope_id = ? ORDER BY created_at DESC LIMIT ?')
+      .all(scope.id, Math.min(limit, 300)) as Array<{ id: string; fact: string; category: string; created_at: string }>
+    return rows
+  }
+
+  /**
+   * Affine les libellés de thèmes d'une instance avec le LLM configuré (à la
+   * demande, couche 14). Gratuit par défaut (heuristique) ; ce bouton paie un
+   * petit appel par thème pour des noms propres. Retourne le nombre renommé.
+   */
+  async refineTopicLabels(instanceId: string, limit = 40): Promise<{ refined: number }> {
+    this.assertOpen()
+    const { extraction } = await this.ensureProfile()
+    if (!extraction || !(await extraction.isAvailable())) return { refined: 0 }
+    const db = this.registry.dbForInstance(instanceId)
+    if (!db || !existsSync(db.path)) return { refined: 0 }
+    const store = this.openContent(db.path)
+    const topicEngine = this.topicFor(store, null)
+    const topics = topicEngine.listTopics({ minFacts: 2 }).slice(0, limit)
+    let refined = 0
+    for (const t of topics) {
+      const sample = topicEngine.factsForTopic(t.id, { limit: 5 }).map(f => f.fact)
+      if (sample.length === 0) continue
+      try {
+        const raw = await extraction.complete({
+          system: 'Donne un titre de THÈME court et clair (2-5 mots, en français, Title Case) qui résume ces souvenirs. Réponds UNIQUEMENT le titre, rien d’autre.',
+          prompt: sample.map(s => `- ${s}`).join('\n'),
+          maxTokens: 20,
+          temperature: 0.2,
+        })
+        const label = raw.trim().replace(/^["'#*\s]+|["'.*\s]+$/g, '').slice(0, 60)
+        if (label.length >= 3 && label.toLowerCase() !== t.name.toLowerCase()) {
+          store.db.prepare('UPDATE topics SET name = ?, updated_at = ? WHERE id = ?').run(label, nowISO(), t.id)
+          refined++
+        }
+      } catch (err) {
+        console.warn(`[memoria:topics] affinage LLM échoué (${t.id}) :`, (err as Error).message)
+      }
+    }
+    return { refined }
   }
 
   stats(): { facts: number; databases: number; instances: number } {
