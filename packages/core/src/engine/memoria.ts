@@ -239,9 +239,14 @@ export class Memoria {
       }
     }
 
+    // GATE SECRETS — défense en profondeur (audit QW1) : tout fait, même posé
+    // en direct (store_fact MCP) ou issu d'un import, passe par la redaction
+    // AVANT le stockage. La valeur détectée part au coffre, jamais dans facts.
+    const content = this.redactBeforeStore(input.content)
+
     const store = this.storeForScope(scope, instance)
     const fact = store.insertFact({
-      fact: input.content,
+      fact: content,
       category: input.category,
       fact_type: input.fact_type,
       confidence: input.confidence,
@@ -1786,6 +1791,20 @@ export class Memoria {
 
   private assertOpen(): void {
     if (this.closed) throw new Error('Memoria est fermé (close() déjà appelé)')
+  }
+
+  /** Redaction des secrets avant tout stockage de fait → valeur au coffre, jamais en clair. */
+  private redactBeforeStore(text: string): string {
+    const result = this.redactor.redact(text)
+    for (const secret of result.found) {
+      try {
+        this.secretProvider.set(secret.name, secret.value)
+        this.registry.upsertSecretRef(secret.name, this.secretProvider.locationFor(secret.name), secret.kind)
+      } catch (err) {
+        console.warn(`[memoria] mise au coffre du secret « ${secret.name} » en échec :`, (err as Error).message)
+      }
+    }
+    return result.text
   }
 
   private mustInstance(instanceId: string): AssistantInstance {

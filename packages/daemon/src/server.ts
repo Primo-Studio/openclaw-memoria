@@ -13,6 +13,7 @@
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { existsSync } from 'node:fs'
+import { timingSafeEqual } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import {
   Memoria,
@@ -79,6 +80,13 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     const url = new URL(req.url ?? '/', 'http://127.0.0.1')
     const route = `${req.method} ${url.pathname}`
 
+    // Anti-DNS-rebinding : un site web malveillant peut résoudre un domaine vers
+    // 127.0.0.1 et taper notre daemon. On n'accepte que les hôtes loopback.
+    if (!isLoopbackHost(req.headers.host) || !isAllowedOrigin(req.headers.origin)) {
+      res.writeHead(403).end()
+      return
+    }
+
     if (route === 'GET /v1/health') {
       sendJson(res, 200, { ok: true, version: DAEMON_VERSION, daemon_id: daemonId, ui: Boolean(uiDist) })
       return
@@ -98,7 +106,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     const token = bearerToken(req)
 
     if (url.pathname.startsWith('/v1/admin/')) {
-      if (token !== adminToken) throw new HttpError(401, 'token admin requis')
+      if (!token || !timingSafeEqualStr(token, adminToken)) throw new HttpError(401, 'token admin requis')
       await handleAdmin(route, url, req, res)
       return
     }
@@ -506,6 +514,32 @@ function localConnectCommand(code: string): string | null {
     /* ignore */
   }
   return null
+}
+
+/** Hôte loopback uniquement (anti-DNS-rebinding). Absent = client non-HTTP/1.0 toléré. */
+function isLoopbackHost(host: string | undefined): boolean {
+  if (!host) return true
+  const name = host.replace(/:\d+$/, '').toLowerCase()
+  return name === '127.0.0.1' || name === 'localhost' || name === '[::1]' || name === '::1'
+}
+
+/** Origin (si présent) doit être loopback — un site web tiers ne doit pas nous appeler. */
+function isAllowedOrigin(origin: string | undefined): boolean {
+  if (!origin) return true // appels non-navigateur (CLI/MCP/agents) n'envoient pas d'Origin
+  try {
+    const h = new URL(origin).hostname.toLowerCase()
+    return h === '127.0.0.1' || h === 'localhost' || h === '::1'
+  } catch {
+    return false
+  }
+}
+
+/** Comparaison de tokens à temps constant (anti-timing-attack). */
+function timingSafeEqualStr(a: string, b: string): boolean {
+  const ab = Buffer.from(a)
+  const bb = Buffer.from(b)
+  if (ab.length !== bb.length) return false
+  return timingSafeEqual(ab, bb)
 }
 
 function bearerToken(req: IncomingMessage): string | null {

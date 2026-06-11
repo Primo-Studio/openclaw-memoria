@@ -86,12 +86,34 @@ export interface FtsHit {
 
 const SENSITIVITY_ORDER: Record<Sensitivity, number> = { normal: 0, sensitive: 1, critical: 2 }
 
-/** Tokens significatifs d'une requête (≥3 caractères : élimine les stop-words FR/EN courts). */
+/**
+ * Un token est-il un MOT de contenu (utile en thème/recall) ? Rejette les
+ * nombres purs, les hex courts et les jetons à >40 % de chiffres (audit QW3 :
+ * « 20b 255 analyse » ne doit pas devenir un libellé de thème). Garde en
+ * revanche les identifiants courts à casse mixte ou avec chiffre (X, v2, S3, k8s).
+ */
+export function isContentWord(token: string): boolean {
+  if (token.length < 2) return false
+  if (/^\d+$/.test(token)) return false // nombre pur
+  if (/^[0-9a-f]{1,8}$/i.test(token) && /\d/.test(token)) return false // hex court
+  const digits = (token.match(/\d/g) ?? []).length
+  if (digits / token.length > 0.4) return false // majoritairement numérique
+  return true
+}
+
+/**
+ * Tokens significatifs d'une requête. Garde les ≥3 caractères ET les tokens
+ * courts discriminants (chiffre ou casse mixte : « X », « v2 », « S3 ») pour ne
+ * pas confondre « projet X » et « projet Y » (audit QW5).
+ */
 export function queryTokens(query: string): string[] {
-  return normalizeText(query)
+  return query
     .split(/[^\p{L}\p{N}_-]+/u)
     .map(t => t.trim())
-    .filter(t => t.length > 2)
+    // garder ≥3 car., OU court avec chiffre/majuscule (identifiant : X, v2, S3)
+    .filter(t => t.length > 2 || /[0-9A-Z]/.test(t))
+    .map(t => normalizeText(t))
+    .filter(t => t.length > 0)
 }
 
 /** Échappe une requête utilisateur en expression FTS5 sûre (tokens cités, OR). */

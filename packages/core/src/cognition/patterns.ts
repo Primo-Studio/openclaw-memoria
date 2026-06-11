@@ -24,6 +24,7 @@
  */
 import type { Database } from 'better-sqlite3'
 import type { ContentStore } from '../storage/content.js'
+import { isContentWord } from '../storage/content.js'
 import { runMigrations, type Migration } from '../storage/migrations.js'
 import { newId, nowISO } from '../util.js'
 
@@ -467,7 +468,7 @@ export function significantTokens(text: string): Set<string> {
   const tokens = normalized
     .split(/[^\p{L}\p{N}]+/u)
     .map(t => t.trim())
-    .filter(t => t.length >= MIN_TOKEN_LEN && !STOPWORDS.has(t))
+    .filter(t => t.length >= MIN_TOKEN_LEN && !STOPWORDS.has(t) && isContentWord(t))
   return new Set(tokens)
 }
 

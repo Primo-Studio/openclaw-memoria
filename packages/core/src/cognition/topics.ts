@@ -16,7 +16,7 @@ import type { Database } from 'better-sqlite3'
 import type { ContentStore, FactRow } from '../storage/content.js'
 import { runMigrations, type Migration } from '../storage/migrations.js'
 import { fromJsonArray, newId, nowISO, toJson } from '../util.js'
-import { normalizeText } from '../storage/content.js'
+import { normalizeText, isContentWord } from '../storage/content.js'
 import type { LlmProvider } from '../llm/provider.js'
 
 export interface TopicSummary {
@@ -72,7 +72,7 @@ export function ensureTopicSchema(db: Database): void {
 export function topicKeywords(text: string): string[] {
   return normalizeText(text)
     .split(/[^\p{L}\p{N}_-]+/u)
-    .filter(w => w.length > 3 && !STOPWORDS.has(w))
+    .filter(w => w.length > 3 && !STOPWORDS.has(w) && isContentWord(w))
 }
 
 function titleCase(s: string): string {

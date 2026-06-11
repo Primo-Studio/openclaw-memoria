@@ -6,7 +6,7 @@
  * - `daemon.lock` : PID — un seul daemon par storage_root. Lock périmé (process
  *   mort) → reprise automatique.
  */
-import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { storagePaths } from '@memoria/core'
 
 export interface DaemonState {
@@ -29,7 +29,11 @@ export function readDaemonState(storageRoot: string): DaemonState | null {
 
 export function writeDaemonState(storageRoot: string, state: DaemonState): void {
   const p = storagePaths(storageRoot).daemonState
-  writeFileSync(p, JSON.stringify(state, null, 2), 'utf8')
+  // mode 600 dès la création (pas de fenêtre 644 entre write et chmod) : le
+  // fichier porte l'admin_token. Écriture tmp+rename pour l'atomicité.
+  const tmp = `${p}.${process.pid}.tmp`
+  writeFileSync(tmp, JSON.stringify(state, null, 2), { encoding: 'utf8', mode: 0o600 })
+  renameSync(tmp, p)
   chmodSync(p, 0o600)
 }
 

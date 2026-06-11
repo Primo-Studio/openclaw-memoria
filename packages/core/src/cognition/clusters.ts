@@ -24,7 +24,7 @@ import type { Database } from 'better-sqlite3'
 import type { ContentStore } from '../storage/content.js'
 import { runMigrations, type Migration } from '../storage/migrations.js'
 import { fromJsonArray, newId, nowISO, toJson } from '../util.js'
-import { normalizeText } from '../storage/content.js'
+import { normalizeText, isContentWord } from '../storage/content.js'
 
 export const clusterMigrations: Migration[] = [
   {
@@ -117,7 +117,7 @@ export function clusterKeywords(text: string): string[] {
   return normalizeText(text)
     .split(/[^\p{L}\p{N}_-]+/u)
     .map(t => t.trim())
-    .filter(t => t.length > 3 && !STOPWORDS.has(t))
+    .filter(t => t.length > 3 && !STOPWORDS.has(t) && isContentWord(t))
 }
 
 /** Forme interne d'un fait pendant le clustering. */

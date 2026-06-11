@@ -15,7 +15,7 @@ export {
 } from './config.js'
 export type { MemoriaConfig, ResolvedConfig, ResolveOptions } from './config.js'
 export { RegistryStore } from './storage/registry.js'
-export { ContentStore, toFtsQuery, queryTokens, normalizeText, rowToFact } from './storage/content.js'
+export { ContentStore, toFtsQuery, queryTokens, normalizeText, isContentWord, rowToFact } from './storage/content.js'
 export type { FactRow, InsertFactInput, FtsHit, FtsSearchOptions } from './storage/content.js'
 export { runMigrations, schemaVersion } from './storage/migrations.js'
 export type { Migration } from './storage/migrations.js'

@@ -39,7 +39,15 @@ const PATTERNS: ReadonlyArray<SecretPattern> = [
   },
   { kind: 'github', regex: /\b(?:gh[opsu]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/gd },
   { kind: 'google', regex: /\bAIza[0-9A-Za-z_-]{35}(?![0-9A-Za-z_-])/gd },
+  { kind: 'google-oauth', regex: /\bya29\.[A-Za-z0-9_-]{20,}/gd },
   { kind: 'slack', regex: /\bxox[baprs]-[A-Za-z0-9-]{10,}(?![A-Za-z0-9-])/gd },
+  { kind: 'slack-webhook', regex: /\bhttps:\/\/hooks\.slack\.com\/services\/[A-Za-z0-9/]{20,}/gd },
+  // Stripe (écosystème Primo) : clés secrètes/restreintes/webhook + sessions live.
+  { kind: 'stripe', regex: /\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}/gd },
+  { kind: 'stripe-webhook', regex: /\bwhsec_[A-Za-z0-9]{20,}/gd },
+  { kind: 'stripe-session', regex: /\bcs_(?:live|test)_[A-Za-z0-9]{20,}/gd },
+  // Chaîne de connexion avec credentials : proto://user:pass@host
+  { kind: 'connection-string', regex: /\b[a-z][a-z0-9+.-]*:\/\/[^\s:/@]+:([^\s:/@]{3,})@[^\s/]+/gid, group: 1 },
   {
     kind: 'jwt',
     regex: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}(?![A-Za-z0-9_.-])/gd,
