@@ -240,7 +240,7 @@ export type LlmProfile = '100-local' | 'local-plus-cloud' | 'cloud'
 export interface ProvidersStatus {
   ollama: { available: boolean; models: string[]; base_url?: string }
   anthropic: { available: boolean }
-  lmstudio: { available: boolean }
+  lmstudio: { available: boolean; models?: string[]; base_url?: string }
   openai: { available: boolean }
   openrouter: { available: boolean }
 }
@@ -250,11 +250,11 @@ export async function getProviders(): Promise<ProvidersStatus> {
   return request<ProvidersStatus>('GET', '/v1/admin/providers')
 }
 
-export type LlmProviderName = 'ollama' | 'anthropic' | 'openai' | 'openrouter'
+export type LlmProviderName = 'ollama' | 'lmstudio' | 'anthropic' | 'openai' | 'openrouter'
 
 export interface LlmConfig {
   profile: string
-  extraction?: { provider?: string; model?: string }
+  extraction?: { provider?: string; model?: string; base_url?: string }
 }
 
 export async function getLlmProfile(): Promise<LlmConfig> {
@@ -268,6 +268,99 @@ export async function setLlmProfile(profile: LlmProfile): Promise<void> {
 /** Choix explicite du provider/modèle d'extraction (« l'utilisateur décide »). */
 export async function setExtractionProvider(provider: LlmProviderName, model?: string): Promise<void> {
   await request<unknown>('POST', '/v1/admin/llm_extraction', { provider, ...(model ? { model } : {}) })
+}
+
+// ------------------------------------------------------------ santé LLM (anti-mort-silencieuse)
+
+/** État d'un moteur (extraction ou embeddings) dans le bilan de santé. */
+export interface LlmEngineState {
+  provider: string
+  model: string
+  available: boolean
+  /** Toujours présent quand available=false. */
+  reason?: string
+}
+
+export interface OllamaOptionState {
+  kind: 'ollama'
+  available: boolean
+  serverUp: boolean
+  hasEmbedModel: boolean
+  hasExtractModel: boolean
+  binaryInPath: boolean
+  models: string[]
+  baseUrl: string
+  detail: string
+}
+
+export interface LmStudioOptionState {
+  kind: 'lmstudio'
+  available: boolean
+  models: string[]
+  baseUrl: string
+  detail: string
+}
+
+export interface ApiKeyOptionState {
+  kind: 'openai' | 'anthropic' | 'openrouter'
+  available: boolean
+  source: 'fichier' | 'env' | null
+  keyFile: string
+  detail: string
+}
+
+export interface OpenClawOptionState {
+  kind: 'openclaw'
+  available: boolean
+  reusable: boolean
+  provider?: 'openai' | 'anthropic' | 'openrouter'
+  configPath?: string
+  reason?: string
+  detail: string
+}
+
+export interface LlmOptionsState {
+  ollama: OllamaOptionState
+  lmstudio: LmStudioOptionState
+  openai: ApiKeyOptionState
+  anthropic: ApiKeyOptionState
+  openrouter: ApiKeyOptionState
+  openclaw: OpenClawOptionState
+}
+
+/** Bilan GET /v1/admin/llm_health — la source de vérité anti-mort-silencieuse. */
+export interface LlmHealth {
+  extraction: LlmEngineState
+  embeddings: LlmEngineState
+  /** Souvenirs capturés en attente d'extraction (toutes instances). */
+  wal_pending: number
+  options: LlmOptionsState
+}
+
+export async function getLlmHealth(): Promise<LlmHealth> {
+  return request<LlmHealth>('GET', '/v1/admin/llm_health')
+}
+
+/** Lance le téléchargement d'un modèle Ollama (409 si un job tourne déjà). */
+export async function startOllamaPull(model: string): Promise<void> {
+  await request<{ ok: boolean; model: string }>('POST', '/v1/admin/ollama_pull', { model })
+}
+
+export interface OllamaPullStatus {
+  running: boolean
+  model: string | null
+  percent: number | null
+  status: string | null
+  error: string | null
+}
+
+export async function getOllamaPullStatus(): Promise<OllamaPullStatus> {
+  return request<OllamaPullStatus>('GET', '/v1/admin/ollama_pull_status')
+}
+
+/** Copie la clé API trouvée chez OpenClaw vers ~/.<provider>/api_key (chmod 600). */
+export async function copyOpenClawKey(provider: 'openai' | 'anthropic' | 'openrouter'): Promise<{ key_file: string }> {
+  return request<{ ok: boolean; provider: string; key_file: string }>('POST', '/v1/admin/openclaw_copy_key', { provider })
 }
 
 // ------------------------------------------------------------ partage (§11)

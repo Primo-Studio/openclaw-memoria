@@ -90,7 +90,7 @@ export function App() {
         <div className="sidebar-foot muted">100 % local — rien ne quitte cette machine.</div>
       </aside>
       <main className="content">
-        {screen === 'dashboard' && <Dashboard onConnect={() => setScreen('agents')} />}
+        {screen === 'dashboard' && <Dashboard onConnect={() => setScreen('agents')} onConfigure={() => setScreen('settings')} />}
         {screen === 'agents' && <Agents />}
         {screen === 'memory' && <Memory />}
         {screen === 'themes' && <Themes />}
