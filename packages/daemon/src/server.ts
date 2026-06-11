@@ -17,17 +17,27 @@ import { timingSafeEqual } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import {
   Memoria,
+  autoRegister,
   autostartStatus,
+  collectTranscriptFiles,
+  detectAgents,
   disableAutostart,
   enableAutostart,
   newToken,
   nowISO,
+  saveCredentials,
+  serveInvocation,
+  type AssistantType,
   type CaptureMode,
   type CaptureTurnInput,
   type ForgetFilter,
+  type MemoriaInitOptions,
   type RecallInput,
+  type RegisterOptions,
+  type RegisterResult,
   type StoreFactInput,
 } from '@memoria/core'
+import { ImportJobRunner } from './import-job.js'
 import { daemonBinPath } from './client.js'
 import { currentVersion, pullAndBuild, scheduleRestart } from './update.js'
 import { findUiDist, serveUi } from './static.js'
@@ -42,6 +52,16 @@ export interface DaemonOptions {
   port?: number
   /** Dossier dist de l'UI web (défaut : auto-détection @memoria/web/dist). */
   uiDist?: string
+  /** HOME inspecté par la détection d'agents et la collecte de transcripts (tests : tmpdir). */
+  agentsHome?: string
+  /** Sonde de présence d'un CLI (tests : jamais les vrais binaires). */
+  checkCli?: (bin: string) => boolean
+  /** Enregistrement MCP auprès de l'hôte (tests : stub — jamais le vrai ~/.claude.json). */
+  registrar?: (host: string, instanceId: string, opts: RegisterOptions) => RegisterResult
+  /** Dossier des credentials d'instance (tests : tmpdir, jamais ~/.memoria). */
+  credentialsDir?: string
+  /** Override LLM transmis au moteur (tests : extraction mockée, zéro réseau). */
+  llm?: MemoriaInitOptions['llm']
 }
 
 export interface RunningDaemon {
@@ -60,8 +80,9 @@ class HttpError extends Error {
 }
 
 export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaemon> {
-  const memoria = Memoria.init({ storageRoot: opts.storageRoot, configPath: opts.configPath })
+  const memoria = Memoria.init({ storageRoot: opts.storageRoot, configPath: opts.configPath, llm: opts.llm })
   const storageRoot = memoria.paths.root
+  const importJobs = new ImportJobRunner(memoria)
 
   const release = acquireLock(storageRoot)
   if (!release) {
@@ -498,6 +519,132 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         const instanceId = String(body['assistant_instance_id'] ?? '')
         if (!instanceId) throw new HttpError(400, 'assistant_instance_id requis')
         sendJson(res, 200, memoria.deleteInstance(instanceId))
+        return
+      }
+      // ------------------------------------- agents sur cette machine (B1/B2/B3)
+      case 'GET /v1/admin/agents_detect': {
+        sendJson(res, 200, {
+          agents: detectAgents({
+            home: opts.agentsHome,
+            checkCli: opts.checkCli,
+            agents: memoria.listAgents(),
+          }),
+        })
+        return
+      }
+      case 'POST /v1/admin/agents_connect': {
+        // Connexion 1 CLIC : pairing complet EN PROCESSUS (pairAssistant +
+        // completePairing), credentials chmod 600, puis enregistrement MCP
+        // automatique selon le type — l'équivalent serveur de mcp/connect.ts.
+        const body = await readJson(req)
+        const kind = String(body['kind'] ?? '')
+        const allowedKinds = ['claude-code', 'codex', 'openclaw', 'cursor', 'generic']
+        if (!allowedKinds.includes(kind)) {
+          throw new HttpError(400, `type d'agent inconnu : « ${kind} » (attendu : ${allowedKinds.join(', ')})`)
+        }
+        const displayName = typeof body['name'] === 'string' && body['name'].trim().length > 0 ? body['name'].trim() : undefined
+        const paired = memoria.pairAssistant({ type: kind as AssistantType, display_name: displayName })
+        const done = memoria.completePairing(paired.pairing_code)
+        if (!done) throw new HttpError(500, 'échange de pairing impossible — code interne rejeté (voir le journal du daemon)')
+
+        const credentialsPath = saveCredentials(
+          done.assistant_instance_id,
+          {
+            instance_token: done.instance_token,
+            storage_root: storageRoot,
+            created_at: nowISO(),
+            assistant_type: kind,
+          },
+          opts.credentialsDir,
+        )
+
+        const registrar = opts.registrar ?? autoRegister
+        let registration: RegisterResult
+        try {
+          registration = registrar(kind, done.assistant_instance_id, { token: done.instance_token, storageRoot })
+        } catch (err) {
+          // VISIBLE, jamais avalé : échec précis + repli manuel (commande serve).
+          const inv = serveInvocation(done.assistant_instance_id)
+          registration = {
+            host: 'generic',
+            registered: false,
+            detail: `enregistrement automatique en échec : ${(err as Error).message}. Manuel : ${inv.command} ${inv.args.join(' ')}`,
+          }
+        }
+        if (!registration.registered) {
+          console.warn(`[memoria-daemon] agents_connect ${kind} : ${registration.detail}`)
+        }
+        sendJson(res, 200, {
+          instance_id: done.assistant_instance_id,
+          credentials_path: credentialsPath,
+          registered: registration,
+          restart_hint: registration.registered ? 'Redémarre ton agent pour activer Memoria.' : null,
+        })
+        return
+      }
+      case 'POST /v1/admin/import_start': {
+        const body = await readJson(req)
+        const instanceId = String(body['instance_id'] ?? '')
+        const kind = String(body['kind'] ?? '')
+        if (!instanceId) throw new HttpError(400, 'instance_id requis')
+        if (kind !== 'transcripts' && kind !== 'legacy') {
+          throw new HttpError(400, `kind inconnu : « ${kind} » (attendu : transcripts | legacy)`)
+        }
+        if (importJobs.running) {
+          throw new HttpError(409, 'un import est déjà en cours — attends sa fin (GET /v1/admin/import_status)')
+        }
+        const agent = memoria.listAgents().find(a => a.instance.id === instanceId)
+        if (!agent) throw new HttpError(404, `instance inconnue : ${instanceId}`)
+        if (agent.instance.revoked_at !== null) {
+          throw new HttpError(400, 'instance révoquée — reconnecte l’agent avant d’importer')
+        }
+
+        if (kind === 'legacy') {
+          // Pas de LLM requis : l'import legacy copie des faits déjà extraits.
+          const legacyPath = String(body['legacy_path'] ?? '')
+          if (!legacyPath) {
+            throw new HttpError(400, 'legacy_path requis pour un import legacy (chemin de la base memoria.db OpenClaw)')
+          }
+          if (!existsSync(legacyPath)) throw new HttpError(404, `base legacy introuvable : ${legacyPath}`)
+          // GARDE-FOU : scope legacy_to_review UNIQUE — jamais 2 bases en même temps.
+          const pending = memoria.legacyQuarantineCount()
+          if (pending > 0) {
+            throw new HttpError(
+              409,
+              `la quarantaine legacy contient déjà ${pending} souvenir(s) non adoptés — termine cette adoption d'abord (une seule base legacy à la fois)`,
+            )
+          }
+          sendJson(res, 200, importJobs.startLegacy({ instanceId, legacyPath }))
+          return
+        }
+
+        // kind === 'transcripts'
+        if (agent.assistant_type === 'openclaw') {
+          throw new HttpError(400, 'OpenClaw n’a pas de transcripts importables — utilise l’import de mémoire legacy (kind=legacy + legacy_path)')
+        }
+        if (agent.assistant_type !== 'claude-code' && agent.assistant_type !== 'codex') {
+          throw new HttpError(400, `pas de transcripts connus pour le type « ${agent.assistant_type} » (supportés : claude-code, codex)`)
+        }
+        // L'extraction a besoin d'un LLM : pas de job qui tourne pour rien.
+        if (!(await memoria.hasExtraction())) {
+          throw new HttpError(422, 'Configure d’abord un moteur d’intelligence (Réglages) — l’import de conversations a besoin d’un LLM d’extraction.')
+        }
+        const files = collectTranscriptFiles(agent.assistant_type, opts.agentsHome)
+        if (files.length === 0) {
+          throw new HttpError(404, `aucune conversation trouvée pour ${agent.assistant_type} sur cette machine`)
+        }
+        const rawMax = body['max_windows_per_file']
+        let maxWindowsPerFile: number | undefined
+        if (rawMax !== undefined && rawMax !== null) {
+          const n = Number(rawMax)
+          if (!Number.isFinite(n) || n < 1) throw new HttpError(400, 'max_windows_per_file doit être un entier ≥ 1')
+          maxWindowsPerFile = Math.floor(n)
+        }
+        sendJson(res, 200, importJobs.startTranscripts({ instanceId, files, maxWindowsPerFile }))
+        return
+      }
+      case 'GET /v1/admin/import_status': {
+        sendJson(res, 200, importJobs.current)
         return
       }
       // ----------------------------------------------------------- synchro inter-machines (admin)

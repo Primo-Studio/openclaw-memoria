@@ -5,6 +5,7 @@
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { resolveStorageRoot, type RecallResult } from '@memoria/core'
+import type { ImportJobStatus } from './import-job.js'
 import { daemonLooksAlive, readDaemonState, type DaemonState } from './state.js'
 
 export interface ClientOptions {
@@ -77,6 +78,25 @@ export class DaemonClient {
   }
   async deleteAgent(instanceId: string): Promise<{ deleted: boolean }> {
     return this.post('/v1/admin/delete_agent', { assistant_instance_id: instanceId })
+  }
+
+  // --- agents sur cette machine : détection, connexion 1 clic, import (B1/B2/B3) ---
+  async detectAgents(): Promise<{ agents: unknown[] }> {
+    return this.get('/v1/admin/agents_detect')
+  }
+  async connectAgent(kind: string, name?: string): Promise<unknown> {
+    return this.post('/v1/admin/agents_connect', { kind, ...(name ? { name } : {}) })
+  }
+  async importStart(input: {
+    instance_id: string
+    kind: 'transcripts' | 'legacy'
+    legacy_path?: string
+    max_windows_per_file?: number
+  }): Promise<ImportJobStatus> {
+    return this.post('/v1/admin/import_start', input)
+  }
+  async importStatus(): Promise<ImportJobStatus> {
+    return this.get('/v1/admin/import_status')
   }
 
   // --- synchro inter-machines ---
