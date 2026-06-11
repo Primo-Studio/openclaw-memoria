@@ -102,6 +102,14 @@ export class DaemonClient {
     return this.post('/v1/admin/sync/leave', {})
   }
 
+  // --- mise à jour ---
+  async version(): Promise<{ version: string; sha: string | null; is_git: boolean; daemon: string }> {
+    return this.get('/v1/admin/version')
+  }
+  async update(): Promise<{ ok: boolean; changed: boolean; before: string | null; after: string | null; message: string; log: string }> {
+    return this.post('/v1/admin/update', {})
+  }
+
   // --- mémoire (token d'instance) ---
   async storeFact(input: Record<string, unknown>): Promise<unknown> {
     return this.post('/v1/memory/store_fact', input)

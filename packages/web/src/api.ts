@@ -686,3 +686,29 @@ export async function syncRevoke(machineId: string): Promise<{ revoked: boolean 
 export async function syncLeave(): Promise<{ ok: boolean }> {
   return request('POST', '/v1/admin/sync/leave', {})
 }
+
+// ------------------------------------------------------------ mise à jour
+
+export interface VersionInfo {
+  version: string
+  sha: string | null
+  is_git: boolean
+  daemon: string
+}
+
+export async function getVersion(): Promise<VersionInfo> {
+  return request<VersionInfo>('GET', '/v1/admin/version')
+}
+
+export interface UpdateResult {
+  ok: boolean
+  changed: boolean
+  before: string | null
+  after: string | null
+  message: string
+  log: string
+}
+
+export async function runUpdate(): Promise<UpdateResult> {
+  return request<UpdateResult>('POST', '/v1/admin/update', {})
+}

@@ -29,6 +29,7 @@ import {
   type StoreFactInput,
 } from '@memoria/core'
 import { daemonBinPath } from './client.js'
+import { currentVersion, pullAndBuild, scheduleRestart } from './update.js'
 import { findUiDist, serveUi } from './static.js'
 import { acquireLock, clearDaemonState, writeDaemonState, type DaemonState } from './state.js'
 
@@ -550,6 +551,18 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       case 'POST /v1/admin/sync/leave': {
         memoria.sync.leave()
         sendJson(res, 200, { ok: true })
+        return
+      }
+      // ----------------------------------------------------------- mise à jour
+      case 'GET /v1/admin/version': {
+        sendJson(res, 200, { ...(await currentVersion()), daemon: DAEMON_VERSION })
+        return
+      }
+      case 'POST /v1/admin/update': {
+        const result = await pullAndBuild()
+        sendJson(res, 200, result)
+        // si du neuf a été buildé, on planifie un redémarrage APRÈS l'envoi de la réponse
+        if (result.ok && result.changed) scheduleRestart(storageRoot)
         return
       }
       default:

@@ -58,6 +58,29 @@ npm install && npm run build && npm test   # doit être 100% vert AVANT toute mo
   **cause #1 plausible de la casse de capture v3.34**. L'install de l'adaptateur DOIT poser
   `plugins.entries.memoria.hooks.allowConversationAccess=true`. L'auto-recall (`before_prompt_build`) survit.
 
+## ✅ Session 4 (2026-06-11) — Réseau multi-machines + interlocuteur + install/update
+
+- **Interlocuteur (Personnes)** : registry v3 `person_identifiers` (tel/mail/Telegram/WhatsApp/handle,
+  normalisés, 1 identifiant→1 personne) + colonnes persons (relation/org_id/user_id). Engine
+  `identifyInterlocutor` (+ faits connus), `describeInterlocutor`, CRUD. Routes admin + route mémoire
+  `identify_interlocutor` + **outil MCP `memoria_identify_interlocutor`**. Écran **Personnes** (UI). 7 tests.
+- **Synchro inter-machines** (hub-and-spoke, design `SYNC-INTER-MACHINES.md`) :
+  - content v2 (provenance origin_machine_id/rev/content_hash + tombstones) + `sync/merge.ts` LWW
+    déterministe + `sync/clock.ts`. registry v4 (sync_peers/cursor/secret_envelopes/nonces).
+  - `sync/peer-auth.ts` (HMAC ±60 s + nonce 5 min), `sync/secrets-sync.ts` (GVK AES-GCM, sealGvk scrypt),
+    GVK/CPK en Keychain. `SyncEngine` (invite/completePairing/authenticate/collectDelta/snapshot/
+    applyIncoming/serveSecrets ; join/pull/push/syncAll/tick/leave). **adoptScope** aligne les IDs de scope.
+  - daemon : **second listener LAN** (hub) `/v1/sync/*` (HMAC) ; admin/memory restent loopback
+    (anti-rebinding préservé) ; timer best-effort (spoke). Routes admin sync + CLI `memoria sync *` + UI Réglages.
+  - Tests : sync-merge (11) + sync-crypto (10) + sync-engine intégration in-memory (8) + **sync-http 2 daemons
+    réels (4)**. Coffre inter-machines validé (secret déchiffré chez le spoke, jamais en clair sur le réseau).
+  - ⏳ Reste OPTIONNEL : incrément 6 (relais NAS QNAP pour bootstrap quand le hub dort) + `sync verify`.
+- **Install iMac + mise à jour** : `scripts/install-memoria.sh` (1 commande, non-dev), route+CLI+bouton UI
+  **Mise à jour** (git pull + build + redémarrage auto), `GET /v1/admin/version`. Guide `INSTALLATION-RESEAU.md`.
+- Suite = **430 verts**. Tout vérifié live sur le daemon réel (version, sync status, personnes).
+- **Terrain (Néto/Badette)** : sur le Mac Studio `memoria sync init-hub` + redémarrer + inviter ;
+  sur l'iMac, `install-memoria.sh` puis « Relier au hub » → Luna partage la mémoire d'équipe + le coffre avec Koda.
+
 ## Reste à faire (ordre conseillé)
 
 ### Import des mémoires Claude Code / Codex

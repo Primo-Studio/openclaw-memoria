@@ -5,6 +5,8 @@
 export { startDaemon, DAEMON_VERSION } from './server.js'
 export type { DaemonOptions, RunningDaemon } from './server.js'
 export { DaemonClient, ensureDaemon, daemonBinPath } from './client.js'
+export { currentVersion, pullAndBuild, scheduleRestart, repoRoot } from './update.js'
+export type { UpdateResult } from './update.js'
 export type { ClientOptions } from './client.js'
 export {
   readDaemonState,

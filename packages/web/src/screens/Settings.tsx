@@ -15,6 +15,8 @@ import {
   getOptions,
   getProviders,
   getSyncStatus,
+  getVersion,
+  runUpdate,
   setAutostart,
   setEnabled,
   setExtractionProvider,
@@ -31,6 +33,7 @@ import {
   type LlmProviderName,
   type ProvidersStatus,
   type SyncStatus,
+  type VersionInfo,
 } from '../api'
 
 const OPTIONS: Array<{ key: string; label: string; hint: string }> = [
@@ -116,6 +119,8 @@ export function Settings() {
       {error && <div className="error-banner">{error}</div>}
 
       <ControlPanel onError={setError} />
+
+      <UpdatePanel onError={setError} />
 
       <SyncPanel onError={setError} />
 
@@ -209,6 +214,60 @@ export function Settings() {
         </p>
       </div>
     </section>
+  )
+}
+
+function UpdatePanel({ onError }: { onError: (m: string) => void }) {
+  const [version, setVersion] = useState<VersionInfo | null>(null)
+  const [unavailable, setUnavailable] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [note, setNote] = useState<string | null>(null)
+
+  useEffect(() => {
+    getVersion().then(setVersion).catch(() => setUnavailable(true))
+  }, [])
+
+  if (unavailable) return null
+  if (version === null) return null
+
+  return (
+    <div className="settings-block">
+      <h2>Mise à jour</h2>
+      <p className="muted">
+        Version <strong>{version.version}</strong>
+        {version.sha ? <> · révision <code>{version.sha}</code></> : null}
+        {!version.is_git && <> · installation figée</>}
+      </p>
+      {version.is_git ? (
+        <>
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true)
+              setNote('Mise à jour en cours… (téléchargement + reconstruction, ~1 min)')
+              try {
+                const r = await runUpdate()
+                setNote(r.message + (r.changed ? ' Le service redémarre — recharge cette page dans ~10 s (relance « memoria » si la clé d’accès a changé).' : ''))
+                if (r.changed) getVersion().then(setVersion).catch(() => {})
+              } catch (err) {
+                onError(err instanceof ApiError ? err.message : 'Mise à jour impossible.')
+                setNote(null)
+              } finally {
+                setBusy(false)
+              }
+            }}
+          >
+            {busy ? 'Mise à jour…' : 'Vérifier et mettre à jour'}
+          </button>
+          <p className="muted" style={{ marginTop: '0.5rem' }}>Télécharge la dernière version, reconstruit, puis redémarre le service automatiquement.</p>
+        </>
+      ) : (
+        <p className="muted">Cette installation n’est pas gérée par git — mets à jour via ton gestionnaire de paquets.</p>
+      )}
+      {note && <p className="muted sync-note">{note}</p>}
+    </div>
   )
 }
 

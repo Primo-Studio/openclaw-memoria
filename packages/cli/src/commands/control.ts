@@ -10,7 +10,7 @@
  */
 import { Command, Option } from 'clipanion/lib/advanced/index.js'
 import { autostartStatus, disableAutostart, enableAutostart, moveStorage, setEnabled } from '@memoria/core'
-import { daemonBinPath, readDaemonState } from '@memoria/daemon'
+import { currentVersion, daemonBinPath, pullAndBuild, readDaemonState, scheduleRestart } from '@memoria/daemon'
 import { fail, findAliveDaemon, resolveCommon } from '../index.js'
 
 function pidAlive(pid: number): boolean {
@@ -100,6 +100,35 @@ export class AutostartCommand extends Command {
       return fail(this.context.stderr, `autostart : argument « ${this.mode} » inconnu (attendu : on | off | rien).`)
     } catch (err) {
       return fail(this.context.stderr, `autostart : ${(err as Error).message}`)
+    }
+  }
+}
+
+export class UpdateCommand extends Command {
+  static override paths = [['update']]
+  static override usage = Command.Usage({
+    description: 'Met Memoria à jour (git pull + build) et redémarre le daemon.',
+  })
+  storageRoot = Option.String('--storage-root', { description: 'Racine du stockage' })
+  config = Option.String('--config', { description: 'Fichier de découverte' })
+
+  override async execute(): Promise<number> {
+    const out = this.context.stdout
+    try {
+      const v = await currentVersion()
+      out.write(`Version actuelle : ${v.version}${v.sha ? ` (${v.sha})` : ''}\n`)
+      if (!v.is_git) return fail(this.context.stderr, 'update : installation non-git — mets à jour via ton gestionnaire de paquets.')
+      out.write('Téléchargement + reconstruction…\n')
+      const r = await pullAndBuild()
+      out.write(`${r.message}\n`)
+      if (r.ok && r.changed) {
+        const { storageRoot } = resolveCommon({ storageRoot: this.storageRoot, configPath: this.config })
+        scheduleRestart(storageRoot)
+        out.write('Le daemon redémarre dans quelques secondes (memoria stop && start).\n')
+      }
+      return r.ok ? 0 : 1
+    } catch (err) {
+      return fail(this.context.stderr, `update : ${(err as Error).message}`)
     }
   }
 }
