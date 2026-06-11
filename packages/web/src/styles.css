@@ -944,6 +944,21 @@ input[type='search']:focus {
 .theme-graph-legend ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.45rem; }
 .theme-graph-legend li { font-size: 0.85rem; line-height: 1.35; }
 
+/* --------------------------------------------------------------- synchro */
+
+.sync-setup { display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 0.6rem; }
+.sync-card {
+  flex: 1 1 260px; display: flex; flex-direction: column; gap: 0.5rem;
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 0.9rem;
+}
+.sync-card input { width: 100%; }
+.sync-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin: 0.6rem 0; }
+.sync-invite { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 0.8rem; margin-top: 0.6rem; }
+.peer-list { list-style: none; padding: 0; margin: 0.6rem 0 0; display: grid; gap: 0.4rem; }
+.peer-row { display: flex; align-items: center; gap: 0.7rem; flex-wrap: wrap; font-size: 0.88rem; }
+.peer-row .btn { margin-left: auto; }
+.sync-note { margin-top: 0.6rem; }
+
 /* --------------------------------------------------------------- personnes */
 
 .identify-row, .add-person, .ident-add { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }

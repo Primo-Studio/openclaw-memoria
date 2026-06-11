@@ -499,6 +499,59 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         sendJson(res, 200, memoria.deleteInstance(instanceId))
         return
       }
+      // ----------------------------------------------------------- synchro inter-machines (admin)
+      case 'GET /v1/admin/sync/status': {
+        const cfg = memoria.resolved.config.sync ?? {}
+        sendJson(res, 200, {
+          enabled: cfg.enabled === true,
+          role: memoria.sync.role,
+          machine_id: memoria.sync.machineId,
+          hub: cfg.hub ?? null,
+          listen_lan: cfg.listen_lan ?? null,
+          scopes: memoria.sync.syncScopes().map(s => ({ id: s.id, type: s.type, name: s.name })),
+          peers: memoria.sync.peers(),
+        })
+        return
+      }
+      case 'POST /v1/admin/sync/init_hub': {
+        const body = await readJson(req)
+        const listenLan = String(body['listen_lan'] ?? '0.0.0.0:47600')
+        memoria.configureSyncHub(listenLan, (body['scopes'] as string[] | undefined) ?? undefined)
+        sendJson(res, 200, { role: 'hub', listen_lan: listenLan, machine_id: memoria.sync.machineId, restart_required: true })
+        return
+      }
+      case 'POST /v1/admin/sync/invite': {
+        const body = await readJson(req)
+        sendJson(res, 200, memoria.sync.invite((body['display_name'] as string | undefined) ?? undefined))
+        return
+      }
+      case 'POST /v1/admin/sync/join': {
+        const body = await readJson(req)
+        const hub = String(body['hub'] ?? '')
+        const code = String(body['code'] ?? '')
+        if (!hub || !code) throw new HttpError(400, 'hub et code requis')
+        sendJson(res, 200, await memoria.sync.join({ hub, code }))
+        return
+      }
+      case 'POST /v1/admin/sync/now': {
+        const r = await memoria.sync.syncAll()
+        sendJson(res, 200, r)
+        return
+      }
+      case 'GET /v1/admin/sync/peers': {
+        sendJson(res, 200, { peers: memoria.sync.peers() })
+        return
+      }
+      case 'POST /v1/admin/sync/revoke': {
+        const body = await readJson(req)
+        sendJson(res, 200, { revoked: memoria.registry.revokePeer(String(body['machine_id'] ?? '')) })
+        return
+      }
+      case 'POST /v1/admin/sync/leave': {
+        memoria.sync.leave()
+        sendJson(res, 200, { ok: true })
+        return
+      }
       default:
         throw new HttpError(404, `route admin inconnue : ${route}`)
     }
@@ -555,6 +608,67 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     }
   }
 
+  /**
+   * Routes de SYNCHRO sur le LAN (SYNC §3.10). Seules ces routes sortent du
+   * loopback, derrière peer_token + HMAC (sauf /pairing/complete : code TTL).
+   * /v1/admin/* et /v1/memory/* ne sont JAMAIS servis ici.
+   */
+  async function handleSync(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const url = new URL(req.url ?? '/', 'http://lan')
+    if (!url.pathname.startsWith('/v1/sync/')) {
+      res.writeHead(403).end()
+      return
+    }
+    const method = req.method ?? 'GET'
+    const pathWithQuery = url.pathname + url.search
+    const body = await readRawBody(req)
+
+    // Pairing : pas de Bearer (le code one-shot TTL EST le secret).
+    if (method === 'POST' && url.pathname === '/v1/sync/pairing/complete') {
+      const parsed = body ? (JSON.parse(body) as Record<string, unknown>) : {}
+      const host = (req.socket.remoteAddress ?? '').replace(/^::ffff:/, '')
+      sendJson(res, 200, memoria.sync.completePairing({
+        code: String(parsed['code'] ?? ''),
+        machine_id: String(parsed['machine_id'] ?? ''),
+        display_name: parsed['display_name'] as string | undefined,
+        host: host || undefined,
+      }))
+      return
+    }
+
+    // Toutes les autres routes : authenticité HMAC + token de pair.
+    try {
+      memoria.sync.authenticate(
+        bearerToken(req) ?? undefined,
+        headerStr(req, 'x-memoria-sig'),
+        { method, path: pathWithQuery, body, ts: headerStr(req, 'x-memoria-ts') ?? '', nonce: headerStr(req, 'x-memoria-nonce') ?? '' },
+      )
+    } catch (err) {
+      sendJson(res, 401, { error: (err as Error).message })
+      return
+    }
+
+    if (method === 'GET' && url.pathname === '/v1/sync/snapshot') {
+      sendJson(res, 200, memoria.sync.snapshot(url.searchParams.get('scope') ?? '', url.searchParams.get('since') ?? undefined))
+      return
+    }
+    if (method === 'GET' && url.pathname === '/v1/sync/pull') {
+      sendJson(res, 200, memoria.sync.collectDelta(url.searchParams.get('scope') ?? '', url.searchParams.get('since') ?? '1970-01-01T00:00:00.000Z'))
+      return
+    }
+    if (method === 'POST' && url.pathname === '/v1/sync/push') {
+      const b = JSON.parse(body) as { scope_id: string; facts: never[]; tombstones: never[] }
+      sendJson(res, 200, memoria.sync.applyIncoming(b.scope_id, b.facts ?? [], b.tombstones ?? []))
+      return
+    }
+    if (method === 'GET' && url.pathname === '/v1/sync/secrets') {
+      const secrets = memoria.sync.serveSecrets(url.searchParams.get('scope') ?? '').map(s => ({ name: s.name, env: s.env }))
+      sendJson(res, 200, { secrets })
+      return
+    }
+    throw new HttpError(404, `route sync inconnue : ${method} ${url.pathname}`)
+  }
+
   let port: number
   try {
     port = await new Promise<number>((resolvePort, reject) => {
@@ -579,6 +693,34 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     started_at: nowISO(),
   }
   writeDaemonState(storageRoot, state)
+
+  // ---- SYNCHRO INTER-MACHINES (SYNC §3.10) -------------------------------
+  // (a) HUB : second listener sur le LAN, routes /v1/sync/* uniquement.
+  const syncCfg = memoria.resolved.config.sync
+  let lanServer: Server | null = null
+  let syncTimer: ReturnType<typeof setInterval> | null = null
+  if (syncCfg?.enabled && syncCfg.role === 'hub' && syncCfg.listen_lan) {
+    const [lanHost, lanPortStr] = parseHostPort(syncCfg.listen_lan)
+    lanServer = createServer((req, res) => {
+      void handleSync(req, res).catch((err: unknown) => {
+        const status = err instanceof HttpError ? err.status : 500
+        sendJson(res, status, { error: (err as Error).message ?? 'erreur interne' })
+      })
+    })
+    lanServer.on('error', e => console.warn('[memoria-daemon] listener LAN sync en échec :', (e as Error).message))
+    lanServer.listen(lanPortStr, lanHost, () => console.log(`[memoria-daemon] synchro HUB à l'écoute sur ${lanHost}:${lanPortStr} (/v1/sync/*)`))
+  }
+  // (b) SPOKE : passe de synchro best-effort, au boot puis périodiquement.
+  if (syncCfg?.enabled && syncCfg.role === 'spoke') {
+    const intervalMs = Math.max(30, syncCfg.interval_sec ?? 120) * 1000
+    const runTick = (): void => {
+      void memoria.sync.tick().then(r => {
+        if (r && (r.pulled > 0 || r.pushed > 0)) console.log(`[memoria-daemon] synchro : ${r.pulled} reçus, ${r.pushed} poussés`)
+      }).catch(() => {})
+    }
+    syncTimer = setInterval(runTick, intervalMs)
+    setTimeout(runTick, 2000) // 1re passe peu après le boot (laisse replayWal démarrer)
+  }
 
   // Rejeu du WAL au boot (spec §6.2) : best-effort, jamais bloquant pour le
   // démarrage — sans LLM dispo les entrées restent pending (visibles au doctor).
@@ -606,6 +748,8 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     .catch((err: unknown) => console.warn('[memoria-daemon] rejeu/indexation au boot en échec :', (err as Error).message))
 
   const close = async (): Promise<void> => {
+    if (syncTimer) clearInterval(syncTimer)
+    if (lanServer) await new Promise<void>(r => lanServer!.close(() => r()))
     await new Promise<void>((resolveClose) => server.close(() => resolveClose()))
     clearDaemonState(storageRoot)
     release()
@@ -616,6 +760,21 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
 }
 
 // ----------------------------------------------------------------- helpers
+
+/** Valeur d'en-tête HTTP en string (jamais un tableau). */
+function headerStr(req: IncomingMessage, name: string): string | undefined {
+  const v = req.headers[name]
+  return Array.isArray(v) ? v[0] : v
+}
+
+/** « host:port » → [host, port]. host vide → 0.0.0.0. */
+function parseHostPort(addr: string): [string, number] {
+  const i = addr.lastIndexOf(':')
+  if (i < 0) return ['0.0.0.0', Number.parseInt(addr, 10) || 47600]
+  const host = addr.slice(0, i) || '0.0.0.0'
+  const port = Number.parseInt(addr.slice(i + 1), 10) || 47600
+  return [host, port]
+}
 
 /**
  * Commande de connexion LOCALE : `node <repo>/packages/mcp/dist/bin.js connect
@@ -665,19 +824,25 @@ function bearerToken(req: IncomingMessage): string | null {
 }
 
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
+  const raw = await readRawBody(req)
+  if (raw.length === 0) return {}
+  try {
+    return JSON.parse(raw) as Record<string, unknown>
+  } catch {
+    throw new HttpError(400, 'JSON invalide')
+  }
+}
+
+/** Corps BRUT (string) — nécessaire au HMAC de synchro (sha256 du corps exact). */
+async function readRawBody(req: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = []
   let size = 0
   for await (const chunk of req) {
     size += (chunk as Buffer).length
-    if (size > 2_000_000) throw new HttpError(413, 'corps de requête trop grand')
+    if (size > 8_000_000) throw new HttpError(413, 'corps de requête trop grand')
     chunks.push(chunk as Buffer)
   }
-  if (chunks.length === 0) return {}
-  try {
-    return JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>
-  } catch {
-    throw new HttpError(400, 'JSON invalide')
-  }
+  return chunks.length === 0 ? '' : Buffer.concat(chunks).toString('utf8')
 }
 
 function sendJson(res: ServerResponse, status: number, payload: unknown): void {

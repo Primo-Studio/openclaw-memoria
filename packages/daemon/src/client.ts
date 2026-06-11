@@ -79,6 +79,29 @@ export class DaemonClient {
     return this.post('/v1/admin/delete_agent', { assistant_instance_id: instanceId })
   }
 
+  // --- synchro inter-machines ---
+  async syncStatus(): Promise<unknown> {
+    return this.get('/v1/admin/sync/status')
+  }
+  async syncInitHub(listenLan: string): Promise<unknown> {
+    return this.post('/v1/admin/sync/init_hub', { listen_lan: listenLan })
+  }
+  async syncInvite(displayName?: string): Promise<{ code: string; expires_at: string; hub_lan: string | null }> {
+    return this.post('/v1/admin/sync/invite', { display_name: displayName })
+  }
+  async syncJoin(hub: string, code: string): Promise<{ scopes: number; facts: number; secrets: number }> {
+    return this.post('/v1/admin/sync/join', { hub, code })
+  }
+  async syncNow(): Promise<{ pulled: number; pushed: number }> {
+    return this.post('/v1/admin/sync/now', {})
+  }
+  async syncRevoke(machineId: string): Promise<{ revoked: boolean }> {
+    return this.post('/v1/admin/sync/revoke', { machine_id: machineId })
+  }
+  async syncLeave(): Promise<{ ok: boolean }> {
+    return this.post('/v1/admin/sync/leave', {})
+  }
+
   // --- mémoire (token d'instance) ---
   async storeFact(input: Record<string, unknown>): Promise<unknown> {
     return this.post('/v1/memory/store_fact', input)

@@ -1436,6 +1436,21 @@ export class Memoria {
     return this.registry.listScopes().filter(s => whitelist.includes(s.type))
   }
 
+  /** Configure cette machine comme HUB de synchro (persiste). Redémarrage requis pour le listener LAN. */
+  configureSyncHub(listenLan: string, scopes?: string[]): void {
+    this.assertOpen()
+    this.resolved.config.sync = {
+      ...this.resolved.config.sync,
+      enabled: true,
+      role: 'hub',
+      machine_id: localMachineId(this.registry),
+      listen_lan: listenLan,
+      ...(scopes ? { scopes } : {}),
+    }
+    saveConfigFile(this.resolved.config, this.resolved.configPath)
+    this.syncEngine = undefined // re-construire avec la nouvelle config
+  }
+
   /** Coffre local (pour le module de synchro — clés GVK/CPK + valeurs scellées). */
   get secrets(): SecretProvider {
     return this.secretProvider

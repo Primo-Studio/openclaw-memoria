@@ -15,6 +15,15 @@ import { AgentsCommand, DeleteAgentCommand, RevokeCommand } from './commands/age
 import { AuditCommand } from './commands/audit.js'
 import { AutostartCommand, DisableCommand, EnableCommand, MoveCommand } from './commands/control.js'
 import { DaemonCommand, StartCommand, StopCommand } from './commands/daemon.js'
+import {
+  SyncInitHubCommand,
+  SyncInviteCommand,
+  SyncJoinCommand,
+  SyncLeaveCommand,
+  SyncNowCommand,
+  SyncRevokeCommand,
+  SyncStatusCommand,
+} from './commands/sync.js'
 import { DoctorCommand } from './commands/doctor.js'
 import { ExportCommand } from './commands/export.js'
 import { ForgetCommand } from './commands/forget.js'
@@ -146,5 +155,12 @@ export function buildCli(): Cli {
   cli.register(DisableCommand)
   cli.register(AutostartCommand)
   cli.register(MoveCommand)
+  cli.register(SyncStatusCommand)
+  cli.register(SyncInitHubCommand)
+  cli.register(SyncInviteCommand)
+  cli.register(SyncJoinCommand)
+  cli.register(SyncNowCommand)
+  cli.register(SyncRevokeCommand)
+  cli.register(SyncLeaveCommand)
   return cli
 }

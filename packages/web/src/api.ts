@@ -637,3 +637,52 @@ export async function setAutostart(enabled: boolean): Promise<AutostartStatus> {
   const res = await request<{ autostart: AutostartStatus }>('POST', '/v1/admin/autostart', { enabled })
   return res.autostart
 }
+
+// ------------------------------------------------------------ synchro inter-machines
+
+export interface SyncPeer {
+  machine_id: string
+  display_name: string
+  role: 'hub' | 'spoke'
+  host: string | null
+  last_seen_at: string | null
+  revoked_at: string | null
+}
+
+export interface SyncStatus {
+  enabled: boolean
+  role: 'hub' | 'spoke'
+  machine_id: string
+  hub: string | null
+  listen_lan: string | null
+  scopes: Array<{ id: string; type: string; name: string }>
+  peers: SyncPeer[]
+}
+
+export async function getSyncStatus(): Promise<SyncStatus> {
+  return request<SyncStatus>('GET', '/v1/admin/sync/status')
+}
+
+export async function syncInitHub(listenLan: string): Promise<{ listen_lan: string; machine_id: string }> {
+  return request('POST', '/v1/admin/sync/init_hub', { listen_lan: listenLan })
+}
+
+export async function syncInvite(displayName?: string): Promise<{ code: string; expires_at: string; hub_lan: string | null }> {
+  return request('POST', '/v1/admin/sync/invite', { display_name: displayName })
+}
+
+export async function syncJoin(hub: string, code: string): Promise<{ scopes: number; facts: number; secrets: number }> {
+  return request('POST', '/v1/admin/sync/join', { hub, code })
+}
+
+export async function syncNow(): Promise<{ pulled: number; pushed: number }> {
+  return request('POST', '/v1/admin/sync/now', {})
+}
+
+export async function syncRevoke(machineId: string): Promise<{ revoked: boolean }> {
+  return request('POST', '/v1/admin/sync/revoke', { machine_id: machineId })
+}
+
+export async function syncLeave(): Promise<{ ok: boolean }> {
+  return request('POST', '/v1/admin/sync/leave', {})
+}

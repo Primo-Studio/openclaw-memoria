@@ -6,6 +6,7 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import { useCallback as useCb } from 'react'
+import { ConfirmButton, CopyButton } from '../components/ui'
 import {
   ApiError,
   getControl,
@@ -13,15 +14,23 @@ import {
   getLlmProfile,
   getOptions,
   getProviders,
+  getSyncStatus,
   setAutostart,
   setEnabled,
   setExtractionProvider,
   setOption,
+  syncInitHub,
+  syncInvite,
+  syncJoin,
+  syncLeave,
+  syncNow,
+  syncRevoke,
   type ControlState,
   type DoctorReport,
   type LlmConfig,
   type LlmProviderName,
   type ProvidersStatus,
+  type SyncStatus,
 } from '../api'
 
 const OPTIONS: Array<{ key: string; label: string; hint: string }> = [
@@ -107,6 +116,8 @@ export function Settings() {
       {error && <div className="error-banner">{error}</div>}
 
       <ControlPanel onError={setError} />
+
+      <SyncPanel onError={setError} />
 
       <div className="settings-block">
         <h2>Moteur d’extraction</h2>
@@ -198,6 +209,120 @@ export function Settings() {
         </p>
       </div>
     </section>
+  )
+}
+
+function SyncPanel({ onError }: { onError: (m: string) => void }) {
+  const [status, setStatus] = useState<SyncStatus | null>(null)
+  const [unavailable, setUnavailable] = useState(false)
+  const [invite, setInvite] = useState<{ code: string; hub_lan: string | null } | null>(null)
+  const [joinHub, setJoinHub] = useState('')
+  const [joinCode, setJoinCode] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [note, setNote] = useState<string | null>(null)
+
+  const refresh = useCb(() => {
+    getSyncStatus().then(setStatus).catch(() => setUnavailable(true))
+  }, [])
+  useEffect(() => refresh(), [refresh])
+
+  const wrap = async (fn: () => Promise<void>) => {
+    setBusy(true)
+    try { await fn() } catch (err) { onError(err instanceof ApiError ? err.message : 'Action impossible.') } finally { setBusy(false) }
+  }
+
+  if (unavailable) return null
+  if (status === null) return <div className="settings-block"><div className="spinner-row"><span className="spinner" aria-hidden /> Chargement…</div></div>
+
+  const configured = status.enabled && (status.role === 'hub' || status.hub)
+
+  return (
+    <div className="settings-block">
+      <h2>Synchro entre machines</h2>
+      <p className="muted">
+        Partage la mémoire d'équipe (infos sur toi, l'entreprise, les projets) et le coffre entre tes Mac
+        du réseau. La mémoire <strong>privée</strong> de chaque agent ne se partage jamais.
+      </p>
+
+      {!configured ? (
+        <>
+          <p className="muted">Cette machine n'est pas encore reliée. Choisis :</p>
+          <div className="sync-setup">
+            <div className="sync-card">
+              <strong>En faire le hub</strong>
+              <span className="muted">La machine toujours allumée (ex. le Mac Studio de Koda) qui centralise la mémoire partagée.</span>
+              <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void wrap(async () => {
+                const r = await syncInitHub('0.0.0.0:47600')
+                setNote(`Hub configuré (machine ${r.machine_id}). Redémarre Memoria (memoria stop && start) pour activer l'écoute réseau, puis invite tes autres machines.`)
+                refresh()
+              })}>Faire de cette machine le hub</button>
+            </div>
+            <div className="sync-card">
+              <strong>Relier au hub</strong>
+              <span className="muted">Sur une machine secondaire (l'iMac de Luna), colle l'adresse du hub et le code d'invitation.</span>
+              <input type="text" placeholder="adresse du hub (ex. 192.168.1.20:47600)" value={joinHub} onChange={e => setJoinHub(e.target.value)} />
+              <input type="text" placeholder="code d'invitation (XXXX-XXXX)" value={joinCode} onChange={e => setJoinCode(e.target.value)} />
+              <button type="button" className="btn btn-primary" disabled={busy || !joinHub.trim() || !joinCode.trim()} onClick={() => void wrap(async () => {
+                const r = await syncJoin(joinHub.trim(), joinCode.trim())
+                setNote(`✓ Relié. Reçu ${r.facts} souvenirs partagés et ${r.secrets} secrets.`)
+                refresh()
+              })}>Relier cette machine</button>
+            </div>
+          </div>
+        </>
+      ) : (
+        <>
+          <p className="muted">
+            Rôle : <strong>{status.role === 'hub' ? 'hub (central)' : 'machine reliée'}</strong>
+            {status.role === 'hub' && status.listen_lan ? ` · écoute ${status.listen_lan}` : ''}
+            {status.role === 'spoke' && status.hub ? ` · hub ${status.hub}` : ''}
+            {' · '}id <code>{status.machine_id}</code>
+          </p>
+
+          <div className="sync-actions">
+            <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => void wrap(async () => {
+              const r = await syncNow(); setNote(`Synchro : ${r.pulled} reçus, ${r.pushed} poussés.`)
+            })}>Synchroniser maintenant</button>
+            {status.role === 'hub' && (
+              <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void wrap(async () => {
+                const inv = await syncInvite(); setInvite({ code: inv.code, hub_lan: inv.hub_lan })
+              })}>Inviter une machine</button>
+            )}
+            {status.role === 'spoke' && (
+              <ConfirmButton label="Se déconnecter" confirmLabel="Quitter le hub ?" onConfirm={() => void wrap(async () => { await syncLeave(); refresh() })} />
+            )}
+          </div>
+
+          {invite && (
+            <div className="sync-invite">
+              <p>Sur l'autre machine, dans Réglages → « Relier au hub » :</p>
+              <div className="command-row">
+                <code className="command">hub : {invite.hub_lan ?? '<ip-de-ce-mac>:47600'}</code>
+              </div>
+              <div className="command-row">
+                <code className="command">code : {invite.code}</code>
+                <CopyButton text={invite.code} label="Copier le code" />
+              </div>
+              <p className="muted">Le code expire dans 10 minutes.</p>
+            </div>
+          )}
+
+          {status.peers.length > 0 && (
+            <ul className="peer-list">
+              {status.peers.map(p => (
+                <li key={p.machine_id} className="peer-row">
+                  <span><strong>{p.display_name}</strong> <span className="badge badge-muted">{p.role}</span></span>
+                  <span className="muted">{p.revoked_at ? 'révoqué' : p.last_seen_at ? `vu ${new Date(p.last_seen_at).toLocaleString('fr-FR')}` : 'jamais vu'}</span>
+                  {!p.revoked_at && <ConfirmButton label="Révoquer" confirmLabel="Révoquer ce pair ?" onConfirm={() => void wrap(async () => { await syncRevoke(p.machine_id); refresh() })} />}
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+
+      {note && <p className="muted sync-note">{note}</p>}
+    </div>
   )
 }
 
