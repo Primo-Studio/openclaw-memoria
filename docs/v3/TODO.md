@@ -103,7 +103,9 @@ npm install && npm run build && npm test   # doit être 100% vert AVANT toute mo
       (`suggestIdentityFacts` → `shareFacts` vers `user`). Vérifié live (top candidat Koda = « Neto Pompeu »).
       Reste optionnel : raffiner le tri des candidats identité (du bruit type « Token » dans la longue traîne).
 - [ ] Écran Organisations & projets (créer org client, projet, scopes) — logique core prête.
-- [ ] Onboarding : barres de progression de téléchargement des modèles Ollama (spec §14).
+- [x] ~~Onboarding : barres de progression de téléchargement des modèles Ollama (spec §14)~~ **FAIT session 5**
+      (étape « Moteur d'intelligence » complète : choix Ollama/LM Studio/clés/OpenClaw, pulls avec
+      progression, mode dégradé explicite).
 - [x] ~~Vue relations entre thèmes~~ **FAIT** (onglet « Relations » écran Thèmes, graphe SVG).
 - [x] ~~Recherche globale (tous agents)~~ **FAIT** (option « Toutes les mémoires » écran Mémoire).
 
@@ -136,6 +138,21 @@ npm install && npm run build && npm test   # doit être 100% vert AVANT toute mo
 - [ ] `getSecretRef`/`secret_access` de bout en bout (engine→daemon→MCP `memoria_get_secret_ref`).
 - [ ] Renommer le repo `openclaw-memoria` → `memoria` (à la release, décision Néto).
 - [ ] Récupérer **Sol** (Mac mini) quand Néto le voudra — procédure dans AGENTS-RESEAU.md.
+
+## ✅ Session 5 (2026-06-11) — Readiness test iMac
+
+- Onboarding « Moteur d'intelligence » + santé LLM (`llm_health`, bannière Dashboard, provider LM Studio
+  extraction) ; détection d'agents + connexion 1 clic + import par bouton (job daemon, progression, Revue) ;
+  `memoria import` ; install-memoria.sh durci (CLT, garde anti-écrasement, PATH, autostart, ouverture UI) ;
+  `memoria ui` = défaut. 514 tests verts. Détail : STATUS.md session 5.
+- Reste de ce chantier : embeddings LM Studio (V1 = Ollama-only, dit explicitement dans la santé) ;
+  harmoniser le tutoiement de l'écran Agents historique ; annulation d'un job d'import ;
+  vérité terrain du format SQLite `auth_profile_stores` OpenClaw (table vide ici, parsing défensif).
+
+### Tests sync flaky (préexistant — à corriger dans le chantier sync)
+- [ ] `sync-engine.test.ts` + `sync-http.test.ts` : contention Keychain macOS réel
+      (`security add-generic-password -U` sur `__cluster_pairing_key`) + port LAN fixe 47733 →
+      passer ces tests sur `secretsVault: 'aes-vault'` + port 0.
 
 ## Pièges connus
 - bm25 NON comparable entre DB → scoring fan-out = couverture de requête (`content.ts searchFacts`). Ne pas « simplifier ».

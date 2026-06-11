@@ -4,14 +4,15 @@
 > (`PLAN-Memoria-v3-2026-06-03.md` §15), adaptée par la décision kickoff
 > (monorepo direct, Phase 0 fusionnée dans le port).
 
-**Dernière mise à jour :** 2026-06-11 (session 4 — réseau multi-machines + interlocuteur + install/update)
+**Dernière mise à jour :** 2026-06-11 (session 5 — readiness test iMac : onboarding moteur, détection/import agents par bouton, install durcie)
 
 ## 🏁 État global : produit complet, partage multi-machines opérationnel
 
 Fondation V3 complète (daemon/MCP/UI/secrets/migration/partage/providers/desktop) + **24 couches**
 (voir `COUCHES-ETAT.md`) + **adaptateur OpenClaw** (auto-recall/capture) + **synchro inter-machines**
 (hub-and-spoke, coffre partagé) + **identification d'interlocuteur** + **install 1-commande & bouton
-mise à jour**. **430 tests verts, CI verte.** UI à 14 écrans. 6 agents réels connectés.
+mise à jour** + **onboarding moteur d'intelligence** (anti-mort-silencieuse) + **détection/connexion/
+import d'agents par bouton**. **514 tests verts, CI verte.** UI à 14 écrans. 6 agents réels connectés.
 Reste : terrain (init hub Mac Studio + join iMac), relais NAS optionnel, distribution npm/signature.
 
 
@@ -43,6 +44,31 @@ défaut sûr sans contexte, pas de sur-masquage, dormant explicite, cap tokens. 
   (`memoria stop && memoria start`). Auto-démarrage launchd : TODO.
 
 ## Journal de session
+
+### 2026-06-11 — Session 5 (readiness test iMac — 3 chantiers parallèles, 514 tests verts)
+- **Moteur d'intelligence (anti-mort-silencieuse)** : provider **LM Studio** (extraction, OpenAI-compatible
+  local), `detectLlmOptions()` (Ollama/LM Studio/clés/OpenClaw — clés API en clair réutilisables via
+  `copyOpenClawKey`, OAuth honnêtement refusé), **`GET /v1/admin/llm_health`** (extraction+embeddings avec
+  raisons + `wal_pending`), job `ollama_pull` avec progression NDJSON. **Onboarding** étape « Moteur
+  d'intelligence » obligatoire (cartes + badges, pulls avec barres de progression, commandes de clé à
+  copier, bouton Tester, mode dégradé = opt-in explicite encart rouge). **Bannière Dashboard** quand
+  extraction indisponible / souvenirs en attente. Embeddings = Ollama-only V1 (dit explicitement).
+- **Agents par bouton** : `detectAgents()` (CLI + transcripts comptés + DB legacy OpenClaw + croisement
+  registry), routes `agents_detect` / `agents_connect` (pairing+credentials+enregistrement MCP EN
+  PROCESSUS daemon, échec visible avec repli manuel), **job d'import asynchrone dans le daemon**
+  (`import_start`/`import_status` : transcripts avec onProgress → quarantaine Revue ; legacy snapshot →
+  adoption ; gate 422 sans moteur ; 1 seul job ; garde-fou quarantaine non vide). UI Agents section
+  « Sur cette machine » (Détecter / Connecter / Importer avec progression / Démarrer de zéro).
+  CLI `memoria import`. `register.ts`+`credentials.ts` déplacés mcp→core (ré-export intact).
+- **Install & CLI** : `install-memoria.sh` durci (check git/Xcode CLT avec popup+consigne, avertissement
+  Node non-LTS, **garde anti-écrasement** si modifs locales, init non muet, PATH ~/.zshrc idempotent,
+  `autostart on`, ouverture auto de l'UI, shim node runtime). **`memoria ui`** = commande par défaut
+  (`memoria` tout court ouvre l'interface ; --help intact). INSTALLATION-RESEAU.md à jour (étape 1bis moteur).
+- Vérifié live sur le daemon réel : llm_health (gpt-4o-mini + nomic prêts, LM Studio non détecté,
+  OpenClaw sans clé réutilisable), agents_detect (Claude Code 159 transcripts / Codex 38 / OpenClaw,
+  tous already_connected), import_status idle, UI 200, `memoria ui` ouvre le navigateur, update « Déjà à jour ».
+- ⚠️ Flakiness PRÉEXISTANTE confirmée (base f2799a0) : tests sync se disputent le Keychain réel
+  (`__cluster_pairing_key`) + port LAN fixe 47733 → à corriger dans le chantier sync (aes-vault + port 0).
 
 ### 2026-06-10 — Session 1 (kickoff)
 - Clone `Primo-Studio/openclaw-memoria` → `~/openclaw-memoria`, HEAD = `4556c4d` (v3.34.0, base de l'audit).
