@@ -75,8 +75,10 @@ npm install && npm run build && npm test   # doit être 100% vert AVANT toute mo
 - [ ] (optionnel) prompt d'extraction encore plus sélectif / post-filtre de l'éphémère résiduel.
 
 ### UI manquante
-- [ ] **Écran Partage** (matrice scopes × agents) : API prête (`GET /v1/admin/scopes`, `POST /share`,
-      `POST /policy`, `GET /identity_candidates`), il manque l'écran React.
+- [x] ~~Écran Partage (matrice scopes × agents)~~ **FAIT** (`Sharing.tsx`) : matrice « qui lit quoi »
+      (`setPolicy`), explorateur de contenu de scope, panneau « Faits sur toi à partager »
+      (`suggestIdentityFacts` → `shareFacts` vers `user`). Vérifié live (top candidat Koda = « Neto Pompeu »).
+      Reste optionnel : raffiner le tri des candidats identité (du bruit type « Token » dans la longue traîne).
 - [ ] Écran Organisations & projets (créer org client, projet, scopes) — logique core prête.
 - [ ] Onboarding : barres de progression de téléchargement des modèles Ollama (spec §14).
 - [x] ~~Vue relations entre thèmes~~ **FAIT** (onglet « Relations » écran Thèmes, graphe SVG).
