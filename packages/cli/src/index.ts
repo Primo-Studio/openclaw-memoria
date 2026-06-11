@@ -30,6 +30,7 @@ import { ForgetCommand } from './commands/forget.js'
 import { InitCommand } from './commands/init.js'
 import { PairCommand } from './commands/pair.js'
 import { StatsCommand } from './commands/stats.js'
+import { UiCommand } from './commands/ui.js'
 
 export const CLI_VERSION = '0.1.0'
 
@@ -51,6 +52,7 @@ export {
   StartCommand,
   StatsCommand,
   StopCommand,
+  UiCommand,
 }
 
 /** Options communes à toutes les commandes (`--storage-root`, `--config`). */
@@ -139,6 +141,7 @@ export function buildCli(): Cli {
   cli.register(Builtins.HelpCommand)
   cli.register(Builtins.VersionCommand)
   cli.register(InitCommand)
+  cli.register(UiCommand) // aussi commande par défaut (`memoria` seul = `memoria ui`)
   cli.register(DaemonCommand)
   cli.register(StartCommand)
   cli.register(StopCommand)

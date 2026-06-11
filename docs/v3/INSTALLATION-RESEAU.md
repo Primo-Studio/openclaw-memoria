@@ -13,12 +13,39 @@ curl -fsSL https://raw.githubusercontent.com/Primo-Studio/openclaw-memoria/memor
 
 (ou, si le dépôt est déjà cloné : `sh scripts/install-memoria.sh`)
 
-Le script vérifie Node, télécharge Memoria, l'installe, le construit, démarre le
-service et affiche **l'adresse de l'interface** (`http://127.0.0.1:<port>/ui/#token=…`).
-Il crée aussi le raccourci `memoria` (taper `memoria` rouvre l'interface).
+Le script fait tout : il vérifie les outils, télécharge Memoria, l'installe, le
+construit, démarre le service, configure la commande `memoria` (PATH dans
+`~/.zshrc`), active le **lancement automatique au démarrage du Mac** et **ouvre
+l'interface tout seul** dans le navigateur.
 
-> Pré-requis : **Node.js 22 LTS** (https://nodejs.org). Le script le vérifie et
-> s'arrête proprement s'il manque.
+Pour rouvrir l'interface plus tard : taper **`memoria ui`** (ou `memoria` tout
+court) dans le Terminal. Pas besoin de relancer quoi que ce soit après un
+redémarrage : Memoria démarre tout seul au prochain allumage.
+
+> Pré-requis : **Node.js 22 LTS** (https://nodejs.org). Le script vérifie sa
+> présence et s'arrête proprement s'il manque (il avertit aussi si une version
+> non-LTS est installée). Les **outils de développement Apple** sont gérés par
+> le script lui-même : s'ils manquent, il ouvre la fenêtre d'installation
+> système (~5 min) et demande simplement de le relancer ensuite.
+
+> Sécurité : si le dossier `~/openclaw-memoria` contient des modifications
+> locales (machine de développement), le script **refuse** de l'écraser et
+> conseille `memoria update` à la place.
+
+## 1bis. Choisir le moteur d'intelligence
+
+Au premier lancement, l'écran d'accueil de l'interface te guide pour brancher
+le **moteur d'intelligence** — c'est lui qui transforme les conversations en
+souvenirs. Trois options :
+
+- **Ollama** (recommandé) : 100 % local et gratuit, rien ne sort de la machine.
+- **LM Studio** : local aussi, si tu préfères son application.
+- **Clé API** (Anthropic, OpenAI, OpenRouter) : moteur dans le cloud.
+
+Sans moteur configuré, Memoria capture les conversations mais **n'extrait aucun
+souvenir** — et te l'affiche clairement dans l'interface (rien n'échoue en
+silence). Suis simplement l'onboarding : il détecte ce qui est installé et
+propose la marche à suivre.
 
 ## 2. Désigner le hub (le Mac Studio de Koda)
 
