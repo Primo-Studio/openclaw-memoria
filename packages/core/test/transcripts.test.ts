@@ -346,6 +346,39 @@ describe('importTranscripts — quarantaine de revue', () => {
     expect(report.notes.some(n => n.includes('fenêtre(s) ancienne(s) ignorée(s)'))).toBe(true)
   })
 
+  it('onProgress : appelé après CHAQUE fichier avec compteurs exacts (et un callback qui jette ne casse rien)', async () => {
+    const fake = new FakeExtraction()
+    const mem = newMemoria(fake)
+    instance = mem.pairAssistant({ type: 'claude-code' }).assistant_instance_id
+    const fileA = join(root, 'a.jsonl')
+    const fileB = join(root, 'b.jsonl')
+    writeClaudeFile(fileA, ['scaleway'])
+    writeClaudeFile(fileB, ['convex'])
+
+    const ticks: Array<{ filesDone: number; filesTotal: number; factsImported: number }> = []
+    const report = await mem.importTranscripts(instance, [fileA, fileB], {
+      onProgress: p => ticks.push({ ...p }),
+    })
+
+    expect(ticks).toHaveLength(2) // 1 tick par fichier
+    expect(ticks[0]).toMatchObject({ filesDone: 1, filesTotal: 2 })
+    expect(ticks[1]).toMatchObject({ filesDone: 2, filesTotal: 2 })
+    // compteur monotone, et le dernier tick reflète le total final
+    expect(ticks[1]!.factsImported).toBeGreaterThanOrEqual(ticks[0]!.factsImported)
+    expect(ticks[1]!.factsImported).toBe(report.facts_quarantined)
+
+    // un callback qui jette est loggé mais n'interrompt pas l'import
+    const fileC = join(root, 'c.jsonl')
+    writeClaudeFile(fileC, ['stripe'])
+    const report2 = await mem.importTranscripts(instance, [fileC], {
+      onProgress: () => {
+        throw new Error('boom UI')
+      },
+    })
+    expect(report2.errors).toEqual([])
+    expect(report2.files_read).toBe(1)
+  })
+
   // Demandé par la revue adversariale : prouver que la quarantaine d'un agent
   // ne fuite JAMAIS vers un autre agent, avant ET après approbation.
   it('ANTI-FUITE : transcript importé pour A invisible au recall de B', async () => {
