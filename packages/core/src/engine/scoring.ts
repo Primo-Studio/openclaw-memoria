@@ -40,16 +40,22 @@ export function scoreFact(row: FactRow, relevance: number, context: ActiveContex
     hot = 1 + 0.5 * Math.exp((-Math.LN2 * sinceAccess) / HOT_HALF_LIFE_DAYS)
   }
 
+  // BOOST de contexte PLAFONNÉ (audit QW4) : il ne doit jamais faire passer un
+  // fait peu pertinent devant un fait très pertinent. Borne dure à ×2, et le
+  // relevance_weight (feedback) reste un facteur SÉPARÉ et borné, pas un
+  // multiplicateur du boost qui le ferait exploser.
   let boost = 1
   if (context) {
     if (context.project_id && row.project_id === context.project_id) boost *= 1.6
     if (context.client_org_id && row.client_org_id === context.client_org_id) boost *= 1.4
     if (context.org_id && row.org_id === context.org_id) boost *= 1.2
   }
-  boost *= row.relevance_weight
+  boost = Math.min(boost, 2)
+  const weight = clamp(row.relevance_weight, 0.3, 1.6)
 
-  const total = relevance * recency * confidence * usage * lifecycle * hot * boost
-  return { relevance, recency, confidence, usage, lifecycle, hot, boost, total }
+  // La PERTINENCE domine (exposant) ; les autres facteurs modulent.
+  const total = Math.pow(Math.max(relevance, 1e-6), 1.5) * recency * confidence * usage * lifecycle * hot * boost * weight
+  return { relevance, recency, confidence, usage, lifecycle, hot, boost: boost * weight, total }
 }
 
 /**

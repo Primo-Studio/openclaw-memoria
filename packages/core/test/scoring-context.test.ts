@@ -35,6 +35,15 @@ describe('hot-tier (couche 2)', () => {
     const old = scoreFact(rowOf({ last_accessed_at: new Date(now - 30 * 86_400_000).toISOString() }), 1, undefined, now)
     expect(recent.hot).toBeGreaterThan(old.hot)
   })
+
+  it('QW4 : la pertinence domine le boost de contexte', () => {
+    const now = Date.now()
+    // fait TRÈS pertinent mais hors-contexte
+    const relevant = scoreFact(rowOf({ project_id: null }), 1.0, { project_id: 'P' }, now)
+    // fait PEU pertinent mais dans le contexte projet
+    const inContext = scoreFact(rowOf({ project_id: 'P' }), 0.25, { project_id: 'P' }, now)
+    expect(relevant.total).toBeGreaterThan(inContext.total)
+  })
 })
 
 describe('context-tree (couche 9)', () => {
