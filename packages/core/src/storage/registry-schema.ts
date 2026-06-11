@@ -198,4 +198,56 @@ export const registryMigrations: Migration[] = [
       if (!cols.includes('updated_at')) db.exec("ALTER TABLE persons ADD COLUMN updated_at TEXT")
     },
   },
+  {
+    version: 4,
+    name: 'registry-sync',
+    up(db) {
+      // SYNCHRO INTER-MACHINES (SYNC-INTER-MACHINES.md §3.2). Aucune VALEUR de
+      // secret ni clé ici : seulement gouvernance + enveloppes chiffrées (GVK).
+      db.exec(`
+        -- Pairs machine connus (côté hub : ses spokes ; côté spoke : son hub)
+        CREATE TABLE sync_peers (
+          id              TEXT PRIMARY KEY,
+          machine_id      TEXT NOT NULL UNIQUE,
+          display_name    TEXT NOT NULL,
+          role            TEXT NOT NULL CHECK (role IN ('hub','spoke')),
+          host            TEXT,
+          peer_token_hash TEXT NOT NULL,
+          cpk_location    TEXT NOT NULL,
+          allowed_scopes  TEXT NOT NULL DEFAULT '[]',
+          last_seen_at    TEXT,
+          added_at        TEXT NOT NULL,
+          revoked_at      TEXT
+        );
+
+        -- Curseur de sync par (pair, scope)
+        CREATE TABLE sync_cursor (
+          peer_machine_id TEXT NOT NULL,
+          scope_id        TEXT NOT NULL,
+          watermark       TEXT NOT NULL DEFAULT '1970-01-01T00:00:00.000Z',
+          last_push_at    TEXT NOT NULL DEFAULT '1970-01-01T00:00:00.000Z',
+          last_sync_at    TEXT,
+          PRIMARY KEY (peer_machine_id, scope_id)
+        );
+
+        -- Enveloppes de secrets partagés (valeurs chiffrées GVK ; jamais en clair)
+        CREATE TABLE shared_secret_envelopes (
+          ref_id     TEXT PRIMARY KEY REFERENCES secret_refs(id) ON DELETE CASCADE,
+          scope_id   TEXT NOT NULL,
+          syncable   INTEGER NOT NULL DEFAULT 0,
+          iv         TEXT NOT NULL,
+          tag        TEXT NOT NULL,
+          data       TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        -- Anti-rejeu : nonces vus récemment (purge TTL)
+        CREATE TABLE sync_nonces (
+          nonce   TEXT PRIMARY KEY,
+          seen_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_sync_nonces_seen ON sync_nonces(seen_at);
+      `)
+    },
+  },
 ]

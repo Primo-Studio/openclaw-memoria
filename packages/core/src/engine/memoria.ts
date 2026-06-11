@@ -53,6 +53,7 @@ import type { WalReplaySummary } from './wal.js'
 import { passesClientIsolation, scoreFact } from './scoring.js'
 import { localMachineId, nextRev } from '../sync/clock.js'
 import { contentHash } from '../sync/merge.js'
+import { SyncEngine } from '../sync/engine.js'
 import type {
   AssistantInstance,
   AssistantType,
@@ -109,6 +110,7 @@ export class Memoria {
 
   private readonly secretProvider: SecretProvider
   private readonly redactor = new RegexRedactor()
+  private syncEngine?: SyncEngine
   private readonly llmOverride: MemoriaInitOptions['llm']
   private pipelinePromise: Promise<CapturePipeline> | null = null
   private profilePromise: Promise<{ extraction: LlmProvider | null; embeddings: EmbeddingProvider | null }> | null = null
@@ -1415,6 +1417,49 @@ export class Memoria {
   }
 
   /** Scopes + agents qui peuvent les lire (matrice de partage UI). */
+  // ------------------------------------------------------------ synchro inter-machines
+
+  /** ContentStore d'un scope PARTAGÉ (ouvre/enregistre la DB locale). null si privé/inconnu. */
+  sharedContentStore(scopeId: string): ContentStore | null {
+    this.assertOpen()
+    const scope = this.registry.getScope(scopeId)
+    if (!scope || scope.type === 'private' || scope.type === 'legacy_to_review') return null
+    const path = this.sharedDbPathPublic(scope)
+    const store = this.openContent(path)
+    this.registry.registerDb({ kind: 'shared', path, assistant_instance_id: null, scope_id: scope.id })
+    return store
+  }
+
+  /** Scopes synchronisables présents localement (types whitelistés). */
+  syncableScopes(whitelist: readonly string[]): MemoryScope[] {
+    this.assertOpen()
+    return this.registry.listScopes().filter(s => whitelist.includes(s.type))
+  }
+
+  /** Coffre local (pour le module de synchro — clés GVK/CPK + valeurs scellées). */
+  get secrets(): SecretProvider {
+    return this.secretProvider
+  }
+
+  /** Moteur de synchro inter-machines (lazy). Construit avec la config [sync]. */
+  get sync(): SyncEngine {
+    if (!this.syncEngine) {
+      this.syncEngine = new SyncEngine({
+        registry: this.registry,
+        secrets: this.secretProvider,
+        machineId: localMachineId(this.registry),
+        config: this.resolved.config.sync ?? {},
+        sharedStore: (scopeId: string) => this.sharedContentStore(scopeId),
+        listSyncableScopes: (whitelist: readonly string[]) => this.syncableScopes(whitelist),
+        persistConfig: () => saveConfigFile(this.resolved.config, this.resolved.configPath),
+        setSyncConfig: (patch: Record<string, unknown>) => {
+          this.resolved.config.sync = { ...this.resolved.config.sync, ...patch }
+        },
+      })
+    }
+    return this.syncEngine
+  }
+
   listScopesWithAccess(): Array<{ id: string; type: string; name: string; readers: string[]; facts: number }> {
     this.assertOpen()
     return this.registry.listScopes().map(scope => {

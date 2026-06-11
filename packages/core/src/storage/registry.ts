@@ -25,7 +25,24 @@ import type {
   ScopeKind,
   ScopePolicy,
   SecretAccess,
+  SyncPeer,
 } from '../types.js'
+
+function rowToPeer(r: Record<string, unknown>): SyncPeer {
+  return {
+    id: String(r['id']),
+    machine_id: String(r['machine_id']),
+    display_name: String(r['display_name']),
+    role: r['role'] as 'hub' | 'spoke',
+    host: (r['host'] as string | null) ?? null,
+    peer_token_hash: String(r['peer_token_hash']),
+    cpk_location: String(r['cpk_location']),
+    allowed_scopes: fromJsonArray(String(r['allowed_scopes'] ?? '[]')),
+    last_seen_at: (r['last_seen_at'] as string | null) ?? null,
+    added_at: String(r['added_at']),
+    revoked_at: (r['revoked_at'] as string | null) ?? null,
+  }
+}
 
 const PAIRING_TTL_MS = 10 * 60 * 1000 // 10 minutes
 
@@ -116,6 +133,30 @@ export class RegistryStore {
       )
       .run(scope.id, scope.type, scope.name, scope.owner_user_id, scope.org_id, scope.client_org_id, scope.project_id, scope.created_at)
     return scope
+  }
+
+  /**
+   * Adopte un scope d'un PAIR (synchro) : aligne l'identité de scope entre
+   * machines. Pour les scopes SINGLETON (user/org/legacy), repointe le scope
+   * local (vide sur une machine neuve) vers l'id du hub ; sinon crée la ligne.
+   * Sans ça, chaque machine a des ids de scope différents → la synchro casse.
+   */
+  adoptScope(def: { id: string; type: ScopeKind; name: string }): MemoryScope {
+    const byId = this.getScope(def.id)
+    if (byId) return byId
+    const SINGLETON: ScopeKind[] = ['user', 'org', 'legacy_to_review']
+    if (SINGLETON.includes(def.type)) {
+      const local = this.db.prepare('SELECT id FROM memory_scopes WHERE type = ? LIMIT 1').get(def.type) as { id: string } | undefined
+      if (local) {
+        // machine neuve : repointer l'id local vers celui du hub (un seul scope de ce type)
+        this.db.prepare('UPDATE memory_scopes SET id = ?, name = ? WHERE id = ?').run(def.id, def.name, local.id)
+        return this.getScope(def.id)!
+      }
+    }
+    this.db
+      .prepare('INSERT OR IGNORE INTO memory_scopes (id, type, name, owner_user_id, org_id, client_org_id, project_id, created_at) VALUES (?, ?, ?, NULL, NULL, NULL, NULL, ?)')
+      .run(def.id, def.type, def.name, nowISO())
+    return this.getScope(def.id)!
   }
 
   createProject(name: string, ownerOrgId: string, clientOrgId?: string | null): Project {
@@ -525,6 +566,105 @@ export class RegistryStore {
          ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
       )
       .run(key, value, nowISO())
+  }
+
+  // ------------------------------------------------------------------ synchro (pairs, nonces, curseurs)
+
+  addPeer(input: {
+    machine_id: string
+    display_name: string
+    role: 'hub' | 'spoke'
+    host?: string | null
+    peer_token: string
+    cpk_location: string
+    allowed_scopes?: string[]
+  }): SyncPeer {
+    const peer: SyncPeer = {
+      id: newId(),
+      machine_id: input.machine_id,
+      display_name: input.display_name,
+      role: input.role,
+      host: input.host ?? null,
+      peer_token_hash: sha256Hex(input.peer_token),
+      cpk_location: input.cpk_location,
+      allowed_scopes: input.allowed_scopes ?? [],
+      last_seen_at: null,
+      added_at: nowISO(),
+      revoked_at: null,
+    }
+    this.db
+      .prepare(
+        `INSERT INTO sync_peers (id, machine_id, display_name, role, host, peer_token_hash, cpk_location, allowed_scopes, last_seen_at, added_at, revoked_at)
+         VALUES (@id, @machine_id, @display_name, @role, @host, @peer_token_hash, @cpk_location, @allowed_scopes, @last_seen_at, @added_at, @revoked_at)
+         ON CONFLICT(machine_id) DO UPDATE SET
+           display_name=excluded.display_name, role=excluded.role, host=excluded.host,
+           peer_token_hash=excluded.peer_token_hash, cpk_location=excluded.cpk_location,
+           allowed_scopes=excluded.allowed_scopes, revoked_at=NULL`,
+      )
+      .run({ ...peer, allowed_scopes: toJson(peer.allowed_scopes) })
+    return peer
+  }
+
+  listPeers(includeRevoked = false): SyncPeer[] {
+    const sql = includeRevoked
+      ? 'SELECT * FROM sync_peers ORDER BY added_at'
+      : 'SELECT * FROM sync_peers WHERE revoked_at IS NULL ORDER BY added_at'
+    return (this.db.prepare(sql).all() as Array<Record<string, unknown>>).map(rowToPeer)
+  }
+
+  getPeerByMachineId(machineId: string): SyncPeer | null {
+    const r = this.db.prepare('SELECT * FROM sync_peers WHERE machine_id = ?').get(machineId) as Record<string, unknown> | undefined
+    return r ? rowToPeer(r) : null
+  }
+
+  /** Authentifie un pair par son token (jamais comparé en clair en base). */
+  verifyPeerToken(token: string): SyncPeer | null {
+    const hash = sha256Hex(token)
+    const r = this.db.prepare('SELECT * FROM sync_peers WHERE peer_token_hash = ? AND revoked_at IS NULL').get(hash) as
+      | Record<string, unknown>
+      | undefined
+    return r ? rowToPeer(r) : null
+  }
+
+  touchPeer(machineId: string, host?: string | null): void {
+    this.db.prepare('UPDATE sync_peers SET last_seen_at = ?, host = COALESCE(?, host) WHERE machine_id = ?').run(nowISO(), host ?? null, machineId)
+  }
+
+  revokePeer(machineId: string): boolean {
+    return this.db.prepare('UPDATE sync_peers SET revoked_at = ? WHERE machine_id = ? AND revoked_at IS NULL').run(nowISO(), machineId).changes > 0
+  }
+
+  /**
+   * Enregistre un nonce de synchro. Renvoie true si NOUVEAU (accepté), false si
+   * déjà vu (rejeu). Purge au passage les nonces périmés (TTL 5 min).
+   */
+  recordSyncNonce(nonce: string, ttlMs = 5 * 60_000): boolean {
+    const now = Date.now()
+    this.db.prepare('DELETE FROM sync_nonces WHERE seen_at < ?').run(new Date(now - ttlMs).toISOString())
+    try {
+      this.db.prepare('INSERT INTO sync_nonces (nonce, seen_at) VALUES (?, ?)').run(nonce, new Date(now).toISOString())
+      return true
+    } catch {
+      return false // PRIMARY KEY violation = déjà vu
+    }
+  }
+
+  getCursor(peerMachineId: string, scopeId: string): { watermark: string; last_push_at: string } {
+    const r = this.db.prepare('SELECT watermark, last_push_at FROM sync_cursor WHERE peer_machine_id = ? AND scope_id = ?').get(peerMachineId, scopeId) as
+      | { watermark: string; last_push_at: string }
+      | undefined
+    return r ?? { watermark: '1970-01-01T00:00:00.000Z', last_push_at: '1970-01-01T00:00:00.000Z' }
+  }
+
+  setCursor(peerMachineId: string, scopeId: string, patch: { watermark?: string; last_push_at?: string }): void {
+    const cur = this.getCursor(peerMachineId, scopeId)
+    this.db
+      .prepare(
+        `INSERT INTO sync_cursor (peer_machine_id, scope_id, watermark, last_push_at, last_sync_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(peer_machine_id, scope_id) DO UPDATE SET watermark=excluded.watermark, last_push_at=excluded.last_push_at, last_sync_at=excluded.last_sync_at`,
+      )
+      .run(peerMachineId, scopeId, patch.watermark ?? cur.watermark, patch.last_push_at ?? cur.last_push_at, nowISO())
   }
 
   // ------------------------------------------------------------------ audit

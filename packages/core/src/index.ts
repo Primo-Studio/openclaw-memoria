@@ -46,6 +46,13 @@ export * from './cognition/index.js'
 export { localMachineId, nextRev, currentRev } from './sync/clock.js'
 export { winner, contentHash, applyDelta } from './sync/merge.js'
 export type { MergeFields, SyncFact, Tombstone, SyncStore, ApplyReport } from './sync/merge.js'
+export { signRequest, verifyRequest, newNonce, SYNC_TS_SKEW_MS, SYNC_NONCE_TTL_MS } from './sync/peer-auth.js'
+export type { SigParts, VerifyResult } from './sync/peer-auth.js'
+export { sealValue, openEnvelope, sealGvk, openGvk } from './sync/secrets-sync.js'
+export type { Envelope } from './sync/secrets-sync.js'
+export { groupVaultKey, clusterPairingKey, setGroupVaultKey, setClusterPairingKey } from './secrets/index.js'
+export { SyncEngine, SyncAuthError } from './sync/engine.js'
+export type { SyncConfig, SyncDeps, SyncDelta, FetchLike } from './sync/engine.js'
 export { importLegacyCognition } from './migration/import-cognition.js'
 export {
   estimateTokens,

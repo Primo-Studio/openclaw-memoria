@@ -23,6 +23,26 @@ export interface MemoriaConfig {
     /** 0 = port auto (choisi au premier démarrage puis persisté). */
     port?: number
   }
+  /**
+   * Synchro inter-machines (SYNC-INTER-MACHINES.md). hub = détenteur canonique
+   * des scopes partagés ; spoke = réplique locale qui tire/pousse vers le hub.
+   * GVK/CPK/peer_token NE SONT JAMAIS ici (fichier clair) → Keychain.
+   */
+  sync?: {
+    enabled?: boolean
+    role?: 'hub' | 'spoke'
+    machine_id?: string
+    /** (spoke) adresse du hub « ip:port ». */
+    hub?: string
+    /** (hub) listener LAN dédié /v1/sync/* « ip:port » (≠ port loopback admin/memory). */
+    listen_lan?: string
+    interval_sec?: number
+    tls?: boolean
+    /** Types de scopes synchronisés (private exclu par construction). */
+    scopes?: string[]
+    relay_path?: string
+    discovery_file?: string
+  }
   llm?: {
     /** Profil raccourci : '100-local' | 'local-plus-cloud' | 'cloud' | 'custom'. */
     profile?: string

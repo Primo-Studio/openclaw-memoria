@@ -65,6 +65,21 @@ export interface Person {
   updated_at: string | null
 }
 
+/** Pair machine de synchro (un spoke côté hub, ou le hub côté spoke). */
+export interface SyncPeer {
+  id: string
+  machine_id: string
+  display_name: string
+  role: 'hub' | 'spoke'
+  host: string | null
+  peer_token_hash: string
+  cpk_location: string
+  allowed_scopes: string[]
+  last_seen_at: string | null
+  added_at: string
+  revoked_at: string | null
+}
+
 /** Identifiant qui permet de reconnaître un interlocuteur (Telegram, mail, tel…). */
 export interface PersonIdentifier {
   id: string
