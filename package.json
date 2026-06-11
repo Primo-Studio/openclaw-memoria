@@ -13,7 +13,7 @@
     "apps/*"
   ],
   "scripts": {
-    "build": "tsc -b",
+    "build": "tsc -b && npm run build:vite --workspace @memoria/web",
     "clean": "tsc -b --clean",
     "test": "vitest run",
     "test:watch": "vitest",

@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -p tsconfig.json --noEmit && vite build",
+    "build:vite": "vite build",
     "test": "vitest run"
   },
   "dependencies": {
