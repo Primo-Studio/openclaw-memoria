@@ -21,6 +21,7 @@ import {
   setAutostart,
   setEnabled,
   setExtractionProvider,
+  setProviderKey,
   setOption,
   syncInitHub,
   syncInvite,
@@ -73,6 +74,8 @@ export function Settings() {
   const [unavailable, setUnavailable] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // clé API saisie par provider (non persistée tant qu'on ne valide pas)
+  const [keyInput, setKeyInput] = useState<Record<string, string>>({})
 
   const refresh = useCallback(async () => {
     try {
@@ -110,6 +113,26 @@ export function Settings() {
       }
     },
     [refresh],
+  )
+
+  /** Enregistre la clé API collée par l'utilisateur, puis rafraîchit (le point passe au vert). */
+  const saveKey = useCallback(
+    async (provider: LlmProviderName) => {
+      const key = (keyInput[provider] ?? '').trim()
+      if (!key) return
+      setBusy(true)
+      try {
+        await setProviderKey(provider, key)
+        setKeyInput(prev => ({ ...prev, [provider]: '' }))
+        await refresh()
+        setError(null)
+      } catch (err) {
+        setError(err instanceof ApiError ? err.message : 'Enregistrement de la clé impossible.')
+      } finally {
+        setBusy(false)
+      }
+    },
+    [keyInput, refresh],
   )
 
   const current = config?.extraction
@@ -170,6 +193,26 @@ export function Settings() {
                           : `Clé absente — place-la dans ~/.${p.id}/api_key (chmod 600).`}
                     </p>
                   )}
+                  {(p.id === 'openai' || p.id === 'openrouter' || p.id === 'anthropic') && (
+                    <div className="provider-key">
+                      <input
+                        type="password"
+                        className="key-input"
+                        autoComplete="off"
+                        placeholder={avail ? 'Remplacer la clé API…' : 'Colle ta clé API ici…'}
+                        value={keyInput[p.id] ?? ''}
+                        onChange={e => setKeyInput(prev => ({ ...prev, [p.id]: e.target.value }))}
+                      />
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        disabled={busy || !(keyInput[p.id]?.trim())}
+                        onClick={() => void saveKey(p.id)}
+                      >
+                        Enregistrer la clé
+                      </button>
+                    </div>
+                  )}
                   {p.id === 'lmstudio' && avail === true && models.length === 0 && (
                     <p className="provider-missing">Aucun modèle chargé dans LM Studio — charge un modèle puis reviens ici.</p>
                   )}
@@ -178,7 +221,7 @@ export function Settings() {
                       <button
                         key={model}
                         type="button"
-                        disabled={busy || avail === false}
+                        disabled={busy}
                         className={`capture-option${isCurrent && current?.model === model ? ' capture-active' : ''}`}
                         onClick={() => void choose(p.id, model)}
                         title={model === p.recommended ? 'conseillé' : ''}

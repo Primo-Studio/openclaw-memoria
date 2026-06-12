@@ -331,6 +331,12 @@ export async function setExtractionProvider(provider: LlmProviderName, model?: s
   await request<unknown>('POST', '/v1/admin/llm_extraction', { provider, ...(model ? { model } : {}) })
 }
 
+/** Enregistre une clé API saisie par l'utilisateur (écrite côté daemon dans
+ *  ~/.<provider>/api_key chmod 600, jamais renvoyée). Providers cloud uniquement. */
+export async function setProviderKey(provider: LlmProviderName, key: string): Promise<void> {
+  await request<unknown>('POST', '/v1/admin/provider_key', { provider, key })
+}
+
 // ------------------------------------------------------------ santé LLM (anti-mort-silencieuse)
 
 /** État d'un moteur (extraction ou embeddings) dans le bilan de santé. */

@@ -301,6 +301,25 @@ export function copyOpenClawKey(
   return { provider, keyFile, from: candidate.configPath }
 }
 
+/**
+ * Écrit une clé API SAISIE PAR L'UTILISATEUR vers ~/.<provider>/api_key
+ * (chmod 600). Permet de coller sa clé depuis l'UI sans toucher au terminal.
+ * La valeur n'est jamais loggée. Échec si la clé est vide.
+ */
+export function writeProviderKey(
+  provider: ReusableProvider,
+  key: string,
+  opts: { keyFile?: string } = {},
+): { provider: ReusableProvider; keyFile: string } {
+  const trimmed = key.trim()
+  if (trimmed === '') throw new Error('clé vide')
+  const keyFile = opts.keyFile ?? defaultKeyFile(provider)
+  mkdirSync(dirname(keyFile), { recursive: true, mode: 0o700 })
+  writeFileSync(keyFile, `${trimmed}\n`, { encoding: 'utf8', mode: 0o600 })
+  chmodSync(keyFile, 0o600) // mode de writeFileSync ignoré si le fichier existait
+  return { provider, keyFile }
+}
+
 // ------------------------------------------------------ détection globale
 
 /**

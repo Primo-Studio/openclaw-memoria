@@ -21,6 +21,7 @@ import {
   autostartStatus,
   collectTranscriptFiles,
   copyOpenClawKey,
+  writeProviderKey,
   detectAgents,
   disableAutostart,
   enableAutostart,
@@ -388,6 +389,28 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
           reason: `depuis ${copied.from}`,
         })
         sendJson(res, 200, { ok: true, provider, key_file: copied.keyFile })
+        return
+      }
+      case 'POST /v1/admin/provider_key': {
+        // L'utilisateur colle sa clé API → écrite dans ~/.<provider>/api_key
+        // (chmod 600). La valeur n'est JAMAIS loggée ni renvoyée.
+        const body = await readJson(req)
+        const provider = String(body['provider'] ?? '')
+        const key = String(body['key'] ?? '')
+        if (!['openai', 'anthropic', 'openrouter'].includes(provider)) {
+          throw new HttpError(400, `provider invalide : ${provider}`)
+        }
+        if (key.trim() === '') throw new HttpError(400, 'clé vide')
+        const written = writeProviderKey(provider as ReusableProvider, key)
+        memoria.registry.audit({
+          actor_type: 'user',
+          actor_id: 'local',
+          action: `provider_key:${provider}`,
+          target_id_hash: null,
+          scope_id: null,
+          reason: 'clé saisie par l’utilisateur',
+        })
+        sendJson(res, 200, { ok: true, provider, key_file: written.keyFile })
         return
       }
       case 'GET /v1/admin/options': {

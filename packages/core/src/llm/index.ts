@@ -43,6 +43,7 @@ export {
 export type { LmStudioModelsResult, LmStudioProviderOptions } from './lmstudio.js'
 export {
   copyOpenClawKey,
+  writeProviderKey,
   defaultHasCommand,
   detectLlmOptions,
   scanOpenClawCredentials,
