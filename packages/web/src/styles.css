@@ -917,6 +917,37 @@ input[type='search']:focus {
 .layer-stat { margin-left: auto; font-weight: 700; color: var(--accent, #e85a1f); font-size: 0.9rem; }
 .layer-desc { margin: 0.35rem 0 0; font-size: 0.78rem; }
 
+/* docs — centre de documentation (sous-onglets) */
+.docs-points { margin: 0.45rem 0 0; padding-left: 1.05rem; font-size: 0.78rem; line-height: 1.45; }
+.docs-points li { margin: 0.2rem 0; }
+.layer-card .layer-desc:not(.muted) { color: var(--text); font-weight: 500; }
+
+.docs-layout { display: grid; grid-template-columns: 220px 1fr; gap: 1.5rem; align-items: start; }
+.docs-subnav { position: sticky; top: 1rem; display: flex; flex-direction: column; gap: 0.15rem; border-right: 1px solid var(--border); padding-right: 0.75rem; }
+.docs-subnav-group { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); margin: 0.8rem 0 0.25rem 0.55rem; }
+.docs-subnav-group:first-child { margin-top: 0; }
+.docs-subnav button { appearance: none; border: none; background: transparent; color: var(--text-muted); font: inherit; font-size: 0.85rem; text-align: left; padding: 0.4rem 0.6rem; border-radius: 8px; cursor: pointer; }
+.docs-subnav button:hover { background: var(--bg-hover); color: var(--text); }
+.docs-subnav button.docs-active { background: var(--accent-soft); color: var(--text); font-weight: 600; }
+.docs-body { max-width: 760px; min-width: 0; }
+.docs-body h1 { margin-bottom: 0.3rem; }
+.docs-body h3 { font-size: 0.95rem; font-weight: 650; margin: 1.1rem 0 0.3rem; }
+.docs-body p { line-height: 1.6; }
+.docs-body ul:not(.docs-points) { line-height: 1.55; padding-left: 1.2rem; }
+.docs-body ul:not(.docs-points) li { margin: 0.3rem 0; }
+.docs-lead { font-size: 1rem; color: var(--text-muted); margin: 0.2rem 0 1.2rem; line-height: 1.55; }
+.docs-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; margin: 0.6rem 0; }
+.docs-table th, .docs-table td { text-align: left; padding: 0.45rem 0.6rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+.docs-table th { color: var(--text-muted); font-weight: 600; font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.04em; }
+.docs-table td code { white-space: nowrap; }
+.docs-callout { padding: 0.8rem 1rem; border-radius: 10px; border: 1px solid var(--border); background: var(--bg-raised); font-size: 0.85rem; line-height: 1.55; margin: 1rem 0; }
+.docs-callout.tip { background: color-mix(in srgb, var(--ok) 8%, var(--bg-raised)); border-color: color-mix(in srgb, var(--ok) 35%, var(--border)); }
+.docs-callout.warn { background: color-mix(in srgb, var(--warn) 9%, var(--bg-raised)); border-color: color-mix(in srgb, var(--warn) 35%, var(--border)); }
+.docs-steps { counter-reset: docstep; list-style: none; padding-left: 0; }
+.docs-steps > li { counter-increment: docstep; position: relative; padding-left: 2.1rem; margin: 0.7rem 0; line-height: 1.55; }
+.docs-steps > li::before { content: counter(docstep); position: absolute; left: 0; top: 0; width: 1.5rem; height: 1.5rem; display: grid; place-items: center; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-size: 0.78rem; font-weight: 700; }
+@media (max-width: 780px) { .docs-layout { grid-template-columns: 1fr; } .docs-subnav { position: static; flex-direction: row; flex-wrap: wrap; border-right: none; border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; } }
+
 /* coffre */
 .vault-explainer { padding: 0.9rem 1rem; border-radius: 10px; border: 1px solid var(--border, #2a2a3d); background: color-mix(in srgb, var(--ok, #3fb96a) 8%, var(--card, #1c1c2b)); font-size: 0.86rem; margin-bottom: 1rem; line-height: 1.5; }
 

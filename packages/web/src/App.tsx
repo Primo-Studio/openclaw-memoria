@@ -21,10 +21,11 @@ import { System } from './screens/System'
 import { Audit } from './screens/Audit'
 import { Onboarding } from './screens/Onboarding'
 import { Settings } from './screens/Settings'
+import { Docs } from './screens/Docs'
 
 type ScreenId =
   | 'dashboard' | 'agents' | 'memory' | 'themes' | 'patterns' | 'procedures'
-  | 'review' | 'revisions' | 'sharing' | 'persons' | 'vault' | 'system' | 'audit' | 'settings'
+  | 'review' | 'revisions' | 'sharing' | 'persons' | 'vault' | 'system' | 'audit' | 'settings' | 'docs'
 
 const NAV: Array<{ id: ScreenId; label: string }> = [
   { id: 'dashboard', label: 'Tableau de bord' },
@@ -41,6 +42,7 @@ const NAV: Array<{ id: ScreenId; label: string }> = [
   { id: 'system', label: 'Système' },
   { id: 'audit', label: 'Journal' },
   { id: 'settings', label: 'Réglages' },
+  { id: 'docs', label: 'Docs' },
 ]
 
 const MODES: Array<{ id: CaptureMode; label: string; hint: string }> = [
@@ -104,6 +106,7 @@ export function App() {
         {screen === 'system' && <System />}
         {screen === 'audit' && <Audit />}
         {screen === 'settings' && <Settings />}
+        {screen === 'docs' && <Docs />}
       </main>
     </div>
   )
