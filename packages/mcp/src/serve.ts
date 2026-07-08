@@ -25,6 +25,7 @@ export interface DaemonGateway {
   storeFact(input: Record<string, unknown>): Promise<unknown>
   captureTurn(input: Record<string, unknown>): Promise<unknown>
   identifyInterlocutor(input: Record<string, unknown>): Promise<unknown>
+  identifyOrCreateInterlocutor(input: Record<string, unknown>): Promise<unknown>
 }
 
 /**
@@ -55,6 +56,10 @@ export class HttpDaemonGateway implements DaemonGateway {
 
   identifyInterlocutor(input: Record<string, unknown>): Promise<unknown> {
     return this.postMemory('/v1/memory/identify_interlocutor', input)
+  }
+
+  identifyOrCreateInterlocutor(input: Record<string, unknown>): Promise<unknown> {
+    return this.postMemory('/v1/memory/identify_or_create_interlocutor', input)
   }
 
   private async postMemory(path: string, input: Record<string, unknown>): Promise<unknown> {
@@ -94,6 +99,7 @@ export interface ToolHandlers {
   setContext(args: SetContextInput): Promise<CallToolResult>
   getContext(): Promise<CallToolResult>
   identifyInterlocutor(args: { phone?: string; email?: string; telegram?: string; whatsapp?: string; handle?: string; name?: string }): Promise<CallToolResult>
+  identifyOrCreateInterlocutor(args: { phone?: string; email?: string; telegram?: string; whatsapp?: string; handle?: string; name?: string; relation?: string }): Promise<CallToolResult>
 }
 
 export interface BuiltServer {
@@ -202,6 +208,14 @@ export function buildServer(opts: BuildServerOptions): BuiltServer {
         return fail(err)
       }
     },
+
+    async identifyOrCreateInterlocutor(args) {
+      try {
+        return ok(await withDaemon(g => g.identifyOrCreateInterlocutor(args as Record<string, unknown>)))
+      } catch (err) {
+        return fail(err)
+      }
+    },
   }
 
   const server = new McpServer(
@@ -300,6 +314,24 @@ export function buildServer(opts: BuildServerOptions): BuiltServer {
       },
     },
     async args => handlers.identifyInterlocutor(args),
+  )
+
+  server.registerTool(
+    'memoria_identify_or_create_interlocutor',
+    {
+      description:
+        'Like memoria_identify_interlocutor, but AUTO-REGISTERS the person on first contact: if no known person matches the given identifier (phone/email/Telegram/WhatsApp/handle), a new person is created with that identifier (and name/relation if provided). Use when a new contact reaches you on a channel and should be remembered for next time. Returns the person and created=true when a new one was made. With no identifier at all, creates nothing (assume the owner).',
+      inputSchema: {
+        phone: z.string().optional().describe('Phone number (any format).'),
+        email: z.string().optional().describe('Email address.'),
+        telegram: z.string().optional().describe('Telegram handle or numeric id.'),
+        whatsapp: z.string().optional().describe('WhatsApp number.'),
+        handle: z.string().optional().describe('Generic handle/username.'),
+        name: z.string().optional().describe('Display name for the new person (falls back to the identifier).'),
+        relation: z.string().optional().describe('Relation to the owner (e.g. client, colleague), stored on creation.'),
+      },
+    },
+    async args => handlers.identifyOrCreateInterlocutor(args),
   )
 
   return { server, handlers }

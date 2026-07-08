@@ -52,7 +52,13 @@ export function hybridSearchFacts(store: ContentStore, query: string, opts: Hybr
 
   // Fusion RRF : score(d) = Σ 1/(k + rang) par branche, ramené ~0..1 par ×k/2
   const scores = new Map<string, { row: FactRow; score: number }>()
+  // On GARDE la pertinence lexicale par couverture (searchFacts, content.ts) :
+  // le RRF pur ne classe que par RANG et écrase la magnitude lexicale, ce qui
+  // enterre les faits qui couvrent BEAUCOUP de termes de la requête derrière des
+  // faits génériques ne partageant qu'un mot fréquent. On la ré-injecte plus bas.
+  const lexRelById = new Map<string, number>()
   ftsHits.forEach((hit, rank) => {
+    lexRelById.set(hit.row.id, hit.relevance)
     scores.set(hit.row.id, { row: hit.row, score: (RRF_K / 2) * (1 / (RRF_K + rank + 1)) })
   })
   let vecRank = 0
@@ -66,8 +72,16 @@ export function hybridSearchFacts(store: ContentStore, query: string, opts: Hybr
     else scores.set(row.id, { row, score: inc })
   }
 
+  // Pertinence finale = fusion RRF (rang) MODULÉE par la couverture lexicale
+  // (magnitude). Un fait qui couvre tous les termes de la requête garde ~100 %
+  // de son RRF ; un hit purement vectoriel (aucun terme lexical) tombe à 40 %,
+  // sans disparaître. Corrige l'enfouissement des règles très spécifiques.
   return [...scores.values()]
     .sort((a, b) => b.score - a.score)
     .slice(0, limit)
-    .map(s => ({ row: s.row, relevance: Math.min(1, s.score) }))
+    .map(s => {
+      const rrf = Math.min(1, s.score)
+      const lex = lexRelById.get(s.row.id) ?? 0
+      return { row: s.row, relevance: rrf * (0.4 + 0.6 * lex) }
+    })
 }

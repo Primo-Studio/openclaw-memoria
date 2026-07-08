@@ -387,6 +387,53 @@ export class Memoria {
     return { person, known: this.knownAboutPerson(person.display_name) }
   }
 
+  /**
+   * Comme identifyInterlocutor, mais CRÉE la personne au premier contact si aucun
+   * identifiant connu ne matche (auto-enregistrement des interlocuteurs, ex.
+   * nouveau numéro WhatsApp/Telegram). Le premier identifiant fourni sert de clé.
+   * `created` indique si une nouvelle personne a été créée. Sans aucun identifiant
+   * fourni → comportement identique à identifyInterlocutor (pas de création).
+   */
+  identifyOrCreateInterlocutor(input: {
+    phone?: string
+    email?: string
+    telegram?: string
+    whatsapp?: string
+    handle?: string
+    name?: string
+    relation?: string | null
+  }): { person: PersonProfile; known: string[]; created: boolean } | null {
+    this.assertOpen()
+    const existing = this.identifyInterlocutor(input)
+    if (existing) return { ...existing, created: false }
+
+    // Aucune personne connue : on tente la création si on a AU MOINS un identifiant.
+    const tries: Array<[PersonIdentifier['kind'], string | undefined]> = [
+      ['telegram', input.telegram],
+      ['whatsapp', input.whatsapp],
+      ['phone', input.phone],
+      ['email', input.email],
+      ['handle', input.handle],
+    ]
+    const idents = tries.filter((t): t is [PersonIdentifier['kind'], string] => Boolean(t[1]))
+    if (idents.length === 0) return null // rien pour identifier → owner par défaut
+
+    const display = input.name?.trim() || idents[0]![1]
+    const person = this.registry.createPerson({ display_name: display, relation: input.relation ?? null })
+    for (const [kind, value] of idents) {
+      // addIdentifier a un index unique (kind,value) : en cas de course, on ignore.
+      try {
+        this.registry.addIdentifier(person.id, kind, value)
+      } catch {
+        /* identifiant déjà rattaché ailleurs — on garde la personne créée */
+      }
+    }
+    this.registry.audit({ actor_type: 'assistant', actor_id: 'local', action: 'person_autocreate', target_id_hash: sha256Hex(person.id), scope_id: null, reason: null })
+    const profile = this.registry.getPerson(person.id)
+    if (!profile) throw new Error('person auto-create: profil introuvable après création')
+    return { person: profile, known: this.knownAboutPerson(profile.display_name), created: true }
+  }
+
   /** Faits connus mentionnant cette personne (cross-agent, scopes partagés). */
   private knownAboutPerson(name: string, limit = 8): string[] {
     const hits = this.globalSearch(name, limit)

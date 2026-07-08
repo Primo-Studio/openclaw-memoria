@@ -202,7 +202,7 @@ describe('buildServer handlers', () => {
     expect(getPayload.active_context.project_id).toBe('jamboard')
   })
 
-  it('le serveur MCP expose bien les 6 outils', () => {
+  it('le serveur MCP expose bien les 7 outils', () => {
     const { server } = buildServer({
       instanceId: 'i',
       tracker: new ActiveContextTracker(),
@@ -214,6 +214,7 @@ describe('buildServer handlers', () => {
       'memoria_capture_turn',
       'memoria_get_context',
       'memoria_identify_interlocutor',
+      'memoria_identify_or_create_interlocutor',
       'memoria_recall',
       'memoria_set_context',
       'memoria_store_fact',

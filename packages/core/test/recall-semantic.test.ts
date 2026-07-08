@@ -75,6 +75,23 @@ describe('recallSemantic', () => {
     expect(hybrid.items[0]!.content).toContain('automobile')
   })
 
+  it('un fait SPÉCIFIQUE (couvre bcp de termes) bat un fait générique (1 mot commun)', async () => {
+    // Régression : le RRF pur classait par rang et enterrait les faits très
+    // couvrants derrière des faits génériques fréquents. La couverture lexicale
+    // ré-injectée dans hybrid.ts doit remonter le fait spécifique.
+    const generic = m.storeFact({ instance, content: 'Quand Neto demande une facture Indy, la télécharger depuis Indy', category: 'general', confidence: 0.7 })
+    const specific = m.storeFact({ instance, content: 'Sur Indy, fermer la modale pop-up promo avec la croix avant toute action', category: 'procedure', confidence: 0.9 })
+    // Le générique est « chaud » et souvent rappelé (avantage d'ancienneté) :
+    // malgré ça, le spécifique doit gagner sur la pertinence lexicale.
+    m.recall({ instance, query: 'facture Indy' }) // touchFacts → chauffe le générique
+    await m.indexEmbeddings(instance)
+
+    const r = await m.recallSemantic({ instance, query: 'modale pop-up Indy fermer croix' })
+    const ids = r.items.map(i => i.id)
+    expect(ids).toContain(specific.id)
+    expect(ids.indexOf(specific.id)).toBeLessThan(ids.indexOf(generic.id))
+  })
+
   it('forget nettoie aussi l’index vectoriel (pas de fantôme sémantique)', async () => {
     await m.captureTurn({ instance, messages: [{ role: 'assistant', content: 'La voiture est au parking.' }] })
     await m.indexEmbeddings(instance)

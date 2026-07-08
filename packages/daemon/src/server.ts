@@ -834,6 +834,13 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         sendJson(res, 200, { match: memoria.identifyInterlocutor(body as Record<string, never>) })
         return
       }
+      case 'POST /v1/memory/identify_or_create_interlocutor': {
+        // Comme identify_interlocutor mais CRÉE la personne au 1er contact d'un
+        // identifiant inconnu (auto-enregistrement WhatsApp/Telegram/…).
+        const body = await readJson(req)
+        sendJson(res, 200, { match: memoria.identifyOrCreateInterlocutor(body as Record<string, never>) })
+        return
+      }
       default:
         throw new HttpError(404, `route mémoire inconnue : ${route}`)
     }

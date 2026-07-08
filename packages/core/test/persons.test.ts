@@ -92,4 +92,25 @@ describe('personnes & identifiants', () => {
     expect(line).toContain('collaboratrice')
     expect(line).toContain('Accès builds iOS.')
   })
+
+  it('identifyOrCreateInterlocutor crée la personne au 1er contact puis la retrouve', () => {
+    // 1er contact d'un numéro WhatsApp inconnu → création automatique
+    const first = m.identifyOrCreateInterlocutor({ whatsapp: '+594694003393', name: 'Patron SOC' })
+    expect(first).not.toBeNull()
+    expect(first!.created).toBe(true)
+    expect(first!.person.display_name).toBe('Patron SOC')
+    expect(first!.person.identifiers.some(i => i.kind === 'whatsapp')).toBe(true)
+
+    // 2e contact du même numéro → retrouvée, PAS recréée
+    const second = m.identifyOrCreateInterlocutor({ whatsapp: '+594694003393' })
+    expect(second!.created).toBe(false)
+    expect(second!.person.id).toBe(first!.person.id)
+    expect(m.listPersons()).toHaveLength(1)
+  })
+
+  it('identifyOrCreateInterlocutor sans identifiant ne crée rien (owner par défaut)', () => {
+    const r = m.identifyOrCreateInterlocutor({ name: 'Inconnu sans identifiant' })
+    expect(r).toBeNull()
+    expect(m.listPersons()).toHaveLength(0)
+  })
 })

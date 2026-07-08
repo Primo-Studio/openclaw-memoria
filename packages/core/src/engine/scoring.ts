@@ -23,12 +23,19 @@ export interface ScoreParts {
 const RECENCY_HALF_LIFE_DAYS = 90
 const RECENCY_FLOOR = 0.15
 const HOT_HALF_LIFE_DAYS = 3 // un accès « refroidit » en ~3 jours
+const RELEVANCE_EXPONENT = 1.8 // la pertinence doit dominer les modulateurs
+const USAGE_COEF = 0.12 // pente du bonus d'usage (log)
+const USAGE_MAX = 1.3 // plafond du bonus d'usage (anti auto-renforcement)
+const HOT_MAX_BONUS = 0.25 // bonus « chaud » max (était 0.5 → auto-renforçait trop)
 
 export function scoreFact(row: FactRow, relevance: number, context: ActiveContext | undefined, now: number): ScoreParts {
   const ageDays = Math.max(0, (now - Date.parse(row.created_at)) / 86_400_000)
   const recency = Math.max(RECENCY_FLOOR, Math.exp((-Math.LN2 * ageDays) / RECENCY_HALF_LIFE_DAYS))
   const confidence = clamp(row.confidence, 0.05, 1)
-  const usage = 1 + Math.log1p(row.used_count + 0.5 * row.recall_count) * 0.15
+  // Bonus d'usage PLAFONNÉ : sans borne, les faits souvent rappelés grimpaient
+  // sans fin (touchFacts ré-incrémente à chaque recall) et enterraient les faits
+  // récents mais très pertinents — le riche s'enrichissait.
+  const usage = Math.min(USAGE_MAX, 1 + Math.log1p(row.used_count + 0.5 * row.recall_count) * USAGE_COEF)
   const lifecycle = row.lifecycle_state === 'active' ? 1 : row.lifecycle_state === 'dormant' ? 0.3 : 0
 
   // HOT-TIER (couche 2) : boost transitoire des faits récemment ACCÉDÉS.
@@ -37,7 +44,7 @@ export function scoreFact(row: FactRow, relevance: number, context: ActiveContex
   let hot = 1
   if (row.last_accessed_at) {
     const sinceAccess = Math.max(0, (now - Date.parse(row.last_accessed_at)) / 86_400_000)
-    hot = 1 + 0.5 * Math.exp((-Math.LN2 * sinceAccess) / HOT_HALF_LIFE_DAYS)
+    hot = 1 + HOT_MAX_BONUS * Math.exp((-Math.LN2 * sinceAccess) / HOT_HALF_LIFE_DAYS)
   }
 
   // BOOST de contexte PLAFONNÉ (audit QW4) : il ne doit jamais faire passer un
@@ -54,7 +61,7 @@ export function scoreFact(row: FactRow, relevance: number, context: ActiveContex
   const weight = clamp(row.relevance_weight, 0.3, 1.6)
 
   // La PERTINENCE domine (exposant) ; les autres facteurs modulent.
-  const total = Math.pow(Math.max(relevance, 1e-6), 1.5) * recency * confidence * usage * lifecycle * hot * boost * weight
+  const total = Math.pow(Math.max(relevance, 1e-6), RELEVANCE_EXPONENT) * recency * confidence * usage * lifecycle * hot * boost * weight
   return { relevance, recency, confidence, usage, lifecycle, hot, boost: boost * weight, total }
 }
 
