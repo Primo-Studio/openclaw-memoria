@@ -13,14 +13,19 @@ import {
   type AgentEntry,
   type RevisionProposal,
 } from '../api'
+import { useT } from '../i18n'
 
-const KIND_LABEL: Record<string, string> = {
-  contradicted: 'Contradiction',
-  duplicate: 'Doublon',
-  obsolete: 'Obsolète',
+type Translate = (key: string, vars?: Record<string, string | number>) => string
+
+const KNOWN_KINDS = new Set(['contradicted', 'duplicate', 'obsolete'])
+
+/** Libellé traduit d'un type de révision (repli sur le type brut si inconnu). */
+function kindLabel(t: Translate, kind: string): string {
+  return KNOWN_KINDS.has(kind) ? t(`revisions.kind_${kind}`) : kind
 }
 
 export function Revisions() {
+  const { t } = useT()
   const [agents, setAgents] = useState<AgentEntry[]>([])
   const [instance, setInstance] = useState('')
   const [items, setItems] = useState<RevisionProposal[] | null>(null)
@@ -34,8 +39,8 @@ export function Revisions() {
         setAgents(real)
         if (real[0]) setInstance(real[0].instance.id)
       })
-      .catch(() => setError('Le service ne répond pas.'))
-  }, [])
+      .catch(() => setError(t('revisions.error_service')))
+  }, [t])
 
   const load = useCallback(async (inst: string) => {
     setItems(null)
@@ -60,20 +65,20 @@ export function Revisions() {
         await decideRevision(instance, id, decision)
         setItems(prev => (prev ? prev.filter(i => i.id !== id) : prev))
       } catch (err) {
-        setError(err instanceof ApiError ? err.message : 'Action impossible.')
+        setError(err instanceof ApiError ? err.message : t('revisions.error_action'))
       } finally {
         setBusy(false)
       }
     },
-    [instance],
+    [instance, t],
   )
 
   return (
     <section>
       <header className="screen-head">
         <div>
-          <h1>Révisions</h1>
-          <p className="muted">Le ménage de la mémoire : souvenirs qui se contredisent ou font doublon.</p>
+          <h1>{t('revisions.title')}</h1>
+          <p className="muted">{t('revisions.lead')}</p>
         </div>
         {agents.length > 0 && (
           <select className="agent-select" value={instance} onChange={e => setInstance(e.target.value)}>
@@ -85,26 +90,26 @@ export function Revisions() {
       {error && <div className="error-banner">{error}</div>}
 
       {items === null ? (
-        <div className="spinner-row"><span className="spinner" aria-hidden /> Analyse de la mémoire…</div>
+        <div className="spinner-row"><span className="spinner" aria-hidden /> {t('revisions.analyzing')}</div>
       ) : items.length === 0 ? (
         <div className="empty-state">
-          <p>Mémoire saine — rien à ranger. ✨</p>
-          <p className="muted">Memoria propose une révision quand deux souvenirs se contredisent ou se répètent.</p>
+          <p>{t('revisions.empty_title')}</p>
+          <p className="muted">{t('revisions.empty_body')}</p>
         </div>
       ) : (
         <ul className="pattern-list">
           {items.map(r => (
             <li key={r.id} className="pattern-card">
               <div className="pattern-head">
-                <span className="badge badge-accent">{KIND_LABEL[r.kind] ?? r.kind}</span>
+                <span className="badge badge-accent">{kindLabel(t, r.kind)}</span>
               </div>
               <p className="pattern-canonical muted">{r.reason}</p>
               <div className="pattern-actions">
                 <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void decide(r.id, 'accept')}>
-                  Ranger (garder le récent)
+                  {t('revisions.action_accept')}
                 </button>
                 <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => void decide(r.id, 'dismiss')}>
-                  Laisser
+                  {t('revisions.action_dismiss')}
                 </button>
               </div>
             </li>

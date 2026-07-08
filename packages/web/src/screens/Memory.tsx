@@ -15,6 +15,9 @@ import {
   humanError,
   useLoad,
 } from '../components/ui'
+import { useT } from '../i18n'
+
+type Translate = (key: string, vars?: Record<string, string | number>) => string
 
 /** Souvenir affiché : optionnellement étiqueté de l'agent (recherche globale). */
 type ShownFact = AdminFact & { agent_type?: string }
@@ -28,12 +31,13 @@ type SearchState =
   | { status: 'ready'; facts: ShownFact[]; query: string }
 
 export function Memory() {
+  const { t } = useT()
   const { state: agentsState, reload: reloadAgents } = useLoad(getAgents)
 
   return (
     <section>
       <header className="screen-head">
-        <h1>Mémoire</h1>
+        <h1>{t('memory.title')}</h1>
       </header>
 
       {agentsState.status === 'loading' && <Spinner />}
@@ -41,8 +45,8 @@ export function Memory() {
       {agentsState.status === 'ready' &&
         (agentsState.data.length === 0 ? (
           <EmptyState
-            title="Aucun agent, donc aucune mémoire"
-            body="Connectez d’abord un agent depuis l’onglet « Agents » : ses souvenirs apparaîtront ici."
+            title={t('memory.no_agent_title')}
+            body={t('memory.no_agent_body')}
           />
         ) : (
           <MemoryBrowser agents={agentsState.data} />
@@ -52,6 +56,7 @@ export function Memory() {
 }
 
 function MemoryBrowser({ agents }: { agents: AgentEntry[] }) {
+  const { t } = useT()
   const active = agents.filter(a => a.instance.revoked_at === null)
   const first = active[0] ?? agents[0]
   const [instanceId, setInstanceId] = useState(first ? first.instance.id : '')
@@ -96,7 +101,7 @@ function MemoryBrowser({ agents }: { agents: AgentEntry[] }) {
     <>
       <form className="memory-controls" onSubmit={submit}>
         <label className="field">
-          <span className="field-label">Agent</span>
+          <span className="field-label">{t('memory.field_agent')}</span>
           <select
             value={instanceId}
             onChange={e => {
@@ -104,26 +109,26 @@ function MemoryBrowser({ agents }: { agents: AgentEntry[] }) {
               setSearch({ status: 'idle' })
             }}
           >
-            <option value={ALL}>🔍 Toutes les mémoires</option>
+            <option value={ALL}>{t('memory.all_memories')}</option>
             {agents.map(({ instance, assistant_type }) => (
               <option key={instance.id} value={instance.id}>
                 {agentTypeLabel(assistant_type)} — {instance.machine_id}
-                {instance.revoked_at !== null ? ' (déconnecté)' : ''}
+                {instance.revoked_at !== null ? t('memory.disconnected_suffix') : ''}
               </option>
             ))}
           </select>
         </label>
         <label className="field field-grow">
-          <span className="field-label">{instanceId === ALL ? 'Rechercher dans toutes les mémoires' : 'Rechercher dans sa mémoire'}</span>
+          <span className="field-label">{instanceId === ALL ? t('memory.search_all_label') : t('memory.search_one_label')}</span>
           <input
             type="search"
             value={query}
-            placeholder="Un mot-clé, un sujet, un nom de projet…"
+            placeholder={t('memory.search_placeholder')}
             onChange={e => setQuery(e.target.value)}
           />
         </label>
         <button type="submit" className="btn btn-primary" disabled={instanceId === ''}>
-          Rechercher
+          {t('memory.search_button')}
         </button>
         <button
           type="button"
@@ -134,23 +139,23 @@ function MemoryBrowser({ agents }: { agents: AgentEntry[] }) {
             runSearch('')
           }}
         >
-          Tout afficher
+          {t('memory.show_all')}
         </button>
       </form>
 
       {search.status === 'idle' && (
-        <p className="muted">Tapez un mot-clé puis « Rechercher », ou « Tout afficher » pour voir les derniers souvenirs.</p>
+        <p className="muted">{t('memory.hint')}</p>
       )}
-      {search.status === 'loading' && <Spinner label="Recherche…" />}
+      {search.status === 'loading' && <Spinner label={t('memory.searching')} />}
       {search.status === 'error' && <ErrorBanner message={search.message} />}
       {search.status === 'ready' &&
         (search.facts.length === 0 ? (
           <EmptyState
-            title="Rien trouvé"
+            title={t('memory.empty_title')}
             body={
               search.query === ''
-                ? 'Cet agent n’a encore aucun souvenir. Travaillez avec lui : sa mémoire se remplira toute seule.'
-                : `Aucun souvenir ne correspond à « ${search.query} ».`
+                ? t('memory.empty_body_all')
+                : t('memory.empty_body_query', { query: search.query })
             }
           />
         ) : (
@@ -160,16 +165,16 @@ function MemoryBrowser({ agents }: { agents: AgentEntry[] }) {
                 <p className="fact-content">{fact.fact}</p>
                 <div className="fact-meta">
                   {fact.agent_type && (
-                    <span className="badge badge-ok" title="agent source">{agentTypeLabel(fact.agent_type)}</span>
+                    <span className="badge badge-ok" title={t('memory.badge_agent_source')}>{agentTypeLabel(fact.agent_type)}</span>
                   )}
-                  {(fact.topics ?? []).map(t => (
-                    <span key={t} className="badge badge-theme" title="thème">{t}</span>
+                  {(fact.topics ?? []).map(topic => (
+                    <span key={topic} className="badge badge-theme" title={t('memory.badge_topic')}>{topic}</span>
                   ))}
                   <span className="badge badge-muted">{fact.category}</span>
-                  <span className="badge badge-muted">{scopeLabel(fact)}</span>
+                  <span className="badge badge-muted">{scopeLabel(t, fact)}</span>
                   <span className="muted">{formatDate(fact.created_at)}</span>
                   <span className="fact-actions">
-                    <ConfirmButton label="Oublier" confirmLabel="Oublier définitivement ?" onConfirm={() => forget(fact)} />
+                    <ConfirmButton label={t('memory.forget')} confirmLabel={t('memory.forget_confirm')} onConfirm={() => forget(fact)} />
                   </span>
                 </div>
               </li>
@@ -181,9 +186,9 @@ function MemoryBrowser({ agents }: { agents: AgentEntry[] }) {
 }
 
 /** Libellé lisible du scope — jamais d'identifiant brut quand on peut l'éviter. */
-function scopeLabel(fact: AdminFact): string {
+function scopeLabel(t: Translate, fact: AdminFact): string {
   const name = fact.scope_name ?? fact.scope_id
-  if (name.startsWith('private:')) return 'Privé'
-  if (name === 'user') return 'Partagé avec tous vos agents'
+  if (name.startsWith('private:')) return t('memory.scope_private')
+  if (name === 'user') return t('memory.scope_shared')
   return name.length > 24 ? `${name.slice(0, 24)}…` : name
 }

@@ -5,8 +5,10 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import { ApiError, getAgents, getProcedures, type AgentEntry, type Procedure } from '../api'
+import { useT } from '../i18n'
 
 export function Procedures() {
+  const { t } = useT()
   const [agents, setAgents] = useState<AgentEntry[]>([])
   const [instance, setInstance] = useState('')
   const [procedures, setProcedures] = useState<Procedure[] | null>(null)
@@ -19,8 +21,8 @@ export function Procedures() {
         setAgents(real)
         if (real[0]) setInstance(real[0].instance.id)
       })
-      .catch(() => setError('Le service ne répond pas.'))
-  }, [])
+      .catch(() => setError(t('procedures.error_service')))
+  }, [t])
 
   const load = useCallback(async (inst: string) => {
     setProcedures(null)
@@ -40,8 +42,8 @@ export function Procedures() {
     <section>
       <header className="screen-head">
         <div>
-          <h1>Procédures</h1>
-          <p className="muted">Les savoir-faire de l’agent : comment il fait les choses, et ce qui marche le mieux.</p>
+          <h1>{t('procedures.title')}</h1>
+          <p className="muted">{t('procedures.lead')}</p>
         </div>
         {agents.length > 0 && (
           <select className="agent-select" value={instance} onChange={e => setInstance(e.target.value)}>
@@ -53,11 +55,11 @@ export function Procedures() {
       {error && <div className="error-banner">{error}</div>}
 
       {procedures === null ? (
-        <div className="spinner-row"><span className="spinner" aria-hidden /> Chargement…</div>
+        <div className="spinner-row"><span className="spinner" aria-hidden /> {t('common.loading')}</div>
       ) : procedures.length === 0 ? (
         <div className="empty-state">
-          <p>Pas encore de procédure pour cet agent.</p>
-          <p className="muted">Les procédures se forment quand l’agent répète un savoir-faire (commande, workflow).</p>
+          <p>{t('procedures.empty_title')}</p>
+          <p className="muted">{t('procedures.empty_body')}</p>
         </div>
       ) : (
         <ul className="proc-list">
@@ -70,7 +72,7 @@ export function Procedures() {
                   <strong>{p.name}</strong>
                   {rate !== null && (
                     <span className={`proc-rate ${rate >= 70 ? 'rate-ok' : rate >= 40 ? 'rate-mid' : 'rate-low'}`}>
-                      {rate}% de réussite ({total})
+                      {t('procedures.success_rate', { rate, total })}
                     </span>
                   )}
                 </div>

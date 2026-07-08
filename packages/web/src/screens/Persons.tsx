@@ -18,21 +18,26 @@ import {
   type PersonProfile,
 } from '../api'
 import { ConfirmButton, EmptyState, ErrorBanner, Spinner, humanError, useLoad } from '../components/ui'
+import { useT } from '../i18n'
 
-const KINDS: Array<{ id: PersonIdentifier['kind']; label: string; placeholder: string }> = [
-  { id: 'telegram', label: 'Telegram', placeholder: '@handle ou id numérique' },
-  { id: 'whatsapp', label: 'WhatsApp', placeholder: '+594 6xx xx xx xx' },
-  { id: 'phone', label: 'Téléphone', placeholder: '+594 6xx xx xx xx' },
-  { id: 'email', label: 'E-mail', placeholder: 'prenom@exemple.com' },
-  { id: 'handle', label: 'Handle', placeholder: 'pseudo' },
-  { id: 'other', label: 'Autre', placeholder: 'identifiant' },
+type Translate = (key: string, vars?: Record<string, string | number>) => string
+
+const KINDS: Array<{ id: PersonIdentifier['kind']; labelKey: string; placeholderKey: string }> = [
+  { id: 'telegram', labelKey: 'persons.kind.telegram', placeholderKey: 'persons.placeholder.telegram' },
+  { id: 'whatsapp', labelKey: 'persons.kind.whatsapp', placeholderKey: 'persons.placeholder.whatsapp' },
+  { id: 'phone', labelKey: 'persons.kind.phone', placeholderKey: 'persons.placeholder.phone' },
+  { id: 'email', labelKey: 'persons.kind.email', placeholderKey: 'persons.placeholder.email' },
+  { id: 'handle', labelKey: 'persons.kind.handle', placeholderKey: 'persons.placeholder.handle' },
+  { id: 'other', labelKey: 'persons.kind.other', placeholderKey: 'persons.placeholder.other' },
 ]
 
-function kindLabel(kind: string): string {
-  return KINDS.find(k => k.id === kind)?.label ?? kind
+function kindLabel(t: Translate, kind: string): string {
+  const found = KINDS.find(k => k.id === kind)
+  return found ? t(found.labelKey) : kind
 }
 
 export function Persons() {
+  const { t } = useT()
   const { state, reload } = useLoad(getPersons)
   const [error, setError] = useState<string | null>(null)
 
@@ -40,10 +45,9 @@ export function Persons() {
     <section>
       <header className="screen-head">
         <div>
-          <h1>Personnes</h1>
+          <h1>{t('persons.title')}</h1>
           <p className="muted">
-            Aide les agents à savoir <strong>à qui ils parlent</strong>. Renseigne les identifiants
-            (Telegram, WhatsApp, e-mail) qui permettent de reconnaître chaque personne, et ce qu'on peut partager avec elle.
+            {t('persons.lead.before')}<strong>{t('persons.lead.strong')}</strong>{t('persons.lead.after')}
           </p>
         </div>
       </header>
@@ -58,7 +62,7 @@ export function Persons() {
       {state.status === 'error' && <ErrorBanner message={state.message} onRetry={reload} />}
       {state.status === 'ready' &&
         (state.data.length === 0 ? (
-          <EmptyState title="Aucune personne enregistrée" body="Ajoute Néto, Badette, tes stagiaires ou tes clients pour que les agents les reconnaissent." />
+          <EmptyState title={t('persons.empty.title')} body={t('persons.empty.body')} />
         ) : (
           <ul className="person-list">
             {state.data.map(p => (
@@ -71,6 +75,7 @@ export function Persons() {
 }
 
 function IdentifyTester({ onError }: { onError: (m: string) => void }) {
+  const { t } = useT()
   const [kind, setKind] = useState<PersonIdentifier['kind'] | 'name'>('telegram')
   const [value, setValue] = useState('')
   const [result, setResult] = useState<InterlocutorMatch | null | 'none'>(null)
@@ -89,17 +94,17 @@ function IdentifyTester({ onError }: { onError: (m: string) => void }) {
 
   return (
     <div className="settings-block">
-      <h2>Tester l'identification</h2>
-      <p className="muted">Colle un numéro, un e-mail ou un nom : tu verras qui l'agent reconnaîtrait.</p>
+      <h2>{t('persons.identify.title')}</h2>
+      <p className="muted">{t('persons.identify.lead')}</p>
       <form className="identify-row" onSubmit={test}>
         <select value={kind} onChange={e => setKind(e.target.value as PersonIdentifier['kind'] | 'name')}>
-          {KINDS.map(k => <option key={k.id} value={k.id}>{k.label}</option>)}
-          <option value="name">Nom</option>
+          {KINDS.map(k => <option key={k.id} value={k.id}>{t(k.labelKey)}</option>)}
+          <option value="name">{t('persons.identify.name')}</option>
         </select>
-        <input type="text" value={value} placeholder="valeur à reconnaître" onChange={e => setValue(e.target.value)} />
-        <button type="submit" className="btn btn-primary">Identifier</button>
+        <input type="text" value={value} placeholder={t('persons.identify.placeholder')} onChange={e => setValue(e.target.value)} />
+        <button type="submit" className="btn btn-primary">{t('persons.identify.submit')}</button>
       </form>
-      {result === 'none' && <p className="muted" style={{ marginTop: '0.6rem' }}>Aucune correspondance → l'agent supposera que c'est l'utilisateur (Néto).</p>}
+      {result === 'none' && <p className="muted" style={{ marginTop: '0.6rem' }}>{t('persons.identify.noMatch')}</p>}
       {result && result !== 'none' && (
         <div className="identify-result">
           <strong>{result.person.display_name}</strong>
@@ -117,6 +122,7 @@ function IdentifyTester({ onError }: { onError: (m: string) => void }) {
 }
 
 function AddPerson({ onAdded, onError }: { onAdded: () => void; onError: (m: string) => void }) {
+  const { t } = useT()
   const [name, setName] = useState('')
   const [relation, setRelation] = useState('')
   const [busy, setBusy] = useState(false)
@@ -139,14 +145,15 @@ function AddPerson({ onAdded, onError }: { onAdded: () => void; onError: (m: str
 
   return (
     <form className="add-person" onSubmit={submit}>
-      <input type="text" value={name} placeholder="Nom (ex. Badette)" onChange={e => setName(e.target.value)} />
-      <input type="text" value={relation} placeholder="Relation (ex. collaboratrice, stagiaire, client)" onChange={e => setRelation(e.target.value)} />
-      <button type="submit" className="btn btn-primary" disabled={busy || !name.trim()}>Ajouter</button>
+      <input type="text" value={name} placeholder={t('persons.add.namePlaceholder')} onChange={e => setName(e.target.value)} />
+      <input type="text" value={relation} placeholder={t('persons.add.relationPlaceholder')} onChange={e => setRelation(e.target.value)} />
+      <button type="submit" className="btn btn-primary" disabled={busy || !name.trim()}>{t('persons.add.submit')}</button>
     </form>
   )
 }
 
 function PersonCard({ person, onChange, onError }: { person: PersonProfile; onChange: () => void; onError: (m: string) => void }) {
+  const { t } = useT()
   const [notes, setNotes] = useState(person.notes ?? '')
   const [relation, setRelation] = useState(person.relation ?? '')
   const [idKind, setIdKind] = useState<PersonIdentifier['kind']>('telegram')
@@ -179,24 +186,24 @@ function PersonCard({ person, onChange, onError }: { person: PersonProfile; onCh
     <li className="person-card">
       <div className="person-head">
         <strong>{person.display_name}</strong>
-        {person.user_id && <span className="badge badge-ok">utilisateur</span>}
-        <ConfirmButton label="Supprimer" confirmLabel="Supprimer cette personne ?" onConfirm={async () => {
+        {person.user_id && <span className="badge badge-ok">{t('persons.card.userBadge')}</span>}
+        <ConfirmButton label={t('persons.card.delete')} confirmLabel={t('persons.card.deleteConfirm')} onConfirm={async () => {
           try { await deletePerson(person.id); onChange() } catch (err) { onError(humanError(err)) }
         }} />
       </div>
 
       <div className="person-fields">
-        <input type="text" value={relation} placeholder="Relation (rôle)" onChange={e => setRelation(e.target.value)} />
-        <textarea value={notes} placeholder="Notes : ce qu'on peut partager avec elle, son rôle, ses préférences…" onChange={e => setNotes(e.target.value)} rows={2} />
-        {dirty && <button type="button" className="btn btn-primary" onClick={() => void saveMeta()}>Enregistrer</button>}
+        <input type="text" value={relation} placeholder={t('persons.card.relationPlaceholder')} onChange={e => setRelation(e.target.value)} />
+        <textarea value={notes} placeholder={t('persons.card.notesPlaceholder')} onChange={e => setNotes(e.target.value)} rows={2} />
+        {dirty && <button type="button" className="btn btn-primary" onClick={() => void saveMeta()}>{t('persons.card.save')}</button>}
       </div>
 
       <div className="person-idents">
-        {person.identifiers.length === 0 && <span className="muted">Aucun identifiant — l'agent ne pourra pas la reconnaître automatiquement.</span>}
+        {person.identifiers.length === 0 && <span className="muted">{t('persons.card.noIdent')}</span>}
         {person.identifiers.map(id => (
           <span key={id.id} className="ident-chip">
-            <span className="ident-kind">{kindLabel(id.kind)}</span> {id.value}
-            <button type="button" className="ident-x" aria-label="Retirer" onClick={async () => {
+            <span className="ident-kind">{kindLabel(t, id.kind)}</span> {id.value}
+            <button type="button" className="ident-x" aria-label={t('persons.card.removeIdent')} onClick={async () => {
               try { await removePersonIdentifier(id.id); onChange() } catch (err) { onError(humanError(err)) }
             }}>✕</button>
           </span>
@@ -205,10 +212,10 @@ function PersonCard({ person, onChange, onError }: { person: PersonProfile; onCh
 
       <form className="ident-add" onSubmit={addId}>
         <select value={idKind} onChange={e => setIdKind(e.target.value as PersonIdentifier['kind'])}>
-          {KINDS.map(k => <option key={k.id} value={k.id}>{k.label}</option>)}
+          {KINDS.map(k => <option key={k.id} value={k.id}>{t(k.labelKey)}</option>)}
         </select>
-        <input type="text" value={idValue} placeholder={KINDS.find(k => k.id === idKind)?.placeholder} onChange={e => setIdValue(e.target.value)} />
-        <button type="submit" className="btn btn-ghost" disabled={!idValue.trim()}>+ identifiant</button>
+        <input type="text" value={idValue} placeholder={t(KINDS.find(k => k.id === idKind)!.placeholderKey)} onChange={e => setIdValue(e.target.value)} />
+        <button type="submit" className="btn btn-ghost" disabled={!idValue.trim()}>{t('persons.card.addIdent')}</button>
       </form>
     </li>
   )

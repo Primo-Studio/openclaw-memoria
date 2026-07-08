@@ -766,6 +766,22 @@ input[type='search']:focus {
   border-top: 1px solid var(--border, #2a2a3d);
 }
 
+.lang-switch {
+  padding: 0.6rem 1rem 0.75rem;
+  border-top: 1px solid var(--border, #2a2a3d);
+}
+.lang-select {
+  margin-top: 0.35rem;
+  width: 100%;
+  padding: 0.35rem 0.5rem;
+  border-radius: 0.4rem;
+  border: 1px solid var(--border, #2a2a3d);
+  background: var(--surface, #1b1b28);
+  color: var(--text, inherit);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
 .capture-options {
   display: flex;
   flex-direction: column;

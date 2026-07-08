@@ -22,8 +22,12 @@ import {
   type IdentityCandidate,
   type ScopeAccess,
 } from '../api'
+import { useT } from '../i18n'
+
+type Translate = (key: string, vars?: Record<string, string | number>) => string
 
 export function Sharing() {
+  const { t } = useT()
   const [scopes, setScopes] = useState<ScopeAccess[] | null>(null)
   const [assistants, setAssistants] = useState<AssistantInfo[]>([])
   const [agents, setAgents] = useState<AgentEntry[]>([])
@@ -39,9 +43,9 @@ export function Sharing() {
       setAgents(a)
       setError(null)
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Le service ne répond pas.')
+      setError(err instanceof ApiError ? err.message : t('sharing.error_service'))
     }
-  }, [])
+  }, [t])
 
   useEffect(() => {
     void refresh()
@@ -54,21 +58,21 @@ export function Sharing() {
         await setPolicy(assistantId, scope.id, { can_read: next })
         await refresh()
       } catch (err) {
-        setError(err instanceof ApiError ? err.message : 'Modification impossible.')
+        setError(err instanceof ApiError ? err.message : t('sharing.error_toggle'))
       } finally {
         setBusy(false)
       }
     },
-    [refresh],
+    [refresh, t],
   )
 
   return (
     <section>
       <header className="screen-head">
         <div>
-          <h1>Partage</h1>
+          <h1>{t('sharing.title')}</h1>
           <p className="muted">
-            Chaque agent a sa mémoire privée. Ici, tu décides ce qui est commun — et qui y accède.
+            {t('sharing.lead')}
           </p>
         </div>
       </header>
@@ -76,17 +80,17 @@ export function Sharing() {
       {error && <div className="error-banner">{error}</div>}
 
       <div className="settings-block">
-        <h2>Qui peut lire quoi</h2>
+        <h2>{t('sharing.matrix_title')}</h2>
         {scopes === null ? (
-          <div className="spinner-row"><span className="spinner" aria-hidden /> Chargement…</div>
+          <div className="spinner-row"><span className="spinner" aria-hidden /> {t('common.loading')}</div>
         ) : scopes.length === 0 ? (
-          <p className="muted">Aucune mémoire partagée pour l’instant.</p>
+          <p className="muted">{t('sharing.matrix_empty')}</p>
         ) : (
           <table className="share-matrix">
             <thead>
               <tr>
-                <th>Mémoire partagée</th>
-                <th>Faits</th>
+                <th>{t('sharing.col_scope')}</th>
+                <th>{t('sharing.col_facts')}</th>
                 {assistants.map(a => (
                   <th key={a.id} title={a.type}>{a.display_name}</th>
                 ))}
@@ -97,7 +101,7 @@ export function Sharing() {
                 <tr key={scope.id}>
                   <td>
                     <button type="button" className="scope-link" onClick={() => setExploring(exploring === scope.id ? null : scope.id)}>
-                      {scopeLabel(scope)} <span className="muted">{exploring === scope.id ? '▾' : '▸'}</span>
+                      {scopeLabel(t, scope)} <span className="muted">{exploring === scope.id ? '▾' : '▸'}</span>
                     </button>
                   </td>
                   <td className="muted">{scope.facts}</td>
@@ -109,7 +113,7 @@ export function Sharing() {
                           type="checkbox"
                           checked={allowed}
                           disabled={busy}
-                          aria-label={`${a.display_name} peut lire ${scopeLabel(scope)}`}
+                          aria-label={t('sharing.reader_aria', { agent: a.display_name, scope: scopeLabel(t, scope) })}
                           onChange={e => void toggle(a.id, scope, e.target.checked)}
                         />
                       </td>
@@ -124,10 +128,9 @@ export function Sharing() {
       </div>
 
       <div className="settings-block">
-        <h2>Faits sur toi à partager</h2>
+        <h2>{t('sharing.identity_title')}</h2>
         <p className="muted">
-          Memoria a repéré, dans la mémoire de chaque agent, des faits qui te concernent. Partage-les
-          vers la mémoire commune « user » pour que tous tes agents les connaissent.
+          {t('sharing.identity_lead')}
         </p>
         {agents.filter(a => a.assistant_type !== 'generic').map(a => (
           <IdentityPanel key={a.instance.id} agent={a} onShared={() => void refresh()} onError={setError} />
@@ -139,14 +142,15 @@ export function Sharing() {
 
 /** Contenu d'un scope partagé (les souvenirs dans « Sur vous », « Entreprise »…). */
 function ScopeContent({ scopeId, onError }: { scopeId: string; onError: (m: string) => void }) {
+  const { t } = useT()
   const [facts, setFacts] = useState<AdminFact[] | null>(null)
   useEffect(() => {
     getScopeFacts(scopeId)
       .then(setFacts)
-      .catch(err => onError(err instanceof ApiError ? err.message : 'Chargement impossible.'))
-  }, [scopeId, onError])
+      .catch(err => onError(err instanceof ApiError ? err.message : t('sharing.error_load')))
+  }, [scopeId, onError, t])
   if (facts === null) return <div className="spinner-row"><span className="spinner" aria-hidden /> …</div>
-  if (facts.length === 0) return <p className="muted scope-content">Cette mémoire partagée est vide — rien n’y a encore été partagé.</p>
+  if (facts.length === 0) return <p className="muted scope-content">{t('sharing.scope_empty')}</p>
   return (
     <ul className="fact-list scope-content">
       {facts.map(f => (
@@ -165,6 +169,7 @@ function IdentityPanel({
   onShared: () => void
   onError: (m: string) => void
 }) {
+  const { t } = useT()
   const [candidates, setCandidates] = useState<IdentityCandidate[] | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [open, setOpen] = useState(false)
@@ -175,9 +180,9 @@ function IdentityPanel({
       const c = await getIdentityCandidates(agent.instance.id)
       setCandidates(c)
     } catch (err) {
-      onError(err instanceof ApiError ? err.message : 'Chargement impossible.')
+      onError(err instanceof ApiError ? err.message : t('sharing.error_load'))
     }
-  }, [agent.instance.id, onError])
+  }, [agent.instance.id, onError, t])
 
   const share = useCallback(async () => {
     if (selected.size === 0) return
@@ -188,11 +193,11 @@ function IdentityPanel({
       await load()
       onShared()
     } catch (err) {
-      onError(err instanceof ApiError ? err.message : 'Partage impossible.')
+      onError(err instanceof ApiError ? err.message : t('sharing.error_share'))
     } finally {
       setBusy(false)
     }
-  }, [selected, load, onShared, onError])
+  }, [selected, load, onShared, onError, t])
 
   return (
     <div className="identity-panel">
@@ -204,13 +209,13 @@ function IdentityPanel({
           if (!open && candidates === null) void load()
         }}
       >
-        {open ? '▾' : '▸'} {agent.assistant_type} — faits sur toi
+        {open ? '▾' : '▸'} {t('sharing.identity_panel_label', { agent: agent.assistant_type })}
       </button>
       {open && (
         candidates === null ? (
-          <div className="spinner-row"><span className="spinner" aria-hidden /> Analyse…</div>
+          <div className="spinner-row"><span className="spinner" aria-hidden /> {t('sharing.analyzing')}</div>
         ) : candidates.length === 0 ? (
-          <p className="muted">Aucun fait identité repéré pour cet agent.</p>
+          <p className="muted">{t('sharing.identity_empty')}</p>
         ) : (
           <>
             <ul className="fact-list">
@@ -233,7 +238,7 @@ function IdentityPanel({
               ))}
             </ul>
             <button type="button" className="btn btn-primary" disabled={busy || selected.size === 0} onClick={() => void share()}>
-              Partager {selected.size > 0 ? `(${selected.size})` : ''} vers « user »
+              {selected.size > 0 ? t('sharing.share_button_count', { count: selected.size }) : t('sharing.share_button')}
             </button>
           </>
         )
@@ -242,18 +247,18 @@ function IdentityPanel({
   )
 }
 
-function scopeLabel(scope: ScopeAccess): string {
+function scopeLabel(t: Translate, scope: ScopeAccess): string {
   switch (scope.type) {
     case 'user':
-      return 'Sur l’utilisateur'
+      return t('sharing.scope_user')
     case 'org':
-      return 'Entreprise'
+      return t('sharing.scope_org')
     case 'client':
-      return `Client : ${scope.name}`
+      return t('sharing.scope_client', { name: scope.name })
     case 'project':
-      return `Projet : ${scope.name}`
+      return t('sharing.scope_project', { name: scope.name })
     case 'shared_topic':
-      return `Sujet : ${scope.name}`
+      return t('sharing.scope_topic', { name: scope.name })
     default:
       return scope.name
   }

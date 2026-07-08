@@ -36,14 +36,17 @@ import {
   humanError,
   useLoad,
 } from '../components/ui'
+import { useT } from '../i18n'
+
+type Translate = (key: string, vars?: Record<string, string | number>) => string
 
 const PAIRING_TTL_SECONDS = 10 * 60 // miroir de PAIRING_TTL_MS (registry.ts)
 
-const AGENT_CHOICES: Array<{ type: AgentType; label: string; hint: string }> = [
-  { type: 'claude-code', label: 'Claude Code', hint: 'L’assistant de votre terminal' },
-  { type: 'codex', label: 'Codex', hint: 'L’assistant OpenAI' },
-  { type: 'openclaw', label: 'OpenClaw', hint: 'Votre assistant OpenClaw' },
-  { type: 'generic', label: 'Autre agent', hint: 'Tout agent compatible' },
+const AGENT_CHOICES: Array<{ type: AgentType; labelKey: string; hintKey: string }> = [
+  { type: 'claude-code', labelKey: 'agents.choice.claudeCode.label', hintKey: 'agents.choice.claudeCode.hint' },
+  { type: 'codex', labelKey: 'agents.choice.codex.label', hintKey: 'agents.choice.codex.hint' },
+  { type: 'openclaw', labelKey: 'agents.choice.openclaw.label', hintKey: 'agents.choice.openclaw.hint' },
+  { type: 'generic', labelKey: 'agents.choice.generic.label', hintKey: 'agents.choice.generic.hint' },
 ]
 
 type PairFlow =
@@ -52,6 +55,7 @@ type PairFlow =
   | { step: 'code'; type: AgentType; result: PairResult }
 
 export function Agents({ onOpenReview }: { onOpenReview?: () => void }) {
+  const { t } = useT()
   const { state, reload } = useLoad(getAgents)
   const [flow, setFlow] = useState<PairFlow>({ step: 'closed' })
   const [actionError, setActionError] = useState<string | null>(null)
@@ -97,10 +101,10 @@ export function Agents({ onOpenReview }: { onOpenReview?: () => void }) {
   return (
     <section>
       <header className="screen-head">
-        <h1>Agents</h1>
+        <h1>{t('agents.title')}</h1>
         {state.status === 'ready' && state.data.length > 0 && (
           <button type="button" className="btn btn-primary" onClick={() => setFlow({ step: 'choose', busy: null, error: null })}>
-            Connecter un agent
+            {t('agents.connect')}
           </button>
         )}
       </header>
@@ -114,15 +118,15 @@ export function Agents({ onOpenReview }: { onOpenReview?: () => void }) {
       {state.status === 'ready' &&
         (state.data.length === 0 && flow.step === 'closed' ? (
           <EmptyState
-            title="Aucun agent connecté"
-            body="Reliez votre premier assistant : il gardera en mémoire ce que vous faites ensemble, d’une session à l’autre."
+            title={t('agents.empty.title')}
+            body={t('agents.empty.body')}
             action={
               <button
                 type="button"
                 className="btn btn-primary btn-big"
                 onClick={() => setFlow({ step: 'choose', busy: null, error: null })}
               >
-                Connecter votre premier agent
+                {t('agents.empty.action')}
               </button>
             }
           />
@@ -131,7 +135,7 @@ export function Agents({ onOpenReview }: { onOpenReview?: () => void }) {
         ))}
 
       {flow.step === 'choose' && (
-        <Modal title="Quel agent voulez-vous connecter ?" onClose={() => setFlow({ step: 'closed' })}>
+        <Modal title={t('agents.choose.title')} onClose={() => setFlow({ step: 'closed' })}>
           {flow.error && <ErrorBanner message={flow.error} />}
           <div className="choice-grid">
             {AGENT_CHOICES.map(choice => (
@@ -142,8 +146,8 @@ export function Agents({ onOpenReview }: { onOpenReview?: () => void }) {
                 disabled={flow.busy !== null}
                 onClick={() => startPairing(choice.type)}
               >
-                <strong>{choice.label}</strong>
-                <span className="muted">{flow.busy === choice.type ? 'Préparation…' : choice.hint}</span>
+                <strong>{t(choice.labelKey)}</strong>
+                <span className="muted">{flow.busy === choice.type ? t('agents.choose.preparing') : t(choice.hintKey)}</span>
               </button>
             ))}
           </div>
@@ -151,11 +155,11 @@ export function Agents({ onOpenReview }: { onOpenReview?: () => void }) {
       )}
 
       {flow.step === 'code' && (
-        <Modal title={`Connecter ${agentTypeLabel(flow.type)}`} onClose={closeFlow}>
+        <Modal title={t('agents.code.title', { agent: agentTypeLabel(flow.type) })} onClose={closeFlow}>
           <PairingCode result={flow.result} onRegenerate={() => startPairing(flow.type)} />
           <div className="modal-foot">
             <button type="button" className="btn btn-primary" onClick={closeFlow}>
-              C’est fait
+              {t('agents.code.done')}
             </button>
           </div>
         </Modal>
@@ -197,6 +201,7 @@ type ImportFlow =
 
 /** Section « Sur cette machine » : détection, connexion 1 clic, import des souvenirs. */
 function MachineAgents({ onChanged, onOpenReview }: { onChanged: () => void; onOpenReview?: () => void }) {
+  const { t } = useT()
   const [detected, setDetected] = useState<DetectedAgent[] | null>(null)
   const [detecting, setDetecting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -276,7 +281,7 @@ function MachineAgents({ onChanged, onOpenReview }: { onChanged: () => void; onO
       getImportStatus().then(
         status => {
           if (status.state === 'done') setFlow({ step: 'done', agent, status })
-          else if (status.state === 'error') setFlow({ step: 'failed', agent, message: status.error ?? 'Erreur inconnue — regarde le journal du daemon.' })
+          else if (status.state === 'error') setFlow({ step: 'failed', agent, message: status.error ?? t('agents.import.unknownError') })
           else setFlow({ step: 'running', agent, status })
         },
         (err: unknown) => {
@@ -291,14 +296,14 @@ function MachineAgents({ onChanged, onOpenReview }: { onChanged: () => void; onO
   return (
     <div className="machine-agents">
       <div className="machine-head">
-        <h2>Sur cette machine</h2>
+        <h2>{t('agents.machine.title')}</h2>
         <button type="button" className="btn" onClick={detect} disabled={detecting}>
-          {detecting ? 'Détection…' : '🔍 Détecter les agents'}
+          {detecting ? t('agents.machine.detecting') : t('agents.machine.detect')}
         </button>
       </div>
       {error && <ErrorBanner message={error} />}
       {detected !== null && detected.length === 0 && (
-        <p className="muted">Aucun assistant détecté sur cette machine.</p>
+        <p className="muted">{t('agents.machine.none')}</p>
       )}
       {detected !== null && detected.length > 0 && (
         <div className="machine-grid">
@@ -320,7 +325,7 @@ function MachineAgents({ onChanged, onOpenReview }: { onChanged: () => void; onO
 
       {flow.step !== 'closed' && (
         <Modal
-          title={`Importer les souvenirs — ${flow.agent.name}`}
+          title={t('agents.import.title', { name: flow.agent.name })}
           onClose={() => {
             // pendant le run on laisse le job finir côté daemon ; on ferme juste la fenêtre
             setFlow({ step: 'closed' })
@@ -360,46 +365,47 @@ function MachineAgentCard({
   onDismiss: () => void
   onUndoDismiss: () => void
 }) {
+  const { t } = useT()
   const connected = agent.already_connected !== null
-  const dataLabel = describeData(agent)
+  const dataLabel = describeData(t, agent)
   return (
     <div className="machine-card">
       <div className="machine-card-head">
         <strong>{agentIcon(agent.kind)} {agent.name}</strong>
-        {connected ? <span className="badge badge-ok">Déjà connecté ✓</span> : <span className="badge badge-muted">Non connecté</span>}
+        {connected ? <span className="badge badge-ok">{t('agents.card.connected')}</span> : <span className="badge badge-muted">{t('agents.card.notConnected')}</span>}
       </div>
       <div className="machine-card-meta muted">
-        {agent.installed ? 'CLI installée' : 'CLI absente'}
+        {agent.installed ? t('agents.card.cliInstalled') : t('agents.card.cliAbsent')}
         {dataLabel && <> · {dataLabel}</>}
       </div>
       {connectResult && (
         <p className={connectResult.registered.registered ? 'machine-connect-ok' : 'machine-connect-warn'}>
           {connectResult.registered.registered
-            ? `✓ Connecté. ${connectResult.restart_hint ?? ''}`
-            : `⚠ Connecté, mais l'enregistrement automatique a échoué : ${connectResult.registered.detail}`}
+            ? t('agents.card.connectOk', { hint: connectResult.restart_hint ?? '' })
+            : t('agents.card.connectWarn', { detail: connectResult.registered.detail })}
         </p>
       )}
       <div className="machine-card-actions">
         {!connected && (
           <button type="button" className="btn btn-primary" onClick={onConnect} disabled={busy}>
-            {busy ? 'Connexion…' : 'Connecter'}
+            {busy ? t('agents.card.connecting') : t('agents.card.connect')}
           </button>
         )}
         {connected && dataLabel && !dismissed && (
           <>
             <button type="button" className="btn btn-primary" onClick={onImport}>
-              Importer ses souvenirs
+              {t('agents.card.import')}
             </button>
             <button type="button" className="btn btn-ghost" onClick={onDismiss}>
-              Démarrer de zéro
+              {t('agents.card.startFresh')}
             </button>
           </>
         )}
         {connected && dataLabel && dismissed && (
           <span className="muted">
-            Démarrage de zéro — rien ne sera importé.{' '}
+            {t('agents.card.startFreshNote')}{' '}
             <button type="button" className="btn-link" onClick={onUndoDismiss}>
-              Changer d’avis
+              {t('agents.card.undoDismiss')}
             </button>
           </span>
         )}
@@ -416,43 +422,43 @@ function agentIcon(kind: DetectedAgent['kind']): string {
 }
 
 /** « 122 conversations trouvées » / « Mémoire OpenClaw : 3 573 souvenirs ». */
-function describeData(agent: DetectedAgent): string | null {
+function describeData(t: Translate, agent: DetectedAgent): string | null {
   if (agent.data_found.transcript_files !== undefined) {
     const n = agent.data_found.transcript_files
-    return `${n.toLocaleString('fr-FR')} conversation${n > 1 ? 's' : ''} trouvée${n > 1 ? 's' : ''}`
+    const key = n > 1 ? 'agents.data.conversations.plural' : 'agents.data.conversations.one'
+    return t(key, { n: n.toLocaleString('fr-FR') })
   }
   if (agent.data_found.legacy_db) {
-    return `Mémoire OpenClaw : ${agent.data_found.legacy_db.fact_count.toLocaleString('fr-FR')} souvenirs`
+    return t('agents.data.legacy', { n: agent.data_found.legacy_db.fact_count.toLocaleString('fr-FR') })
   }
   return null
 }
 
 function ImportConfirm({ agent, onConfirm, onCancel }: { agent: DetectedAgent; onConfirm: () => void; onCancel: () => void }) {
+  const { t } = useT()
   const isLegacy = agent.kind === 'openclaw'
   return (
     <div className="import-confirm">
       <p>
-        <strong>Source : </strong>
-        {describeData(agent)}
+        <strong>{t('agents.confirm.source')}</strong>
+        {describeData(t, agent)}
         {isLegacy && agent.data_found.legacy_db && <span className="muted"> ({agent.data_found.legacy_db.path})</span>}
       </p>
       {isLegacy ? (
         <p className="muted">
-          La mémoire OpenClaw sera adoptée directement dans la mémoire privée de cet agent : les souvenirs
-          deviennent actifs immédiatement (la base d’origine n’est jamais modifiée — un instantané est utilisé).
+          {t('agents.confirm.legacyBody')}
         </p>
       ) : (
         <p className="muted">
-          Tes conversations seront analysées et résumées en souvenirs. Ils arrivent <strong>dormants</strong> :
-          rien n’est utilisé avant ta validation dans l’écran Revue.
+          {t('agents.confirm.transcriptsBefore')}<strong>{t('agents.confirm.transcriptsDormant')}</strong>{t('agents.confirm.transcriptsAfter')}
         </p>
       )}
       <div className="modal-foot">
         <button type="button" className="btn btn-ghost" onClick={onCancel}>
-          Annuler
+          {t('agents.confirm.cancel')}
         </button>
         <button type="button" className="btn btn-primary" onClick={onConfirm}>
-          Lancer l’import
+          {t('agents.confirm.launch')}
         </button>
       </div>
     </div>
@@ -460,18 +466,19 @@ function ImportConfirm({ agent, onConfirm, onCancel }: { agent: DetectedAgent; o
 }
 
 function ImportProgress({ status }: { status: ImportJobStatus | null }) {
+  const { t } = useT()
   const p = status?.progress
   const total = p && p.files_total > 0 ? p.files_total : 1
   const done = p ? Math.min(p.files_done, total) : 0
   const percent = Math.round((done / total) * 100)
   return (
     <div className="import-progress">
-      <p>Import en cours… ne ferme pas le service Memoria.</p>
+      <p>{t('agents.progress.running')}</p>
       <div className="progress-track" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}>
         <div className="progress-fill" style={{ width: `${percent}%` }} />
       </div>
       <p className="muted">
-        {p ? `${p.files_done}/${p.files_total} fichier(s) — ${p.facts_imported.toLocaleString('fr-FR')} souvenir(s) pour l'instant` : 'Démarrage…'}
+        {p ? t('agents.progress.detail', { done: p.files_done, total: p.files_total, facts: p.facts_imported.toLocaleString('fr-FR') }) : t('agents.progress.starting')}
       </p>
     </div>
   )
@@ -488,24 +495,23 @@ function ImportDone({
   onOpenReview?: () => void
   onClose: () => void
 }) {
+  const { t } = useT()
   const n = status.progress.facts_imported
   const isLegacy = agent.kind === 'openclaw'
   return (
     <div className="import-done">
       {isLegacy ? (
         <p>
-          ✓ <strong>{n.toLocaleString('fr-FR')} souvenirs adoptés</strong> — la mémoire OpenClaw est maintenant la
-          mémoire privée de cet agent, active immédiatement.
+          ✓ <strong>{t('agents.done.legacyStrong', { n: n.toLocaleString('fr-FR') })}</strong>{t('agents.done.legacyAfter')}
         </p>
       ) : (
         <p>
-          ✓ <strong>{n.toLocaleString('fr-FR')} souvenir{n > 1 ? 's' : ''} importé{n > 1 ? 's' : ''}</strong> — ils
-          attendent ta validation dans l’écran Revue.
+          ✓ <strong>{t(n > 1 ? 'agents.done.transcriptsStrong.plural' : 'agents.done.transcriptsStrong.one', { n: n.toLocaleString('fr-FR') })}</strong>{t('agents.done.transcriptsAfter')}
         </p>
       )}
       {status.errors.length > 0 && (
         <details className="import-errors">
-          <summary>⚠ {status.errors.length} erreur(s) non bloquante(s) pendant l’import</summary>
+          <summary>{t('agents.done.errorsSummary', { n: status.errors.length })}</summary>
           <ul>
             {status.errors.slice(0, 10).map((e, i) => (
               <li key={i} className="muted">{e}</li>
@@ -515,11 +521,11 @@ function ImportDone({
       )}
       <div className="modal-foot">
         <button type="button" className="btn btn-ghost" onClick={onClose}>
-          Fermer
+          {t('agents.done.close')}
         </button>
         {!isLegacy && onOpenReview && (
           <button type="button" className="btn btn-primary" onClick={onOpenReview}>
-            Ouvrir l’écran Revue →
+            {t('agents.done.openReview')}
           </button>
         )}
       </div>
@@ -528,6 +534,7 @@ function ImportDone({
 }
 
 function AgentList({ agents, onRevoke, onDelete }: { agents: AgentEntry[]; onRevoke: (id: string) => void; onDelete: (id: string) => void }) {
+  const { t } = useT()
   if (agents.length === 0) return null
   return (
     <ul className="agent-list">
@@ -538,28 +545,28 @@ function AgentList({ agents, onRevoke, onDelete }: { agents: AgentEntry[]; onRev
           <li key={instance.id} className={`agent-row${revoked ? ' agent-revoked' : ''}`}>
             <div className="agent-id">
               <strong>{agentTypeLabel(assistant_type)}</strong>
-              <span className="muted">sur {instance.machine_id}</span>
+              <span className="muted">{t('agents.list.on', { machine: instance.machine_id })}</span>
             </div>
             <div className="agent-meta">
               {revoked ? (
-                <span className="badge badge-muted">Déconnecté</span>
+                <span className="badge badge-muted">{t('agents.list.revoked')}</span>
               ) : pending ? (
-                <span className="badge badge-warn">En attente de l’agent</span>
+                <span className="badge badge-warn">{t('agents.list.pending')}</span>
               ) : (
-                <span className="badge badge-ok">Connecté</span>
+                <span className="badge badge-ok">{t('agents.list.connected')}</span>
               )}
               <span className="muted">
-                {instance.last_seen_at ? `Vu le ${formatDate(instance.last_seen_at)}` : `Ajouté le ${formatDate(instance.created_at)}`}
+                {instance.last_seen_at ? t('agents.list.seenAt', { date: formatDate(instance.last_seen_at) }) : t('agents.list.addedAt', { date: formatDate(instance.created_at) })}
               </span>
             </div>
             {!revoked && !pending && <AgentExpertise instanceId={instance.id} />}
             <div className="agent-actions">
               {!revoked && (
-                <ConfirmButton label="Révoquer" confirmLabel="Confirmer la révocation ?" onConfirm={() => onRevoke(instance.id)} />
+                <ConfirmButton label={t('agents.list.revoke')} confirmLabel={t('agents.list.revokeConfirm')} onConfirm={() => onRevoke(instance.id)} />
               )}
               <ConfirmButton
-                label="Supprimer"
-                confirmLabel="Effacer la mémoire définitivement ?"
+                label={t('agents.list.delete')}
+                confirmLabel={t('agents.list.deleteConfirm')}
                 onConfirm={() => onDelete(instance.id)}
               />
             </div>
@@ -572,6 +579,7 @@ function AgentList({ agents, onRevoke, onDelete }: { agents: AgentEntry[]; onRev
 
 /** Domaines de maîtrise + forces/faiblesses de l'agent (couches 8 + 19). */
 function AgentExpertise({ instanceId }: { instanceId: string }) {
+  const { t } = useT()
   const [domains, setDomains] = useState<ExpertiseDomain[]>([])
   const [self, setSelf] = useState<SelfObservation[]>([])
   useEffect(() => {
@@ -589,8 +597,8 @@ function AgentExpertise({ instanceId }: { instanceId: string }) {
   return (
     <div className="agent-insights">
       {domains.length > 0 && (
-        <div className="agent-expertise" title="Domaines de maîtrise">
-          <span className="muted">maîtrise :</span>
+        <div className="agent-expertise" title={t('agents.expertise.title')}>
+          <span className="muted">{t('agents.expertise.label')}</span>
           {domains.map(d => <span key={d.domain} className="badge badge-theme">{d.domain}</span>)}
         </div>
       )}
@@ -609,6 +617,7 @@ function AgentExpertise({ instanceId }: { instanceId: string }) {
 }
 
 function PairingCode({ result, onRegenerate }: { result: PairResult; onRegenerate: () => void }) {
+  const { t } = useT()
   const [secondsLeft, setSecondsLeft] = useState(PAIRING_TTL_SECONDS)
 
   useEffect(() => {
@@ -624,25 +633,25 @@ function PairingCode({ result, onRegenerate }: { result: PairResult; onRegenerat
   return (
     <div className="pairing">
       <p>
-        Collez cette commande dans le terminal de votre agent (ou donnez-lui le code) — il se connectera tout seul.
+        {t('agents.pairing.instructions')}
       </p>
-      <div className="pairing-code" aria-label="Code de connexion">
+      <div className="pairing-code" aria-label={t('agents.pairing.codeLabel')}>
         {result.pairing_code}
       </div>
       <div className="command-row">
         <code className="command">{result.command}</code>
-        <CopyButton text={result.command} label="Copier la commande" />
+        <CopyButton text={result.command} label={t('agents.pairing.copy')} />
       </div>
       {expired ? (
         <div className="pairing-expired">
-          <span>Ce code a expiré.</span>
+          <span>{t('agents.pairing.expired')}</span>
           <button type="button" className="btn btn-primary" onClick={onRegenerate}>
-            Générer un nouveau code
+            {t('agents.pairing.regenerate')}
           </button>
         </div>
       ) : (
         <p className="muted">
-          Ce code expire dans <strong>{mm}:{ss}</strong>. Il ne sert qu’une fois.
+          {t('agents.pairing.expiresBefore')}<strong>{mm}:{ss}</strong>{t('agents.pairing.expiresAfter')}
         </p>
       )}
     </div>
@@ -650,12 +659,13 @@ function PairingCode({ result, onRegenerate }: { result: PairResult; onRegenerat
 }
 
 function Modal({ title, children, onClose }: { title: string; children: ReactNode; onClose: () => void }) {
+  const { t } = useT()
   return (
     <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label={title}>
       <div className="modal">
         <header className="modal-head">
           <h2>{title}</h2>
-          <button type="button" className="btn btn-ghost" onClick={onClose} aria-label="Fermer">
+          <button type="button" className="btn btn-ghost" onClick={onClose} aria-label={t('agents.modal.close')}>
             ✕
           </button>
         </header>

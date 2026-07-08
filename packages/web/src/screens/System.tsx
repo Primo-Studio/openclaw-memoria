@@ -5,77 +5,79 @@
  */
 import { getCognitiveStats } from '../api'
 import { ErrorBanner, Spinner, useLoad } from '../components/ui'
+import { useT } from '../i18n'
 
 interface Layer {
   n: number
-  name: string
-  desc: string
+  nameKey: string
+  descKey: string
   /** Clé de stat live (cognitive_stats) — optionnel. */
   stat?: string
 }
 
-const BUCKETS: Array<{ title: string; subtitle: string; layers: Layer[] }> = [
+const BUCKETS: Array<{ titleKey: string; subtitleKey: string; layers: Layer[] }> = [
   {
-    title: 'Actif',
-    subtitle: 'le socle — tourne en permanence',
+    titleKey: 'system.bucket_active_title',
+    subtitleKey: 'system.bucket_active_subtitle',
     layers: [
-      { n: 1, name: 'Base de données', desc: 'schéma gouverné, recherche plein-texte', stat: 'facts' },
-      { n: 2, name: 'Scoring + hot-tier', desc: 'classe la pertinence ; les souvenirs récents sont « chauds »' },
-      { n: 3, name: 'Sélection & contradictions', desc: 'dédup et repère les souvenirs qui se contredisent' },
-      { n: 4, name: 'Cycle de vie', desc: 'actif / en sommeil / archivé' },
-      { n: 5, name: 'Budget', desc: 'limite le bruit injecté (cap de tokens)' },
-      { n: 6, name: 'Procédures', desc: 'savoir-faire avec taux de réussite', stat: 'procedures' },
-      { n: 7, name: 'Feedback', desc: 'ce qui sert vraiment remonte avec l’usage' },
-      { n: 8, name: 'Expertise', desc: 'domaines de maîtrise par agent' },
-      { n: 9, name: 'Contexte', desc: 'projet → client → organisation' },
-      { n: 10, name: 'Identité & config', desc: 'agents, instances, réglages' },
-      { n: 11, name: 'Journal WAL', desc: 'rien ne se perd, rejeu au démarrage', stat: 'wal_buffer' },
+      { n: 1, nameKey: 'system.layer_1_name', descKey: 'system.layer_1_desc', stat: 'facts' },
+      { n: 2, nameKey: 'system.layer_2_name', descKey: 'system.layer_2_desc' },
+      { n: 3, nameKey: 'system.layer_3_name', descKey: 'system.layer_3_desc' },
+      { n: 4, nameKey: 'system.layer_4_name', descKey: 'system.layer_4_desc' },
+      { n: 5, nameKey: 'system.layer_5_name', descKey: 'system.layer_5_desc' },
+      { n: 6, nameKey: 'system.layer_6_name', descKey: 'system.layer_6_desc', stat: 'procedures' },
+      { n: 7, nameKey: 'system.layer_7_name', descKey: 'system.layer_7_desc' },
+      { n: 8, nameKey: 'system.layer_8_name', descKey: 'system.layer_8_desc' },
+      { n: 9, nameKey: 'system.layer_9_name', descKey: 'system.layer_9_desc' },
+      { n: 10, nameKey: 'system.layer_10_name', descKey: 'system.layer_10_desc' },
+      { n: 11, nameKey: 'system.layer_11_name', descKey: 'system.layer_11_desc', stat: 'wal_buffer' },
     ],
   },
   {
-    title: 'Enrichissement',
-    subtitle: 'en arrière-plan, jamais dans la réponse',
+    titleKey: 'system.bucket_enrichment_title',
+    subtitleKey: 'system.bucket_enrichment_subtitle',
     layers: [
-      { n: 12, name: 'Embeddings', desc: 'recherche par le sens (vectoriel)', stat: 'embeddings' },
-      { n: 13, name: 'Graphe', desc: 'entités et relations', stat: 'relations' },
-      { n: 14, name: 'Thèmes', desc: 'où chaque souvenir est rangé', stat: 'topics' },
-      { n: 15, name: 'Observations', desc: 'synthèses vivantes par sujet', stat: 'observations' },
-      { n: 16, name: 'Clusters', desc: 'paquets de souvenirs liés', stat: 'fact_clusters' },
-      { n: 17, name: 'Capture continue', desc: 'apprend à chaque échange' },
-      { n: 18, name: 'Révision', desc: 'propose le ménage de la mémoire', stat: 'revision_proposals' },
+      { n: 12, nameKey: 'system.layer_12_name', descKey: 'system.layer_12_desc', stat: 'embeddings' },
+      { n: 13, nameKey: 'system.layer_13_name', descKey: 'system.layer_13_desc', stat: 'relations' },
+      { n: 14, nameKey: 'system.layer_14_name', descKey: 'system.layer_14_desc', stat: 'topics' },
+      { n: 15, nameKey: 'system.layer_15_name', descKey: 'system.layer_15_desc', stat: 'observations' },
+      { n: 16, nameKey: 'system.layer_16_name', descKey: 'system.layer_16_desc', stat: 'fact_clusters' },
+      { n: 17, nameKey: 'system.layer_17_name', descKey: 'system.layer_17_desc' },
+      { n: 18, nameKey: 'system.layer_18_name', descKey: 'system.layer_18_desc', stat: 'revision_proposals' },
     ],
   },
   {
-    title: 'Optionnel',
-    subtitle: 'à activer quand vous voulez',
+    titleKey: 'system.bucket_optional_title',
+    subtitleKey: 'system.bucket_optional_subtitle',
     layers: [
-      { n: 19, name: 'Auto-observation', desc: 'l’agent observe ses forces/faiblesses', stat: 'self_observations' },
-      { n: 20, name: 'Export Markdown', desc: 'miroir lisible en fichiers .md' },
-      { n: 21, name: 'Dialectique', desc: 'confronte les points de vue de la mémoire' },
+      { n: 19, nameKey: 'system.layer_19_name', descKey: 'system.layer_19_desc', stat: 'self_observations' },
+      { n: 20, nameKey: 'system.layer_20_name', descKey: 'system.layer_20_desc' },
+      { n: 21, nameKey: 'system.layer_21_name', descKey: 'system.layer_21_desc' },
     ],
   },
   {
-    title: 'Sur validation',
-    subtitle: 'ne s’applique jamais sans votre accord',
+    titleKey: 'system.bucket_validation_title',
+    subtitleKey: 'system.bucket_validation_subtitle',
     layers: [
-      { n: 22, name: 'Récurrences', desc: 'repère ce qui revient souvent', stat: 'patterns' },
-      { n: 23, name: 'Auto-compétences', desc: 'propose des procédures depuis les récurrences' },
-      { n: 24, name: 'Révision (mutations)', desc: 'applique la supersession sur validation' },
+      { n: 22, nameKey: 'system.layer_22_name', descKey: 'system.layer_22_desc', stat: 'patterns' },
+      { n: 23, nameKey: 'system.layer_23_name', descKey: 'system.layer_23_desc' },
+      { n: 24, nameKey: 'system.layer_24_name', descKey: 'system.layer_24_desc' },
     ],
   },
 ]
 
 export function System() {
+  const { t } = useT()
   const { state, reload } = useLoad(getCognitiveStats)
 
   return (
     <section>
       <header className="screen-head">
         <div>
-          <h1>Système</h1>
-          <p className="muted">Les 24 couches qui font la mémoire de Memoria — et ce qu’elles contiennent en ce moment.</p>
+          <h1>{t('system.title')}</h1>
+          <p className="muted">{t('system.lead')}</p>
         </div>
-        <button type="button" className="btn btn-ghost" onClick={reload}>Actualiser</button>
+        <button type="button" className="btn btn-ghost" onClick={reload}>{t('common.refresh')}</button>
       </header>
 
       {state.status === 'loading' && <Spinner />}
@@ -83,10 +85,10 @@ export function System() {
       {state.status === 'ready' && (
         <div className="system-buckets">
           {BUCKETS.map(bucket => (
-            <div key={bucket.title} className="system-bucket">
+            <div key={bucket.titleKey} className="system-bucket">
               <div className="system-bucket-head">
-                <h2>{bucket.title}</h2>
-                <span className="muted">{bucket.subtitle}</span>
+                <h2>{t(bucket.titleKey)}</h2>
+                <span className="muted">{t(bucket.subtitleKey)}</span>
               </div>
               <div className="layer-grid">
                 {bucket.layers.map(l => {
@@ -95,10 +97,10 @@ export function System() {
                     <div key={l.n} className="layer-card">
                       <div className="layer-top">
                         <span className="layer-num">{l.n}</span>
-                        <strong>{l.name}</strong>
+                        <strong>{t(l.nameKey)}</strong>
                         {value !== undefined && value > 0 && <span className="layer-stat">{value.toLocaleString('fr-FR')}</span>}
                       </div>
-                      <p className="muted layer-desc">{l.desc}</p>
+                      <p className="muted layer-desc">{t(l.descKey)}</p>
                     </div>
                   )
                 })}

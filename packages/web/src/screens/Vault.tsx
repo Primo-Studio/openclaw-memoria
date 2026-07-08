@@ -6,24 +6,27 @@
  */
 import { getSecrets } from '../api'
 import { ErrorBanner, Spinner, useLoad } from '../components/ui'
+import { useT } from '../i18n'
 
 export function Vault() {
+  const { t } = useT()
   const { state, reload } = useLoad(getSecrets)
 
   return (
     <section>
       <header className="screen-head">
         <div>
-          <h1>Coffre</h1>
-          <p className="muted">Clés et mots de passe détectés et mis à l’abri automatiquement — la valeur reste chiffrée.</p>
+          <h1>{t('vault.title')}</h1>
+          <p className="muted">{t('vault.lead')}</p>
         </div>
-        <button type="button" className="btn btn-ghost" onClick={reload}>Actualiser</button>
+        <button type="button" className="btn btn-ghost" onClick={reload}>{t('common.refresh')}</button>
       </header>
 
       <div className="vault-explainer">
-        🔒 Quand un agent rencontre une clé API ou un mot de passe, Memoria le remplace par une
-        référence <code>[secret:…]</code> avant de l’enregistrer. La vraie valeur part dans le coffre
-        du système. <strong>Elle n’apparaît jamais</strong> dans la mémoire, les exports ou les logs.
+        {t('vault.explainer.before')}
+        <code>[secret:…]</code>
+        {t('vault.explainer.mid')} <strong>{t('vault.explainer.never')}</strong>
+        {t('vault.explainer.after')}
       </div>
 
       {state.status === 'loading' && <Spinner />}
@@ -31,13 +34,13 @@ export function Vault() {
       {state.status === 'ready' && (
         state.data.length === 0 ? (
           <div className="empty-state">
-            <p>Aucun secret au coffre pour l’instant.</p>
-            <p className="muted">C’est normal : le coffre se remplit dès qu’un agent croise une clé ou un mot de passe.</p>
+            <p>{t('vault.empty.title')}</p>
+            <p className="muted">{t('vault.empty.body')}</p>
           </div>
         ) : (
           <table className="table">
             <thead>
-              <tr><th>Référence</th><th>Type</th><th>Emplacement</th><th>Ajouté</th></tr>
+              <tr><th>{t('vault.col.reference')}</th><th>{t('vault.col.type')}</th><th>{t('vault.col.location')}</th><th>{t('vault.col.added')}</th></tr>
             </thead>
             <tbody>
               {state.data.map(s => (

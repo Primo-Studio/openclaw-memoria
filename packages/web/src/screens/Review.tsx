@@ -5,8 +5,10 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import { ApiError, getReview, reviewDecision, type ReviewItem } from '../api'
+import { useT } from '../i18n'
 
 export function Review() {
+  const { t } = useT()
   const [items, setItems] = useState<ReviewItem[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -16,9 +18,9 @@ export function Review() {
       setItems(await getReview())
       setError(null)
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Le service ne répond pas.')
+      setError(err instanceof ApiError ? err.message : t('review.service_unavailable'))
     }
-  }, [])
+  }, [t])
 
   useEffect(() => {
     void refresh()
@@ -31,23 +33,20 @@ export function Review() {
         await reviewDecision(ids, decision)
         await refresh()
       } catch (err) {
-        setError(err instanceof ApiError ? err.message : 'Action impossible.')
+        setError(err instanceof ApiError ? err.message : t('review.action_failed'))
       } finally {
         setBusy(false)
       }
     },
-    [refresh],
+    [refresh, t],
   )
 
   return (
     <section>
       <header className="screen-head">
         <div>
-          <h1>Revue</h1>
-          <p className="muted">
-            Souvenirs en attente de votre décision — invisibles pour les agents tant qu’ils ne sont
-            pas approuvés.
-          </p>
+          <h1>{t('review.title')}</h1>
+          <p className="muted">{t('review.lead')}</p>
         </div>
         {items !== null && items.length > 1 && (
           <div className="review-bulk">
@@ -57,19 +56,19 @@ export function Review() {
               disabled={busy}
               onClick={() => void decide(items.map(i => i.id), 'approve')}
             >
-              Tout approuver ({items.length})
+              {t('review.approve_all', { count: items.length })}
             </button>
             <button
               type="button"
               className="btn btn-danger"
               disabled={busy}
               onClick={() => {
-                if (confirm(`Rejeter définitivement les ${items.length} souvenirs en attente ?`)) {
+                if (confirm(t('review.reject_all_confirm', { count: items.length }))) {
                   void decide(items.map(i => i.id), 'reject')
                 }
               }}
             >
-              Tout rejeter
+              {t('review.reject_all')}
             </button>
           </div>
         )}
@@ -80,15 +79,12 @@ export function Review() {
       {items === null ? (
         <div className="spinner-row">
           <span className="spinner" aria-hidden />
-          Chargement…
+          {t('common.loading')}
         </div>
       ) : items.length === 0 ? (
         <div className="empty-state">
-          <p>Rien à relire — tout est à jour. ✨</p>
-          <p className="muted">
-            Les souvenirs n’attendent ici que si la capture est en mode « revue d’abord », ou après
-            un import.
-          </p>
+          <p>{t('review.empty_title')}</p>
+          <p className="muted">{t('review.empty_body')}</p>
         </div>
       ) : (
         <ul className="fact-list">
@@ -96,14 +92,14 @@ export function Review() {
             <li key={item.id} className="fact-card">
               <p className="fact-content">{item.content}</p>
               <div className="fact-meta">
-                {(item.topics ?? []).map(t => (
-                  <span key={t} className="badge badge-theme" title="rangé dans ce thème">{t}</span>
+                {(item.topics ?? []).map(topic => (
+                  <span key={topic} className="badge badge-theme" title={t('review.badge_topic_title')}>{topic}</span>
                 ))}
                 <span className="badge badge-muted">{item.category}</span>
                 <span className="badge badge-muted">
-                  {item.source_type === 'capture-review' ? 'capture' : 'import'}
+                  {item.source_type === 'capture-review' ? t('review.source_capture') : t('review.source_import')}
                 </span>
-                <span className="muted">confiance {(item.confidence * 100).toFixed(0)} %</span>
+                <span className="muted">{t('review.confidence', { percent: (item.confidence * 100).toFixed(0) })}</span>
                 <span className="fact-actions">
                   <button
                     type="button"
@@ -111,7 +107,7 @@ export function Review() {
                     disabled={busy}
                     onClick={() => void decide([item.id], 'approve')}
                   >
-                    Approuver
+                    {t('review.approve')}
                   </button>
                   <button
                     type="button"
@@ -119,7 +115,7 @@ export function Review() {
                     disabled={busy}
                     onClick={() => void decide([item.id], 'reject')}
                   >
-                    Rejeter
+                    {t('review.reject')}
                   </button>
                 </span>
               </div>

@@ -6,6 +6,7 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import { getAgents, getCaptureMode, getVersion, hasToken, setCaptureMode, type CaptureMode } from './api'
+import { useT, LANGS, type Lang } from './i18n'
 import { Dashboard } from './screens/Dashboard'
 import { Agents } from './screens/Agents'
 import { Memory } from './screens/Memory'
@@ -27,31 +28,21 @@ type ScreenId =
   | 'dashboard' | 'agents' | 'memory' | 'themes' | 'patterns' | 'procedures'
   | 'review' | 'revisions' | 'sharing' | 'persons' | 'vault' | 'system' | 'audit' | 'settings' | 'docs'
 
-const NAV: Array<{ id: ScreenId; label: string }> = [
-  { id: 'dashboard', label: 'Tableau de bord' },
-  { id: 'agents', label: 'Agents' },
-  { id: 'memory', label: 'Mémoire' },
-  { id: 'themes', label: 'Thèmes' },
-  { id: 'patterns', label: 'Récurrences' },
-  { id: 'procedures', label: 'Procédures' },
-  { id: 'review', label: 'Revue' },
-  { id: 'revisions', label: 'Révisions' },
-  { id: 'sharing', label: 'Partage' },
-  { id: 'persons', label: 'Personnes' },
-  { id: 'vault', label: 'Coffre' },
-  { id: 'system', label: 'Système' },
-  { id: 'audit', label: 'Journal' },
-  { id: 'settings', label: 'Réglages' },
-  { id: 'docs', label: 'Docs' },
+// Les libellés viennent de l'i18n : nav.<id> (cf. messages/fr.ts).
+const NAV_IDS: ScreenId[] = [
+  'dashboard', 'agents', 'memory', 'themes', 'patterns', 'procedures',
+  'review', 'revisions', 'sharing', 'persons', 'vault', 'system', 'audit', 'settings', 'docs',
 ]
 
-const MODES: Array<{ id: CaptureMode; label: string; hint: string }> = [
-  { id: 'auto-private', label: 'Capture auto', hint: 'Les agents mémorisent en privé automatiquement.' },
-  { id: 'review-first', label: 'Revue d’abord', hint: 'Chaque souvenir attend votre validation (écran Revue).' },
-  { id: 'incognito', label: 'Pause', hint: 'Plus aucune capture — rien n’est écrit nulle part.' },
+// clés i18n : capture.<key> (label) + capture.hint.<key>
+const MODES: Array<{ id: CaptureMode; key: 'auto' | 'review' | 'pause' }> = [
+  { id: 'auto-private', key: 'auto' },
+  { id: 'review-first', key: 'review' },
+  { id: 'incognito', key: 'pause' },
 ]
 
 export function App() {
+  const { t } = useT()
   // Le token est adopté avant le rendu (main.tsx) ; sa présence ne change plus ensuite.
   const [authed] = useState(hasToken)
   const [screen, setScreen] = useState<ScreenId>('dashboard')
@@ -74,23 +65,24 @@ export function App() {
       <aside className="sidebar">
         <div className="brand">
           Memoria
-          <span className="brand-sub">mémoire locale</span>
+          <span className="brand-sub">{t('brand.sub')}</span>
         </div>
         <nav className="nav" aria-label="Navigation principale">
-          {NAV.map(item => (
+          {NAV_IDS.map(id => (
             <button
-              key={item.id}
+              key={id}
               type="button"
-              className={`nav-item${screen === item.id ? ' nav-active' : ''}`}
-              onClick={() => setScreen(item.id)}
+              className={`nav-item${screen === id ? ' nav-active' : ''}`}
+              onClick={() => setScreen(id)}
             >
-              {item.label}
+              {t(`nav.${id}`)}
             </button>
           ))}
         </nav>
         <CaptureModeSwitch />
+        <LangSwitch />
         <div className="sidebar-foot muted">
-          100 % local — rien ne quitte cette machine.
+          {t('foot.local')}
           <VersionFoot />
         </div>
       </aside>
@@ -117,6 +109,7 @@ export function App() {
 
 /** Pause/capture toujours accessible, quel que soit l'écran (spec §13). */
 function CaptureModeSwitch() {
+  const { t } = useT()
   const [mode, setMode] = useState<CaptureMode | null>(null)
 
   useEffect(() => {
@@ -139,23 +132,45 @@ function CaptureModeSwitch() {
   const current = MODES.find(m => m.id === mode)
   return (
     <div className="capture-switch">
-      <span className="field-label">Capture</span>
-      <div className="capture-options" role="radiogroup" aria-label="Mode de capture">
+      <span className="field-label">{t('capture.title')}</span>
+      <div className="capture-options" role="radiogroup" aria-label={t('capture.title')}>
         {MODES.map(m => (
           <button
             key={m.id}
             type="button"
             role="radio"
             aria-checked={mode === m.id}
-            title={m.hint}
+            title={t(`capture.hint.${m.key}`)}
             className={`capture-option${mode === m.id ? ' capture-active' : ''}${m.id === 'incognito' && mode === m.id ? ' capture-paused' : ''}`}
             onClick={() => change(m.id)}
           >
-            {m.label}
+            {t(`capture.${m.key}`)}
           </button>
         ))}
       </div>
-      {current && <p className="muted capture-hint">{current.hint}</p>}
+      {current && <p className="muted capture-hint">{t(`capture.hint.${current.key}`)}</p>}
+    </div>
+  )
+}
+
+/** Sélecteur de langue de l'interface (barre latérale). */
+function LangSwitch() {
+  const { t, lang, setLang } = useT()
+  return (
+    <div className="lang-switch">
+      <label className="field-label" htmlFor="lang-select">{t('lang.title')}</label>
+      <select
+        id="lang-select"
+        className="lang-select"
+        value={lang}
+        onChange={e => setLang(e.target.value as Lang)}
+      >
+        {LANGS.map(l => (
+          <option key={l.code} value={l.code}>
+            {l.flag} {l.label}
+          </option>
+        ))}
+      </select>
     </div>
   )
 }

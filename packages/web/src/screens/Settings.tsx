@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useCallback as useCb } from 'react'
 import { ConfirmButton, CopyButton } from '../components/ui'
+import { useT } from '../i18n'
 import {
   ApiError,
   getControl,
@@ -39,34 +40,29 @@ import {
   type VersionInfo,
 } from '../api'
 
-const OPTIONS: Array<{ key: string; label: string; hint: string }> = [
-  { key: 'auto_themes_ai', label: 'Affiner les thèmes avec l’IA', hint: 'Donne automatiquement des noms clairs aux thèmes (coûte quelques appels au moteur configuré).' },
-  { key: 'auto_patterns', label: 'Détecter les récurrences', hint: 'Repère automatiquement ce qui revient souvent (écran Récurrences).' },
-  { key: 'auto_revision', label: 'Proposer le ménage', hint: 'Détecte automatiquement contradictions et doublons (écran Révisions).' },
-  { key: 'auto_self_observation', label: 'Auto-observation des agents', hint: 'L’agent dégage ses forces/faiblesses depuis son historique (écran Agents).' },
-  { key: 'markdown_export', label: 'Export Markdown automatique', hint: 'Tient à jour un miroir .md de la mémoire dans <stockage>/exports/.' },
-]
+// Libellés/hints → clés i18n settings.option.<key>.label / .hint
+const OPTIONS: string[] = ['auto_themes_ai', 'auto_patterns', 'auto_revision', 'auto_self_observation', 'markdown_export']
 
 interface ProviderChoice {
   id: LlmProviderName
-  label: string
   models: string[]
   /** Modèle conseillé (1er). */
   recommended: string
-  hint: string
   local: boolean
 }
 
+// Libellés/hints → clés i18n settings.provider.<id>.label / .hint
 const PROVIDERS: ProviderChoice[] = [
-  { id: 'ollama', label: 'Ollama (local)', models: ['qwen2.5:3b', 'gemma3:4b', 'llama3.1:8b'], recommended: 'qwen2.5:3b', hint: '100 % local, gratuit, rien ne sort de la machine. Qualité correcte.', local: true },
+  { id: 'ollama', models: ['qwen2.5:3b', 'gemma3:4b', 'llama3.1:8b'], recommended: 'qwen2.5:3b', local: true },
   // models vide = liste dynamique (modèles réellement chargés dans LM Studio)
-  { id: 'lmstudio', label: 'LM Studio (local)', models: [], recommended: '', hint: '100 % local avec interface graphique. Utilise le modèle chargé dans LM Studio.', local: true },
-  { id: 'openai', label: 'OpenAI', models: ['gpt-4o-mini', 'gpt-5-mini', 'gpt-4.1-mini'], recommended: 'gpt-4o-mini', hint: 'Excellente qualité d’extraction pour un coût minime. Recommandé.', local: false },
-  { id: 'anthropic', label: 'Anthropic (Claude)', models: ['claude-haiku-4-5-20251001'], recommended: 'claude-haiku-4-5-20251001', hint: 'Haiku : rapide et précis. Cloud, ta clé.', local: false },
-  { id: 'openrouter', label: 'OpenRouter', models: ['openai/gpt-4o-mini', 'anthropic/claude-3.5-haiku', 'google/gemini-flash-1.5'], recommended: 'openai/gpt-4o-mini', hint: 'Une seule clé, des centaines de modèles. Pour les utilisateurs avancés.', local: false },
+  { id: 'lmstudio', models: [], recommended: '', local: true },
+  { id: 'openai', models: ['gpt-4o-mini', 'gpt-5-mini', 'gpt-4.1-mini'], recommended: 'gpt-4o-mini', local: false },
+  { id: 'anthropic', models: ['claude-haiku-4-5-20251001'], recommended: 'claude-haiku-4-5-20251001', local: false },
+  { id: 'openrouter', models: ['openai/gpt-4o-mini', 'anthropic/claude-3.5-haiku', 'google/gemini-flash-1.5'], recommended: 'openai/gpt-4o-mini', local: false },
 ]
 
 export function Settings() {
+  const { t } = useT()
   const [doctor, setDoctor] = useState<DoctorReport | null>(null)
   const [config, setConfig] = useState<LlmConfig | null>(null)
   const [providers, setProviders] = useState<ProvidersStatus | null>(null)
@@ -107,12 +103,12 @@ export function Settings() {
         await refresh()
         setError(null)
       } catch (err) {
-        setError(err instanceof ApiError ? err.message : 'Changement impossible.')
+        setError(err instanceof ApiError ? err.message : t('settings.error.changeFailed'))
       } finally {
         setBusy(false)
       }
     },
-    [refresh],
+    [refresh, t],
   )
 
   /** Enregistre la clé API collée par l'utilisateur, puis rafraîchit (le point passe au vert). */
@@ -127,12 +123,12 @@ export function Settings() {
         await refresh()
         setError(null)
       } catch (err) {
-        setError(err instanceof ApiError ? err.message : 'Enregistrement de la clé impossible.')
+        setError(err instanceof ApiError ? err.message : t('settings.error.keySaveFailed'))
       } finally {
         setBusy(false)
       }
     },
-    [keyInput, refresh],
+    [keyInput, refresh, t],
   )
 
   const current = config?.extraction
@@ -145,8 +141,8 @@ export function Settings() {
     <section>
       <header className="screen-head">
         <div>
-          <h1>Réglages</h1>
-          <p className="muted">Choisis ton moteur d’IA et où vit ta mémoire — tout reste sous ton contrôle.</p>
+          <h1>{t('settings.title')}</h1>
+          <p className="muted">{t('settings.lead')}</p>
         </div>
       </header>
 
@@ -159,16 +155,19 @@ export function Settings() {
       <SyncPanel onError={setError} />
 
       <div className="settings-block">
-        <h2>Moteur d’extraction</h2>
+        <h2>{t('settings.engine.title')}</h2>
         <p className="muted">
-          Le modèle qui transforme les conversations en souvenirs durables. Choisis selon tes
-          priorités : <strong>local</strong> (gratuit, privé) ou <strong>cloud</strong> (meilleure qualité).
+          {t('settings.engine.lead.before')}
+          <strong>{t('settings.engine.lead.local')}</strong>
+          {t('settings.engine.lead.middle')}
+          <strong>{t('settings.engine.lead.cloud')}</strong>
+          {t('settings.engine.lead.after')}
         </p>
         {health && <LlmHealthSummary health={health} />}
         {unavailable ? (
-          <p className="muted">Réglage du moteur non disponible sur ce service.</p>
+          <p className="muted">{t('settings.engine.unavailable')}</p>
         ) : !providers || !config ? (
-          <div className="spinner-row"><span className="spinner" aria-hidden /> Chargement…</div>
+          <div className="spinner-row"><span className="spinner" aria-hidden />{' '}{t('common.loading')}</div>
         ) : (
           <div className="provider-list">
             {PROVIDERS.map(p => {
@@ -179,18 +178,18 @@ export function Settings() {
               return (
                 <div key={p.id} className={`provider-card${isCurrent ? ' provider-current' : ''}`}>
                   <div className="provider-head">
-                    <strong>{p.label}</strong>
-                    {p.id === 'openai' && <span className="badge-reco">recommandé</span>}
-                    <span className={`dot ${avail ? 'dot-ok' : 'dot-warn'}`} title={avail ? 'détecté' : 'clé/serveur absent'} />
+                    <strong>{t(`settings.provider.${p.id}.label`)}</strong>
+                    {p.id === 'openai' && <span className="badge-reco">{t('settings.engine.badgeRecommended')}</span>}
+                    <span className={`dot ${avail ? 'dot-ok' : 'dot-warn'}`} title={avail ? t('settings.engine.detected') : t('settings.engine.missingKeyServer')} />
                   </div>
-                  <p className="muted provider-hint">{p.hint}</p>
+                  <p className="muted provider-hint">{t(`settings.provider.${p.id}.hint`)}</p>
                   {avail === false && (
                     <p className="provider-missing">
                       {p.id === 'ollama'
-                        ? 'Ollama non détecté (lance l’application Ollama ou « ollama serve »).'
+                        ? t('settings.engine.missing.ollama')
                         : p.id === 'lmstudio'
-                          ? 'LM Studio non détecté — démarre son serveur local (onglet Developer, port 1234).'
-                          : `Clé absente — place-la dans ~/.${p.id}/api_key (chmod 600).`}
+                          ? t('settings.engine.missing.lmstudio')
+                          : t('settings.engine.missing.key', { provider: p.id })}
                     </p>
                   )}
                   {(p.id === 'openai' || p.id === 'openrouter' || p.id === 'anthropic') && (
@@ -199,7 +198,7 @@ export function Settings() {
                         type="password"
                         className="key-input"
                         autoComplete="off"
-                        placeholder={avail ? 'Remplacer la clé API…' : 'Colle ta clé API ici…'}
+                        placeholder={avail ? t('settings.engine.keyPlaceholderReplace') : t('settings.engine.keyPlaceholderPaste')}
                         value={keyInput[p.id] ?? ''}
                         onChange={e => setKeyInput(prev => ({ ...prev, [p.id]: e.target.value }))}
                       />
@@ -209,12 +208,12 @@ export function Settings() {
                         disabled={busy || !(keyInput[p.id]?.trim())}
                         onClick={() => void saveKey(p.id)}
                       >
-                        Enregistrer la clé
+                        {t('settings.engine.saveKey')}
                       </button>
                     </div>
                   )}
                   {p.id === 'lmstudio' && avail === true && models.length === 0 && (
-                    <p className="provider-missing">Aucun modèle chargé dans LM Studio — charge un modèle puis reviens ici.</p>
+                    <p className="provider-missing">{t('settings.engine.lmstudioNoModels')}</p>
                   )}
                   <div className="provider-models">
                     {models.map(model => (
@@ -224,7 +223,7 @@ export function Settings() {
                         disabled={busy}
                         className={`capture-option${isCurrent && current?.model === model ? ' capture-active' : ''}`}
                         onClick={() => void choose(p.id, model)}
-                        title={model === p.recommended ? 'conseillé' : ''}
+                        title={model === p.recommended ? t('settings.engine.modelRecommendedTitle') : ''}
                       >
                         {model}{model === p.recommended ? ' ★' : ''}
                       </button>
@@ -237,51 +236,49 @@ export function Settings() {
         )}
         {config?.extraction && (
           <p className="muted" style={{ marginTop: '0.8rem' }}>
-            Actuel : <strong>{config.extraction.provider}</strong> / {config.extraction.model ?? '(défaut)'}
+            {t('settings.engine.current')} <strong>{config.extraction.provider}</strong> / {config.extraction.model ?? t('settings.engine.defaultModel')}
           </p>
         )}
       </div>
 
       <div className="settings-block">
-        <h2>Emplacement de stockage</h2>
+        <h2>{t('settings.storage.title')}</h2>
         <div className="path-row">
           <pre className="command path-grow">{doctor?.storage_root ?? '~/.memoria/data'}</pre>
-          <CopyButton text={doctor?.storage_root ?? '~/.memoria/data'} label="Copier le chemin" />
+          <CopyButton text={doctor?.storage_root ?? '~/.memoria/data'} label={t('settings.storage.copyPath')} />
         </div>
         <p className="muted">
-          Toutes tes mémoires (chiffrées pour les secrets). Un navigateur ne peut pas ouvrir de
-          sélecteur de dossier système ; pour emporter Memoria sur une <strong>clé USB</strong>
-          (ou tout autre dossier), lance depuis le terminal la commande ci-dessous (bouton Copier) :
+          {t('settings.storage.desc.before')}
+          <strong>{t('settings.storage.desc.usb')}</strong>
+          {t('settings.storage.desc.after')}
         </p>
         <div className="path-row">
           <pre className="command path-grow">memoria move --to /Volumes/MaCle/memoria</pre>
-          <CopyButton text="memoria move --to /Volumes/MaCle/memoria" label="Copier la commande" />
+          <CopyButton text="memoria move --to /Volumes/MaCle/memoria" label={t('settings.storage.copyCommand')} />
         </div>
         <p className="muted">
-          Le service s’arrête le temps du déplacement, met à jour la config, puis
-          <code> memoria start </code> le relance au nouvel emplacement.
+          {t('settings.storage.restart.before')}
+          <code> memoria start </code>{t('settings.storage.restart.after')}
         </p>
       </div>
 
       <div className="settings-block">
-        <h2>Capture</h2>
-        <p className="muted">Mode (auto / revue / pause) : barre latérale, toujours accessible.</p>
+        <h2>{t('settings.capture.title')}</h2>
+        <p className="muted">{t('settings.capture.desc')}</p>
       </div>
 
       <div className="settings-block">
-        <h2>Options</h2>
-        <p className="muted">
-          Couches avancées de Memoria. Désactivées par défaut : activez-les quand vous voulez.
-          Activer une option la fait tourner tout de suite, puis à chaque démarrage.
-        </p>
+        <h2>{t('settings.options.title')}</h2>
+        <p className="muted">{t('settings.options.desc')}</p>
         <OptionsPanel onError={setError} />
       </div>
 
       <div className="settings-block">
-        <h2>Export Markdown</h2>
+        <h2>{t('settings.export.title')}</h2>
         <p className="muted">
-          Aussi disponible à la demande : <code>memoria export</code> depuis le terminal (un fichier
-          <code> .md </code> par thème).
+          {t('settings.export.desc.before')}
+          <code>memoria export</code>{t('settings.export.desc.middle')}
+          <code> .md </code>{t('settings.export.desc.after')}
         </p>
       </div>
     </section>
@@ -294,22 +291,26 @@ export function Settings() {
  * IMMÉDIATEMENT si Memoria apprend ou accumule en silence.
  */
 function LlmHealthSummary({ health }: { health: LlmHealth }) {
+  const { t } = useT()
+  const count = health.wal_pending.toLocaleString('fr-FR')
   return (
     <div className="llm-summary">
       <p className={health.extraction.available ? 'ok' : 'ko'}>
         {health.extraction.available
-          ? `✓ Extraction prête (${health.extraction.provider} / ${health.extraction.model})`
-          : `✗ Extraction indisponible — ${health.extraction.reason ?? 'raison inconnue'}`}
+          ? t('settings.health.extractionReady', { provider: health.extraction.provider, model: health.extraction.model })
+          : t('settings.health.extractionUnavailable', { reason: health.extraction.reason ?? t('settings.health.reasonUnknown') })}
       </p>
       <p className={health.embeddings.available ? 'ok' : 'warn'}>
         {health.embeddings.available
-          ? `✓ Recherche sémantique prête (${health.embeddings.provider} / ${health.embeddings.model})`
-          : `⚠ ${health.embeddings.reason ?? 'Recherche sémantique indisponible'}`}
+          ? t('settings.health.embeddingsReady', { provider: health.embeddings.provider, model: health.embeddings.model })
+          : t('settings.health.embeddingsWarn', { reason: health.embeddings.reason ?? t('settings.health.embeddingsUnavailable') })}
       </p>
       {health.wal_pending > 0 && (
         <p className={health.extraction.available ? 'warn' : 'ko'}>
-          {health.wal_pending.toLocaleString('fr-FR')} souvenir{health.wal_pending > 1 ? 's' : ''} en attente d’extraction
-          {health.extraction.available ? ' (traitement au prochain passage).' : ' — ils seront traités dès qu’un moteur sera prêt.'}
+          {health.wal_pending > 1
+            ? t('settings.health.walPendingPlural', { count })
+            : t('settings.health.walPending', { count })}
+          {health.extraction.available ? t('settings.health.walNext') : t('settings.health.walWaiting')}
         </p>
       )}
     </div>
@@ -317,6 +318,7 @@ function LlmHealthSummary({ health }: { health: LlmHealth }) {
 }
 
 function UpdatePanel({ onError }: { onError: (m: string) => void }) {
+  const { t } = useT()
   const [version, setVersion] = useState<VersionInfo | null>(null)
   const [unavailable, setUnavailable] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -331,11 +333,11 @@ function UpdatePanel({ onError }: { onError: (m: string) => void }) {
 
   return (
     <div className="settings-block">
-      <h2>Mise à jour</h2>
+      <h2>{t('settings.update.title')}</h2>
       <p className="muted">
-        Version <strong>{version.version}</strong>
-        {version.sha ? <> · révision <code>{version.sha}</code></> : null}
-        {!version.is_git && <> · installation figée</>}
+        {t('settings.update.versionLabel')} <strong>{version.version}</strong>
+        {version.sha ? <> · {t('settings.update.revision')} <code>{version.sha}</code></> : null}
+        {!version.is_git && <> · {t('settings.update.frozen')}</>}
       </p>
       {version.is_git ? (
         <>
@@ -345,25 +347,25 @@ function UpdatePanel({ onError }: { onError: (m: string) => void }) {
             disabled={busy}
             onClick={async () => {
               setBusy(true)
-              setNote('Mise à jour en cours… (téléchargement + reconstruction, ~1 min)')
+              setNote(t('settings.update.inProgress'))
               try {
                 const r = await runUpdate()
-                setNote(r.message + (r.changed ? ' Le service redémarre — recharge cette page dans ~10 s (relance « memoria » si la clé d’accès a changé).' : ''))
+                setNote(r.message + (r.changed ? t('settings.update.restarted') : ''))
                 if (r.changed) getVersion().then(setVersion).catch(() => {})
               } catch (err) {
-                onError(err instanceof ApiError ? err.message : 'Mise à jour impossible.')
+                onError(err instanceof ApiError ? err.message : t('settings.update.failed'))
                 setNote(null)
               } finally {
                 setBusy(false)
               }
             }}
           >
-            {busy ? 'Mise à jour…' : 'Vérifier et mettre à jour'}
+            {busy ? t('settings.update.busy') : t('settings.update.button')}
           </button>
-          <p className="muted" style={{ marginTop: '0.5rem' }}>Télécharge la dernière version, reconstruit, puis redémarre le service automatiquement.</p>
+          <p className="muted" style={{ marginTop: '0.5rem' }}>{t('settings.update.hint')}</p>
         </>
       ) : (
-        <p className="muted">Cette installation n’est pas gérée par git — mets à jour via ton gestionnaire de paquets.</p>
+        <p className="muted">{t('settings.update.notGit')}</p>
       )}
       {note && <p className="muted sync-note">{note}</p>}
     </div>
@@ -371,6 +373,7 @@ function UpdatePanel({ onError }: { onError: (m: string) => void }) {
 }
 
 function SyncPanel({ onError }: { onError: (m: string) => void }) {
+  const { t } = useT()
   const [status, setStatus] = useState<SyncStatus | null>(null)
   const [unavailable, setUnavailable] = useState(false)
   const [invite, setInvite] = useState<{ code: string; hub_lan: string | null } | null>(null)
@@ -386,82 +389,83 @@ function SyncPanel({ onError }: { onError: (m: string) => void }) {
 
   const wrap = async (fn: () => Promise<void>) => {
     setBusy(true)
-    try { await fn() } catch (err) { onError(err instanceof ApiError ? err.message : 'Action impossible.') } finally { setBusy(false) }
+    try { await fn() } catch (err) { onError(err instanceof ApiError ? err.message : t('settings.sync.actionFailed')) } finally { setBusy(false) }
   }
 
   if (unavailable) return null
-  if (status === null) return <div className="settings-block"><div className="spinner-row"><span className="spinner" aria-hidden /> Chargement…</div></div>
+  if (status === null) return <div className="settings-block"><div className="spinner-row"><span className="spinner" aria-hidden />{' '}{t('common.loading')}</div></div>
 
   const configured = status.enabled && (status.role === 'hub' || status.hub)
 
   return (
     <div className="settings-block">
-      <h2>Synchro entre machines</h2>
+      <h2>{t('settings.sync.title')}</h2>
       <p className="muted">
-        Partage la mémoire d'équipe (infos sur toi, l'entreprise, les projets) et le coffre entre tes Mac
-        du réseau. La mémoire <strong>privée</strong> de chaque agent ne se partage jamais.
+        {t('settings.sync.desc.before')}
+        <strong>{t('settings.sync.desc.private')}</strong>
+        {t('settings.sync.desc.after')}
       </p>
 
       {!configured ? (
         <>
-          <p className="muted">Cette machine n'est pas encore reliée. Choisis :</p>
+          <p className="muted">{t('settings.sync.notLinked')}</p>
           <div className="sync-setup">
             <div className="sync-card">
-              <strong>En faire le hub</strong>
-              <span className="muted">La machine toujours allumée (ex. le Mac Studio de Koda) qui centralise la mémoire partagée.</span>
+              <strong>{t('settings.sync.makeHubTitle')}</strong>
+              <span className="muted">{t('settings.sync.makeHubDesc')}</span>
               <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void wrap(async () => {
                 const r = await syncInitHub('0.0.0.0:47600')
-                setNote(`Hub configuré (machine ${r.machine_id}). Redémarre Memoria (memoria stop && start) pour activer l'écoute réseau, puis invite tes autres machines.`)
+                setNote(t('settings.sync.hubConfigured', { machine: r.machine_id }))
                 refresh()
-              })}>Faire de cette machine le hub</button>
+              })}>{t('settings.sync.makeHubButton')}</button>
             </div>
             <div className="sync-card">
-              <strong>Relier au hub</strong>
-              <span className="muted">Sur une machine secondaire (l'iMac de Luna), colle l'adresse du hub et le code d'invitation.</span>
-              <input type="text" placeholder="adresse du hub (ex. 192.168.1.20:47600)" value={joinHub} onChange={e => setJoinHub(e.target.value)} />
-              <input type="text" placeholder="code d'invitation (XXXX-XXXX)" value={joinCode} onChange={e => setJoinCode(e.target.value)} />
+              <strong>{t('settings.sync.joinTitle')}</strong>
+              <span className="muted">{t('settings.sync.joinDesc')}</span>
+              <input type="text" placeholder={t('settings.sync.hubAddressPlaceholder')} value={joinHub} onChange={e => setJoinHub(e.target.value)} />
+              <input type="text" placeholder={t('settings.sync.inviteCodePlaceholder')} value={joinCode} onChange={e => setJoinCode(e.target.value)} />
               <button type="button" className="btn btn-primary" disabled={busy || !joinHub.trim() || !joinCode.trim()} onClick={() => void wrap(async () => {
                 const r = await syncJoin(joinHub.trim(), joinCode.trim())
-                setNote(`✓ Relié. Reçu ${r.facts} souvenirs partagés et ${r.secrets} secrets.`)
+                setNote(t('settings.sync.joined', { facts: r.facts, secrets: r.secrets }))
                 refresh()
-              })}>Relier cette machine</button>
+              })}>{t('settings.sync.joinButton')}</button>
             </div>
           </div>
         </>
       ) : (
         <>
           <p className="muted">
-            Rôle : <strong>{status.role === 'hub' ? 'hub (central)' : 'machine reliée'}</strong>
-            {status.role === 'hub' && status.listen_lan ? ` · écoute ${status.listen_lan}` : ''}
-            {status.role === 'spoke' && status.hub ? ` · hub ${status.hub}` : ''}
-            {' · '}id <code>{status.machine_id}</code>
+            {t('settings.sync.roleLabel')} <strong>{status.role === 'hub' ? t('settings.sync.roleHub') : t('settings.sync.roleSpoke')}</strong>
+            {status.role === 'hub' && status.listen_lan ? ` · ${t('settings.sync.listen', { addr: status.listen_lan })}` : ''}
+            {status.role === 'spoke' && status.hub ? ` · ${t('settings.sync.hubOf', { addr: status.hub })}` : ''}
+            {' · '}{t('settings.sync.idLabel')} <code>{status.machine_id}</code>
           </p>
 
           <div className="sync-actions">
             <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => void wrap(async () => {
-              const r = await syncNow(); setNote(`Synchro : ${r.pulled} reçus, ${r.pushed} poussés.`)
-            })}>Synchroniser maintenant</button>
+              const r = await syncNow(); setNote(t('settings.sync.syncDone', { pulled: r.pulled, pushed: r.pushed }))
+            })}>{t('settings.sync.syncNow')}</button>
             {status.role === 'hub' && (
               <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void wrap(async () => {
                 const inv = await syncInvite(); setInvite({ code: inv.code, hub_lan: inv.hub_lan })
-              })}>Inviter une machine</button>
+              })}>{t('settings.sync.invite')}</button>
             )}
             {status.role === 'spoke' && (
-              <ConfirmButton label="Se déconnecter" confirmLabel="Quitter le hub ?" onConfirm={() => void wrap(async () => { await syncLeave(); refresh() })} />
+              <ConfirmButton label={t('settings.sync.leave')} confirmLabel={t('settings.sync.leaveConfirm')} onConfirm={() => void wrap(async () => { await syncLeave(); refresh() })} />
             )}
           </div>
 
           {invite && (
             <div className="sync-invite">
-              <p>Sur l'autre machine, dans Réglages → « Relier au hub » :</p>
+              <p>{t('settings.sync.inviteIntro')}</p>
               <div className="command-row">
-                <code className="command">hub : {invite.hub_lan ?? '<ip-de-ce-mac>:47600'}</code>
+                <code className="command">{t('settings.sync.inviteHub', { addr: invite.hub_lan ?? t('settings.sync.inviteHubFallback') })}</code>
               </div>
               <div className="command-row">
-                <code className="command">code : {invite.code}</code>
-                <CopyButton text={invite.code} label="Copier le code" />
+                <code className="command">{t('settings.sync.inviteCode', { code: invite.code })}</code>
+                <CopyButton text={invite.code} label={t('settings.sync.copyCode')} />
               </div>
-              <p className="muted">Le code expire dans 10 minutes.</p>
+              <p className="muted">{t('settings.sync.codeExpires')}</p>
             </div>
           )}
 
@@ -470,8 +474,8 @@ function SyncPanel({ onError }: { onError: (m: string) => void }) {
               {status.peers.map(p => (
                 <li key={p.machine_id} className="peer-row">
                   <span><strong>{p.display_name}</strong> <span className="badge badge-muted">{p.role}</span></span>
-                  <span className="muted">{p.revoked_at ? 'révoqué' : p.last_seen_at ? `vu ${new Date(p.last_seen_at).toLocaleString('fr-FR')}` : 'jamais vu'}</span>
-                  {!p.revoked_at && <ConfirmButton label="Révoquer" confirmLabel="Révoquer ce pair ?" onConfirm={() => void wrap(async () => { await syncRevoke(p.machine_id); refresh() })} />}
+                  <span className="muted">{p.revoked_at ? t('settings.sync.revoked') : p.last_seen_at ? t('settings.sync.seenAt', { date: new Date(p.last_seen_at).toLocaleString('fr-FR') }) : t('settings.sync.neverSeen')}</span>
+                  {!p.revoked_at && <ConfirmButton label={t('settings.sync.revoke')} confirmLabel={t('settings.sync.revokeConfirm')} onConfirm={() => void wrap(async () => { await syncRevoke(p.machine_id); refresh() })} />}
                 </li>
               ))}
             </ul>
@@ -485,6 +489,7 @@ function SyncPanel({ onError }: { onError: (m: string) => void }) {
 }
 
 function ControlPanel({ onError }: { onError: (m: string) => void }) {
+  const { t } = useT()
   const [state, setState] = useState<ControlState | null>(null)
   const [unavailable, setUnavailable] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
@@ -501,13 +506,13 @@ function ControlPanel({ onError }: { onError: (m: string) => void }) {
         const v = await setEnabled(enabled)
         setState(prev => (prev ? { ...prev, enabled: v } : prev))
       } catch (err) {
-        onError(err instanceof ApiError ? err.message : 'Changement impossible.')
+        onError(err instanceof ApiError ? err.message : t('settings.error.changeFailed'))
         getControl().then(setState).catch(() => {})
       } finally {
         setBusy(null)
       }
     },
-    [onError],
+    [onError, t],
   )
 
   const toggleAutostart = useCb(
@@ -517,21 +522,21 @@ function ControlPanel({ onError }: { onError: (m: string) => void }) {
         const a = await setAutostart(enabled)
         setState(prev => (prev ? { ...prev, autostart: a } : prev))
       } catch (err) {
-        onError(err instanceof ApiError ? err.message : 'Changement impossible.')
+        onError(err instanceof ApiError ? err.message : t('settings.error.changeFailed'))
         getControl().then(setState).catch(() => {})
       } finally {
         setBusy(null)
       }
     },
-    [onError],
+    [onError, t],
   )
 
   if (unavailable) return null
-  if (state === null) return <div className="settings-block"><div className="spinner-row"><span className="spinner" aria-hidden /> Chargement…</div></div>
+  if (state === null) return <div className="settings-block"><div className="spinner-row"><span className="spinner" aria-hidden />{' '}{t('common.loading')}</div></div>
 
   return (
     <div className="settings-block">
-      <h2>Contrôle</h2>
+      <h2>{t('settings.control.title')}</h2>
       <label className="option-row">
         <input
           type="checkbox"
@@ -540,11 +545,11 @@ function ControlPanel({ onError }: { onError: (m: string) => void }) {
           onChange={e => void toggleEnabled(e.target.checked)}
         />
         <span>
-          <strong>Memoria actif</strong>
+          <strong>{t('settings.control.enabledTitle')}</strong>
           <span className="muted option-hint">
             {state.enabled
-              ? 'Capture et rappel des souvenirs en fonctionnement. Décoche pour mettre en pause sans tout fermer.'
-              : '⏸ En pause : les agents tournent mais n’écrivent ni ne lisent aucune mémoire.'}
+              ? t('settings.control.enabledOn')
+              : t('settings.control.enabledOff')}
           </span>
         </span>
       </label>
@@ -556,11 +561,11 @@ function ControlPanel({ onError }: { onError: (m: string) => void }) {
           onChange={e => void toggleAutostart(e.target.checked)}
         />
         <span>
-          <strong>Lancer au démarrage</strong>
+          <strong>{t('settings.control.autostartTitle')}</strong>
           <span className="muted option-hint">
             {state.autostart.supported
-              ? 'Démarre Memoria automatiquement à chaque ouverture de session (launchd).'
-              : 'Disponible sur macOS uniquement pour l’instant.'}
+              ? t('settings.control.autostartOn')
+              : t('settings.control.autostartUnsupported')}
           </span>
         </span>
       </label>
@@ -569,6 +574,7 @@ function ControlPanel({ onError }: { onError: (m: string) => void }) {
 }
 
 function OptionsPanel({ onError }: { onError: (m: string) => void }) {
+  const { t } = useT()
   const [options, setOptions] = useState<Record<string, boolean> | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
 
@@ -583,29 +589,29 @@ function OptionsPanel({ onError }: { onError: (m: string) => void }) {
       try {
         setOptions(await setOption(key, enabled))
       } catch (err) {
-        onError(err instanceof ApiError ? err.message : 'Changement impossible.')
+        onError(err instanceof ApiError ? err.message : t('settings.error.changeFailed'))
         getOptions().then(setOptions).catch(() => {})
       } finally {
         setBusy(null)
       }
     },
-    [onError],
+    [onError, t],
   )
 
-  if (options === null) return <p className="muted">Options non disponibles.</p>
+  if (options === null) return <p className="muted">{t('settings.options.unavailable')}</p>
   return (
     <div className="options-list">
       {OPTIONS.map(o => (
-        <label key={o.key} className="option-row">
+        <label key={o} className="option-row">
           <input
             type="checkbox"
-            checked={options[o.key] ?? false}
-            disabled={busy === o.key}
-            onChange={e => void toggle(o.key, e.target.checked)}
+            checked={options[o] ?? false}
+            disabled={busy === o}
+            onChange={e => void toggle(o, e.target.checked)}
           />
           <span>
-            <strong>{o.label}</strong>
-            <span className="muted option-hint">{o.hint}</span>
+            <strong>{t(`settings.option.${o}.label`)}</strong>
+            <span className="muted option-hint">{t(`settings.option.${o}.hint`)}</span>
           </span>
         </label>
       ))}

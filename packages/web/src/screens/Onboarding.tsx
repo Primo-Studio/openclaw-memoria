@@ -7,6 +7,7 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import { Wizard, type WizardStep } from '../components/Wizard'
+import { useT } from '../i18n'
 import {
   ApiError,
   copyOpenClawKey,
@@ -44,12 +45,14 @@ const DEFAULT_MODELS: Partial<Record<LlmProviderName, string>> = {
 type EngineState = 'ready' | 'config' | 'off'
 
 function StateBadge({ state }: { state: EngineState }) {
-  if (state === 'ready') return <span className="badge badge-ok">Prêt</span>
-  if (state === 'config') return <span className="badge badge-warn">À configurer</span>
-  return <span className="badge badge-muted">Non détecté</span>
+  const { t } = useT()
+  if (state === 'ready') return <span className="badge badge-ok">{t('onboarding.badge.ready')}</span>
+  if (state === 'config') return <span className="badge badge-warn">{t('onboarding.badge.config')}</span>
+  return <span className="badge badge-muted">{t('onboarding.badge.off')}</span>
 }
 
 export function Onboarding({ onDone }: { onDone: () => void }) {
+  const { t } = useT()
   const [step, setStep] = useState(0)
   const [doctor, setDoctor] = useState<DoctorReport | null>(null)
   const [type, setType] = useState<AgentType>('claude-code')
@@ -98,12 +101,12 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     const model = engine === 'lmstudio' ? h?.options.lmstudio.models[0] : DEFAULT_MODELS[engine]
     try {
       await setExtractionProvider(engine, model)
-      setChosenNote(`✓ Moteur enregistré : ${engine}${model ? ` / ${model}` : ''}`)
+      setChosenNote(t('onboarding.engine.saved', { engine, suffix: model ? ` / ${model}` : '' }))
       setEngineError(null)
     } catch (err) {
-      setEngineError(err instanceof ApiError ? err.message : 'Enregistrement du moteur impossible.')
+      setEngineError(err instanceof ApiError ? err.message : t('onboarding.engine.saveError'))
     }
-  }, [])
+  }, [t])
 
   // polling du téléchargement Ollama (barres de progression)
   useEffect(() => {
@@ -114,7 +117,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
           setPullStatus(s)
           if (!s.running) {
             setPulling(null)
-            if (s.error) setEngineError(`Téléchargement de ${s.model ?? 'modèle'} en échec : ${s.error}`)
+            if (s.error) setEngineError(t('onboarding.pull.failed', { model: s.model ?? t('onboarding.pull.modelFallback'), error: s.error }))
             void refreshHealth().then(h => {
               // une fois Ollama complet, on persiste le choix automatiquement
               if (h?.options.ollama.available) void persistChoice('ollama', h)
@@ -124,7 +127,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
         .catch(() => setPulling(null))
     }, 1000)
     return () => clearInterval(timer)
-  }, [pulling, refreshHealth, persistChoice])
+  }, [pulling, refreshHealth, persistChoice, t])
 
   const choose = useCallback(
     async (engine: EngineChoice) => {
@@ -142,7 +145,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
           const h = await refreshHealth()
           await persistChoice(provider, h)
         } catch (err) {
-          setEngineError(err instanceof ApiError ? err.message : 'Copie de la clé OpenClaw impossible.')
+          setEngineError(err instanceof ApiError ? err.message : t('onboarding.engine.copyError'))
         }
         return
       }
@@ -152,19 +155,19 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
         : o[engine].available
       if (ready) await persistChoice(engine, health)
     },
-    [health, persistChoice, refreshHealth],
+    [health, persistChoice, refreshHealth, t],
   )
 
   const startPull = useCallback((model: string) => {
     setEngineError(null)
-    setPullStatus({ running: true, model, percent: null, status: 'démarrage', error: null })
+    setPullStatus({ running: true, model, percent: null, status: t('onboarding.pull.starting'), error: null })
     startOllamaPull(model)
       .then(() => setPulling(model))
       .catch(err => {
         setPullStatus(null)
-        setEngineError(err instanceof ApiError ? err.message : 'Téléchargement impossible.')
+        setEngineError(err instanceof ApiError ? err.message : t('onboarding.pull.error'))
       })
-  }, [])
+  }, [t])
 
   const reverify = useCallback(async () => {
     setTestResult(null)
@@ -176,9 +179,9 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
         : selected === 'lmstudio' ? o.lmstudio.available && o.lmstudio.models.length > 0
         : o[selected].available
       if (ready && !h.extraction.available) await persistChoice(selected, h)
-      else if (ready) setChosenNote(`✓ Moteur prêt : ${h.extraction.provider} / ${h.extraction.model}`)
+      else if (ready) setChosenNote(t('onboarding.engine.ready', { provider: h.extraction.provider ?? '', model: h.extraction.model ?? '' }))
     }
-  }, [refreshHealth, selected, persistChoice])
+  }, [refreshHealth, selected, persistChoice, t])
 
   const runTest = useCallback(async () => {
     const h = await refreshHealth()
@@ -200,35 +203,31 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   const steps: WizardStep[] = [
     {
       id: 'welcome',
-      title: 'Bienvenue dans Memoria',
+      title: t('onboarding.welcome.title'),
       render: () => (
         <div className="ob-step">
-          <p className="ob-lead">La mémoire locale de tes agents IA.</p>
+          <p className="ob-lead">{t('onboarding.welcome.lead')}</p>
           <p>
-            Chaque assistant (Claude Code, Codex, OpenClaw…) garde sa propre mémoire, ici, sur
-            cette machine. <strong>Rien ne part dans le cloud.</strong>
+            {t('onboarding.welcome.body')} <strong>{t('onboarding.welcome.bodyStrong')}</strong>
           </p>
-          <p className="muted">Cette mise en route prend moins de deux minutes.</p>
+          <p className="muted">{t('onboarding.welcome.duration')}</p>
         </div>
       ),
     },
     {
       id: 'storage',
-      title: 'Où vit ta mémoire',
+      title: t('onboarding.storage.title'),
       render: () => (
         <div className="ob-step">
-          <p>Tes souvenirs sont stockés dans :</p>
+          <p>{t('onboarding.storage.lead')}</p>
           <pre className="command">{doctor?.storage_root ?? '~/.memoria/data'}</pre>
-          <p className="muted">
-            Emplacement modifiable plus tard dans les Réglages. Tout y est chiffré pour les
-            secrets et reste 100 % local.
-          </p>
+          <p className="muted">{t('onboarding.storage.note')}</p>
         </div>
       ),
     },
     {
       id: 'engine',
-      title: 'Moteur d’intelligence',
+      title: t('onboarding.engine.title'),
       render: () => (
         <EngineStep
           health={health}
@@ -254,38 +253,38 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     },
     {
       id: 'agent',
-      title: 'Connecter un premier agent',
+      title: t('onboarding.agent.title'),
       render: () => (
         <div className="ob-step">
           {degraded && (
             <p className="provider-missing">
-              Mode dégradé actif : configure un moteur dans Réglages dès que possible.
+              {t('onboarding.agent.degraded')}
             </p>
           )}
           {!pair ? (
             <>
-              <p>Quel assistant veux-tu relier à sa mémoire ?</p>
+              <p>{t('onboarding.agent.question')}</p>
               <div className="ob-types">
-                {AGENT_TYPES.map(t => (
-                  <button key={t.id} type="button" className={`capture-option${type === t.id ? ' capture-active' : ''}`} onClick={() => setType(t.id)}>
-                    {t.label}
+                {AGENT_TYPES.map(at => (
+                  <button key={at.id} type="button" className={`capture-option${type === at.id ? ' capture-active' : ''}`} onClick={() => setType(at.id)}>
+                    {at.id === 'generic' ? t('onboarding.agent.typeGeneric') : at.label}
                   </button>
                 ))}
               </div>
-              <button type="button" className="btn btn-primary" onClick={() => void startPairing()}>Générer le code</button>
+              <button type="button" className="btn btn-primary" onClick={() => void startPairing()}>{t('onboarding.agent.generate')}</button>
             </>
           ) : (
             <>
-              <p>Colle cette commande dans le chat de ton agent :</p>
+              <p>{t('onboarding.agent.pasteCommand')}</p>
               <pre className="command">{pair.command}</pre>
               <button
                 type="button"
                 className="btn btn-ghost"
                 onClick={() => { void navigator.clipboard.writeText(pair.command); setCopied(true) }}
               >
-                {copied ? 'Copié ✓' : 'Copier'}
+                {copied ? t('onboarding.agent.copied') : t('onboarding.agent.copy')}
               </button>
-              <p className="muted">Code : <strong>{pair.pairing_code}</strong> — valable 10 minutes.</p>
+              <p className="muted">{t('onboarding.agent.codeLabel')}<strong>{pair.pairing_code}</strong>{t('onboarding.agent.codeValidity')}</p>
             </>
           )}
         </div>
@@ -303,7 +302,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
           onBack={() => setStep(s => Math.max(0, s - 1))}
           onNext={() => setStep(s => Math.min(steps.length - 1, s + 1))}
           onFinish={onDone}
-          nextLabel={step === steps.length - 1 ? 'Terminer' : 'Continuer'}
+          nextLabel={step === steps.length - 1 ? t('onboarding.wizard.finish') : t('onboarding.wizard.continue')}
           nextDisabled={step === 2 && !engineGateOpen}
         />
       </div>
@@ -346,12 +345,12 @@ function EngineStep({
   onTest: () => void
   onDegraded: () => void
 }) {
+  const { t } = useT()
   if (healthUnavailable) {
     return (
       <div className="ob-step">
         <p className="muted">
-          Détection des moteurs non disponible sur ce service — tu pourras configurer le moteur
-          dans les Réglages.
+          {t('onboarding.engine.unavailable')}
         </p>
       </div>
     )
@@ -359,7 +358,7 @@ function EngineStep({
   if (!health) {
     return (
       <div className="ob-step">
-        <div className="spinner-row"><span className="spinner" aria-hidden /> Détection des moteurs…</div>
+        <div className="spinner-row"><span className="spinner" aria-hidden /> {t('onboarding.engine.detecting')}</div>
       </div>
     )
   }
@@ -370,26 +369,26 @@ function EngineStep({
       id: 'ollama',
       icon: '🦙',
       label: 'Ollama',
-      hint: 'Recommandé — 100 % local et gratuit',
+      hint: t('onboarding.engine.ollamaHint'),
       state: o.ollama.available ? 'ready' : o.ollama.serverUp || o.ollama.binaryInPath ? 'config' : 'off',
     },
     {
       id: 'lmstudio',
       icon: '🖥️',
       label: 'LM Studio',
-      hint: 'Local — interface graphique pour modèles open source',
+      hint: t('onboarding.engine.lmstudioHint'),
       state: o.lmstudio.available && o.lmstudio.models.length > 0 ? 'ready' : o.lmstudio.available ? 'config' : 'off',
     },
-    { id: 'openai', icon: '🔑', label: 'OpenAI', hint: 'Clé API — payant à l’usage', state: o.openai.available ? 'ready' : 'config' },
-    { id: 'openrouter', icon: '🔑', label: 'OpenRouter', hint: 'Clé API — payant à l’usage', state: o.openrouter.available ? 'ready' : 'config' },
-    { id: 'anthropic', icon: '🔑', label: 'Anthropic', hint: 'Clé API — payant à l’usage', state: o.anthropic.available ? 'ready' : 'config' },
+    { id: 'openai', icon: '🔑', label: 'OpenAI', hint: t('onboarding.engine.apiKeyHint'), state: o.openai.available ? 'ready' : 'config' },
+    { id: 'openrouter', icon: '🔑', label: 'OpenRouter', hint: t('onboarding.engine.apiKeyHint'), state: o.openrouter.available ? 'ready' : 'config' },
+    { id: 'anthropic', icon: '🔑', label: 'Anthropic', hint: t('onboarding.engine.apiKeyHint'), state: o.anthropic.available ? 'ready' : 'config' },
   ]
   if (o.openclaw.available && o.openclaw.reusable && o.openclaw.provider) {
     cards.push({
       id: 'openclaw',
       icon: '🔁',
-      label: 'Réutiliser ma config OpenClaw',
-      hint: `Copie ta clé ${o.openclaw.provider} déjà configurée dans OpenClaw`,
+      label: t('onboarding.engine.openclawLabel'),
+      hint: t('onboarding.engine.openclawHint', { provider: o.openclaw.provider }),
       state: 'ready',
     })
   }
@@ -397,8 +396,7 @@ function EngineStep({
   return (
     <div className="ob-step">
       <p className="muted">
-        C’est lui qui transforme tes conversations en souvenirs. Sans moteur, Memoria
-        enregistre mais <strong>n’apprend rien</strong>.
+        {t('onboarding.engine.lead')} <strong>{t('onboarding.engine.leadStrong')}</strong>.
       </p>
 
       <div className="engine-grid">
@@ -429,19 +427,19 @@ function EngineStep({
 
       <div className="engine-test">
         <button type="button" className="btn btn-ghost" disabled={checking} onClick={onTest}>
-          {checking ? 'Vérification…' : 'Tester'}
+          {checking ? t('onboarding.engine.checking') : t('onboarding.engine.test')}
         </button>
         {testResult && (
           <ul className="engine-results">
             <li className={testResult.extraction.available ? 'ok' : 'ko'}>
               {testResult.extraction.available
-                ? `✓ Extraction prête (${testResult.extraction.provider} / ${testResult.extraction.model})`
-                : `✗ Extraction indisponible — ${testResult.extraction.reason ?? 'raison inconnue'}`}
+                ? t('onboarding.engine.extractionReady', { provider: testResult.extraction.provider ?? '', model: testResult.extraction.model ?? '' })
+                : t('onboarding.engine.extractionFail', { reason: testResult.extraction.reason ?? t('onboarding.engine.reasonUnknown') })}
             </li>
             <li className={testResult.embeddings.available ? 'ok' : 'ko'}>
               {testResult.embeddings.available
-                ? `✓ Recherche sémantique prête (${testResult.embeddings.provider} / ${testResult.embeddings.model})`
-                : `⚠ ${testResult.embeddings.reason ?? 'Recherche sémantique indisponible'}`}
+                ? t('onboarding.engine.embeddingsReady', { provider: testResult.embeddings.provider ?? '', model: testResult.embeddings.model ?? '' })
+                : t('onboarding.engine.embeddingsWarn', { reason: testResult.embeddings.reason ?? t('onboarding.engine.embeddingsUnavailable') })}
             </li>
           </ul>
         )}
@@ -450,12 +448,10 @@ function EngineStep({
       {!health.extraction.available && !degraded && (
         <div className="degraded-box">
           <p>
-            <strong>Memoria enregistrera tes conversations mais n’en extraira AUCUN souvenir
-            tant qu’aucun moteur n’est configuré.</strong> Tes données restent en file d’attente
-            et seront traitées dès qu’un moteur sera prêt.
+            <strong>{t('onboarding.engine.degradedWarnStrong')}</strong> {t('onboarding.engine.degradedWarnBody')}
           </p>
           <button type="button" className="btn btn-danger" onClick={onDegraded}>
-            Continuer sans moteur (mode dégradé)
+            {t('onboarding.engine.continueDegraded')}
           </button>
         </div>
       )}
@@ -478,28 +474,29 @@ function OllamaGuide({
   onReverify: () => void
   checking: boolean
 }) {
+  const { t } = useT()
   if (!o.serverUp) {
     return (
       <div className="engine-guide">
         <p>
-          1. Télécharge Ollama : <a href="https://ollama.com/download" target="_blank" rel="noreferrer">ollama.com/download</a>
+          {t('onboarding.ollama.step1')} <a href="https://ollama.com/download" target="_blank" rel="noreferrer">ollama.com/download</a>
         </p>
-        <p>2. Installe-le et lance l’application (l’icône apparaît dans la barre de menus).</p>
+        <p>{t('onboarding.ollama.step2')}</p>
         <button type="button" className="btn btn-primary" disabled={checking} onClick={onReverify}>
-          J’ai installé, re-vérifier
+          {t('onboarding.ollama.recheck')}
         </button>
       </div>
     )
   }
   const missing: Array<{ model: string; label: string }> = []
-  if (!o.hasExtractModel) missing.push({ model: 'qwen2.5:3b', label: 'Télécharger qwen2.5:3b (extraction, ~1,9 Go)' })
-  if (!o.hasEmbedModel) missing.push({ model: 'nomic-embed-text', label: 'Télécharger nomic-embed-text (recherche, ~274 Mo)' })
+  if (!o.hasExtractModel) missing.push({ model: 'qwen2.5:3b', label: t('onboarding.ollama.pullExtract') })
+  if (!o.hasEmbedModel) missing.push({ model: 'nomic-embed-text', label: t('onboarding.ollama.pullEmbed') })
   if (missing.length === 0) {
-    return <div className="engine-guide"><p className="engine-note">✓ Ollama est prêt ({o.models.length} modèle·s).</p></div>
+    return <div className="engine-guide"><p className="engine-note">{t('onboarding.ollama.ready', { count: o.models.length })}</p></div>
   }
   return (
     <div className="engine-guide">
-      <p>Ollama tourne — il manque {missing.length === 1 ? 'un modèle' : 'deux modèles'} :</p>
+      <p>{t('onboarding.ollama.missingIntro', { what: missing.length === 1 ? t('onboarding.ollama.missingOne') : t('onboarding.ollama.missingTwo') })}</p>
       {missing.map(m => {
         const isPullingThis = pullStatus?.model === m.model && (pullStatus.running || pulling === m.model)
         return (
@@ -528,21 +525,22 @@ function OllamaGuide({
 }
 
 function LmStudioGuide({ o, onReverify, checking }: { o: LlmHealth['options']['lmstudio']; onReverify: () => void; checking: boolean }) {
+  const { t } = useT()
   return (
     <div className="engine-guide">
       {!o.available ? (
         <>
-          <p>1. Télécharge LM Studio : <a href="https://lmstudio.ai" target="_blank" rel="noreferrer">lmstudio.ai</a></p>
-          <p>2. Télécharge un modèle (ex. Qwen 2.5 7B Instruct) depuis son onglet Découverte.</p>
-          <p>3. Démarre le serveur local : onglet <strong>Developer</strong> → « Start Server » (port 1234).</p>
+          <p>{t('onboarding.lmstudio.step1')} <a href="https://lmstudio.ai" target="_blank" rel="noreferrer">lmstudio.ai</a></p>
+          <p>{t('onboarding.lmstudio.step2')}</p>
+          <p>{t('onboarding.lmstudio.step3a')}<strong>Developer</strong>{t('onboarding.lmstudio.step3b')}</p>
         </>
       ) : o.models.length === 0 ? (
-        <p>LM Studio répond mais aucun modèle n’est chargé — charge un modèle puis re-vérifie.</p>
+        <p>{t('onboarding.lmstudio.noModel')}</p>
       ) : (
-        <p className="engine-note">✓ LM Studio est prêt (modèle : {o.models[0]}).</p>
+        <p className="engine-note">{t('onboarding.lmstudio.ready', { model: o.models[0] ?? '' })}</p>
       )}
       <button type="button" className="btn btn-primary" disabled={checking} onClick={onReverify}>
-        Re-vérifier
+        {t('onboarding.lmstudio.recheck')}
       </button>
     </div>
   )
@@ -559,23 +557,24 @@ function ApiKeyGuide({
   onReverify: () => void
   checking: boolean
 }) {
+  const { t } = useT()
   const command = `echo 'TA_CLÉ' > ~/.${provider}/api_key && chmod 600 ~/.${provider}/api_key`
+  const providerName = provider === 'openai' ? 'OpenAI' : provider === 'openrouter' ? 'OpenRouter' : 'Anthropic'
   return (
     <div className="engine-guide">
       {available ? (
-        <p className="engine-note">✓ Clé {provider} détectée.</p>
+        <p className="engine-note">{t('onboarding.apikey.detected', { provider })}</p>
       ) : (
         <>
           <p>
-            Crée une clé API sur le site de {provider === 'openai' ? 'OpenAI' : provider === 'openrouter' ? 'OpenRouter' : 'Anthropic'},
-            puis colle cette commande dans ton terminal (remplace TA_CLÉ) :
+            {t('onboarding.apikey.instructions', { provider: providerName })}
           </p>
           <pre className="command">mkdir -p ~/.{provider} && {command}</pre>
-          <p className="muted">Memoria ne te demandera jamais de coller ta clé ici — elle reste dans un fichier protégé (chmod 600).</p>
+          <p className="muted">{t('onboarding.apikey.note')}</p>
         </>
       )}
       <button type="button" className="btn btn-primary" disabled={checking} onClick={onReverify}>
-        Re-vérifier
+        {t('onboarding.apikey.recheck')}
       </button>
     </div>
   )

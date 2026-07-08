@@ -18,8 +18,10 @@ import {
   type Topic,
   type TopicGraph,
 } from '../api'
+import { useT } from '../i18n'
 
 export function Themes() {
+  const { t: tr } = useT()
   const [agents, setAgents] = useState<AgentEntry[]>([])
   const [instance, setInstance] = useState<string>('')
   const [topics, setTopics] = useState<Topic[] | null>(null)
@@ -36,8 +38,8 @@ export function Themes() {
         setAgents(real)
         if (real.length > 0 && real[0]) setInstance(real[0].instance.id)
       })
-      .catch(() => setError('Le service ne répond pas.'))
-  }, [])
+      .catch(() => setError(tr('themes.error_service')))
+  }, [tr])
 
   useEffect(() => {
     if (!instance) return
@@ -61,10 +63,10 @@ export function Themes() {
       try {
         setFacts(await getTopicFacts(instance, t.id))
       } catch (err) {
-        setError(err instanceof ApiError ? err.message : 'Chargement impossible.')
+        setError(err instanceof ApiError ? err.message : tr('themes.error_load'))
       }
     },
-    [instance],
+    [instance, tr],
   )
 
   const maxImportance = useMemo(() => Math.max(1, ...(topics ?? []).map(t => t.importance_score)), [topics])
@@ -73,37 +75,37 @@ export function Themes() {
     <section>
       <header className="screen-head">
         <div>
-          <h1>Thèmes</h1>
-          <p className="muted">Ce que chaque agent sait, rangé par sujet. Clique un thème pour voir ses souvenirs.</p>
+          <h1>{tr('themes.title')}</h1>
+          <p className="muted">{tr('themes.lead')}</p>
         </div>
         <div className="theme-toolbar">
-          <div className="view-switch" role="tablist" aria-label="Affichage des thèmes">
+          <div className="view-switch" role="tablist" aria-label={tr('themes.view_aria')}>
             <button type="button" role="tab" aria-selected={view === 'tiles'} className={`view-tab${view === 'tiles' ? ' view-tab-active' : ''}`} onClick={() => setView('tiles')}>
-              Tuiles
+              {tr('themes.view_tiles')}
             </button>
             <button type="button" role="tab" aria-selected={view === 'graph'} className={`view-tab${view === 'graph' ? ' view-tab-active' : ''}`} onClick={() => setView('graph')}>
-              Relations
+              {tr('themes.view_relations')}
             </button>
           </div>
           <button
             type="button"
             className="btn btn-ghost"
             disabled={refining || !instance}
-            title="Donne des noms plus clairs aux thèmes avec l'IA configurée"
+            title={tr('themes.refine_title')}
             onClick={async () => {
               setRefining(true)
               try {
                 const n = await refineTopics(instance)
                 if (n > 0) setTopics(await getTopics(instance, 2))
-                else setError('Aucun moteur d’IA disponible pour affiner (voir Réglages).')
+                else setError(tr('themes.error_no_ai'))
               } catch (err) {
-                setError(err instanceof ApiError ? err.message : 'Affinage impossible.')
+                setError(err instanceof ApiError ? err.message : tr('themes.error_refine'))
               } finally {
                 setRefining(false)
               }
             }}
           >
-            {refining ? 'Affinage…' : '✨ Affiner les libellés (IA)'}
+            {refining ? tr('themes.refining') : tr('themes.refine_button')}
           </button>
           {agents.length > 0 && (
             <select className="agent-select" value={instance} onChange={e => setInstance(e.target.value)}>
@@ -120,11 +122,11 @@ export function Themes() {
       {error && <div className="error-banner">{error}</div>}
 
       {topics === null ? (
-        <div className="spinner-row"><span className="spinner" aria-hidden /> Chargement…</div>
+        <div className="spinner-row"><span className="spinner" aria-hidden /> {tr('common.loading')}</div>
       ) : topics.length === 0 ? (
         <div className="empty-state">
-          <p>Pas encore de thèmes pour cet agent.</p>
-          <p className="muted">Les thèmes se forment à mesure que l’agent mémorise, ou après l’approbation des souvenirs importés.</p>
+          <p>{tr('themes.empty_title')}</p>
+          <p className="muted">{tr('themes.empty_body')}</p>
         </div>
       ) : view === 'graph' ? (
         <ThemeRelations instance={instance} onOpen={t => void openTopic(t)} onError={setError} />
@@ -150,7 +152,7 @@ export function Themes() {
 
       {view === 'tiles' && active && (
         <div className="theme-detail">
-          <h2>{active.name} <span className="muted">· {active.fact_count} souvenirs</span></h2>
+          <h2>{active.name} <span className="muted">{tr('themes.detail_count', { count: active.fact_count })}</span></h2>
           {active.keywords.length > 0 && (
             <div className="theme-keywords">{active.keywords.slice(0, 8).map(k => <span key={k} className="badge badge-muted">{k}</span>)}</div>
           )}
@@ -179,6 +181,7 @@ export function Themes() {
  * d'un thème → ses liens ressortent ; clic → ouvre ses souvenirs (vue Tuiles).
  */
 function ThemeRelations({ instance, onOpen, onError }: { instance: string; onOpen: (t: Topic) => void; onError: (m: string) => void }) {
+  const { t: tr } = useT()
   const [graph, setGraph] = useState<TopicGraph | null>(null)
   const [hover, setHover] = useState<string | null>(null)
 
@@ -216,12 +219,12 @@ function ThemeRelations({ instance, onOpen, onError }: { instance: string; onOpe
     return { size, pos, maxW }
   }, [graph])
 
-  if (graph === null) return <div className="spinner-row"><span className="spinner" aria-hidden /> Chargement des relations…</div>
+  if (graph === null) return <div className="spinner-row"><span className="spinner" aria-hidden /> {tr('themes.loading_relations')}</div>
   if (graph.edges.length === 0)
     return (
       <div className="empty-state">
-        <p>Aucune relation marquée entre thèmes pour l’instant.</p>
-        <p className="muted">Les liens apparaissent quand plusieurs thèmes partagent des souvenirs ou des entités communes (une personne, un client, un projet).</p>
+        <p>{tr('themes.relations_empty_title')}</p>
+        <p className="muted">{tr('themes.relations_empty_body')}</p>
       </div>
     )
 
@@ -230,7 +233,7 @@ function ThemeRelations({ instance, onOpen, onError }: { instance: string; onOpe
 
   return (
     <div className="theme-graph-wrap">
-      <svg className="theme-graph" viewBox={`0 0 ${size} ${size}`} role="img" aria-label="Carte des relations entre thèmes">
+      <svg className="theme-graph" viewBox={`0 0 ${size} ${size}`} role="img" aria-label={tr('themes.graph_aria')}>
         {graph.edges.map(e => {
           const pa = pos.get(e.a)
           const pb = pos.get(e.b)
@@ -245,7 +248,7 @@ function ThemeRelations({ instance, onOpen, onError }: { instance: string; onOpe
               strokeOpacity={active ? 0.55 : 0.08}
               strokeLinecap="round"
             >
-              <title>{e.via.length > 0 ? `Liés par : ${e.via.join(', ')}` : `${e.shared_facts} souvenir(s) en commun`}</title>
+              <title>{e.via.length > 0 ? tr('themes.edge_linked_by', { via: e.via.join(', ') }) : tr('themes.edge_shared_facts', { count: e.shared_facts })}</title>
             </line>
           )
         })}
@@ -271,7 +274,7 @@ function ThemeRelations({ instance, onOpen, onError }: { instance: string; onOpe
         })}
       </svg>
       <div className="theme-graph-legend">
-        <h3>Liens les plus forts</h3>
+        <h3>{tr('themes.strongest_links')}</h3>
         <ul>
           {strongest.map(e => {
             const na = pos.get(e.a)?.t.name ?? '?'
@@ -280,7 +283,7 @@ function ThemeRelations({ instance, onOpen, onError }: { instance: string; onOpe
               <li key={`${e.a}-${e.b}`}>
                 <strong>{na}</strong> ↔ <strong>{nb}</strong>
                 <span className="muted">
-                  {e.via.length > 0 ? ` · ${e.via.join(', ')}` : e.shared_facts > 0 ? ` · ${e.shared_facts} souvenir(s) commun(s)` : ''}
+                  {e.via.length > 0 ? tr('themes.legend_via', { via: e.via.join(', ') }) : e.shared_facts > 0 ? tr('themes.legend_shared', { count: e.shared_facts }) : ''}
                 </span>
               </li>
             )
