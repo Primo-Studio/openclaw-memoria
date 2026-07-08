@@ -67,6 +67,7 @@ export function App() {
           Memoria
           <span className="brand-sub">{t('brand.sub')}</span>
         </div>
+        <LangSwitch />
         <nav className="nav" aria-label="Navigation principale">
           {NAV_IDS.map(id => (
             <button
@@ -80,7 +81,6 @@ export function App() {
           ))}
         </nav>
         <CaptureModeSwitch />
-        <LangSwitch />
         <div className="sidebar-foot muted">
           {t('foot.local')}
           <VersionFoot />
