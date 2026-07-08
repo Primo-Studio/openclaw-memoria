@@ -92,6 +92,20 @@ describe('recallSemantic', () => {
     expect(ids.indexOf(specific.id)).toBeLessThan(ids.indexOf(generic.id))
   })
 
+  it('requête impérative : une procédure prime sur un fait général équivalent', async () => {
+    // Deux faits au TEXTE identique (même couverture, même vecteur) : seul le
+    // type diffère. Sur une requête impérative, la procédure doit passer devant.
+    const text = 'Sur Indy, fermer la modale avant toute action'
+    const general = m.storeFact({ instance, content: text, category: 'general', confidence: 0.8 })
+    const procedure = m.storeFact({ instance, content: text, category: 'procedure', confidence: 0.8 })
+    await m.indexEmbeddings(instance)
+
+    const r = await m.recallSemantic({ instance, query: 'comment fermer la modale sur Indy' })
+    const ids = r.items.map(i => i.id)
+    expect(ids).toContain(procedure.id)
+    expect(ids.indexOf(procedure.id)).toBeLessThan(ids.indexOf(general.id))
+  })
+
   it('forget nettoie aussi l’index vectoriel (pas de fantôme sémantique)', async () => {
     await m.captureTurn({ instance, messages: [{ role: 'assistant', content: 'La voiture est au parking.' }] })
     await m.indexEmbeddings(instance)

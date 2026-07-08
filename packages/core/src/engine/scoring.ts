@@ -27,8 +27,27 @@ const RELEVANCE_EXPONENT = 1.8 // la pertinence doit dominer les modulateurs
 const USAGE_COEF = 0.12 // pente du bonus d'usage (log)
 const USAGE_MAX = 1.3 // plafond du bonus d'usage (anti auto-renforcement)
 const HOT_MAX_BONUS = 0.25 // bonus « chaud » max (était 0.5 → auto-renforçait trop)
+const PROCEDURE_BOOST = 1.25 // sur une requête impérative, une procédure/how-to prime
 
-export function scoreFact(row: FactRow, relevance: number, context: ActiveContext | undefined, now: number): ScoreParts {
+/**
+ * Requête « impérative / how-to » : l'utilisateur cherche QUOI FAIRE, pas un
+ * simple fait. On booste alors les souvenirs de type procédure. Heuristique
+ * légère multilingue (FR/EN) — mots d'action et interrogatifs de procédure.
+ */
+const PROCEDURAL_MARKERS =
+  /\b(comment|commen|faut|dois|fermer|ferme|cliqu|ouvrir|ouvre|remplir|saisir|étape|etape|procédure|procedure|comment faire|how|close|click|open|fill|step|should i|proc[eé]der)\b/i
+
+export function isProceduralQuery(query: string): boolean {
+  return PROCEDURAL_MARKERS.test(query)
+}
+
+export function scoreFact(
+  row: FactRow,
+  relevance: number,
+  context: ActiveContext | undefined,
+  now: number,
+  proceduralQuery = false,
+): ScoreParts {
   const ageDays = Math.max(0, (now - Date.parse(row.created_at)) / 86_400_000)
   const recency = Math.max(RECENCY_FLOOR, Math.exp((-Math.LN2 * ageDays) / RECENCY_HALF_LIFE_DAYS))
   const confidence = clamp(row.confidence, 0.05, 1)
@@ -60,9 +79,15 @@ export function scoreFact(row: FactRow, relevance: number, context: ActiveContex
   boost = Math.min(boost, 2)
   const weight = clamp(row.relevance_weight, 0.3, 1.6)
 
+  // BOOST PROCÉDURE : sur une requête impérative (« comment fermer… »), une
+  // règle de type procédure/how-to est ce que l'agent doit appliquer → petit
+  // avantage. Neutre (×1) sur les requêtes factuelles ou les faits non-procédure.
+  const isProcedure = row.category === 'procedure' || row.fact_type === 'howto' || row.fact_type === 'procedure'
+  const procedure = proceduralQuery && isProcedure ? PROCEDURE_BOOST : 1
+
   // La PERTINENCE domine (exposant) ; les autres facteurs modulent.
-  const total = Math.pow(Math.max(relevance, 1e-6), RELEVANCE_EXPONENT) * recency * confidence * usage * lifecycle * hot * boost * weight
-  return { relevance, recency, confidence, usage, lifecycle, hot, boost: boost * weight, total }
+  const total = Math.pow(Math.max(relevance, 1e-6), RELEVANCE_EXPONENT) * recency * confidence * usage * lifecycle * hot * boost * weight * procedure
+  return { relevance, recency, confidence, usage, lifecycle, hot, boost: boost * weight * procedure, total }
 }
 
 /**

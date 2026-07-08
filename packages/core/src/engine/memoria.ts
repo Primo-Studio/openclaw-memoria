@@ -51,7 +51,7 @@ import type { LlmOptions } from '../llm/detect.js'
 import type { EmbeddingProvider, LlmProvider } from '../llm/provider.js'
 import { CapturePipeline, type CaptureTurnInput, type CaptureTurnResult } from './capture.js'
 import type { WalReplaySummary } from './wal.js'
-import { passesClientIsolation, scoreFact } from './scoring.js'
+import { isProceduralQuery, passesClientIsolation, scoreFact } from './scoring.js'
 import { localMachineId, nextRev } from '../sync/clock.js'
 import { contentHash } from '../sync/merge.js'
 import { SyncEngine } from '../sync/engine.js'
@@ -564,6 +564,7 @@ export class Memoria {
     const context = this.expandContextTree(input.active_context)
     const searchTargets = this.resolveReadTargets(instance)
     const now = Date.now()
+    const procedural = isProceduralQuery(input.query) // boost procédures sur requête impérative
     const candidates: Array<{ item: RecallItem; store: ContentStore }> = []
     let totalFound = 0
 
@@ -579,7 +580,7 @@ export class Memoria {
       for (const hit of hits) {
         // FILTRE DUR anti-fuite inter-clients — jamais un boost, une exclusion.
         if (!passesClientIsolation(hit.row, context)) continue
-        const parts = scoreFact(hit.row, hit.relevance, context, now)
+        const parts = scoreFact(hit.row, hit.relevance, context, now, procedural)
         if (parts.total <= 0) continue
         candidates.push({
           store,
@@ -622,7 +623,7 @@ export class Memoria {
           if (!passesClientIsolation(row, context)) continue
           // relevance dérivée du lien graphe, fortement escomptée (un voisin n'est
           // jamais aussi pertinent qu'un hit direct) ; on garde recency/confiance.
-          const parts = scoreFact(row, Math.min(0.4, ex.score) * 0.5, context, now)
+          const parts = scoreFact(row, Math.min(0.4, ex.score) * 0.5, context, now, procedural)
           if (parts.total <= 0) continue
           existing.add(ex.fact_id)
           candidates.push({
