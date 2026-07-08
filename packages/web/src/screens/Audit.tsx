@@ -51,20 +51,71 @@ export function Audit() {
   )
 }
 
+type SortKey = 'ts' | 'actor' | 'action' | 'scope'
+type SortDir = 'asc' | 'desc'
+
+/** Valeur de tri (texte comparable) pour une colonne donnée. */
+function sortValue(e: AuditEntry, key: SortKey): string {
+  switch (key) {
+    case 'ts':
+      return e.ts
+    case 'actor':
+      return `${ACTOR_LABELS[e.actor_type]} ${e.actor_id}`
+    case 'action':
+      return ACTION_LABELS[e.action] ?? e.action
+    case 'scope':
+      return e.scope_id ?? ''
+  }
+}
+
 function AuditTable({ entries, page, setPage }: { entries: AuditEntry[]; page: number; setPage: (p: number) => void }) {
-  const pageCount = Math.max(1, Math.ceil(entries.length / PAGE_SIZE))
+  // Tri par défaut : Date décroissante (le plus récent d'abord).
+  const [sortKey, setSortKey] = useState<SortKey>('ts')
+  const [sortDir, setSortDir] = useState<SortDir>('desc')
+
+  function toggleSort(key: SortKey) {
+    if (key === sortKey) {
+      setSortDir(d => (d === 'asc' ? 'desc' : 'asc'))
+    } else {
+      setSortKey(key)
+      setSortDir(key === 'ts' ? 'desc' : 'asc') // date : récent d'abord ; texte : A→Z
+    }
+    setPage(0)
+  }
+
+  const sorted = [...entries].sort((a, b) => {
+    const cmp = sortValue(a, sortKey).localeCompare(sortValue(b, sortKey), 'fr', { numeric: true })
+    return sortDir === 'asc' ? cmp : -cmp
+  })
+
+  const pageCount = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE))
   const current = Math.min(page, pageCount - 1)
-  const slice = entries.slice(current * PAGE_SIZE, (current + 1) * PAGE_SIZE)
+  const slice = sorted.slice(current * PAGE_SIZE, (current + 1) * PAGE_SIZE)
+
+  const columns: Array<{ key: SortKey; label: string }> = [
+    { key: 'ts', label: 'Date' },
+    { key: 'actor', label: 'Acteur' },
+    { key: 'action', label: 'Action' },
+    { key: 'scope', label: 'Espace' },
+  ]
+  const arrow = (key: SortKey) => (key === sortKey ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ' ↕')
 
   return (
     <>
       <table className="table">
         <thead>
           <tr>
-            <th>Date</th>
-            <th>Acteur</th>
-            <th>Action</th>
-            <th>Espace</th>
+            {columns.map(col => (
+              <th
+                key={col.key}
+                className="sortable"
+                aria-sort={col.key === sortKey ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
+                onClick={() => toggleSort(col.key)}
+              >
+                {col.label}
+                <span className="sort-arrow muted">{arrow(col.key)}</span>
+              </th>
+            ))}
           </tr>
         </thead>
         <tbody>

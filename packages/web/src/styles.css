@@ -47,6 +47,17 @@ pre,
   font-family: var(--mono);
   font-size: 0.88em;
 }
+.path-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.path-row .path-grow {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  margin: 0;
+}
 
 h1 {
   font-size: 1.45rem;
@@ -137,6 +148,12 @@ p {
 
 .sidebar-foot {
   font-size: 0.78rem;
+}
+.sidebar-version {
+  margin-top: 0.35rem;
+  font-size: 0.72rem;
+  opacity: 0.7;
+  font-variant-numeric: tabular-nums;
 }
 
 .content {
@@ -412,6 +429,17 @@ p {
   letter-spacing: 0.05em;
   padding: 0.5rem 0.6rem;
   border-bottom: 1px solid var(--border);
+}
+.table th.sortable {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.table th.sortable:hover {
+  color: var(--text);
+}
+.table th .sort-arrow {
+  font-size: 0.85em;
 }
 
 .table td {

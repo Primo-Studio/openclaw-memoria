@@ -5,7 +5,7 @@
  * `memoria`, qui passe le token dans l'URL).
  */
 import { useCallback, useEffect, useState } from 'react'
-import { getAgents, getCaptureMode, hasToken, setCaptureMode, type CaptureMode } from './api'
+import { getAgents, getCaptureMode, getVersion, hasToken, setCaptureMode, type CaptureMode } from './api'
 import { Dashboard } from './screens/Dashboard'
 import { Agents } from './screens/Agents'
 import { Memory } from './screens/Memory'
@@ -89,7 +89,10 @@ export function App() {
           ))}
         </nav>
         <CaptureModeSwitch />
-        <div className="sidebar-foot muted">100 % local — rien ne quitte cette machine.</div>
+        <div className="sidebar-foot muted">
+          100 % local — rien ne quitte cette machine.
+          <VersionFoot />
+        </div>
       </aside>
       <main className="content">
         {screen === 'dashboard' && <Dashboard onConnect={() => setScreen('agents')} onConfigure={() => setScreen('settings')} />}
@@ -155,6 +158,18 @@ function CaptureModeSwitch() {
       {current && <p className="muted capture-hint">{current.hint}</p>}
     </div>
   )
+}
+
+/** Version installée, affichée discrètement en pied de barre latérale. */
+function VersionFoot() {
+  const [label, setLabel] = useState<string | null>(null)
+  useEffect(() => {
+    getVersion()
+      .then(v => setLabel(v.sha ? `v${v.version} · ${v.sha}` : `v${v.version}`))
+      .catch(() => setLabel(null))
+  }, [])
+  if (!label) return null
+  return <div className="sidebar-version">{label}</div>
 }
 
 function Welcome() {

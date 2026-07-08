@@ -244,12 +244,19 @@ export function Settings() {
 
       <div className="settings-block">
         <h2>Emplacement de stockage</h2>
-        <pre className="command">{doctor?.storage_root ?? '~/.memoria/data'}</pre>
+        <div className="path-row">
+          <pre className="command path-grow">{doctor?.storage_root ?? '~/.memoria/data'}</pre>
+          <CopyButton text={doctor?.storage_root ?? '~/.memoria/data'} label="Copier le chemin" />
+        </div>
         <p className="muted">
-          Toutes tes mémoires (chiffrées pour les secrets). Pour emporter Memoria sur une
-          <strong> clé USB</strong> (ou tout autre dossier), déplace-la depuis le terminal :
+          Toutes tes mémoires (chiffrées pour les secrets). Un navigateur ne peut pas ouvrir de
+          sélecteur de dossier système ; pour emporter Memoria sur une <strong>clé USB</strong>
+          (ou tout autre dossier), lance depuis le terminal la commande ci-dessous (bouton Copier) :
         </p>
-        <pre className="command">memoria move --to /Volumes/MaCle/memoria</pre>
+        <div className="path-row">
+          <pre className="command path-grow">memoria move --to /Volumes/MaCle/memoria</pre>
+          <CopyButton text="memoria move --to /Volumes/MaCle/memoria" label="Copier la commande" />
+        </div>
         <p className="muted">
           Le service s’arrête le temps du déplacement, met à jour la config, puis
           <code> memoria start </code> le relance au nouvel emplacement.
