@@ -34,6 +34,25 @@ const NAV_IDS: ScreenId[] = [
   'review', 'revisions', 'sharing', 'persons', 'vault', 'system', 'audit', 'settings', 'docs',
 ]
 
+// Symbole de marque : « M » formé de nœuds reliés (cf. brand/ + public/favicon.svg).
+// Hérite de la couleur d'accent via currentColor.
+function BrandMark() {
+  return (
+    <svg className="brand-mark" viewBox="0 0 100 100" aria-hidden="true" focusable="false">
+      <g fill="none" stroke="currentColor" strokeWidth={6} strokeLinecap="round" strokeLinejoin="round">
+        <path d="M30 32 V68 M30 32 L50 55 L70 32 M70 32 V68" />
+      </g>
+      <g fill="currentColor">
+        <circle cx={30} cy={32} r={7} />
+        <circle cx={30} cy={68} r={6} />
+        <circle cx={50} cy={55} r={7} />
+        <circle cx={70} cy={32} r={7} />
+        <circle cx={70} cy={68} r={6} />
+      </g>
+    </svg>
+  )
+}
+
 // clés i18n : capture.<key> (label) + capture.hint.<key>
 const MODES: Array<{ id: CaptureMode; key: 'auto' | 'review' | 'pause' }> = [
   { id: 'auto-private', key: 'auto' },
@@ -64,8 +83,11 @@ export function App() {
     <div className="layout">
       <aside className="sidebar">
         <div className="brand">
-          Memoria
-          <span className="brand-sub">{t('brand.sub')}</span>
+          <BrandMark />
+          <div className="brand-text">
+            Memoria
+            <span className="brand-sub">{t('brand.sub')}</span>
+          </div>
         </div>
         <LangSwitch />
         <nav className="nav" aria-label="Navigation principale">

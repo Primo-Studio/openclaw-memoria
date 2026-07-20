@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
-"""Génère src-tauri/icons/icon.png (1024×1024 RGBA).
+"""Génère src-tauri/icons/icon.png (1024×1024 RGBA) — FALLBACK procédural.
 
-Carré arrondi #14141F (fond de l'UI web) + « M » tracé en #3ECF8E (accent UI).
+Carré arrondi #14141F (fond de l'UI web) + « M » tracé en #E85A1F (accent UI).
 Aucune dépendance : le PNG est encodé à la main (zlib + struct, stdlib).
 Usage : python3 scripts/gen-icon.py
+
+NOTE : l'icône livrée (src-tauri/icons/icon.png + icon.icns) est la version
+« M en nœuds reliés » de la charte (cf. brand/icon.png). Ce script ne produit
+qu'un M plein de secours ; ne pas le lancer sans intention de remplacer l'icône.
 """
 
 import math
@@ -13,7 +17,7 @@ import zlib
 
 S = 1024  # taille du canevas
 BG = (0x14, 0x14, 0x1F)  # fond — identique à packages/web
-FG = (0x3E, 0xCF, 0x8E)  # accent — vert Memoria de l'UI web
+FG = (0xE8, 0x5A, 0x1F)  # accent — orange Memoria de l'UI web (--accent)
 CORNER = 180.0  # rayon des coins (style icône macOS)
 STROKE = 92.0  # épaisseur du trait du M
 

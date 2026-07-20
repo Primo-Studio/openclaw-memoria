@@ -1,4 +1,9 @@
-# 🧠 Memoria
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="brand/logo-dark.png" />
+    <img alt="Memoria" src="brand/logo-light.png" width="380" />
+  </picture>
+</p>
 
 **Local, multi-agent memory for AI assistants.** Your agents (Claude Code, Codex, OpenClaw, …) each get their own private, persistent memory — sharing only what you decide. 100% local, zero cloud, open source.
 
