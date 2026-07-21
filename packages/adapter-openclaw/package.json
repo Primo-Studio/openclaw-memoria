@@ -1,5 +1,5 @@
 {
-  "name": "@memoria/adapter-openclaw",
+  "name": "memoria-plugin",
   "version": "4.0.0",
   "description": "Plugin OpenClaw mince (zéro dépendance native) : traduit les hooks OpenClaw en appels HTTP au daemon Memoria — auto-recall (before_prompt_build) + auto-capture (agent_end).",
   "license": "Apache-2.0",
