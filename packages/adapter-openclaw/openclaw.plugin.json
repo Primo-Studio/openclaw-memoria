@@ -1,6 +1,6 @@
 {
   "id": "memoria",
-  "version": "0.1.0",
+  "version": "4.0.0",
   "description": "Mémoire persistante Memoria : auto-recall avant chaque tour et auto-capture en fin de tour, via le daemon local Memoria (127.0.0.1).",
   "keywords": ["memory", "memoria", "recall", "capture"],
   "configSchema": {
