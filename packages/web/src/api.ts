@@ -294,6 +294,40 @@ export async function forgetFacts(ids: string[]): Promise<number> {
   return res.deleted
 }
 
+// ------------------------------------------------------------ maintenance de la mémoire
+
+/**
+ * CORRIGE un souvenir : la version corrigée est créée, l'ancienne marquée
+ * remplacée par elle. Le texte d'origine n'est jamais écrasé — la chaîne reste
+ * navigable et une correction erronée reste rattrapable.
+ */
+export async function correctFact(instance: string, factId: string, content: string): Promise<AdminFact | null> {
+  const res = await request<{ replacement: AdminFact | null }>('POST', '/v1/admin/correct_fact', {
+    instance,
+    fact_id: factId,
+    content,
+  })
+  return res.replacement
+}
+
+/** FUSIONNE des doublons : `keepId` survit, les autres pointent sur lui. */
+export async function mergeFacts(instance: string, keepId: string, mergeIds: string[]): Promise<string[]> {
+  if (mergeIds.length === 0) return []
+  const res = await request<{ merged: string[] }>('POST', '/v1/admin/merge_facts', {
+    instance,
+    keep_fact_id: keepId,
+    merge_fact_ids: mergeIds,
+  })
+  return res.merged
+}
+
+/** Souvenirs jamais utilisés dans une réponse — la matière du ménage. */
+export async function neverUsedFacts(instance: string, limit = 100): Promise<AdminFact[]> {
+  const params = new URLSearchParams({ instance, limit: String(limit) })
+  const res = await request<{ facts: AdminFact[] }>('GET', `/v1/admin/never_used?${params.toString()}`)
+  return res.facts
+}
+
 // ------------------------------------------------------------ moteurs d'IA (§14)
 
 export type LlmProfile = '100-local' | 'local-plus-cloud' | 'cloud'

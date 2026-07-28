@@ -292,6 +292,37 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         sendJson(res, 200, { proposals: memoria.listRevisions(instance) })
         return
       }
+      case 'POST /v1/admin/correct_fact': {
+        // Équivalents ADMIN des opérations de maintenance : l'interface web
+        // parle au daemon avec le token admin, pas avec un token d'instance.
+        // L'instance est donc passée dans le corps, comme pour les autres
+        // routes admin (propose_revisions, topics…).
+        const body = await readJson(req)
+        const instance = String(body['instance'] ?? '')
+        const factId = String(body['fact_id'] ?? '')
+        const content = String(body['content'] ?? '')
+        if (!instance || !factId || !content.trim()) throw new HttpError(400, 'instance, fact_id et content requis')
+        sendJson(res, 200, memoria.correctFact(instance, factId, content))
+        return
+      }
+      case 'POST /v1/admin/merge_facts': {
+        const body = await readJson(req)
+        const instance = String(body['instance'] ?? '')
+        const keep = String(body['keep_fact_id'] ?? '')
+        const ids = body['merge_fact_ids']
+        if (!instance || !keep || !Array.isArray(ids)) {
+          throw new HttpError(400, 'instance, keep_fact_id et merge_fact_ids requis')
+        }
+        sendJson(res, 200, memoria.mergeFacts(instance, keep, ids.filter((v): v is string => typeof v === 'string')))
+        return
+      }
+      case 'GET /v1/admin/never_used': {
+        const instance = url.searchParams.get('instance') ?? ''
+        if (!instance) throw new HttpError(400, 'paramètre instance requis')
+        const limit = Number(url.searchParams.get('limit') ?? '100')
+        sendJson(res, 200, { facts: memoria.neverUsedFacts(instance, Number.isFinite(limit) ? limit : 100) })
+        return
+      }
       case 'POST /v1/admin/propose_revisions': {
         const body = await readJson(req)
         sendJson(res, 200, await memoria.proposeRevisions(String(body['instance'] ?? '')))
