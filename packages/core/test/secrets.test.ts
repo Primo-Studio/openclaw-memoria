@@ -106,10 +106,18 @@ describe('createSecretProvider — factory', () => {
     expect(p.kind).toBe('keychain-macos')
   })
 
-  it('auto : keychain si dispo, sinon vault', () => {
-    const p = createSecretProvider(dir, { env: {} })
-    const expected = new KeychainMacProvider().isAvailable() ? 'keychain-macos' : 'aes-vault'
-    expect(p.kind).toBe(expected)
+  it('auto SOUS TEST : toujours le vault, jamais le trousseau réel', () => {
+    // Le trousseau est un état GLOBAL de la machine : il échappe au tmpdir que
+    // chaque test croit isoler, provoque des collisions entre exécutions
+    // parallèles, et laisse des entrées derrière lui. L'auto-détection ne doit
+    // donc jamais l'élire sous un lanceur de tests.
+    expect(createSecretProvider(dir, { env: {} }).kind).toBe('aes-vault')
+    expect(createSecretProvider(dir).kind).toBe('aes-vault')
+  })
+
+  it('force reste honoré : un test qui VISE le trousseau y a droit', () => {
+    expect(createSecretProvider(dir, { force: 'keychain-macos' }).kind).toBe('keychain-macos')
+    expect(createSecretProvider(dir, { force: 'aes-vault' }).kind).toBe('aes-vault')
   })
 })
 

@@ -34,6 +34,25 @@ export function createSecretProvider(
   if (opts.force === 'keychain-macos') return new KeychainMacProvider()
   if (opts.force === 'aes-vault') return new AesVaultProvider(secretsDir, { env: opts.env })
 
+  // SOUS UN LANCEUR DE TESTS : jamais le trousseau par auto-détection.
+  //
+  // Le trousseau est un état GLOBAL et PERSISTANT de la machine — il échappe au
+  // tmpdir que chaque test croit isoler. Deux conséquences observées :
+  // des exécutions parallèles se disputent le même item et échouent par
+  // intermittence (`SecKeychainItemModifyContent: item already exists`), et
+  // chaque exécution laisse des entrées derrière elle dans le trousseau RÉEL de
+  // l'utilisateur. Douze fichiers de test appelaient `Memoria.init` sans
+  // préciser de coffre et retombaient donc ici.
+  //
+  // `force: 'keychain-macos'` reste honoré : un test qui vise explicitement le
+  // trousseau garde le droit de le faire.
+  // On lit `process.env` et NON `opts.env` : ce dernier configure le coffre AES
+  // (passphrase…), il ne dit rien du contexte d'exécution. S'en servir ici
+  // rendrait la garde contournable dès qu'un appelant passe un environnement.
+  if (process.env['VITEST'] || process.env['NODE_ENV'] === 'test') {
+    return new AesVaultProvider(secretsDir, { env: opts.env })
+  }
+
   const keychain = new KeychainMacProvider()
   if (keychain.isAvailable()) return keychain
   return new AesVaultProvider(secretsDir, { env: opts.env })
