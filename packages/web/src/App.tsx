@@ -15,6 +15,7 @@ import { Themes } from './screens/Themes'
 import { Patterns } from './screens/Patterns'
 import { Procedures } from './screens/Procedures'
 import { Revisions } from './screens/Revisions'
+import { Maintenance } from './screens/Maintenance'
 import { Sharing } from './screens/Sharing'
 import { Persons } from './screens/Persons'
 import { Vault } from './screens/Vault'
@@ -26,12 +27,12 @@ import { Docs } from './screens/Docs'
 
 type ScreenId =
   | 'dashboard' | 'agents' | 'memory' | 'themes' | 'patterns' | 'procedures'
-  | 'review' | 'revisions' | 'sharing' | 'persons' | 'vault' | 'system' | 'audit' | 'settings' | 'docs'
+  | 'review' | 'revisions' | 'maintenance' | 'sharing' | 'persons' | 'vault' | 'system' | 'audit' | 'settings' | 'docs'
 
 // Les libellés viennent de l'i18n : nav.<id> (cf. messages/fr.ts).
 const NAV_IDS: ScreenId[] = [
   'dashboard', 'agents', 'memory', 'themes', 'patterns', 'procedures',
-  'review', 'revisions', 'sharing', 'persons', 'vault', 'system', 'audit', 'settings', 'docs',
+  'review', 'revisions', 'maintenance', 'sharing', 'persons', 'vault', 'system', 'audit', 'settings', 'docs',
 ]
 
 // Symbole de marque : « M » formé de nœuds reliés (cf. brand/ + public/favicon.svg).
@@ -117,6 +118,7 @@ export function App() {
         {screen === 'procedures' && <Procedures />}
         {screen === 'review' && <Review />}
         {screen === 'revisions' && <Revisions />}
+        {screen === 'maintenance' && <Maintenance />}
         {screen === 'sharing' && <Sharing />}
         {screen === 'persons' && <Persons />}
         {screen === 'vault' && <Vault />}

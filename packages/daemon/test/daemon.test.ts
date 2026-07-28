@@ -98,6 +98,55 @@ describe('daemon', () => {
     expect(((await unknown.json()) as { updated: string[] }).updated).toEqual([])
   })
 
+  it('routes admin de maintenance : corriger, fusionner, jamais utilisés', async () => {
+    const admin = new DaemonClient(daemon.state, daemon.state.admin_token)
+    const paired = await admin.pair('claude-code', 'Claude Code')
+    const done = await new DaemonClient(daemon.state).completePairing(paired.pairing_code)
+    const agent = new DaemonClient(daemon.state, done.instance_token)
+    const instance = paired.assistant_instance_id
+
+    await agent.storeFact({ content: 'Le déploiement du studio passe par Hello-Primo', category: 'process' })
+    const recall = await agent.recall({ query: 'déploiement studio' })
+    const factId = recall.items[0]!.id
+
+    const call = async (path: string, body: unknown): Promise<Response> =>
+      fetch(`http://127.0.0.1:${daemon.state.port}${path}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${daemon.state.admin_token}` },
+        body: JSON.stringify(body),
+      })
+
+    // CORRIGER : l'ancien texte n'est pas écrasé, il est remplacé.
+    const corrected = await call('/v1/admin/correct_fact', {
+      instance,
+      fact_id: factId,
+      content: 'Le déploiement du studio passe par Vercel',
+    })
+    expect(corrected.status).toBe(200)
+    const { replacement } = (await corrected.json()) as { replacement: { id: string; fact: string } | null }
+    expect(replacement?.fact).toBe('Le déploiement du studio passe par Vercel')
+
+    // FUSIONNER : refuse un fait conservé déjà supersédé (chaîne cassée).
+    const broken = await call('/v1/admin/merge_facts', {
+      instance,
+      keep_fact_id: factId,
+      merge_fact_ids: [replacement!.id],
+    })
+    expect(broken.status).toBeGreaterThanOrEqual(400)
+
+    // JAMAIS UTILISÉS : la correction n'a encore servi à personne.
+    const never = await fetch(
+      `http://127.0.0.1:${daemon.state.port}/v1/admin/never_used?instance=${instance}`,
+      { headers: { authorization: `Bearer ${daemon.state.admin_token}` } },
+    )
+    expect(never.status).toBe(200)
+    expect(((await never.json()) as { facts: unknown[] }).facts.length).toBeGreaterThan(0)
+
+    // Contrat d'entrée : chaque champ requis est vérifié.
+    expect((await call('/v1/admin/correct_fact', { instance, fact_id: factId })).status).toBe(400)
+    expect((await call('/v1/admin/merge_facts', { instance })).status).toBe(400)
+  })
+
   it('révocation par l’admin coupe l’agent', async () => {
     const admin = new DaemonClient(daemon.state, daemon.state.admin_token)
     const paired = await admin.pair('codex')
