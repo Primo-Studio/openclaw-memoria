@@ -130,9 +130,17 @@ export class OpenAiProvider implements LlmProvider {
     //
     // ⚠ Sur ces modèles, le budget couvre AUSSI les tokens de raisonnement, qui
     // sont facturés et consommés AVANT la réponse visible. Avec 1024, le
-    // raisonnement peut absorber tout le budget : l'API répond alors 200 avec un
-    // `content` VIDE et `finish_reason: "length"`. Observé en production —
-    // 154 extractions abandonnées, toutes sur « extraction LLM sans JSON : «  » ».
+    // raisonnement absorbe tout le budget : l'API répond 200 avec un `content`
+    // VIDE et `finish_reason: "length"`.
+    //
+    // REPRODUIT contre l'API (gpt-5-mini, prompt de 3131 tokens) :
+    //   1024 sans reasoning_effort → finish_reason=length, raisonnement=1024,
+    //                                content vide, 0 fait extrait ;
+    //   4096 + reasoning_effort:low → finish_reason=stop, raisonnement=256,
+    //                                 7 faits extraits.
+    // Le seuil dépend de la LONGUEUR du tour : les tours courts passaient, les
+    // longs échouaient — d'où 154 abandons intermittents et non une panne
+    // franche, restée invisible dix jours.
     // On garantit donc un plancher de budget, et on demande un effort de
     // raisonnement FAIBLE : extraire des faits est une tâche structurée, pas un
     // problème de raisonnement.
