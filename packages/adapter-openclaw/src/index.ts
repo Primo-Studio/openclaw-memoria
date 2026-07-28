@@ -74,20 +74,24 @@ export interface AgentEndEvent {
 // ------------------------------------------------------------ config & découverte du daemon
 
 /**
- * Comment la mémoire arrive dans le prompt.
+ * Par quelles surfaces la mémoire est mise à disposition de l'agent.
  *
- * `hooks`  : Memoria injecte SON PROPRE bloc via `before_prompt_build`. Correct
- *            uniquement si aucun autre plugin ne possède le slot mémoire —
- *            sinon deux systèmes écrivent dans le même prompt sans se connaître.
- * `corpus` : Memoria s'enregistre comme supplément de corpus ; le propriétaire
- *            du slot (`memory-core` par défaut) fusionne les résultats dans SA
- *            section, avec SON budget. À privilégier dès que
- *            `plugins.slots.memory` vaut autre chose que `"none"`.
+ * `hooks`  : Memoria injecte SON PROPRE bloc via `before_prompt_build`, à chaque
+ *            tour, sans que l'agent ait rien à demander. C'est la seule voie
+ *            réellement AUTOMATIQUE.
+ * `corpus` : Memoria s'enregistre via `registerMemoryCorpusSupplement`. Contrairement
+ *            à ce qu'on a d'abord cru, l'hôte ne fusionne PAS les suppléments dans
+ *            sa section de prompt : il les interroge depuis un OUTIL
+ *            (`searchMemoryCorpusSupplements`, module `tools` d'OpenClaw). C'est
+ *            donc du PULL — utile pour la consultation à la demande, mais seul,
+ *            il ne rappelle rien. Mesuré : 3 captures, 8 faits, ZÉRO rappel.
+ * `both`   : les deux. Aucun conflit possible — le corpus ne s'ajoute pas au
+ *            prompt, il répond à des recherches. On obtient le rappel automatique
+ *            ET la recherche à la demande.
  *
- * L'auto-capture est INDÉPENDANTE de ce choix : elle reste active dans les deux
- * modes (elle écrit, elle n'injecte pas).
+ * L'auto-capture est INDÉPENDANTE de ce choix : elle écrit, elle n'injecte pas.
  */
-export type InjectionMode = 'hooks' | 'corpus'
+export type InjectionMode = 'hooks' | 'corpus' | 'both'
 
 interface AdapterConfig {
   daemonUrl?: string
@@ -118,7 +122,7 @@ function readConfig(raw: Record<string, unknown> | undefined): AdapterConfig {
     token: str(c['token']),
     instance: str(c['instance']) ?? 'koda',
     storageRoot: str(c['storageRoot']),
-    injectionMode: c['injectionMode'] === 'corpus' ? 'corpus' : 'hooks',
+    injectionMode: c['injectionMode'] === 'corpus' || c['injectionMode'] === 'both' ? c['injectionMode'] : 'hooks',
     autoRecall: c['autoRecall'] !== false,
     autoCapture: c['autoCapture'] !== false,
     recallLimit: clampInt(c['recallLimit'], 12, 1, 20),
@@ -534,12 +538,13 @@ export function register(api: OpenClawPluginApi): void {
     }
   }
 
-  // (0) MODE CORPUS — Memoria n'injecte RIEN elle-même : elle s'enregistre comme
-  //     supplément auprès du propriétaire du slot mémoire, qui fusionne les
-  //     résultats dans SA section unique. C'est ce qui supprime la double
-  //     injection quand `memory-core` (ou un autre) possède le slot.
-  //     Mutuellement exclusif avec le hook d'injection ci-dessous.
-  if (cfg.injectionMode === 'corpus') {
+  const corpusEnabled = cfg.injectionMode === 'corpus' || cfg.injectionMode === 'both'
+  const hooksEnabled = cfg.injectionMode === 'hooks' || cfg.injectionMode === 'both'
+
+  // (0) SUPPLÉMENT DE CORPUS — rend la mémoire consultable À LA DEMANDE par
+  //     l'outil de recherche de l'hôte. N'injecte rien de lui-même, donc ne peut
+  //     PAS entrer en conflit avec le hook d'injection : les deux cohabitent.
+  if (corpusEnabled) {
     const corpus = createMemoriaCorpus({
       recall: (query, limit) => fetchRecall(query, limit, undefined),
       relevanceFloor: cfg.relevanceFloor,
@@ -553,15 +558,25 @@ export function register(api: OpenClawPluginApi): void {
       },
     })
     void registerCorpusSupplement(corpus, m => warn('/corpus', m)).then(ok => {
-      if (ok) api.logger?.info?.('[memoria] enregistrée comme supplément de corpus (aucune injection directe).')
-      else warn('/corpus', 'mode corpus demandé mais indisponible — AUCUNE mémoire ne sera injectée (bascule injectionMode sur "hooks").')
+      if (ok) {
+        api.logger?.info?.('[memoria] enregistrée comme supplément de corpus (consultation à la demande).')
+        return
+      }
+      // Le message dépend du mode : en `both`, les hooks prennent le relais et
+      // rien n'est perdu. En `corpus` seul, il ne reste RIEN.
+      warn(
+        '/corpus',
+        hooksEnabled
+          ? 'supplément de corpus indisponible — la consultation à la demande est désactivée, le rappel automatique reste actif.'
+          : 'mode corpus demandé mais indisponible — AUCUNE mémoire ne sera mise à disposition (passe injectionMode à "hooks" ou "both").',
+      )
     })
   }
 
   // (1) AUTO-RECALL — before_prompt_build est un prompt-injection hook, autorisé
   //     par défaut (allowPromptInjection ≠ false). Timeout DUR : la mémoire ne
   //     doit jamais retarder un tour.
-  if (cfg.autoRecall && cfg.injectionMode === 'hooks') {
+  if (cfg.autoRecall && hooksEnabled) {
     api.on<BeforePromptBuildEvent, BeforePromptBuildResult | undefined>(
       'before_prompt_build',
       async (event, ctx) => {

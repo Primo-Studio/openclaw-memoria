@@ -2,7 +2,12 @@
   "id": "memoria",
   "version": "4.0.0",
   "description": "Mémoire persistante Memoria : auto-recall avant chaque tour et auto-capture en fin de tour, via le daemon local Memoria (127.0.0.1).",
-  "keywords": ["memory", "memoria", "recall", "capture"],
+  "keywords": [
+    "memory",
+    "memoria",
+    "recall",
+    "capture"
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": true,
@@ -15,21 +20,44 @@
         "type": "string",
         "description": "Token d'instance (obtenu au pairing). REQUIS pour lire/écrire la mémoire."
       },
-      "instance": { "type": "string", "default": "koda" },
+      "instance": {
+        "type": "string",
+        "default": "koda"
+      },
       "storageRoot": {
         "type": "string",
         "description": "Racine du stockage Memoria (pour la découverte du port). Défaut ~/.memoria/data."
       },
       "injectionMode": {
         "type": "string",
-        "enum": ["hooks", "corpus"],
+        "enum": [
+          "hooks",
+          "corpus",
+          "both"
+        ],
         "default": "hooks",
-        "description": "Comment la mémoire entre dans le prompt. 'corpus' = Memoria alimente la section du propriétaire du slot mémoire (recommandé si plugins.slots.memory ≠ 'none'). 'hooks' = Memoria injecte son propre bloc."
+        "description": "Surfaces de mise à disposition de la mémoire. 'hooks' = injection automatique à chaque tour. 'corpus' = consultation à la demande via l'outil de recherche de l'hôte (PULL : ne rappelle rien tout seul). 'both' = les deux, sans conflit — recommandé quand un plugin possède le slot mémoire."
       },
-      "autoRecall": { "type": "boolean", "default": true },
-      "autoCapture": { "type": "boolean", "default": true },
-      "recallLimit": { "type": "number", "default": 12, "minimum": 1, "maximum": 20 },
-      "recallTimeoutMs": { "type": "number", "default": 800, "minimum": 100, "maximum": 5000 },
+      "autoRecall": {
+        "type": "boolean",
+        "default": true
+      },
+      "autoCapture": {
+        "type": "boolean",
+        "default": true
+      },
+      "recallLimit": {
+        "type": "number",
+        "default": 12,
+        "minimum": 1,
+        "maximum": 20
+      },
+      "recallTimeoutMs": {
+        "type": "number",
+        "default": 800,
+        "minimum": 100,
+        "maximum": 5000
+      },
       "tokenBudget": {
         "type": "number",
         "default": 600,
@@ -64,9 +92,17 @@
     }
   },
   "uiHints": {
-    "autoRecall": { "label": "Auto-Recall" },
-    "autoCapture": { "label": "Auto-Capture" },
-    "projectId": { "label": "Projet actif" },
-    "clientOrgId": { "label": "Client actif" }
+    "autoRecall": {
+      "label": "Auto-Recall"
+    },
+    "autoCapture": {
+      "label": "Auto-Capture"
+    },
+    "projectId": {
+      "label": "Projet actif"
+    },
+    "clientOrgId": {
+      "label": "Client actif"
+    }
   }
 }

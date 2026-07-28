@@ -331,20 +331,40 @@ describe('register → hooks → daemon', () => {
 describe('mode corpus — résolution de la cohabitation avec memory-core', () => {
   const baseConfig = { daemonUrl: 'http://127.0.0.1:9999', token: 'tok-instance', instance: 'koda' }
 
-  it('injectionMode:"corpus" n’enregistre PAS le hook d’injection', () => {
+  it('injectionMode:"corpus" seul → pas d’injection automatique', () => {
     const { api, handlers } = fakeApi({ ...baseConfig, injectionMode: 'corpus' })
     register(api)
-    // Sinon Memoria injecterait SON bloc en plus de celui du propriétaire du
-    // slot — exactement la double injection qu'on cherche à supprimer.
+    // Le corpus est du PULL : l'hôte interroge les suppléments depuis un outil,
+    // il ne les fusionne pas dans son prompt. Seul, ce mode ne rappelle rien.
     expect(handlers.has('before_prompt_build')).toBe(false)
-    // La capture, elle, reste active : elle écrit, elle n'injecte pas.
+    // La capture reste active dans tous les cas : elle écrit, elle n'injecte pas.
     expect(handlers.has('agent_end')).toBe(true)
   })
 
-  it('injectionMode par défaut = "hooks" (comportement inchangé)', () => {
+  it('injectionMode:"both" → injection automatique ET consultation à la demande', () => {
+    const { api, handlers } = fakeApi({ ...baseConfig, injectionMode: 'both' })
+    register(api)
+    // Aucun conflit : le corpus ne s'ajoute pas au prompt, il répond à des
+    // recherches. Les deux surfaces sont donc cumulables.
+    expect(handlers.has('before_prompt_build')).toBe(true)
+    expect(handlers.has('agent_end')).toBe(true)
+  })
+
+  it('injectionMode par défaut = "hooks" ; une valeur inconnue y retombe', () => {
     const { api, handlers } = fakeApi(baseConfig)
     register(api)
     expect(handlers.has('before_prompt_build')).toBe(true)
+
+    const bidon = fakeApi({ ...baseConfig, injectionMode: 'nawak' })
+    register(bidon.api)
+    expect(bidon.handlers.has('before_prompt_build')).toBe(true)
+  })
+
+  it('autoRecall:false coupe l’injection même en "both"', () => {
+    const { api, handlers } = fakeApi({ ...baseConfig, injectionMode: 'both', autoRecall: false })
+    register(api)
+    expect(handlers.has('before_prompt_build')).toBe(false)
+    expect(handlers.has('agent_end')).toBe(true)
   })
 })
 

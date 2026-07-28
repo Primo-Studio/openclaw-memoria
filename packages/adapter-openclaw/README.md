@@ -57,7 +57,7 @@ config, laisse le reste intact).
 
 | Clé | Défaut | Rôle |
 |---|---|---|
-| `injectionMode` | `hooks` | `hooks` = Memoria injecte son propre bloc. `corpus` = Memoria alimente la section du propriétaire du slot mémoire. Voir ci-dessous. |
+| `injectionMode` | `hooks` | `hooks` = injection automatique. `corpus` = consultation à la demande. `both` = les deux. Voir ci-dessous. |
 | `token` | — | **Requis.** Token d'instance (pairing). Lit/écrit `/v1/memory/*`. |
 | `instance` | `koda` | Étiquette d'affichage seulement (l'instance réelle est dérivée du token). |
 | `daemonUrl` | auto | Vide = découverte du port via `<storageRoot>/daemon.json`. |
@@ -73,38 +73,34 @@ config, laisse le reste intact).
 | `clientOrgId` | — | `active_context.client_org_id` → **isolation dure** inter-clients. |
 | `orgId` | — | `active_context.org_id` → boost de pertinence organisation. |
 
-### `injectionMode` : qui écrit dans le prompt ?
+### `injectionMode` : par quelles surfaces la mémoire arrive
 
-Depuis OpenClaw 2026.4, le slot mémoire (`plugins.slots.memory`) est **exclusif**
-et appartient par défaut au plugin bundlé `memory-core`. Si Memoria injecte en
-plus son propre bloc via `before_prompt_build`, **deux systèmes écrivent dans le
-même prompt sans se connaître** : budgets qui se marchent dessus, et un même fait
-qui revient sous deux formulations.
+| Mode | Rappel automatique | Consultation à la demande |
+|---|---|---|
+| `hooks` (défaut) | ✓ | — |
+| `corpus` | — | ✓ |
+| `both` | ✓ | ✓ |
 
-```
-plugins.slots.memory = "none"          → injectionMode: "hooks"
-plugins.slots.memory = <un plugin>     → injectionMode: "corpus"   ← recommandé
-```
+**`hooks`** injecte un bloc mémoire à chaque tour via `before_prompt_build`.
+C'est la seule voie réellement automatique.
 
-En mode `corpus`, Memoria n'injecte plus rien : elle s'enregistre via
-`registerMemoryCorpusSupplement` (entrée publique `openclaw/plugin-sdk/memory-core`),
-et le propriétaire du slot fusionne ses résultats dans **sa** section unique, avec
-**son** budget. Vérifier l'état avec :
+**`corpus`** enregistre Memoria via `registerMemoryCorpusSupplement`. Attention à
+un contresens facile : l'hôte ne fusionne **pas** les suppléments dans sa section
+de prompt — il les interroge depuis un **outil**
+(`searchMemoryCorpusSupplements`, module `tools` d'OpenClaw). C'est donc du
+**pull**. Mesuré en production : en `corpus` seul, un agent a produit 3 captures
+et 8 faits pour **zéro rappel**.
 
-```bash
-openclaw config get plugins.slots.memory
-```
+**`both`** cumule les deux, sans conflit possible : le corpus ne s'ajoute pas au
+prompt, il répond à des recherches. C'est le réglage recommandé dès qu'un plugin
+possède le slot mémoire — l'agent reçoit sa mémoire sans rien demander, et peut
+en plus fouiller le reste quand il en a besoin.
 
-Deux bénéfices au passage. Le contrat `search`/`get` est exactement le
-« index court d'abord, détail seulement si nécessaire » : `search` ne renvoie que
-des extraits, `get` ne charge le contenu complet que sur demande. Et
-`MemoryCorpusSearchResult` porte nativement `provenanceLabel`, `sourceType`,
-`updatedAt` et `citation` — la traçabilité par souvenir, sans format maison.
+Si l'enregistrement du supplément échoue (hôte trop ancien), le message diffère
+selon le mode : en `both` le rappel automatique reste actif et rien n'est perdu ;
+en `corpus` seul, plus rien n'est mis à disposition.
 
-L'**auto-capture est indépendante** de ce réglage : elle reste active dans les
-deux modes (elle écrit, elle n'injecte pas). Si l'hôte n'expose pas l'API de
-corpus (version antérieure), l'enregistrement échoue proprement et le journalise
-— il faut alors repasser en `hooks`.
+L'**auto-capture est indépendante** de ce réglage : elle reste active partout.
 
 ### Isolation projet / client : à configurer par workspace
 
