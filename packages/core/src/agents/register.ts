@@ -216,7 +216,13 @@ export function installOpenClawHooks(opts: {
     // 2) merge openclaw.json (jamais d'écrasement du reste de la config)
     const cfg = existsSync(ocConfig) ? (JSON.parse(readFileSync(ocConfig, 'utf8')) as Record<string, unknown>) : {}
     const plugins = (cfg['plugins'] as Record<string, unknown> | undefined) ?? {}
-    const allow = new Set([...(Array.isArray(plugins['allow']) ? (plugins['allow'] as string[]) : []), 'memoria'])
+    // ⚠ `plugins.allow` ABSENT signifie « tout autoriser ». La créer pour y
+    // mettre `memoria` la transforme en liste blanche EXCLUSIVE et coupe TOUS
+    // les autres plugins — observé en production : une gateway est passée de 12
+    // plugins chargés à 2, perdant son runtime d'agent au passage.
+    // On ne complète donc la liste que si elle existait DÉJÀ.
+    const hadAllow = Array.isArray(plugins['allow'])
+    const allow = hadAllow ? new Set([...(plugins['allow'] as string[]), 'memoria']) : null
     const entries = (plugins['entries'] as Record<string, unknown> | undefined) ?? {}
     const prev = (entries['memoria'] as Record<string, unknown> | undefined) ?? {}
     const prevConfig = (prev['config'] as Record<string, unknown> | undefined) ?? {}
@@ -231,7 +237,7 @@ export function installOpenClawHooks(opts: {
         ...(opts.storageRoot ? { storageRoot: opts.storageRoot } : {}),
       },
     }
-    plugins['allow'] = [...allow]
+    if (allow) plugins['allow'] = [...allow]
     plugins['entries'] = entries
     cfg['plugins'] = plugins
     mkdirSync(ocDir, { recursive: true })
