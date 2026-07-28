@@ -70,6 +70,8 @@ import type {
   RecallInput,
   RecallItem,
   PendingRevision,
+  DoctorActivity,
+  DoctorMemory,
   RecallResult,
   StoreFactInput,
 } from '../types.js'
@@ -557,6 +559,7 @@ export class Memoria {
     input: RecallInput,
     search: (store: ContentStore, query: string, opts: FtsSearchOptions) => FtsHit[],
   ): RecallResult {
+    const startedAt = Date.now()
     const instance = this.mustInstance(input.instance)
     const budget = input.token_budget ?? DEFAULT_TOKEN_BUDGET
     const limit = input.limit ?? DEFAULT_RECALL_LIMIT
@@ -686,7 +689,10 @@ export class Memoria {
       action: 'recall',
       target_id_hash: null,
       scope_id: null,
-      reason: `returned=${selected.length}`,
+      // Format PARSABLE (`clé=valeur`) : `doctor` en dérive latence et coût en
+      // tokens sans table de métriques dédiée ni migration. Aucune donnée
+      // sensible — que des compteurs.
+      reason: `returned=${selected.length} tokens=${tokens} ms=${Date.now() - startedAt}`,
     })
 
     return {
@@ -708,8 +714,21 @@ export class Memoria {
     if (mode === 'incognito') {
       return { appended: 0, processed: 0, facts_created: 0, deferred: 0, failed: 0, abandoned: 0, mode }
     }
+    const startedAt = Date.now()
     const pipeline = await this.ensurePipeline()
     const result = await pipeline.captureTurn(input)
+
+    // La capture n'était PAS auditée : impossible de répondre à « la dernière
+    // capture a-t-elle réussi ? », l'angle mort exact signalé en bêta.
+    this.registry.audit({
+      actor_type: 'assistant',
+      actor_id: input.instance,
+      action: 'capture_turn',
+      target_id_hash: null,
+      scope_id: null,
+      reason: `appended=${result.appended} facts=${result.facts_created} deferred=${result.deferred} failed=${result.failed} ms=${Date.now() - startedAt}`,
+    })
+
     // Bucket B ASYNC (jamais dans le chemin de réponse) : embeddings + cognition.
     if (result.facts_created > 0) {
       void this.indexEmbeddings(input.instance).catch((err: unknown) =>
@@ -2258,6 +2277,26 @@ export class Memoria {
       }
       databases.push({ kind: entry.kind, path: entry.path, exists, size_bytes: size, wal_pending: walPending })
     }
+
+    const activity = this.doctorActivity()
+    const memory = this.doctorMemory()
+
+    // Les avertissements sont ce que l'utilisateur doit ACTION­NER — pas une
+    // reformulation des compteurs. On ne signale que l'anormal.
+    if (memory.wal_stuck > 0) {
+      warnings.push(
+        `${memory.wal_stuck} message(s) bloqué(s) en extraction (plusieurs tentatives échouées) — vérifier le provider LLM.`,
+      )
+    }
+    if (memory.contradictions_pending + memory.duplicates_pending > 0) {
+      warnings.push(
+        `${memory.contradictions_pending + memory.duplicates_pending} révision(s) en attente d'arbitrage — jusque-là, les faits contestés restent actifs (écran Révisions).`,
+      )
+    }
+    if (activity.recall_ms_p95 !== undefined && activity.recall_ms_p95 > 1000) {
+      warnings.push(`recall lent : p95 à ${activity.recall_ms_p95} ms — le plugin coupe à recallTimeoutMs.`)
+    }
+
     return {
       ok: warnings.length === 0,
       storage_root: this.paths.root,
@@ -2265,8 +2304,85 @@ export class Memoria {
       registry_path: this.paths.registry,
       databases,
       network_guard: { on_network_volume: onNetwork, journal_mode: journalMode },
+      activity,
+      memory,
       warnings,
     }
+  }
+
+  /** Activité récente, lue dans `audit_log` (aucune table de métriques dédiée). */
+  private doctorActivity(): DoctorActivity {
+    const db = this.registry.db
+    const since = new Date(Date.now() - 86_400_000).toISOString()
+    const lastOf = (action: string): string | undefined =>
+      (db.prepare('SELECT ts FROM audit_log WHERE action = ? ORDER BY ts DESC LIMIT 1').get(action) as
+        | { ts: string }
+        | undefined)?.ts
+    const countSince = (action: string): number =>
+      (db.prepare('SELECT COUNT(*) AS c FROM audit_log WHERE action = ? AND ts >= ?').get(action, since) as { c: number }).c
+
+    // On ne lit que les entrées RÉCENTES et instrumentées : les anciennes ne
+    // portent pas de `ms=`, les inclure fausserait la moyenne vers le bas.
+    const recent = (action: string, limit = 200): string[] =>
+      (db.prepare('SELECT reason FROM audit_log WHERE action = ? AND reason LIKE \'%ms=%\' ORDER BY id DESC LIMIT ?')
+        .all(action, limit) as Array<{ reason: string }>).map(r => r.reason)
+
+    const recalls = recent('recall')
+    const captures = recent('capture_turn')
+    const out: DoctorActivity = {
+      recalls_24h: countSince('recall'),
+      captures_24h: countSince('capture_turn'),
+    }
+    const lastRecall = lastOf('recall')
+    if (lastRecall) out.last_recall_at = lastRecall
+    const lastCapture = lastOf('capture_turn')
+    if (lastCapture) out.last_capture_at = lastCapture
+
+    const recallMs = recalls.map(r => metric(r, 'ms')).filter((n): n is number => n !== undefined)
+    if (recallMs.length > 0) {
+      out.recall_ms_avg = Math.round(avg(recallMs))
+      out.recall_ms_p95 = percentile(recallMs, 0.95)
+    }
+    const recallTokens = recalls.map(r => metric(r, 'tokens')).filter((n): n is number => n !== undefined)
+    if (recallTokens.length > 0) out.recall_tokens_avg = Math.round(avg(recallTokens))
+    const captureMs = captures.map(r => metric(r, 'ms')).filter((n): n is number => n !== undefined)
+    if (captureMs.length > 0) out.capture_ms_avg = Math.round(avg(captureMs))
+    return out
+  }
+
+  /** Volume et hygiène de la mémoire, agrégés sur toutes les DB de contenu. */
+  private doctorMemory(): DoctorMemory {
+    const out: DoctorMemory = {
+      facts_total: 0,
+      facts_superseded: 0,
+      facts_never_used: 0,
+      contradictions_pending: 0,
+      duplicates_pending: 0,
+      wal_pending: 0,
+      wal_stuck: 0,
+    }
+    for (const entry of this.registry.listDbs()) {
+      if (entry.kind === 'registry' || !existsSync(entry.path)) continue
+      const db = this.openContent(entry.path).db
+      const one = (sql: string, ...args: unknown[]): number =>
+        ((db.prepare(sql).get(...args) as { c: number } | undefined)?.c ?? 0)
+      out.facts_total += one('SELECT COUNT(*) AS c FROM facts')
+      out.facts_superseded += one('SELECT COUNT(*) AS c FROM facts WHERE superseded = 1')
+      out.facts_never_used += one('SELECT COUNT(*) AS c FROM facts WHERE superseded = 0 AND used_count = 0')
+      out.wal_pending += one('SELECT COUNT(*) AS c FROM wal_buffer WHERE processed = 0')
+      out.wal_stuck += one('SELECT COUNT(*) AS c FROM wal_buffer WHERE processed = 0 AND attempts >= 3')
+      try {
+        out.contradictions_pending += one(
+          "SELECT COUNT(*) AS c FROM revision_proposals WHERE status = 'proposed' AND kind = 'contradicted'",
+        )
+        out.duplicates_pending += one(
+          "SELECT COUNT(*) AS c FROM revision_proposals WHERE status = 'proposed' AND kind = 'duplicate'",
+        )
+      } catch {
+        /* couche révision (90-99) jamais appliquée sur cette DB */
+      }
+    }
+    return out
   }
 
   close(): void {
@@ -2415,4 +2531,20 @@ function pendingRevisionsFor(store: ContentStore, ids: string[]): Map<string, Pe
     /* table absente (couche révision jamais appliquée) : rien à signaler */
   }
   return out
+}
+/** Lit `clé=nombre` dans une raison d'audit (`returned=3 tokens=120 ms=41`). */
+function metric(reason: string, key: string): number | undefined {
+  const m = new RegExp(`\\b${key}=(\\d+)\\b`).exec(reason)
+  return m ? Number(m[1]) : undefined
+}
+
+function avg(values: number[]): number {
+  return values.reduce((a, b) => a + b, 0) / values.length
+}
+
+/** p95 sur un petit échantillon : tri complet, pas d'estimateur approché. */
+function percentile(values: number[], p: number): number {
+  const sorted = [...values].sort((a, b) => a - b)
+  const idx = Math.min(sorted.length - 1, Math.max(0, Math.ceil(p * sorted.length) - 1))
+  return sorted[idx]!
 }

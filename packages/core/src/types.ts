@@ -357,6 +357,41 @@ export interface ForgetFilter {
   confirm_bulk?: boolean
 }
 
+/**
+ * Activité récente, dérivée de `audit_log`.
+ *
+ * Les latences ne couvrent QUE la période depuis l'instrumentation : les entrées
+ * d'audit antérieures ne portent pas de `ms=`. Un champ absent signifie « pas
+ * encore mesuré », jamais « zéro ».
+ */
+export interface DoctorActivity {
+  last_recall_at?: string
+  last_capture_at?: string
+  recalls_24h: number
+  captures_24h: number
+  /** Moyenne et p95 en millisecondes sur les recalls récents mesurés. */
+  recall_ms_avg?: number
+  recall_ms_p95?: number
+  /** Coût moyen, en tokens, du contexte réellement injecté. */
+  recall_tokens_avg?: number
+  capture_ms_avg?: number
+}
+
+/** État de la mémoire elle-même (volume, hygiène, dette de révision). */
+export interface DoctorMemory {
+  facts_total: number
+  facts_superseded: number
+  /** Faits jamais utilisés dans une réponse (candidats au ménage). */
+  facts_never_used: number
+  /** Révisions proposées et NON tranchées, par type. */
+  contradictions_pending: number
+  duplicates_pending: number
+  /** Messages en attente d'extraction. */
+  wal_pending: number
+  /** Entrées bloquées : plusieurs tentatives d'extraction échouées. */
+  wal_stuck: number
+}
+
 export interface DoctorReport {
   ok: boolean
   storage_root: string
@@ -364,6 +399,8 @@ export interface DoctorReport {
   registry_path: string
   databases: Array<{ kind: string; path: string; exists: boolean; size_bytes: number; wal_pending?: number }>
   network_guard: { on_network_volume: boolean; journal_mode: string }
+  activity: DoctorActivity
+  memory: DoctorMemory
   warnings: string[]
 }
 
