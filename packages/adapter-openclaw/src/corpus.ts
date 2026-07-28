@@ -72,10 +72,14 @@ export const CORPUS_NAME = 'memoria'
 
 const TITLE_MAX = 72
 
-/** Libellés lisibles par type — l'agent doit voir qu'une observation n'est pas une règle. */
+/**
+ * Libellés par type — l'agent doit voir qu'une observation n'est pas une règle.
+ * En anglais comme le reste de la structure injectée (issue #1) : ces étiquettes
+ * atterrissent dans le prompt, pas dans une interface humaine.
+ */
 const KIND_LABEL: Record<string, string> = {
-  fact: 'fait',
-  procedure: 'procédure',
+  fact: 'fact',
+  procedure: 'procedure',
   observation: 'observation',
 }
 

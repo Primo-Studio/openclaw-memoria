@@ -145,14 +145,14 @@ describe('formatRecall', () => {
       item({ kind: 'procedure', content: 'Déployer via Hello-Primo', category: 'howto', score: 0.8 }),
       item({ kind: 'observation', content: 'Le daemon a redémarré hier', category: 'event', score: 0.7 }),
     ])
-    expect(block).toContain('🧠 Mémoire pertinente (Memoria)')
-    expect(block).toContain('### Faits actifs')
-    expect(block).toContain('### Procédures applicables')
-    expect(block).toContain('### À vérifier')
+    expect(block).toContain('🧠 Relevant memory (Memoria)')
+    expect(block).toContain('### Active facts')
+    expect(block).toContain('### Applicable procedures')
+    expect(block).toContain('### To verify')
     expect(block).toContain('Néto préfère le local-first')
     expect(block).toContain('Déployer via Hello-Primo')
     // Un épisode ponctuel ne doit pas se lire comme une règle permanente.
-    expect(block.indexOf('### À vérifier')).toBeGreaterThan(block.indexOf('### Faits actifs'))
+    expect(block.indexOf('### To verify')).toBeGreaterThan(block.indexOf('### Active facts'))
   })
 
   it('écarte le bruit sous le plancher RELATIF au meilleur score', () => {
@@ -364,7 +364,7 @@ describe('supplément de corpus', () => {
     expect(r.kind).toBe('procedure')
     expect(r.snippet).toBe('Déployer via Hello-Primo')
     // Traçabilité réclamée par les deux retours bêta.
-    expect(r.provenanceLabel).toBe('Memoria · procédure · 2026-07-01 · howto')
+    expect(r.provenanceLabel).toBe('Memoria · procedure · 2026-07-01 · howto')
     expect(r.citation).toBe('memoria://procedure/f-1')
     expect(r.updatedAt).toBe('2026-07-01T10:00:00Z')
   })

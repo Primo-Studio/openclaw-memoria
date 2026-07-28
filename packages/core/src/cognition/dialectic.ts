@@ -258,17 +258,20 @@ async function llmSynthesis(
 
   const fmt = (label: string, rows: FactRow[]): string =>
     rows.length === 0 ? '' : `${label} :\n` + rows.map(r => `- ${r.fact}`).join('\n')
-  const corpus = [fmt('POUR', p.pour), fmt('CONTRE', p.contre), fmt('NUANCE', p.nuance)]
+  // Étiquettes en anglais : elles n'apparaissent QUE dans le prompt, jamais dans
+  // la synthèse rendue — laquelle suit la langue des souvenirs (issue #1).
+  const corpus = [fmt('FOR', p.pour), fmt('AGAINST', p.contre), fmt('NUANCE', p.nuance)]
     .filter(Boolean)
     .join('\n\n')
 
   try {
     const out = await llm.complete({
       system:
-        'Tu reçois une question et des souvenirs classés POUR/CONTRE/NUANCE. ' +
-        'Rédige UNE synthèse FACTUELLE de 1-2 phrases, en français sobre, sans inventer. ' +
-        "Si les souvenirs se contredisent, dis-le explicitement.",
-      prompt: `Question : ${question}\n\n${corpus}`,
+        'You are given a question and memories labelled FOR/AGAINST/NUANCE. ' +
+        'Write ONE FACTUAL synthesis of 1-2 plain sentences, inventing nothing, ' +
+        'in the same language as the memories. ' +
+        'If the memories contradict each other, say so explicitly.',
+      prompt: `Question: ${question}\n\n${corpus}`,
       maxTokens: 160,
       temperature: 0.2,
     })

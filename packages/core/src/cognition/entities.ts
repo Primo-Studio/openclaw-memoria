@@ -168,18 +168,19 @@ export function heuristicEntities(text: string): ExtractedEntity[] {
  * retombe sur l'heuristique). Aucune erreur avalée en silence : le throw est
  * relancé à l'appelant qui décide (retry / fallback).
  */
-const LLM_EXTRACT_SYSTEM = `Tu extrais les entités et relations d'un fait, pour un graphe de connaissances.
-Réponds UNIQUEMENT en JSON, sans texte autour :
-{"entities":[{"name":"NomExact","type":"person|project|tool|concept|place|company"}],
- "relations":[{"from":"NomExact1","to":"NomExact2","type":"uses|part_of|works_on|manages|created_by|depends_on|deployed_on|related_to"}]}
-Règles : noms propres exacts ; types stricts ; relations les plus importantes (max 3) ;
-rien d'intéressant → {"entities":[],"relations":[]}.`
+const LLM_EXTRACT_SYSTEM = `You extract the entities and relations of a fact, for a knowledge graph.
+Reply in JSON ONLY, no surrounding text:
+{"entities":[{"name":"ExactName","type":"person|project|tool|concept|place|company"}],
+ "relations":[{"from":"ExactName1","to":"ExactName2","type":"uses|part_of|works_on|manages|created_by|depends_on|deployed_on|related_to"}]}
+Rules: copy proper names EXACTLY as written in the fact, in their original language;
+strict types; only the most important relations (max 3);
+nothing of interest -> {"entities":[],"relations":[]}.`
 
 export async function llmExtract(llm: LlmProvider, factText: string): Promise<Extraction | null> {
   if (!(await llm.isAvailable())) return null
   const raw = await llm.complete({
     system: LLM_EXTRACT_SYSTEM,
-    prompt: `Fait : "${factText}"\n\nJSON {"entities":[...],"relations":[...]} :`,
+    prompt: `Fact: "${factText}"\n\nJSON {"entities":[...],"relations":[...]}:`,
     json: true,
     maxTokens: 512,
     temperature: 0.1,

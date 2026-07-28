@@ -2188,7 +2188,8 @@ export class Memoria {
       if (sample.length === 0) continue
       try {
         const raw = await extraction.complete({
-          system: 'Donne un titre de THÈME court et clair (2-5 mots, en français, Title Case) qui résume ces souvenirs. Réponds UNIQUEMENT le titre, rien d’autre.',
+          system:
+            'Give a SHORT, clear topic title (2-5 words, Title Case) summarising these memories, written in the same language as the memories. Reply with the title ONLY, nothing else.',
           prompt: sample.map(s => `- ${s}`).join('\n'),
           maxTokens: 20,
           temperature: 0.2,
