@@ -20,14 +20,53 @@
         "type": "string",
         "description": "Racine du stockage Memoria (pour la découverte du port). Défaut ~/.memoria/data."
       },
+      "injectionMode": {
+        "type": "string",
+        "enum": ["hooks", "corpus"],
+        "default": "hooks",
+        "description": "Comment la mémoire entre dans le prompt. 'corpus' = Memoria alimente la section du propriétaire du slot mémoire (recommandé si plugins.slots.memory ≠ 'none'). 'hooks' = Memoria injecte son propre bloc."
+      },
       "autoRecall": { "type": "boolean", "default": true },
       "autoCapture": { "type": "boolean", "default": true },
       "recallLimit": { "type": "number", "default": 12, "minimum": 1, "maximum": 20 },
-      "recallTimeoutMs": { "type": "number", "default": 400 }
+      "recallTimeoutMs": { "type": "number", "default": 800, "minimum": 100, "maximum": 5000 },
+      "tokenBudget": {
+        "type": "number",
+        "default": 600,
+        "minimum": 100,
+        "maximum": 4000,
+        "description": "Cap dur du bloc mémoire injecté, en tokens estimés."
+      },
+      "relevanceFloor": {
+        "type": "number",
+        "default": 0.15,
+        "minimum": 0,
+        "maximum": 0.9,
+        "description": "Écarte les souvenirs dont le score est sous cette fraction du meilleur score. 0 = désactivé."
+      },
+      "showProvenance": {
+        "type": "boolean",
+        "default": true,
+        "description": "Afficher la date d'origine de chaque souvenir injecté."
+      },
+      "projectId": {
+        "type": "string",
+        "description": "active_context.project_id — active le boost de pertinence projet côté core."
+      },
+      "clientOrgId": {
+        "type": "string",
+        "description": "active_context.client_org_id — REQUIS pour voir les faits d'un client (isolation dure inter-clients)."
+      },
+      "orgId": {
+        "type": "string",
+        "description": "active_context.org_id — boost de pertinence organisation."
+      }
     }
   },
   "uiHints": {
     "autoRecall": { "label": "Auto-Recall" },
-    "autoCapture": { "label": "Auto-Capture" }
+    "autoCapture": { "label": "Auto-Capture" },
+    "projectId": { "label": "Projet actif" },
+    "clientOrgId": { "label": "Client actif" }
   }
 }
