@@ -41,6 +41,9 @@ export function isProceduralQuery(query: string): boolean {
   return PROCEDURAL_MARKERS.test(query)
 }
 
+/** Bonus d'épinglage : franc, mais toujours borné (pas de score infini). */
+const PINNED_BOOST = 1.8
+
 export function scoreFact(
   row: FactRow,
   relevance: number,
@@ -48,6 +51,12 @@ export function scoreFact(
   now: number,
   proceduralQuery = false,
 ): ScoreParts {
+  // EXPIRATION : un souvenir périmé disparaît du recall aussi sûrement qu'un
+  // supersédé. On ne le supprime pas — l'utilisateur a demandé qu'il cesse
+  // d'être RAPPELÉ, pas qu'il soit détruit.
+  if (row.expires_at && Date.parse(row.expires_at) <= now) {
+    return { relevance, recency: 0, confidence: 0, usage: 0, lifecycle: 0, hot: 0, boost: 0, total: 0 }
+  }
   const ageDays = Math.max(0, (now - Date.parse(row.created_at)) / 86_400_000)
   const recency = Math.max(RECENCY_FLOOR, Math.exp((-Math.LN2 * ageDays) / RECENCY_HALF_LIFE_DAYS))
   const confidence = clamp(row.confidence, 0.05, 1)
@@ -86,7 +95,12 @@ export function scoreFact(
   const procedure = proceduralQuery && isProcedure ? PROCEDURE_BOOST : 1
 
   // La PERTINENCE domine (exposant) ; les autres facteurs modulent.
-  const total = Math.pow(Math.max(relevance, 1e-6), RELEVANCE_EXPONENT) * recency * confidence * usage * lifecycle * hot * boost * weight * procedure
+  // ÉPINGLÉ : l'utilisateur a explicitement dit « garde ça sous la main ».
+  // Appliqué HORS du plafond de contexte (borné à ×2), sinon un épinglage
+  // pourrait être annulé par un boost projet déjà au maximum.
+  const pin = row.pinned ? PINNED_BOOST : 1
+  const total =
+    Math.pow(Math.max(relevance, 1e-6), RELEVANCE_EXPONENT) * recency * confidence * usage * lifecycle * hot * boost * weight * procedure * pin
   return { relevance, recency, confidence, usage, lifecycle, hot, boost: boost * weight * procedure, total }
 }
 

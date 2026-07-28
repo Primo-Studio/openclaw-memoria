@@ -39,6 +39,10 @@ export interface FactRow {
   lifecycle_state: LifecycleState
   superseded: number
   superseded_by: string | null
+  /** Épinglé par l'utilisateur : jamais atténué, prioritaire au recall. */
+  pinned?: number
+  /** Date d'expiration ISO : au-delà, le fait n'est plus rappelé (jamais supprimé). */
+  expires_at?: string | null
   usefulness: number
   recall_count: number
   used_count: number

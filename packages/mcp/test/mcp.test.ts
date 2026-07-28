@@ -64,6 +64,8 @@ function fakeGateway(): DaemonGateway & { calls: Array<{ method: string; input: 
       calls.push({ method: 'captureStatus', input })
       return { entries: [{ wal_id: 1, status: 'done', attempts: 0 }], pending: 0, retrying: 0, done: 1, failed: 0 }
     },
+    pin: async input => { calls.push({ method: 'pin', input }); return { updated: true } },
+    expiry: async input => { calls.push({ method: 'expiry', input }); return { updated: true } },
   }
 }
 
@@ -177,6 +179,8 @@ describe('buildServer handlers', () => {
       identifyInterlocutor: async () => ({ match: null }),
       feedback: async () => ({ updated: [], domains: [] }),
       captureStatus: async () => ({ entries: [], pending: 0, retrying: 0, done: 0, failed: 0 }),
+      pin: async () => ({ updated: false }),
+      expiry: async () => ({ updated: false }),
     }
     const { handlers } = buildServer({
       instanceId: 'i',
@@ -212,7 +216,7 @@ describe('buildServer handlers', () => {
     expect(getPayload.active_context.project_id).toBe('jamboard')
   })
 
-  it('le serveur MCP expose bien les 9 outils', () => {
+  it('le serveur MCP expose bien les 11 outils', () => {
     const { server } = buildServer({
       instanceId: 'i',
       tracker: new ActiveContextTracker(),
@@ -227,8 +231,10 @@ describe('buildServer handlers', () => {
       'memoria_get_context',
       'memoria_identify_interlocutor',
       'memoria_identify_or_create_interlocutor',
+      'memoria_pin',
       'memoria_recall',
       'memoria_set_context',
+      'memoria_set_expiry',
       'memoria_store_fact',
     ])
   })

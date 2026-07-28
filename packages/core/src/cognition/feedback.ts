@@ -239,6 +239,7 @@ export class FeedbackEngine {
            relevance_weight = MAX(?, relevance_weight * ?),
            updated_at = ?
          WHERE superseded = 0
+           AND pinned = 0
            AND used_count = 0
            AND COALESCE(last_accessed_at, created_at) < ?
            AND relevance_weight > ?`,

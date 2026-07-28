@@ -1112,6 +1112,55 @@ export class Memoria {
     return out
   }
 
+  /**
+   * Épingle ou désépingle un souvenir. Un fait épinglé remonte franchement au
+   * recall et échappe à l'atténuation des dormants — c'est le « garde ça sous
+   * la main » réclamé en bêta. Ne modifie jamais le contenu.
+   */
+  setPinned(instanceId: string, factId: string, pinned: boolean): boolean {
+    this.assertOpen()
+    const db = this.registry.dbForInstance(instanceId)
+    if (!db || !existsSync(db.path)) return false
+    const store = this.openContent(db.path)
+    const r = store.db
+      .prepare('UPDATE facts SET pinned = ?, updated_at = ? WHERE id = ?')
+      .run(pinned ? 1 : 0, nowISO(), factId)
+    if (r.changes > 0) {
+      this.registry.audit({
+        actor_type: 'user', actor_id: 'local',
+        action: pinned ? 'fact_pin' : 'fact_unpin',
+        target_id_hash: sha256Hex(factId), scope_id: null, reason: null,
+      })
+    }
+    return r.changes > 0
+  }
+
+  /**
+   * Fixe (ou lève, avec `null`) la date d'expiration d'un souvenir. Passé cette
+   * date il n'est plus RAPPELÉ — il n'est pas supprimé : l'utilisateur a demandé
+   * qu'on cesse de s'en servir, pas qu'on efface l'historique.
+   */
+  setExpiry(instanceId: string, factId: string, expiresAt: string | null): boolean {
+    this.assertOpen()
+    if (expiresAt !== null && Number.isNaN(Date.parse(expiresAt))) {
+      throw new Error(`date d'expiration invalide : ${expiresAt} (ISO 8601 attendu)`)
+    }
+    const db = this.registry.dbForInstance(instanceId)
+    if (!db || !existsSync(db.path)) return false
+    const store = this.openContent(db.path)
+    const r = store.db
+      .prepare('UPDATE facts SET expires_at = ?, updated_at = ? WHERE id = ?')
+      .run(expiresAt, nowISO(), factId)
+    if (r.changes > 0) {
+      this.registry.audit({
+        actor_type: 'user', actor_id: 'local', action: 'fact_expiry',
+        target_id_hash: sha256Hex(factId), scope_id: null,
+        reason: expiresAt ? `expires_at=${expiresAt}` : 'levée',
+      })
+    }
+    return r.changes > 0
+  }
+
   /** Domaines d'expertise de l'agent (où il « sait » le plus). */
   topExpertise(instanceId: string, limit = 10): Array<{ domain: string; level: number; evidence_count: number }> {
     this.assertOpen()

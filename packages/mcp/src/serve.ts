@@ -28,6 +28,8 @@ export interface DaemonGateway {
   identifyOrCreateInterlocutor(input: Record<string, unknown>): Promise<unknown>
   feedback(input: Record<string, unknown>): Promise<unknown>
   captureStatus(input: Record<string, unknown>): Promise<unknown>
+  pin(input: Record<string, unknown>): Promise<unknown>
+  expiry(input: Record<string, unknown>): Promise<unknown>
 }
 
 /**
@@ -66,6 +68,14 @@ export class HttpDaemonGateway implements DaemonGateway {
 
   captureStatus(input: Record<string, unknown>): Promise<unknown> {
     return this.postMemory('/v1/memory/capture_status', input)
+  }
+
+  pin(input: Record<string, unknown>): Promise<unknown> {
+    return this.postMemory('/v1/memory/pin', input)
+  }
+
+  expiry(input: Record<string, unknown>): Promise<unknown> {
+    return this.postMemory('/v1/memory/expiry', input)
   }
 
   identifyOrCreateInterlocutor(input: Record<string, unknown>): Promise<unknown> {
@@ -112,6 +122,8 @@ export interface ToolHandlers {
   identifyOrCreateInterlocutor(args: { phone?: string; email?: string; telegram?: string; whatsapp?: string; handle?: string; name?: string; relation?: string }): Promise<CallToolResult>
   feedback(args: { fact_ids: string[]; verdict: 'useful' | 'noise' }): Promise<CallToolResult>
   captureStatus(args: { wal_ids: number[] }): Promise<CallToolResult>
+  pin(args: { fact_id: string; pinned: boolean }): Promise<CallToolResult>
+  expiry(args: { fact_id: string; expires_at?: string }): Promise<CallToolResult>
 }
 
 export interface BuiltServer {
@@ -197,6 +209,22 @@ export function buildServer(opts: BuildServerOptions): BuiltServer {
           active_context: opts.tracker.current(),
         }
         return ok(await withDaemon(g => g.captureTurn(input)))
+      } catch (err) {
+        return fail(err)
+      }
+    },
+
+    async pin(args) {
+      try {
+        return ok(await withDaemon(g => g.pin({ fact_id: args.fact_id, pinned: args.pinned })))
+      } catch (err) {
+        return fail(err)
+      }
+    },
+
+    async expiry(args) {
+      try {
+        return ok(await withDaemon(g => g.expiry({ fact_id: args.fact_id, expires_at: args.expires_at ?? null })))
       } catch (err) {
         return fail(err)
       }
@@ -309,6 +337,35 @@ export function buildServer(opts: BuildServerOptions): BuiltServer {
       },
     },
     async args => handlers.captureTurn(args),
+  )
+
+  server.registerTool(
+    'memoria_pin',
+    {
+      description:
+        'Pin or unpin a memory. A pinned memory ranks strongly at recall and is never faded by disuse — use it when the user says something must always be kept in mind. It never edits or deletes the memory itself.',
+      inputSchema: {
+        fact_id: z.string().min(1).describe('Id of the memory, from the `id` field returned by memoria_recall.'),
+        pinned: z.boolean().describe('true to pin, false to unpin.'),
+      },
+    },
+    async args => handlers.pin(args),
+  )
+
+  server.registerTool(
+    'memoria_set_expiry',
+    {
+      description:
+        'Give a memory an expiry date, or lift it. Past that date the memory stops being recalled — it is NOT deleted, the history stays. Use it for things true only for a while (a temporary setup, a holiday closure, a stopgap decision). Omit `expires_at` to lift an existing expiry.',
+      inputSchema: {
+        fact_id: z.string().min(1).describe('Id of the memory, from the `id` field returned by memoria_recall.'),
+        expires_at: z
+          .string()
+          .optional()
+          .describe('ISO 8601 date after which the memory is no longer recalled. Omit to lift the expiry.'),
+      },
+    },
+    async args => handlers.expiry(args),
   )
 
   server.registerTool(

@@ -831,6 +831,23 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         sendJson(res, 200, result)
         return
       }
+      case 'POST /v1/memory/pin': {
+        const body = await readJson(req)
+        const factId = String(body['fact_id'] ?? '')
+        if (!factId) throw new HttpError(400, 'fact_id requis')
+        if (typeof body['pinned'] !== 'boolean') throw new HttpError(400, 'pinned requis (booléen)')
+        sendJson(res, 200, { updated: memoria.setPinned(instanceId, factId, body['pinned']) })
+        return
+      }
+      case 'POST /v1/memory/expiry': {
+        const body = await readJson(req)
+        const factId = String(body['fact_id'] ?? '')
+        if (!factId) throw new HttpError(400, 'fact_id requis')
+        const raw = body['expires_at']
+        const expires = raw === null || raw === undefined || raw === '' ? null : String(raw)
+        sendJson(res, 200, { updated: memoria.setExpiry(instanceId, factId, expires) })
+        return
+      }
       case 'POST /v1/memory/capture_status': {
         // Suivi post-timeout : `capture_turn` rend des `wal_ids`, cette route dit
         // ce qu'ils sont devenus. Sans elle, un appelant dont la requête expire
