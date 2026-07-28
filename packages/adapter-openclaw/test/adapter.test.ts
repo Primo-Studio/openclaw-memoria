@@ -5,6 +5,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   buildActiveContext,
+  contestedPrefix,
   formatRecall,
   getStats,
   partsToText,
@@ -433,5 +434,41 @@ describe('boucle de feedback — signal automatique', () => {
     const hits = await corpus.search({ query: 'x' })
     await corpus.get({ lookup: hits[0]!.path })
     expect(used).toEqual([])
+  })
+})
+
+describe('souvenirs contestés — supersession visible', () => {
+  const it2 = (over: Partial<RecallItem>): RecallItem => ({
+    kind: 'fact',
+    content: 'contenu',
+    category: 'general',
+    score: 1,
+    ...over,
+  })
+
+  it('un fait contredit est signalé, pas masqué', () => {
+    const block = formatRecall([
+      it2({ content: 'Le déploiement passe par Hello-Primo', revision: { kind: 'contradicted', replacement_fact_id: 'f-2' } }),
+      it2({ content: 'Néto préfère le local-first' }),
+    ])
+    // Signalé…
+    expect(block).toContain('⚠ [contested by a more recent memory] Le déploiement passe par Hello-Primo')
+    // …mais TOUJOURS présent : masquer sur un faux positif enterrerait un
+    // souvenir valide en silence.
+    expect(block).toContain('Le déploiement passe par Hello-Primo')
+    // Un fait non contesté reste intact.
+    expect(block).toContain('- Néto préfère le local-first')
+  })
+
+  it('chaque type de révision a son libellé', () => {
+    expect(contestedPrefix(it2({ revision: { kind: 'contradicted' } }))).toContain('contested')
+    expect(contestedPrefix(it2({ revision: { kind: 'duplicate' } }))).toContain('duplicate')
+    expect(contestedPrefix(it2({ revision: { kind: 'obsolete' } }))).toContain('obsolete')
+    expect(contestedPrefix(it2({}))).toBe('')
+  })
+
+  it('la contestation apparaît dans la provenance du mode corpus', () => {
+    const r = toCorpusResult(it2({ id: 'f-1', created_at: '2026-07-01T10:00:00Z', revision: { kind: 'contradicted' } }))
+    expect(r.provenanceLabel).toContain('⚠ contradicted')
   })
 })

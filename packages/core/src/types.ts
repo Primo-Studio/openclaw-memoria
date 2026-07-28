@@ -311,6 +311,22 @@ export interface RecallInput {
   expand_graph?: boolean
 }
 
+/**
+ * Révision EN ATTENTE sur un souvenir remonté au recall.
+ *
+ * Un fait contredit par un plus récent reste ACTIF tant qu'un humain n'a pas
+ * tranché (`RevisionEngine.accept()` est la seule voie vers la supersession —
+ * règle d'or de la couche 18). Conséquence observée en bêta : le fait corrigé et
+ * sa correction coexistaient au recall, sans que l'agent puisse les distinguer.
+ * On ne supersède rien automatiquement — trop risqué, un faux positif masquerait
+ * un souvenir valide en silence — mais on rend la contestation VISIBLE.
+ */
+export interface PendingRevision {
+  kind: 'obsolete' | 'contradicted' | 'duplicate'
+  /** Fait plus récent proposé en remplacement (absent pour un obsolète pur). */
+  replacement_fact_id?: string
+}
+
 export interface RecallItem {
   kind: 'fact' | 'procedure' | 'observation'
   id: string
@@ -320,6 +336,8 @@ export interface RecallItem {
   source_db: string // chemin/étiquette de la DB d'origine (fan-out)
   score: number
   created_at: string
+  /** Présent UNIQUEMENT si une révision est proposée et non tranchée. */
+  revision?: PendingRevision
 }
 
 export interface RecallResult {

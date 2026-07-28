@@ -278,6 +278,12 @@ export interface RecallItem {
   content: string
   category: string
   score: number
+  /**
+   * Révision proposée et NON tranchée sur ce souvenir. Un fait contredit par un
+   * plus récent reste actif tant qu'un humain n'a pas décidé — il faut donc que
+   * l'agent voie qu'il est contesté, sinon il l'applique comme s'il faisait foi.
+   */
+  revision?: { kind: 'obsolete' | 'contradicted' | 'duplicate'; replacement_fact_id?: string }
   /** Champs de provenance — optionnels : un daemon antérieur peut ne pas les servir. */
   id?: string
   created_at?: string
@@ -314,6 +320,29 @@ export function sanitizeMemory(content: string): string {
     .replace(/^[\s>#*-]+/, '')
     .replace(/\s{2,}/g, ' ')
     .trim()
+}
+
+/**
+ * Préfixe d'avertissement pour un souvenir CONTESTÉ.
+ *
+ * Retour bêta : « quand une procédure change, l'ancien fait ne devrait plus
+ * ressortir comme s'il était encore valable ». Le core détecte bien la
+ * contradiction, mais ne supersède qu'après validation humaine — entre les deux,
+ * le fait corrigé et sa correction coexistaient au recall, indiscernables.
+ * On ne masque rien (un faux positif enterrerait un souvenir valide) : on
+ * signale, et l'agent arbitre en connaissance de cause.
+ */
+export function contestedPrefix(item: RecallItem): string {
+  switch (item.revision?.kind) {
+    case 'contradicted':
+      return '⚠ [contested by a more recent memory] '
+    case 'duplicate':
+      return '⚠ [duplicate of a more recent memory] '
+    case 'obsolete':
+      return '⚠ [flagged obsolete] '
+    default:
+      return ''
+  }
 }
 
 const CHARS_PER_TOKEN = 4
@@ -366,7 +395,7 @@ export function formatRecall(items: RecallItem[], opts: FormatRecallOptions = {}
       const text = sanitizeMemory(item.content)
       if (!text) continue
       const stamp = opts.showProvenance && item.created_at ? ` _(${item.created_at.slice(0, 10)})_` : ''
-      const line = `- ${text}${stamp}`
+      const line = `- ${contestedPrefix(item)}${text}${stamp}`
       const cost = line.length + 1 + (headerPending ? headerPending.join('\n').length + 1 : 0)
       if (used + cost > budgetChars) break
       if (headerPending) {

@@ -69,6 +69,7 @@ import type {
   PersonProfile,
   RecallInput,
   RecallItem,
+  PendingRevision,
   RecallResult,
   StoreFactInput,
 } from '../types.js'
@@ -665,6 +666,19 @@ export class Memoria {
       byStore.set(s.store, arr)
     }
     for (const [store, ids] of byStore) store.touchFacts(ids)
+
+    // Marque les souvenirs CONTESTÉS (révision proposée, pas encore tranchée).
+    // Fait après la sélection : une seule requête par DB, sur les seuls ids
+    // réellement remontés.
+    for (const [store, ids] of byStore) {
+      const pending = pendingRevisionsFor(store, ids)
+      if (pending.size === 0) continue
+      for (const s of selected) {
+        if (s.store !== store) continue
+        const rev = pending.get(s.item.id)
+        if (rev) s.item.revision = rev
+      }
+    }
 
     this.registry.audit({
       actor_type: 'assistant',
@@ -2371,4 +2385,34 @@ export class Memoria {
 
     return [...targets.entries()].map(([dbPath, v]) => ({ dbPath, ...v }))
   }
+}
+
+/**
+ * Révisions PROPOSÉES (non tranchées) pour un lot de faits.
+ *
+ * `revision_proposals` appartient à la couche 18 (migrations 90-99), appliquée
+ * paresseusement : la table peut ne pas exister. On ne fait donc jamais échouer
+ * un recall pour une info d'affichage — absence de table = aucune contestation.
+ */
+function pendingRevisionsFor(store: ContentStore, ids: string[]): Map<string, PendingRevision> {
+  const out = new Map<string, PendingRevision>()
+  if (ids.length === 0) return out
+  try {
+    const placeholders = ids.map(() => '?').join(',')
+    const rows = store.db
+      .prepare(
+        `SELECT fact_id, kind, replacement_fact_id FROM revision_proposals
+         WHERE status = 'proposed' AND fact_id IN (${placeholders})`,
+      )
+      .all(...ids) as Array<{ fact_id: string; kind: PendingRevision['kind']; replacement_fact_id: string | null }>
+    for (const r of rows) {
+      out.set(r.fact_id, {
+        kind: r.kind,
+        ...(r.replacement_fact_id ? { replacement_fact_id: r.replacement_fact_id } : {}),
+      })
+    }
+  } catch {
+    /* table absente (couche révision jamais appliquée) : rien à signaler */
+  }
+  return out
 }
