@@ -3,6 +3,8 @@
  * `daemon.json`, peut le démarrer s'il n'existe pas (singleton).
  */
 import { spawn } from 'node:child_process'
+import { mkdirSync, openSync } from 'node:fs'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { resolveStorageRoot, type RecallResult } from '@memoria/core'
 import type { ImportJobStatus } from './import-job.js'
@@ -187,7 +189,20 @@ export async function ensureDaemon(opts: ClientOptions = {}): Promise<DaemonStat
   const binPath = fileURLToPath(new URL('./bin.js', import.meta.url))
   const args = [binPath]
   if (opts.storageRoot) args.push('--storage-root', opts.storageRoot)
-  const child = spawn(process.execPath, args, { detached: true, stdio: 'ignore' })
+  // `stdio: 'ignore'` jetait TOUT : warnings, échecs d'extraction, stacktraces.
+  // Une panne du daemon lancé par `memoria start` était donc indiagnosticable —
+  // c'est exactement ce qui a laissé une extraction morte pendant dix jours sans
+  // que rien ne le signale. On journalise dans le stockage, en append.
+  const logPath = join(storageRoot, 'daemon.log')
+  let stdio: 'ignore' | ['ignore', number, number] = 'ignore'
+  try {
+    mkdirSync(storageRoot, { recursive: true })
+    const fd = openSync(logPath, 'a')
+    stdio = ['ignore', fd, fd]
+  } catch {
+    /* stockage non inscriptible : on démarre quand même, sans journal */
+  }
+  const child = spawn(process.execPath, args, { detached: true, stdio })
   child.unref()
 
   const deadline = Date.now() + 15_000

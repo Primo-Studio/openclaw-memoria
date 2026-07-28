@@ -101,6 +101,9 @@ export function provenanceLabel(item: RecallItem): string {
   const parts = ['Memoria', KIND_LABEL[item.kind] ?? item.kind]
   if (item.created_at) parts.push(item.created_at.slice(0, 10))
   if (item.category && item.category !== 'general') parts.push(item.category)
+  // La contestation passe AUSSI par la provenance : en mode corpus, c'est elle
+  // que l'hôte affiche à côté de l'extrait.
+  if (item.revision) parts.push(`⚠ ${item.revision.kind}`)
   return parts.join(' · ')
 }
 

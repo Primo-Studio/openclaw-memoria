@@ -248,7 +248,8 @@ export function buildServer(opts: BuildServerOptions): BuiltServer {
     'memoria_recall',
     {
       description:
-        'Search the user\'s long-term memory (facts, preferences, decisions, procedures) and return the most relevant items for a query. Call this at the start of a task to load context. The current active context (project/client/repo) is applied automatically.',
+        'Search the user\'s long-term memory (facts, preferences, decisions, procedures) and return the most relevant items for a query. Call this at the start of a task to load context. The current active context (project/client/repo) is applied automatically. '
+        + 'An item carrying a `revision` field is CONTESTED: a more recent memory contradicts or duplicates it, pending the user\'s decision. Treat it as doubtful, prefer the memory named by `replacement_fact_id`, and say so rather than acting on it silently.',
       inputSchema: {
         query: z.string().min(1).describe('Natural-language search query, e.g. "deployment rules for project X".'),
         limit: z.number().int().min(1).max(50).optional().describe('Maximum number of items to return (default chosen by the daemon).'),

@@ -62,12 +62,48 @@ function renderDoctor(out: Writable, report: DoctorReport, note: string | null):
     out.write(`✓ garde réseau : volume local (journal_mode=${guard.journal_mode})\n`)
   }
 
+  const m = report.memory
+  if (m) {
+    out.write('\nMémoire\n')
+    out.write(`  faits          : ${m.facts_total} actifs·archivés — ${m.facts_superseded} supersédés\n`)
+    out.write(`  jamais utilisés: ${m.facts_never_used}\n`)
+    const revisions = m.contradictions_pending + m.duplicates_pending
+    out.write(
+      `  révisions      : ${revisions} en attente (${m.contradictions_pending} contradiction(s), ${m.duplicates_pending} doublon(s))\n`,
+    )
+    out.write(`  extraction     : ${m.wal_pending} message(s) en attente, ${m.wal_stuck} bloqué(s)\n`)
+  }
+
+  const a = report.activity
+  if (a) {
+    out.write('\nActivité (24 h)\n')
+    out.write(`  recalls        : ${a.recalls_24h}${a.last_recall_at ? ` — dernier ${shortTs(a.last_recall_at)}` : ''}\n`)
+    out.write(`  captures       : ${a.captures_24h}${a.last_capture_at ? ` — dernière ${shortTs(a.last_capture_at)}` : ''}\n`)
+    // Absent ≠ zéro : les entrées d'audit antérieures à l'instrumentation ne
+    // portent pas de mesure. On le dit plutôt que d'afficher un « 0 ms » faux.
+    out.write(
+      a.recall_ms_avg !== undefined
+        ? `  latence recall : ${a.recall_ms_avg} ms en moyenne, p95 ${a.recall_ms_p95} ms\n`
+        : '  latence recall : pas encore mesurée\n',
+    )
+    if (a.recall_tokens_avg !== undefined) out.write(`  contexte injecté: ${a.recall_tokens_avg} tokens en moyenne\n`)
+    if (a.capture_ms_avg !== undefined) out.write(`  latence capture: ${a.capture_ms_avg} ms en moyenne\n`)
+  }
+
   if (report.warnings.length > 0) {
     out.write('\nAvertissements :\n')
     for (const warning of report.warnings) out.write(`  ⚠ ${warning}\n`)
   }
   out.write('\n')
   out.write(report.ok ? 'État : ✓ OK\n' : `État : ⚠ ${report.warnings.length} avertissement(s)\n`)
+}
+
+/** `2026-07-28T14:31:02.123Z` → `28/07 14:31` (lisible en une ligne de terminal). */
+function shortTs(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
 function relativeOrAbsolute(root: string, path: string): string {
