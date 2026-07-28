@@ -26,6 +26,7 @@ export interface DaemonGateway {
   captureTurn(input: Record<string, unknown>): Promise<unknown>
   identifyInterlocutor(input: Record<string, unknown>): Promise<unknown>
   identifyOrCreateInterlocutor(input: Record<string, unknown>): Promise<unknown>
+  feedback(input: Record<string, unknown>): Promise<unknown>
 }
 
 /**
@@ -56,6 +57,10 @@ export class HttpDaemonGateway implements DaemonGateway {
 
   identifyInterlocutor(input: Record<string, unknown>): Promise<unknown> {
     return this.postMemory('/v1/memory/identify_interlocutor', input)
+  }
+
+  feedback(input: Record<string, unknown>): Promise<unknown> {
+    return this.postMemory('/v1/memory/feedback', input)
   }
 
   identifyOrCreateInterlocutor(input: Record<string, unknown>): Promise<unknown> {
@@ -100,6 +105,7 @@ export interface ToolHandlers {
   getContext(): Promise<CallToolResult>
   identifyInterlocutor(args: { phone?: string; email?: string; telegram?: string; whatsapp?: string; handle?: string; name?: string }): Promise<CallToolResult>
   identifyOrCreateInterlocutor(args: { phone?: string; email?: string; telegram?: string; whatsapp?: string; handle?: string; name?: string; relation?: string }): Promise<CallToolResult>
+  feedback(args: { fact_ids: string[]; verdict: 'useful' | 'noise' }): Promise<CallToolResult>
 }
 
 export interface BuiltServer {
@@ -190,6 +196,21 @@ export function buildServer(opts: BuildServerOptions): BuiltServer {
       }
     },
 
+    async feedback(args) {
+      try {
+        // `verdict` plutôt qu'un booléen nu : « useful/noise » se lit sans
+        // ambiguïté côté agent, et laisse la place à d'autres verdicts plus
+        // tard sans casser le schéma d'outil.
+        const input: Record<string, unknown> = {
+          fact_ids: args.fact_ids,
+          used: args.verdict === 'useful',
+        }
+        return ok(await withDaemon(g => g.feedback(input)))
+      } catch (err) {
+        return fail(err)
+      }
+    },
+
     // Les deux outils de contexte sont locaux au process : pas de daemon.
     async setContext(args) {
       const effective = opts.tracker.set(args)
@@ -272,6 +293,24 @@ export function buildServer(opts: BuildServerOptions): BuiltServer {
       },
     },
     async args => handlers.captureTurn(args),
+  )
+
+  server.registerTool(
+    'memoria_feedback',
+    {
+      description:
+        'Tell Memoria whether the memories it surfaced actually helped. Call it after answering with recalled memories: pass the ids of the ones you genuinely used with verdict "useful", and the ids that were surfaced but irrelevant with verdict "noise". This is what makes recall improve over time — useful memories rank higher, noisy ones fade. It never edits or deletes a memory; to correct or remove one, store a corrected fact instead.',
+      inputSchema: {
+        fact_ids: z
+          .array(z.string().min(1))
+          .min(1)
+          .describe('Ids of recalled memories, taken from the `id` field returned by memoria_recall.'),
+        verdict: z
+          .enum(['useful', 'noise'])
+          .describe('"useful" = these memories contributed to the answer. "noise" = they were surfaced but irrelevant.'),
+      },
+    },
+    async args => handlers.feedback(args),
   )
 
   server.registerTool(

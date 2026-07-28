@@ -123,6 +123,15 @@ export interface CorpusDeps {
   recall(query: string, limit: number): Promise<RecallItem[] | null>
   /** Plancher relatif au meilleur score (anti-bruit), 0 = désactivé. */
   relevanceFloor?: number
+  /**
+   * Signal d'usage RÉEL, appelé quand l'agent demande le contenu complet d'un
+   * souvenir. C'est le seul signal automatique non spéculatif du parcours :
+   * `search` ne prouve rien (l'hôte remonte des extraits que l'agent n'a
+   * peut-être pas lus), tandis que `get` est une demande explicite de détail.
+   * Sans lui, la boucle de feedback dépendrait entièrement de la discipline de
+   * l'agent à appeler `memoria_feedback` — et resterait vide en pratique.
+   */
+  onUsed?(factId: string): void
 }
 
 /** Nb d'entrées conservées pour résoudre `get` sans re-solliciter le daemon. */
@@ -179,6 +188,8 @@ export function createMemoriaCorpus(deps: CorpusDeps): CorpusSupplement {
         if (item) remember(item)
       }
       if (!item) return null
+      // L'agent lit ce souvenir en entier : signal d'usage confirmé.
+      if (item.id) deps.onUsed?.(item.id)
       const content = sanitizeMemory(item.content)
       return {
         corpus: CORPUS_NAME,

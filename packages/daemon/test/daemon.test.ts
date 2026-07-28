@@ -63,6 +63,41 @@ describe('daemon', () => {
     await expect(intruder.recall({ query: 'wifi' })).rejects.toThrow(/401/)
   })
 
+  it('boucle de feedback : le signal d’usage atteint la base et modifie le poids', async () => {
+    const admin = new DaemonClient(daemon.state, daemon.state.admin_token)
+    const paired = await admin.pair('claude-code', 'Claude Code')
+    const done = await new DaemonClient(daemon.state).completePairing(paired.pairing_code)
+    const agent = new DaemonClient(daemon.state, done.instance_token)
+
+    await agent.storeFact({ content: 'Néto préfère le local-first pour Primo', category: 'preference' })
+    const recall = await agent.recall({ query: 'local-first' })
+    const factId = recall.items[0]?.id
+    expect(factId).toBeTruthy()
+
+    const post = async (body: unknown): Promise<Response> =>
+      fetch(`http://127.0.0.1:${daemon.state.port}/v1/memory/feedback`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${done.instance_token}` },
+        body: JSON.stringify(body),
+      })
+
+    const res = await post({ fact_ids: [factId], used: true })
+    expect(res.status).toBe(200)
+    const result = (await res.json()) as { updated: string[]; domains: string[] }
+    // Le fait a bien été touché, et son domaine crédité en expertise.
+    expect(result.updated).toEqual([factId])
+    expect(result.domains).toEqual(['preference'])
+
+    // Contrat d'entrée : fact_ids et used sont obligatoires.
+    expect((await post({ used: true })).status).toBe(400)
+    expect((await post({ fact_ids: [factId] })).status).toBe(400)
+
+    // Un id inconnu ne fait rien — et ne casse rien.
+    const unknown = await post({ fact_ids: ['fact-inexistant'], used: false })
+    expect(unknown.status).toBe(200)
+    expect(((await unknown.json()) as { updated: string[] }).updated).toEqual([])
+  })
+
   it('révocation par l’admin coupe l’agent', async () => {
     const admin = new DaemonClient(daemon.state, daemon.state.admin_token)
     const paired = await admin.pair('codex')

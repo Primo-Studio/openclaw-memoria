@@ -397,3 +397,41 @@ describe('supplément de corpus', () => {
     expect(warnings.join(' ')).toMatch(/corpus/i)
   })
 })
+
+describe('boucle de feedback — signal automatique', () => {
+  const item = (over: Partial<RecallItem>): RecallItem => ({
+    kind: 'fact',
+    content: 'contenu',
+    category: 'general',
+    score: 1,
+    ...over,
+  })
+
+  it('un `get` (lecture complète) émet un signal d’usage, pas un `search`', async () => {
+    const used: string[] = []
+    const corpus = createMemoriaCorpus({
+      recall: async () => [item({ id: 'f-1', content: 'Néto préfère le local-first' })],
+      onUsed: id => used.push(id),
+    })
+
+    // `search` ne prouve rien : l'hôte remonte des extraits, l'agent ne les a
+    // peut-être même pas lus.
+    await corpus.search({ query: 'préférences' })
+    expect(used).toEqual([])
+
+    // `get` est une demande explicite de détail → signal confirmé.
+    await corpus.get({ lookup: 'memoria://fact/f-1' })
+    expect(used).toEqual(['f-1'])
+  })
+
+  it('un souvenir sans id n’émet aucun signal (rien à renforcer)', async () => {
+    const used: string[] = []
+    const corpus = createMemoriaCorpus({
+      recall: async () => [item({ content: 'sans identifiant' })],
+      onUsed: id => used.push(id),
+    })
+    const hits = await corpus.search({ query: 'x' })
+    await corpus.get({ lookup: hits[0]!.path })
+    expect(used).toEqual([])
+  })
+})

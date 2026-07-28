@@ -28,6 +28,7 @@ import {
   PatternEngine,
   ProceduralEngine,
   FeedbackEngine,
+  type ReinforceResult,
   ClusterEngine,
   SelfObservationEngine,
   RevisionEngine,
@@ -1001,12 +1002,18 @@ export class Memoria {
 
   // ---------------------------------------------------------- feedback (couches 7-8)
 
-  /** Renforce/atténue des faits selon leur usage réel dans une réponse. */
-  reinforceFacts(instanceId: string, factIds: string[], used: boolean): void {
+  /**
+   * Renforce/atténue des faits selon leur usage réel dans une réponse.
+   *
+   * Retourne le détail (faits touchés, domaines crédités) : sans lui, un
+   * appelant ne pouvait pas distinguer « signal pris en compte » de « aucun de
+   * ces ids n'existe / est supersédé », et la boucle restait aveugle.
+   */
+  reinforceFacts(instanceId: string, factIds: string[], used: boolean): ReinforceResult {
     this.assertOpen()
     const db = this.registry.dbForInstance(instanceId)
-    if (!db) return
-    this.feedbackFor(this.openContent(db.path)).reinforce(factIds, { used })
+    if (!db) return { updated: [], domains: [] }
+    return this.feedbackFor(this.openContent(db.path)).reinforce(factIds, { used })
   }
 
   /** Domaines d'expertise de l'agent (où il « sait » le plus). */

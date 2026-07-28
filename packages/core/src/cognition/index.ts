@@ -262,7 +262,7 @@ export type { Pattern, DetectOptions, DetectResult, ConsolidateResult, PatternEn
 export { ProceduralEngine, proceduralMigrations, ensureProceduralSchema } from './procedural.js'
 export type { Procedure as ProceduralProcedure, ProcedureMatch, StoreProcedureInput, RecordExecutionInput, ProceduralEngineOptions } from './procedural.js'
 export { FeedbackEngine, feedbackMigrations, ensureFeedbackSchema } from './feedback.js'
-export type { FeedbackEngineOptions } from './feedback.js'
+export type { FeedbackEngineOptions, ReinforceOptions, ReinforceResult, Expertise, FeedbackStats } from './feedback.js'
 export { ClusterEngine, clusterMigrations, ensureClusterSchema } from './clusters.js'
 export type { ClusterEngineOptions } from './clusters.js'
 export { detectContradiction } from './contradiction.js'

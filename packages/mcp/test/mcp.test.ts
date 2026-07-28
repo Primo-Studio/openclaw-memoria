@@ -56,6 +56,10 @@ function fakeGateway(): DaemonGateway & { calls: Array<{ method: string; input: 
       calls.push({ method: 'identifyInterlocutor', input })
       return { match: null }
     },
+    feedback: async input => {
+      calls.push({ method: 'feedback', input })
+      return { updated: ['f1'], domains: ['preference'] }
+    },
   }
 }
 
@@ -167,6 +171,7 @@ describe('buildServer handlers', () => {
       storeFact: async () => ({}),
       captureTurn: async () => ({}),
       identifyInterlocutor: async () => ({ match: null }),
+      feedback: async () => ({ updated: [], domains: [] }),
     }
     const { handlers } = buildServer({
       instanceId: 'i',
@@ -202,7 +207,7 @@ describe('buildServer handlers', () => {
     expect(getPayload.active_context.project_id).toBe('jamboard')
   })
 
-  it('le serveur MCP expose bien les 7 outils', () => {
+  it('le serveur MCP expose bien les 8 outils', () => {
     const { server } = buildServer({
       instanceId: 'i',
       tracker: new ActiveContextTracker(),
@@ -212,6 +217,7 @@ describe('buildServer handlers', () => {
     const tools = (server as unknown as { _registeredTools: Record<string, unknown> })._registeredTools
     expect(Object.keys(tools).sort()).toEqual([
       'memoria_capture_turn',
+      'memoria_feedback',
       'memoria_get_context',
       'memoria_identify_interlocutor',
       'memoria_identify_or_create_interlocutor',
@@ -282,5 +288,52 @@ describe('HttpDaemonGateway.captureTurn', () => {
     )
     const gateway = new HttpDaemonGateway({ port: 5151 }, 'tok-abc')
     await expect(gateway.captureTurn({ messages: [] })).rejects.toThrow(/404.*route inconnue/)
+  })
+})
+
+describe('boucle de feedback', () => {
+  it('verdict "useful" → used:true relayé au daemon', async () => {
+    const gateway = fakeGateway()
+    const { handlers } = buildServer({
+      instanceId: 'i',
+      tracker: new ActiveContextTracker(),
+      connect: async () => gateway,
+    })
+
+    const res = await handlers.feedback({ fact_ids: ['f1', 'f2'], verdict: 'useful' })
+    expect(res.isError).toBeFalsy()
+    expect(gateway.calls).toEqual([{ method: 'feedback', input: { fact_ids: ['f1', 'f2'], used: true } }])
+  })
+
+  it('verdict "noise" → used:false (atténuation, jamais suppression)', async () => {
+    const gateway = fakeGateway()
+    const { handlers } = buildServer({
+      instanceId: 'i',
+      tracker: new ActiveContextTracker(),
+      connect: async () => gateway,
+    })
+
+    await handlers.feedback({ fact_ids: ['f3'], verdict: 'noise' })
+    expect(gateway.calls[0]?.input).toEqual({ fact_ids: ['f3'], used: false })
+  })
+
+  it('daemon injoignable → erreur MCP propre, jamais de throw', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { handlers } = buildServer({
+      instanceId: 'i',
+      tracker: new ActiveContextTracker(),
+      connect: async () => ({
+        recall: async () => RECALL_EMPTY,
+        storeFact: async () => ({}),
+        captureTurn: async () => ({}),
+        identifyInterlocutor: async () => ({ match: null }),
+        feedback: async () => {
+          throw new Error('ECONNREFUSED')
+        },
+      }) as unknown as DaemonGateway,
+    })
+
+    const res = await handlers.feedback({ fact_ids: ['f1'], verdict: 'useful' })
+    expect(res.isError).toBe(true)
   })
 })

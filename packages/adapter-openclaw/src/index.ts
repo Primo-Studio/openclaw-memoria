@@ -387,13 +387,15 @@ export interface AdapterStats {
   captureOk: number
   captureFail: number
   captureSkipped: number
+  /** Signaux d'usage renvoyés au daemon (boucle de feedback). */
+  feedbackSent: number
   lastRecallAt?: string
   lastCaptureAt?: string
   lastError?: string
 }
 
 function newStats(): AdapterStats {
-  return { recallOk: 0, recallFail: 0, recallEmpty: 0, captureOk: 0, captureFail: 0, captureSkipped: 0 }
+  return { recallOk: 0, recallFail: 0, recallEmpty: 0, captureOk: 0, captureFail: 0, captureSkipped: 0, feedbackSent: 0 }
 }
 
 /** Stats du dernier `register()` — lisibles depuis les tests et un futur `memoria doctor`. */
@@ -493,6 +495,14 @@ export function register(api: OpenClawPluginApi): void {
     const corpus = createMemoriaCorpus({
       recall: (query, limit) => fetchRecall(query, limit, undefined),
       relevanceFloor: cfg.relevanceFloor,
+      // Boucle de feedback : un `get` = l'agent a voulu le contenu complet.
+      // Fire-and-forget — un signal de qualité ne doit jamais retarder ni
+      // faire échouer la lecture d'un souvenir.
+      onUsed: factId => {
+        void post('/v1/memory/feedback', { fact_ids: [factId], used: true }, 2_000).then(res => {
+          if (res && res.ok) stats.feedbackSent++
+        })
+      },
     })
     void registerCorpusSupplement(corpus, m => warn('/corpus', m)).then(ok => {
       if (ok) api.logger?.info?.('[memoria] enregistrée comme supplément de corpus (aucune injection directe).')
