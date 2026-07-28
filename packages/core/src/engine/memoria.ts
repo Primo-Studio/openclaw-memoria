@@ -47,7 +47,8 @@ import {
 import { estimateTokens, newId, nowISO, sha256Hex } from '../util.js'
 import { createSecretProvider, RegexRedactor } from '../secrets/index.js'
 import type { SecretProvider } from '../secrets/types.js'
-import { resolveLlmProfile } from '../llm/index.js'
+import { resolveLlmProfile, auditExtraction, auditEmbeddings, formatCloudSend } from '../llm/index.js'
+import type { CloudAuditSink } from '../llm/index.js'
 import type { LlmOptions } from '../llm/detect.js'
 import type { EmbeddingProvider, LlmProvider } from '../llm/provider.js'
 import { CapturePipeline, type CaptureTurnInput, type CaptureTurnResult } from './capture.js'
@@ -72,6 +73,7 @@ import type {
   PendingRevision,
   DoctorActivity,
   DoctorMemory,
+  DoctorCloud,
   RecallResult,
   StoreFactInput,
 } from '../types.js'
@@ -1255,7 +1257,22 @@ export class Memoria {
         return { extraction: this.llmOverride.extraction, embeddings: this.llmOverride.embeddings ?? null }
       }
       const profile = await resolveLlmProfile(this.resolved.config)
-      return { extraction: profile.extraction, embeddings: profile.embeddings }
+      // Journal des envois cloud : enveloppe ICI, seul point où les deux
+      // providers sont résolus. Les providers locaux ressortent inchangés.
+      const sink: CloudAuditSink = send => {
+        this.registry.audit({
+          actor_type: 'system',
+          actor_id: 'llm',
+          action: 'cloud_send',
+          target_id_hash: null,
+          scope_id: null,
+          reason: formatCloudSend(send),
+        })
+      }
+      return {
+        extraction: profile.extraction ? auditExtraction(profile.extraction, sink) : null,
+        embeddings: profile.embeddings ? auditEmbeddings(profile.embeddings, sink) : null,
+      }
     })()
     return this.profilePromise
   }
@@ -2280,6 +2297,7 @@ export class Memoria {
 
     const activity = this.doctorActivity()
     const memory = this.doctorMemory()
+    const cloud = this.doctorCloud()
 
     // Les avertissements sont ce que l'utilisateur doit ACTION­NER — pas une
     // reformulation des compteurs. On ne signale que l'anormal.
@@ -2306,8 +2324,41 @@ export class Memoria {
       network_guard: { on_network_volume: onNetwork, journal_mode: journalMode },
       activity,
       memory,
+      cloud,
       warnings,
     }
+  }
+
+  /** Envois cloud des dernières 24 h, agrégés depuis `audit_log`. */
+  private doctorCloud(): DoctorCloud {
+    const db = this.registry.db
+    const since = new Date(Date.now() - 86_400_000).toISOString()
+    const rows = db
+      .prepare("SELECT ts, reason FROM audit_log WHERE action = 'cloud_send' AND ts >= ? ORDER BY id DESC")
+      .all(since) as Array<{ ts: string; reason: string }>
+
+    const groups = new Map<string, { provider: string; model: string; purpose: string; calls: number; items: number; chars: number; failures: number }>()
+    let chars = 0
+    for (const r of rows) {
+      const provider = field(r.reason, 'provider') ?? '?'
+      const model = field(r.reason, 'model') ?? '?'
+      const purpose = field(r.reason, 'purpose') ?? '?'
+      const key = `${provider}|${model}|${purpose}`
+      const g = groups.get(key) ?? { provider, model, purpose, calls: 0, items: 0, chars: 0, failures: 0 }
+      g.calls += 1
+      g.items += metric(r.reason, 'items') ?? 0
+      const c = metric(r.reason, 'chars') ?? 0
+      g.chars += c
+      chars += c
+      if (field(r.reason, 'ok') === 'false') g.failures += 1
+      groups.set(key, g)
+    }
+    const out: DoctorCloud = { sends_24h: [...groups.values()].sort((a, b) => b.chars - a.chars), chars_24h: chars }
+    const last = db
+      .prepare("SELECT ts FROM audit_log WHERE action = 'cloud_send' ORDER BY ts DESC LIMIT 1")
+      .get() as { ts: string } | undefined
+    if (last) out.last_send_at = last.ts
+    return out
   }
 
   /** Activité récente, lue dans `audit_log` (aucune table de métriques dédiée). */
@@ -2532,6 +2583,12 @@ function pendingRevisionsFor(store: ContentStore, ids: string[]): Map<string, Pe
   }
   return out
 }
+/** Lit `clé=mot` dans une raison d'audit (`provider=openai purpose=extraction`). */
+function field(reason: string, key: string): string | undefined {
+  const m = new RegExp(`\\b${key}=([^\\s]+)`).exec(reason)
+  return m ? m[1] : undefined
+}
+
 /** Lit `clé=nombre` dans une raison d'audit (`returned=3 tokens=120 ms=41`). */
 function metric(reason: string, key: string): number | undefined {
   const m = new RegExp(`\\b${key}=(\\d+)\\b`).exec(reason)

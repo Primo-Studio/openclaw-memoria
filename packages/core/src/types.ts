@@ -392,6 +392,18 @@ export interface DoctorMemory {
   wal_stuck: number
 }
 
+/**
+ * Ce qui a QUITTÉ la machine. Vide sur une installation tout-local — ce qui est
+ * en soi l'information la plus utile : rien n'est parti.
+ */
+export interface DoctorCloud {
+  /** Envois sur 24 h, par fournisseur/modèle/finalité. */
+  sends_24h: Array<{ provider: string; model: string; purpose: string; calls: number; items: number; chars: number; failures: number }>
+  last_send_at?: string
+  /** Volume total en caractères sur 24 h — jamais le contenu. */
+  chars_24h: number
+}
+
 export interface DoctorReport {
   ok: boolean
   storage_root: string
@@ -401,6 +413,7 @@ export interface DoctorReport {
   network_guard: { on_network_volume: boolean; journal_mode: string }
   activity: DoctorActivity
   memory: DoctorMemory
+  cloud: DoctorCloud
   warnings: string[]
 }
 

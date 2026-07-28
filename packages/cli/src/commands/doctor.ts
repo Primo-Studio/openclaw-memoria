@@ -90,6 +90,22 @@ function renderDoctor(out: Writable, report: DoctorReport, note: string | null):
     if (a.capture_ms_avg !== undefined) out.write(`  latence capture: ${a.capture_ms_avg} ms en moyenne\n`)
   }
 
+  const cloud = report.cloud
+  if (cloud) {
+    out.write('\nDonnées envoyées au cloud (24 h)\n')
+    if (cloud.sends_24h.length === 0) {
+      // L'absence d'envoi EST l'information : sur une installation tout-local,
+      // c'est la garantie que rien n'a quitté la machine.
+      out.write('  aucun envoi — rien n’a quitté la machine\n')
+    } else {
+      for (const s of cloud.sends_24h) {
+        const ko = s.failures > 0 ? `, ${s.failures} échec(s)` : ''
+        out.write(`  ${s.provider}/${s.model} · ${s.purpose} : ${s.calls} appel(s), ${s.items} élément(s), ${formatBytes(s.chars)} de texte${ko}\n`)
+      }
+      out.write(`  total          : ${formatBytes(cloud.chars_24h)}${cloud.last_send_at ? ` — dernier ${shortTs(cloud.last_send_at)}` : ''}\n`)
+    }
+  }
+
   if (report.warnings.length > 0) {
     out.write('\nAvertissements :\n')
     for (const warning of report.warnings) out.write(`  ⚠ ${warning}\n`)
