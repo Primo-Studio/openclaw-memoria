@@ -4,7 +4,7 @@ Session de travail partie de deux retours d'agents bêta (« Luna » et un secon
 agent), qui convergeaient sur : *« le prochain gain ne sera pas de stocker
 davantage, ce sera de rappeler moins, mieux classé, non obsolète et vérifiable »*.
 
-**16 commits, 46 fichiers, +4045 / −733 lignes. 630 tests (contre 547 au départ).**
+**20 commits, 9 pull requests. 639 tests (contre 547 au départ).**
 
 Trois pannes ont été trouvées et réparées en chemin — aucune n'avait été
 signalée, parce qu'elles se masquaient mutuellement.
@@ -201,8 +201,12 @@ appelé par **aucune** route, aucun tool, aucun hook.
 
 Câblé de bout en bout : route daemon, outil MCP `memoria_feedback`
 (`useful` / `noise`), plus un **signal automatique** en mode corpus — un `get`
-(l'agent demande le contenu complet) émet `used:true`. Sans lui, la boucle
-dépendrait de la discipline des agents et resterait vide.
+(l'agent demande le contenu complet) émet `used:true`.
+
+> ⚠️ Ce signal automatique ne vaut QUE pour le mode corpus, lequel s'est révélé
+> être du pull (cf. §7). En mode `hooks` — le mode recommandé — la boucle
+> dépend donc encore entièrement de l'appel explicite à `memoria_feedback`.
+> C'est le principal point faible restant.
 
 ---
 
@@ -222,7 +226,7 @@ dépendrait de la discipline des agents et resterait vide.
 
 ---
 
-## 7. Cohabitation avec `memory-core`
+## 7. Cohabitation avec `memory-core` — et une hypothèse fausse
 
 Depuis OpenClaw 2026.4, le slot mémoire est **exclusif** et appartient par défaut
 au plugin bundlé `memory-core`. Si Memoria injecte en plus son propre bloc, deux
@@ -230,16 +234,46 @@ systèmes écrivent dans le même prompt sans se connaître.
 
 Nouveau réglage `injectionMode` :
 
-- `hooks` (défaut) — Memoria injecte son bloc. Correct si
-  `plugins.slots.memory = "none"`.
-- `corpus` — Memoria s'enregistre via `registerMemoryCorpusSupplement` et le
-  propriétaire du slot fusionne ses résultats dans **sa** section, avec **son**
-  budget.
+- `hooks` (défaut) — Memoria injecte son propre bloc via `before_prompt_build`.
+- `corpus` — Memoria s'enregistre via `registerMemoryCorpusSupplement`.
 
-Les deux modes s'excluent, un test le verrouille. Le contrat `search`/`get` est
-exactement le « index court d'abord, détail à la demande » réclamé, et
-`MemoryCorpusSearchResult` porte nativement `provenanceLabel`, `sourceType`,
-`updatedAt` et `citation`.
+### ⚠️ Correction : le mode corpus n'injecte RIEN automatiquement
+
+Le mode corpus a été construit sur l'hypothèse que le propriétaire du slot
+fusionnerait les suppléments dans **sa section de prompt**. **C'est faux.**
+
+Vérifié dans le source d'OpenClaw 2026.7.1 — la fonction vit dans le module
+`tools`, pas dans le constructeur de prompt :
+
+```js
+// dist/tools-*.js
+async function searchMemoryCorpusSupplements(params) {
+  if (params.corpus === "memory" || params.corpus === "sessions") return []
+  const supplements = listMemoryCorpusSupplements()
+  …
+}
+```
+
+Les suppléments sont interrogés **depuis un outil**. Le mode corpus est donc un
+mécanisme de **pull** : l'agent doit demander. Exactement le défaut du MCP.
+
+Confirmé en production. Après bascule de Koda en mode corpus :
+
+```
+3 captures, 8 faits créés, 0 recall
+```
+
+La capture fonctionnait (c'est le hook `agent_end`, indépendant du mode), mais
+aucun rappel n'avait lieu. Rebasculé en `hooks`, le même agent obtenait
+immédiatement `returned=12 tokens=510 ms=158`.
+
+**Conclusion pratique** : préférer `hooks`. Le mode corpus évite la double
+injection — en n'injectant rien. Une mémoire absente est pire qu'une mémoire un
+peu redondante.
+
+À revoir : les deux modes ont été rendus mutuellement exclusifs. Ils devraient
+pouvoir coexister — les hooks pour l'automatique, le corpus pour la consultation
+à la demande via l'outil de recherche d'OpenClaw.
 
 ---
 
@@ -292,6 +326,62 @@ d'API en travers du SDK ferait courir plus de risque que la vulnérabilité.
 
 ---
 
+## 10. Correctifs d'installation
+
+Deux bugs trouvés en installant réellement le plugin, tous deux invisibles en
+test unitaire.
+
+### Le SDK hôte ne se résolvait pas depuis le plugin
+
+Le mode corpus importait `openclaw/plugin-sdk/memory-core` en **spécifieur nu**.
+Ça ne résout pas : le plugin vit dans `~/.openclaw/extensions/memoria`, Node
+résout depuis CE dossier, et OpenClaw étant installé globalement, aucun
+`node_modules` de la chaîne ne le contient.
+
+Le plugin s'exécutant DANS le process OpenClaw, on se rabat sur
+`process.argv[1]`, on remonte à la racine du paquet et on importe le fichier par
+chemin absolu. Attrapé **avant** d'activer le mode sur une config live.
+
+### `plugins.allow` : « tout autoriser » transformé en liste blanche
+
+`installOpenClawHooks` faisait inconditionnellement :
+
+```js
+plugins.allow = [...(allow ?? []), 'memoria']
+```
+
+Or `plugins.allow` **absent** signifie « tout autoriser ». La créer pour y mettre
+`memoria` la transforme en liste blanche **exclusive**.
+
+Observé sur une gateway réelle sans `allow` : passée de **12 plugins chargés à
+2**, perdant son runtime d'agent `codex`, `memory-core` et neuf autres. L'agent a
+tourné une minute dans cet état.
+
+La liste n'est désormais complétée QUE si elle existait déjà. Le test existant
+encodait le comportement bogué — il vérifie maintenant l'absence.
+
+---
+
+## Résultat en production
+
+Après déploiement sur les deux gateways de la machine (Koda et Primo Posts) :
+
+```
+Activité (24 h)
+  recalls        : 4          latence : 78 ms en moyenne, p95 158 ms
+  captures       : 5          latence : 8516 ms en moyenne
+  contexte injecté : 269 tokens en moyenne
+
+Données envoyées au cloud (24 h)
+  openai/gpt-5-mini · extraction : 298 appels, 200 Ko
+  openai/text-embedding-3-small  :   8 appels, 23.6 Ko
+```
+
+Premier rappel réussi depuis le **24 juillet** : `returned=12 tokens=510 ms=158`.
+La base est passée de 3672 à 3686 faits en une heure de conversation.
+
+---
+
 ## Reste ouvert
 
 - **Écran web de maintenance** — corriger, fusionner et lister l'inutilisé sont
@@ -301,5 +391,11 @@ d'API en travers du SDK ferait courir plus de risque que la vulnérabilité.
   table WAL, un rejeu ciblé demanderait du code dédié.
 - **Issue #1** fermée automatiquement par `closes #1`, sans que son auteur ait
   confirmé le correctif sur son installation (Ollama, Phi4-mini).
-- **Le plugin de hooks n'est pas installé** dans la config OpenClaw locale : le
-  mode corpus, l'auto-recall et l'auto-capture restent dormants.
+- **Boucle de feedback en mode `hooks`** : le signal automatique n'existe qu'en
+  mode corpus (cf. §5). En `hooks`, seul l'appel explicite à `memoria_feedback`
+  alimente l'apprentissage — c'est le principal point faible restant.
+- **Les deux modes d'injection sont mutuellement exclusifs** alors qu'ils
+  devraient pouvoir coexister.
+- **Isolation projet/client inactive** : `projectId` / `clientOrgId` ne sont pas
+  renseignés, le scoring contextuel du core reste donc inerte. L'outil
+  `memoria_set_context` existe et devrait être appelé par les agents.
