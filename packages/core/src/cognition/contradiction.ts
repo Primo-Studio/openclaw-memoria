@@ -253,7 +253,7 @@ export async function detectContradiction(
         try {
           const verdict = await llm.complete({
             system:
-              'Tu compares deux affirmations. Réponds UNIQUEMENT « OUI » si elles se CONTREDISENT (mêmes sujet, conclusions incompatibles), sinon « NON ».',
+              'You compare two statements. Reply ONLY "YES" if they CONTRADICT each other (same subject, incompatible conclusions), otherwise "NO".',
             prompt: `A: ${text}\nB: ${row.fact}`,
             maxTokens: 4,
             temperature: 0,

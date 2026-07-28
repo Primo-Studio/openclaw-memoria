@@ -28,6 +28,7 @@ import {
   PatternEngine,
   ProceduralEngine,
   FeedbackEngine,
+  type ReinforceResult,
   ClusterEngine,
   SelfObservationEngine,
   RevisionEngine,
@@ -1001,12 +1002,18 @@ export class Memoria {
 
   // ---------------------------------------------------------- feedback (couches 7-8)
 
-  /** Renforce/atténue des faits selon leur usage réel dans une réponse. */
-  reinforceFacts(instanceId: string, factIds: string[], used: boolean): void {
+  /**
+   * Renforce/atténue des faits selon leur usage réel dans une réponse.
+   *
+   * Retourne le détail (faits touchés, domaines crédités) : sans lui, un
+   * appelant ne pouvait pas distinguer « signal pris en compte » de « aucun de
+   * ces ids n'existe / est supersédé », et la boucle restait aveugle.
+   */
+  reinforceFacts(instanceId: string, factIds: string[], used: boolean): ReinforceResult {
     this.assertOpen()
     const db = this.registry.dbForInstance(instanceId)
-    if (!db) return
-    this.feedbackFor(this.openContent(db.path)).reinforce(factIds, { used })
+    if (!db) return { updated: [], domains: [] }
+    return this.feedbackFor(this.openContent(db.path)).reinforce(factIds, { used })
   }
 
   /** Domaines d'expertise de l'agent (où il « sait » le plus). */
@@ -2181,7 +2188,8 @@ export class Memoria {
       if (sample.length === 0) continue
       try {
         const raw = await extraction.complete({
-          system: 'Donne un titre de THÈME court et clair (2-5 mots, en français, Title Case) qui résume ces souvenirs. Réponds UNIQUEMENT le titre, rien d’autre.',
+          system:
+            'Give a SHORT, clear topic title (2-5 words, Title Case) summarising these memories, written in the same language as the memories. Reply with the title ONLY, nothing else.',
           prompt: sample.map(s => `- ${s}`).join('\n'),
           maxTokens: 20,
           temperature: 0.2,

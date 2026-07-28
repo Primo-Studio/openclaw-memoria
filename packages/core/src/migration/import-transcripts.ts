@@ -90,13 +90,14 @@ export interface ImportTranscriptsReport {
 }
 
 /** Prompt système dédié transcripts (dérivé de EXTRACTION_SYSTEM, spec §7.2). */
-const TRANSCRIPT_EXTRACTION_SYSTEM = `Tu extrais des faits DURABLES depuis un extrait de conversation entre un utilisateur et un assistant de code, pour une mémoire long-terme.
-Ne retiens QUE le durable et réutilisable : préférences de l'utilisateur, décisions et leurs raisons, configurations exactes, conventions de projet, leçons d'erreurs, processus appris.
-N'extrais RIEN d'éphémère : état passager d'une tâche ponctuelle, politesse, question sans réponse, narration ("je lis le fichier"), détail valable une seule fois.
-Chaque fait doit être AUTONOME (compréhensible seul) et contenir un élément concret (nom, version, commande, chemin, décision).
-Réponds UNIQUEMENT avec un objet JSON, sans texte autour :
-{"facts": [{"fact": "énoncé autonome et précis", "category": "preference|decision|config|erreur|process|general", "confidence": 0.0-1.0}]}
-{"facts": []} si rien de durable.`
+const TRANSCRIPT_EXTRACTION_SYSTEM = `You extract DURABLE facts from an excerpt of a conversation between a user and a coding assistant, for a long-term memory.
+Keep ONLY what lasts and can be reused: user preferences, decisions and their rationale, exact configurations, project conventions, lessons learned from mistakes, learned processes.
+Extract NOTHING ephemeral: passing state of a one-off task, pleasantries, unanswered questions, narration ("I am reading the file"), detail that is true only once.
+Each fact must be SELF-CONTAINED (understandable alone) and carry something concrete (name, version, command, path, decision).
+Write every fact in the SAME LANGUAGE as the conversation. Never translate it.
+Reply with a JSON object ONLY, no surrounding text:
+{"facts": [{"fact": "self-contained, precise statement", "category": "preference|decision|config|error|process|general", "confidence": 0.0-1.0}]}
+{"facts": []} if nothing durable.`
 
 const DEFAULT_MAX_WINDOWS = 20
 /** Cible de regroupement d'une fenêtre : ~6 tours OU ~2000 chars (borne le coût). */

@@ -796,6 +796,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       if (route === 'POST /v1/memory/recall') sendJson(res, 200, { items: [], disabled: true })
       else if (route === 'POST /v1/memory/store_fact') sendJson(res, 200, { fact: null, disabled: true })
       else if (route === 'POST /v1/memory/capture_turn') sendJson(res, 200, { captured: 0, facts: [], disabled: true })
+      else if (route === 'POST /v1/memory/feedback') sendJson(res, 200, { updated: [], domains: [], disabled: true })
       else throw new HttpError(404, `route mémoire inconnue : ${route}`)
       return
     }
@@ -825,6 +826,28 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
           messages: messages as CaptureTurnInput['messages'],
           active_context: body['active_context'] as CaptureTurnInput['active_context'],
         })
+        sendJson(res, 200, result)
+        return
+      }
+      case 'POST /v1/memory/feedback': {
+        // BOUCLE DE FEEDBACK : l'agent dit si les souvenirs remontés au recall
+        // ont RÉELLEMENT servi. `used:true` fait monter relevance_weight (cap
+        // 2.0) et crédite l'expertise du domaine ; `used:false` atténue
+        // doucement (plancher 0.3). Ne touche JAMAIS le contenu d'un fait :
+        // pas de supersession, pas de suppression (règle d'or de la couche 7).
+        const body = await readJson(req)
+        const ids = body['fact_ids']
+        if (!Array.isArray(ids) || ids.length === 0) {
+          throw new HttpError(400, 'fact_ids requis (tableau d’identifiants de faits)')
+        }
+        if (typeof body['used'] !== 'boolean') {
+          throw new HttpError(400, 'used requis (booléen) : true = a servi à répondre, false = remonté mais inutile')
+        }
+        const result = memoria.reinforceFacts(
+          instanceId,
+          ids.filter((v): v is string => typeof v === 'string'),
+          body['used'],
+        )
         sendJson(res, 200, result)
         return
       }

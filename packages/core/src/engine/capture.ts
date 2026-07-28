@@ -82,12 +82,19 @@ interface ExtractedFact {
 
 // Objet racine (pas un tableau nu) : le mode JSON d'Ollama pousse les petits
 // modèles à émettre un objet — un tableau demandé donnait « {} » (vu en E2E).
-const EXTRACTION_SYSTEM = `Tu extrais des faits DURABLES depuis une conversation, pour une mémoire long-terme d'assistant.
-Ne retiens QUE le durable : préférences, décisions et leurs raisons, configurations exactes, leçons d'erreurs, processus appris.
-N'extrais RIEN d'éphémère (état passager, politesse, question sans réponse).
-Réponds UNIQUEMENT avec un objet JSON, sans texte autour :
-{"facts": [{"fact": "énoncé autonome et précis", "category": "preference|decision|config|erreur|process|general", "confidence": 0.0-1.0}]}
-{"facts": []} si rien ne mérite d'être retenu.`
+// Consigne en ANGLAIS, contenu dans la langue de la conversation (issue #1).
+// Les petits modèles (Phi-4-mini, Llama 3.2 3B…) suivent bien mieux une consigne
+// anglaise, et s'ils sont amorcés en français ils se mettent à insérer des mots
+// français dans LEURS réponses à l'utilisateur. Mais traduire les faits serait
+// pire que le mal : ce sont des énoncés sur l'utilisateur, sa fidélité prime.
+// D'où la règle explicite « same language, never translate ».
+const EXTRACTION_SYSTEM = `You extract DURABLE facts from a conversation, for an assistant's long-term memory.
+Keep ONLY what lasts: preferences, decisions and their rationale, exact configurations, lessons learned from mistakes, learned processes.
+Extract NOTHING ephemeral (passing state, pleasantries, unanswered questions).
+Write every fact in the SAME LANGUAGE as the conversation. Never translate it.
+Reply with a JSON object ONLY, no surrounding text:
+{"facts": [{"fact": "self-contained, precise statement", "category": "preference|decision|config|error|process|general", "confidence": 0.0-1.0}]}
+{"facts": []} if nothing is worth keeping.`
 
 export class CapturePipeline {
   private readonly deps: CapturePipelineDeps
@@ -251,7 +258,7 @@ export class CapturePipeline {
 
 function buildExtractionPrompt(messages: CaptureMessage[]): string {
   const lines = messages.map(m => `- [${m.role}] ${m.content}`)
-  return `Messages du tour :\n${lines.join('\n')}\n\nObjet JSON {"facts": [...]} des faits durables :`
+  return `Turn messages:\n${lines.join('\n')}\n\nJSON object {"facts": [...]} of the durable facts:`
 }
 
 /**

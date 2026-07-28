@@ -204,7 +204,8 @@ export class TopicEngine {
       try {
         if (await this.llm.isAvailable()) {
           const raw = await this.llm.complete({
-            system: 'Donne un titre de THÈME court (2-4 mots, Title Case) pour ce souvenir. Réponds UNIQUEMENT le titre.',
+            system:
+              'Give a SHORT topic title (2-4 words, Title Case) for this memory, written in the same language as the memory. Reply with the title ONLY.',
             prompt: fact.fact,
             maxTokens: 16,
             temperature: 0.2,

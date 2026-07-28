@@ -38,6 +38,9 @@ const CATEGORY_ORDER = [
   'outil',
   'client',
   'rh',
+  // `erreur` conservé APRÈS `error` : la migration v3 a renommé les faits, mais
+  // un import legacy peut encore en produire (cf. LEGACY_CATEGORIES).
+  'error',
   'erreur',
   'chronologie',
   'general',
@@ -50,6 +53,7 @@ const CATEGORY_TITLES: Record<string, string> = {
   outil: 'Outils',
   client: 'Clients',
   rh: 'RH',
+  error: 'Erreurs & leçons',
   erreur: 'Erreurs & leçons',
   chronologie: 'Chronologie',
   general: 'Général',

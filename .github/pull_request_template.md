@@ -12,8 +12,9 @@ Motivation and context.
 - [ ] Tests
 
 ## Testing
-- [ ] `npx tsx tests/test-core.ts` passes (22/22)
-- [ ] Tested with OpenClaw gateway restart
+- [ ] `npx vitest run` passes (all packages)
+- [ ] `npx tsc -b` clean
+- [ ] Tested with OpenClaw gateway restart (if the plugin or MCP surface changed)
 - [ ] Benchmark run (if applicable)
 
 ## Breaking changes

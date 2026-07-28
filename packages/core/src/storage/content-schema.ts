@@ -219,4 +219,50 @@ export const contentMigrations: Migration[] = [
       db.exec('CREATE INDEX IF NOT EXISTS idx_facts_content_hash ON facts(content_hash)')
     },
   },
+  {
+    version: 3,
+    name: 'content-category-erreur-to-error',
+    up(db) {
+      // ISSUE #1 : l'énumération de catégories du prompt d'extraction mélangeait
+      // les langues (`preference|decision|config|erreur|process|general`) — seul
+      // `erreur` était français. Le prompt est passé à `error` ; sans cette
+      // migration, la base porterait les DEUX valeurs pour un même concept.
+      //
+      // L'enjeu n'est pas cosmétique : `facts.category` sert de DOMAINE
+      // d'expertise (FeedbackEngine). Deux orthographes = deux domaines dont les
+      // niveaux ne se cumulent plus, et un recall qui filtre sur l'un rate
+      // l'autre.
+      db.prepare("UPDATE facts SET category = 'error' WHERE category = 'erreur'").run()
+
+      // `expertise` appartient à la couche feedback (migrations 50-59), appliquée
+      // paresseusement : elle peut ne pas exister encore ici. Si c'est le cas
+      // elle naîtra vide, donc rien à reprendre.
+      const hasExpertise = db
+        .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'expertise'")
+        .get() as unknown
+      if (!hasExpertise) return
+
+      // Fusion plutôt qu'écrasement : si les deux domaines coexistent déjà, on
+      // additionne les preuves et on garde le niveau le plus élevé — `domain`
+      // est UNIQUE, un simple UPDATE violerait la contrainte.
+      const fr = db.prepare("SELECT id, level, evidence_count FROM expertise WHERE domain = 'erreur'").get() as
+        | { id: string; level: number; evidence_count: number }
+        | undefined
+      if (!fr) return
+      const en = db.prepare("SELECT id, level, evidence_count FROM expertise WHERE domain = 'error'").get() as
+        | { id: string; level: number; evidence_count: number }
+        | undefined
+      if (en) {
+        db.prepare('UPDATE expertise SET level = ?, evidence_count = ?, updated_at = ? WHERE id = ?').run(
+          Math.max(en.level, fr.level),
+          en.evidence_count + fr.evidence_count,
+          new Date().toISOString(),
+          en.id,
+        )
+        db.prepare('DELETE FROM expertise WHERE id = ?').run(fr.id)
+      } else {
+        db.prepare("UPDATE expertise SET domain = 'error' WHERE id = ?").run(fr.id)
+      }
+    },
+  },
 ]
