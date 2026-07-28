@@ -11,7 +11,8 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import type { CompleteOptions, LlmProvider } from './provider.js'
+import type { CompleteOptions, EmbeddingProvider, LlmProvider } from './provider.js'
+import { assertVectorDimensions } from './embeddings-guard.js'
 
 export const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini'
 export const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1'
@@ -200,5 +201,100 @@ export class OpenAiProvider implements LlmProvider {
       )
     }
     return content
+  }
+}
+
+/** Modèle d'embeddings par défaut côté OpenAI (1536 dimensions). */
+export const DEFAULT_OPENAI_EMBEDDING_MODEL = 'text-embedding-3-small'
+export const DEFAULT_OPENAI_EMBEDDING_DIMENSIONS = 1536
+
+export interface OpenAiEmbeddingProviderOptions {
+  /** `undefined` = détection automatique ; `null` = explicitement aucune clé. */
+  apiKey?: string | null
+  env?: NodeJS.ProcessEnv
+  keyFilePath?: string
+  model?: string
+  dimensions?: number
+  baseUrl?: string
+  timeoutMs?: number
+}
+
+/**
+ * Embeddings OpenAI — alternative CLOUD à Ollama.
+ *
+ * Memoria reste local-first : Ollama garde la priorité dès qu'il est
+ * disponible. Ce fournisseur existe pour les installations sans modèle local,
+ * où la recherche sémantique était purement et simplement désactivée (repli FTS
+ * seul, annoncé dans les logs mais irréparable sans installer Ollama).
+ *
+ * ⚠ Les dimensions (1536) diffèrent de nomic-embed-text (768). C'est VOULU et
+ * sans danger : `dimensions` est gravé avec chaque vecteur et la garde
+ * anti-768/1536 interdit toute comparaison inter-espaces. Changer de
+ * fournisseur n'abîme donc aucun vecteur existant — il rend les anciens
+ * inexploitables jusqu'à réindexation, ce qui est le comportement correct.
+ */
+export class OpenAiEmbeddingProvider implements EmbeddingProvider {
+  readonly name: string
+  readonly model: string
+  readonly dimensions: number
+  private readonly apiKey: string | null
+  private readonly baseUrl: string
+  private readonly timeoutMs: number
+
+  constructor(opts: OpenAiEmbeddingProviderOptions = {}) {
+    this.name = 'openai'
+    this.model = opts.model ?? DEFAULT_OPENAI_EMBEDDING_MODEL
+    this.dimensions = opts.dimensions ?? DEFAULT_OPENAI_EMBEDDING_DIMENSIONS
+    // `??` traiterait `null` comme « non renseigné » et relancerait la détection :
+    // un appelant qui déclare explicitement l'absence de clé serait ignoré.
+    this.apiKey =
+      opts.apiKey === undefined
+        ? resolveOpenAiApiKey({
+            flavor: 'openai',
+            ...(opts.env ? { env: opts.env } : {}),
+            ...(opts.keyFilePath ? { keyFilePath: opts.keyFilePath } : {}),
+          })
+        : opts.apiKey
+    this.baseUrl = (opts.baseUrl ?? DEFAULT_OPENAI_BASE_URL).replace(/\/$/, '')
+    this.timeoutMs = opts.timeoutMs ?? 60_000
+  }
+
+  isAvailable(): Promise<boolean> {
+    return Promise.resolve(this.apiKey !== null && this.apiKey !== '')
+  }
+
+  async embed(texts: string[]): Promise<Float32Array[]> {
+    if (texts.length === 0) return []
+    if (!this.apiKey) throw new Error('embeddings openai : aucune clé API disponible')
+    const body: Record<string, unknown> = { model: this.model, input: texts }
+    // `dimensions` n'est accepté que par les modèles v3 ; on ne l'envoie que si
+    // l'appelant s'écarte du défaut du modèle.
+    if (this.dimensions !== DEFAULT_OPENAI_EMBEDDING_DIMENSIONS) body['dimensions'] = this.dimensions
+
+    const res = await fetch(`${this.baseUrl}/embeddings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.apiKey}` },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(this.timeoutMs),
+    })
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '')
+      throw new Error(`openai /embeddings HTTP ${res.status} (modèle ${this.model}) : ${detail.slice(0, 200)}`)
+    }
+    const data = (await res.json()) as { data?: Array<{ embedding?: number[]; index?: number }> }
+    const rows = data.data
+    if (!Array.isArray(rows) || rows.length !== texts.length) {
+      throw new Error(`réponse openai /embeddings invalide : ${rows?.length ?? 0} vecteur(s) pour ${texts.length} texte(s)`)
+    }
+    // L'API ne garantit pas l'ordre : on réordonne sur `index` quand il est là.
+    const ordered = rows.every(r => typeof r.index === 'number')
+      ? [...rows].sort((a, b) => (a.index ?? 0) - (b.index ?? 0))
+      : rows
+    return ordered.map(r => {
+      const vec = r.embedding
+      if (!Array.isArray(vec)) throw new Error('réponse openai /embeddings : vecteur absent')
+      assertVectorDimensions(vec, this.dimensions, this.model)
+      return Float32Array.from(vec)
+    })
   }
 }
