@@ -31,6 +31,8 @@
  * `exports` du paquet openclaw). L'import est dynamique et tout échec est avalé :
  * sur un hôte trop ancien, on retombe simplement sur le mode `hooks`.
  */
+import { basename, dirname, join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { sanitizeMemory, type RecallItem } from './index.js'
 
 /** Sous-ensemble de `MemoryCorpusSearchResult` (SDK) que Memoria remplit. */
@@ -223,6 +225,40 @@ function clamp(n: number, lo: number, hi: number): number {
 
 /** Spécifier en variable : TypeScript ne tente pas de résoudre l'hôte à la compilation. */
 const SDK_ENTRY = 'openclaw/plugin-sdk/memory-core'
+const SDK_SUBPATH = 'dist/plugin-sdk/memory-core.js'
+
+/**
+ * Candidats d'import du SDK, du plus propre au plus débrouillard.
+ *
+ * ⚠ Le spécifieur NU ne résout PAS depuis un plugin : celui-ci vit dans
+ * `~/.openclaw/extensions/memoria` (ou un lien vers le dépôt), et Node résout
+ * depuis CE dossier — où `openclaw` n'est pas un voisin. OpenClaw étant
+ * installé globalement, aucun `node_modules` de la chaîne ne le contient.
+ * Vérifié : `require.resolve('openclaw/plugin-sdk/memory-core')` échoue en
+ * MODULE_NOT_FOUND depuis le dossier de l'adaptateur.
+ *
+ * On se rabat donc sur le process HÔTE : le plugin s'exécute DANS OpenClaw,
+ * donc `process.argv[1]` pointe son point d'entrée
+ * (`…/lib/node_modules/openclaw/openclaw.mjs`). On remonte jusqu'à la racine du
+ * paquet et on importe le fichier par chemin absolu.
+ *
+ * Sans ça, le mode corpus échouait silencieusement et AUCUNE mémoire n'était
+ * injectée — pire que de ne pas l'activer du tout.
+ */
+export function sdkCandidates(argv1: string | undefined): string[] {
+  const out = [SDK_ENTRY]
+  if (!argv1) return out
+  let dir = argv1.endsWith('.mjs') || argv1.endsWith('.js') ? dirname(argv1) : argv1
+  // Remonte au plus 6 niveaux à la recherche de la racine du paquet openclaw.
+  for (let i = 0; i < 6 && dir && dir !== '/'; i++) {
+    if (basename(dir) === 'openclaw') {
+      out.push(pathToFileURL(join(dir, SDK_SUBPATH)).href)
+      break
+    }
+    dir = dirname(dir)
+  }
+  return out
+}
 
 /**
  * Enregistre le supplément auprès de l'hôte. Retourne `false` si l'hôte
@@ -233,18 +269,22 @@ export async function registerCorpusSupplement(
   supplement: CorpusSupplement,
   warn: (m: string) => void,
 ): Promise<boolean> {
-  try {
-    const sdk = (await import(/* @vite-ignore */ SDK_ENTRY)) as {
-      registerMemoryCorpusSupplement?: (pluginId: string, s: CorpusSupplement) => void
+  const tried: string[] = []
+  for (const specifier of sdkCandidates(process.argv[1])) {
+    try {
+      const sdk = (await import(/* @vite-ignore */ specifier)) as {
+        registerMemoryCorpusSupplement?: (pluginId: string, s: CorpusSupplement) => void
+      }
+      if (typeof sdk.registerMemoryCorpusSupplement !== 'function') {
+        tried.push(`${specifier} : pas de registerMemoryCorpusSupplement`)
+        continue
+      }
+      sdk.registerMemoryCorpusSupplement(CORPUS_NAME, supplement)
+      return true
+    } catch (err) {
+      tried.push(`${specifier} : ${(err as Error).message}`)
     }
-    if (typeof sdk.registerMemoryCorpusSupplement !== 'function') {
-      warn(`${SDK_ENTRY} n’expose pas registerMemoryCorpusSupplement — mode corpus indisponible.`)
-      return false
-    }
-    sdk.registerMemoryCorpusSupplement(CORPUS_NAME, supplement)
-    return true
-  } catch (err) {
-    warn(`mode corpus indisponible (${(err as Error).message}) — repli sur l’injection par hooks.`)
-    return false
   }
+  warn(`mode corpus indisponible — ${tried.join(' ; ')}. Bascule injectionMode sur « hooks ».`)
+  return false
 }

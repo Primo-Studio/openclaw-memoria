@@ -19,7 +19,7 @@ import {
   type OpenClawPluginApi,
   type RecallItem,
 } from '../src/index.js'
-import { createMemoriaCorpus, registerCorpusSupplement, toCorpusResult } from '../src/corpus.js'
+import { createMemoriaCorpus, registerCorpusSupplement, sdkCandidates, toCorpusResult } from '../src/corpus.js'
 
 /** Faux api.on : mémorise les handlers par nom de hook. */
 function fakeApi(config: Record<string, unknown>): {
@@ -498,5 +498,26 @@ describe('niveaux de vérité — le déduit est signalé', () => {
   it('la provenance corpus porte l’origine, sauf pour l’ordinaire', () => {
     expect(toCorpusResult(it3({ origin: 'inferred' })).provenanceLabel).toContain('inferred')
     expect(toCorpusResult(it3({ origin: 'extracted' })).provenanceLabel).not.toContain('extracted')
+  })
+})
+
+describe('résolution du SDK hôte (mode corpus)', () => {
+  it('dérive le chemin absolu du SDK depuis le point d’entrée d’OpenClaw', () => {
+    const c = sdkCandidates('/opt/homebrew/lib/node_modules/openclaw/openclaw.mjs')
+    // Le spécifieur nu reste tenté en premier (au cas où l'hôte câble la
+    // résolution un jour), mais il ne suffit PAS : vérifié MODULE_NOT_FOUND
+    // depuis le dossier de l'adaptateur.
+    expect(c[0]).toBe('openclaw/plugin-sdk/memory-core')
+    expect(c[1]).toMatch(/^file:\/\/.*\/openclaw\/dist\/plugin-sdk\/memory-core\.js$/)
+  })
+
+  it('remonte depuis un point d’entrée imbriqué', () => {
+    const c = sdkCandidates('/usr/local/lib/node_modules/openclaw/dist/cli/main.js')
+    expect(c[1]).toContain('/openclaw/dist/plugin-sdk/memory-core.js')
+  })
+
+  it('hôte inconnu ou argv absent → seul le spécifieur nu, pas de chemin inventé', () => {
+    expect(sdkCandidates(undefined)).toEqual(['openclaw/plugin-sdk/memory-core'])
+    expect(sdkCandidates('/opt/autre-outil/bin/cli.js')).toEqual(['openclaw/plugin-sdk/memory-core'])
   })
 })
