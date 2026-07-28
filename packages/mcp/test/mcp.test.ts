@@ -65,6 +65,7 @@ function fakeGateway(): DaemonGateway & { calls: Array<{ method: string; input: 
       return { entries: [{ wal_id: 1, status: 'done', attempts: 0 }], pending: 0, retrying: 0, done: 1, failed: 0 }
     },
     pin: async input => { calls.push({ method: 'pin', input }); return { updated: true } },
+    correct: async input => { calls.push({ method: 'correct', input }); return { replacement: { id: 'f2' } } },
     expiry: async input => { calls.push({ method: 'expiry', input }); return { updated: true } },
   }
 }
@@ -180,6 +181,7 @@ describe('buildServer handlers', () => {
       feedback: async () => ({ updated: [], domains: [] }),
       captureStatus: async () => ({ entries: [], pending: 0, retrying: 0, done: 0, failed: 0 }),
       pin: async () => ({ updated: false }),
+      correct: async () => ({ replacement: null }),
       expiry: async () => ({ updated: false }),
     }
     const { handlers } = buildServer({
@@ -216,7 +218,7 @@ describe('buildServer handlers', () => {
     expect(getPayload.active_context.project_id).toBe('jamboard')
   })
 
-  it('le serveur MCP expose bien les 11 outils', () => {
+  it('le serveur MCP expose bien les 12 outils', () => {
     const { server } = buildServer({
       instanceId: 'i',
       tracker: new ActiveContextTracker(),
@@ -227,6 +229,7 @@ describe('buildServer handlers', () => {
     expect(Object.keys(tools).sort()).toEqual([
       'memoria_capture_status',
       'memoria_capture_turn',
+      'memoria_correct',
       'memoria_feedback',
       'memoria_get_context',
       'memoria_identify_interlocutor',

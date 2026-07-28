@@ -1113,6 +1113,102 @@ export class Memoria {
   }
 
   /**
+   * CORRIGE un souvenir : crée la version corrigée et marque l'ancienne
+   * supersédée, `superseded_by` pointant sur la nouvelle.
+   *
+   * On ne réécrit JAMAIS le contenu en place. Deux raisons : la chaîne de
+   * supersession reste navigable (« d'où vient cette correction ? »), et une
+   * correction erronée reste rattrapable — écraser le texte détruirait
+   * l'historique sans filet. C'est la même règle que `RevisionEngine.accept()`.
+   */
+  correctFact(instanceId: string, factId: string, content: string): { replacement: Fact | null } {
+    this.assertOpen()
+    const text = content.trim()
+    if (!text) throw new Error('contenu de correction vide')
+    const db = this.registry.dbForInstance(instanceId)
+    if (!db || !existsSync(db.path)) return { replacement: null }
+    const store = this.openContent(db.path)
+    const old = store.getFact(factId)
+    if (!old || old.superseded) return { replacement: null }
+
+    // La correction hérite du classement de l'original (catégorie, scope,
+    // épinglage) : corriger une formulation ne doit pas dégrader le rangement.
+    const replacement = this.storeFact({
+      instance: instanceId,
+      content: text,
+      category: old.category,
+      scope: old.scope_id,
+    })
+    store.db
+      .prepare("UPDATE facts SET superseded = 1, superseded_by = ?, updated_at = ? WHERE id = ? AND superseded = 0")
+      .run(replacement.id, nowISO(), factId)
+    // `Fact` (forme exposée) ne porte pas `pinned` : on relit la colonne brute.
+    const wasPinned = store.db.prepare('SELECT pinned FROM facts WHERE id = ?').get(factId) as { pinned?: number } | undefined
+    if (wasPinned?.pinned) store.db.prepare('UPDATE facts SET pinned = 1 WHERE id = ?').run(replacement.id)
+    this.registry.audit({
+      actor_type: 'user', actor_id: 'local', action: 'fact_correct',
+      target_id_hash: sha256Hex(factId), scope_id: null, reason: `replacement=${sha256Hex(replacement.id).slice(0, 12)}`,
+    })
+    return { replacement }
+  }
+
+  /**
+   * FUSIONNE des doublons : `keepId` survit, les autres sont supersédés en
+   * pointant sur lui. Aucun contenu n'est réécrit ni supprimé — un doublon
+   * fusionné reste consultable et la fusion reste traçable.
+   */
+  mergeFacts(instanceId: string, keepId: string, mergeIds: string[]): { merged: string[] } {
+    this.assertOpen()
+    const targets = mergeIds.filter(id => id !== keepId)
+    if (targets.length === 0) return { merged: [] }
+    const db = this.registry.dbForInstance(instanceId)
+    if (!db || !existsSync(db.path)) return { merged: [] }
+    const store = this.openContent(db.path)
+    const keep = store.getFact(keepId)
+    // Refuser plutôt que fusionner vers un fait absent ou déjà supersédé :
+    // on créerait une chaîne cassée, exactement le bug legacy 'split:'.
+    if (!keep || keep.superseded) throw new Error(`fusion impossible : le fait conservé ${keepId} est absent ou supersédé`)
+
+    const ts = nowISO()
+    const merged: string[] = []
+    const tx = store.db.transaction(() => {
+      for (const id of targets) {
+        const r = store.db
+          .prepare("UPDATE facts SET superseded = 1, superseded_by = ?, updated_at = ? WHERE id = ? AND superseded = 0")
+          .run(keepId, ts, id)
+        if (r.changes > 0) merged.push(id)
+      }
+    })
+    tx()
+    if (merged.length > 0) {
+      this.registry.audit({
+        actor_type: 'user', actor_id: 'local', action: 'fact_merge',
+        target_id_hash: sha256Hex(keepId), scope_id: null, reason: `merged=${merged.length}`,
+      })
+    }
+    return { merged }
+  }
+
+  /**
+   * Souvenirs JAMAIS utilisés — la matière du ménage réclamé en bêta
+   * (« afficher les mémoires jamais utilisées »).
+   */
+  neverUsedFacts(instanceId: string, limit = 100): Fact[] {
+    this.assertOpen()
+    const db = this.registry.dbForInstance(instanceId)
+    if (!db || !existsSync(db.path)) return []
+    const store = this.openContent(db.path)
+    const rows = store.db
+      .prepare(
+        `SELECT * FROM facts
+         WHERE superseded = 0 AND used_count = 0 AND pinned = 0
+         ORDER BY created_at ASC LIMIT ?`,
+      )
+      .all(Math.max(1, limit)) as FactRow[]
+    return rows.map(rowToFact)
+  }
+
+  /**
    * Épingle ou désépingle un souvenir. Un fait épinglé remonte franchement au
    * recall et échappe à l'atténuation des dormants — c'est le « garde ça sous
    * la main » réclamé en bêta. Ne modifie jamais le contenu.

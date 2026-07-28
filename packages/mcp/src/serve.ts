@@ -30,6 +30,7 @@ export interface DaemonGateway {
   captureStatus(input: Record<string, unknown>): Promise<unknown>
   pin(input: Record<string, unknown>): Promise<unknown>
   expiry(input: Record<string, unknown>): Promise<unknown>
+  correct(input: Record<string, unknown>): Promise<unknown>
 }
 
 /**
@@ -72,6 +73,10 @@ export class HttpDaemonGateway implements DaemonGateway {
 
   pin(input: Record<string, unknown>): Promise<unknown> {
     return this.postMemory('/v1/memory/pin', input)
+  }
+
+  correct(input: Record<string, unknown>): Promise<unknown> {
+    return this.postMemory('/v1/memory/correct', input)
   }
 
   expiry(input: Record<string, unknown>): Promise<unknown> {
@@ -122,6 +127,7 @@ export interface ToolHandlers {
   identifyOrCreateInterlocutor(args: { phone?: string; email?: string; telegram?: string; whatsapp?: string; handle?: string; name?: string; relation?: string }): Promise<CallToolResult>
   feedback(args: { fact_ids: string[]; verdict: 'useful' | 'noise' }): Promise<CallToolResult>
   captureStatus(args: { wal_ids: number[] }): Promise<CallToolResult>
+  correct(args: { fact_id: string; content: string }): Promise<CallToolResult>
   pin(args: { fact_id: string; pinned: boolean }): Promise<CallToolResult>
   expiry(args: { fact_id: string; expires_at?: string }): Promise<CallToolResult>
 }
@@ -209,6 +215,14 @@ export function buildServer(opts: BuildServerOptions): BuiltServer {
           active_context: opts.tracker.current(),
         }
         return ok(await withDaemon(g => g.captureTurn(input)))
+      } catch (err) {
+        return fail(err)
+      }
+    },
+
+    async correct(args) {
+      try {
+        return ok(await withDaemon(g => g.correct({ fact_id: args.fact_id, content: args.content })))
       } catch (err) {
         return fail(err)
       }
@@ -337,6 +351,19 @@ export function buildServer(opts: BuildServerOptions): BuiltServer {
       },
     },
     async args => handlers.captureTurn(args),
+  )
+
+  server.registerTool(
+    'memoria_correct',
+    {
+      description:
+        'Correct a memory that is wrong or outdated. Stores the corrected version and marks the old one as replaced by it — the old text is kept and stays traceable, never overwritten. Prefer this over storing a second contradictory memory, which would leave both active.',
+      inputSchema: {
+        fact_id: z.string().min(1).describe('Id of the memory to correct, from memoria_recall.'),
+        content: z.string().min(1).describe('The corrected statement, self-contained, in the user\'s language.'),
+      },
+    },
+    async args => handlers.correct(args),
   )
 
   server.registerTool(

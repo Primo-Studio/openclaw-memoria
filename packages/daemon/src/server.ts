@@ -831,6 +831,22 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         sendJson(res, 200, result)
         return
       }
+      case 'POST /v1/memory/correct': {
+        const body = await readJson(req)
+        const factId = String(body['fact_id'] ?? '')
+        const content = String(body['content'] ?? '')
+        if (!factId || !content.trim()) throw new HttpError(400, 'fact_id et content requis')
+        sendJson(res, 200, memoria.correctFact(instanceId, factId, content))
+        return
+      }
+      case 'POST /v1/memory/merge': {
+        const body = await readJson(req)
+        const keep = String(body['keep_fact_id'] ?? '')
+        const ids = body['merge_fact_ids']
+        if (!keep || !Array.isArray(ids)) throw new HttpError(400, 'keep_fact_id et merge_fact_ids requis')
+        sendJson(res, 200, memoria.mergeFacts(instanceId, keep, ids.filter((v): v is string => typeof v === 'string')))
+        return
+      }
       case 'POST /v1/memory/pin': {
         const body = await readJson(req)
         const factId = String(body['fact_id'] ?? '')
