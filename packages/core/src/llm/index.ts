@@ -14,6 +14,7 @@ import {
   DEFAULT_OPENAI_MODEL,
   DEFAULT_OPENROUTER_MODEL,
   OpenAiProvider,
+  OpenAiEmbeddingProvider,
   resolveOpenAiApiKey,
 } from './openai.js'
 
@@ -75,11 +76,14 @@ export {
   DEFAULT_OPENROUTER_MODEL,
   DEFAULT_OPENROUTER_BASE_URL,
   OpenAiProvider,
+  OpenAiEmbeddingProvider,
+  DEFAULT_OPENAI_EMBEDDING_MODEL,
+  DEFAULT_OPENAI_EMBEDDING_DIMENSIONS,
   resolveOpenAiApiKey,
   defaultOpenAiKeyFile,
   defaultOpenRouterKeyFile,
 } from './openai.js'
-export type { OpenAiKeyOptions, OpenAiProviderOptions, OpenAiFlavor } from './openai.js'
+export type { OpenAiKeyOptions, OpenAiProviderOptions, OpenAiFlavor, OpenAiEmbeddingProviderOptions } from './openai.js'
 export { assertVectorDimensions, cosineSimilarity } from './embeddings-guard.js'
 
 export type LlmProfileName = '100-local' | 'local-plus-cloud' | 'cloud'
@@ -179,10 +183,31 @@ export async function resolveLlmProfile(
     }
   }
 
-  // Embeddings : Ollama seul en V1 (Anthropic n'expose pas d'embeddings) — quel que soit le profil.
-  const embeddings: EmbeddingProvider | null = (await ollamaEmbeddings.isAvailable())
-    ? ollamaEmbeddings
-    : null
+  // Embeddings — LOCAL-FIRST : Ollama garde la priorité dès qu'il est
+  // disponible, quel que soit le profil. Une installation tout-local conserve
+  // donc exactement le comportement d'avant.
+  //
+  // Repli CLOUD (OpenAI) seulement si Ollama n'a pas le modèle : sans lui, une
+  // machine sans modèle local n'avait AUCUNE recherche sémantique, et le seul
+  // remède était d'installer Ollama. Anthropic n'expose pas d'embeddings, d'où
+  // le choix d'OpenAI ici.
+  // Le repli cloud n'est autorisé QUE si l'extraction passe déjà par OpenAI :
+  // même fournisseur, donc aucun nouveau destinataire des données. Un profil
+  // 100-local, ou une extraction Anthropic/LM Studio, ne doit JAMAIS voir ses
+  // souvenirs partir vers un tiers pour cause d'embeddings manquants.
+  const openaiEmbeddings = new OpenAiEmbeddingProvider({ ...(opts.env ? { env: opts.env } : {}) })
+  const cloudAllowed = extraction?.name === 'openai'
+  let embeddings: EmbeddingProvider | null = null
+  if (await ollamaEmbeddings.isAvailable()) {
+    embeddings = ollamaEmbeddings
+  } else if (cloudAllowed && (await openaiEmbeddings.isAvailable())) {
+    embeddings = openaiEmbeddings
+    console.warn(
+      `[memoria:llm] embeddings via ${openaiEmbeddings.name}/${openaiEmbeddings.model} (${openaiEmbeddings.dimensions}d) — ` +
+        `Ollama indisponible. Les vecteurs d'un autre modèle restent en base mais ne sont plus comparables : ` +
+        `relancer l'indexation pour rétablir la recherche sémantique.`,
+    )
+  }
 
   if (extraction === null) {
     console.warn(`[memoria:llm] aucun provider d'extraction disponible — couches LLM d'extraction désactivées`)
