@@ -167,7 +167,7 @@ export class CapturePipeline {
             action: 'wal_entry_abandoned',
             target_id_hash: sha256Hex(`wal:${store.path}:${entry.id}`),
             scope_id: null,
-            reason: `attempts=${entry.attempts}; error=${error instanceof Error ? error.constructor.name : typeof error}`,
+            reason: `attempts=${entry.attempts}; error=${errorSignature(error, this.deps.redactor)}`,
           })
         },
       })
@@ -315,4 +315,25 @@ export function parseFactArray(raw: string): ExtractedFact[] {
 function excerpt(text: string, max = 120): string {
   const flat = text.replaceAll('\n', ' ')
   return flat.length > max ? `${flat.slice(0, max)}…` : flat
+}
+
+/**
+ * Signature d'erreur pour l'audit : diagnostiquable SANS fuiter de contenu.
+ *
+ * L'audit n'enregistrait que `error.constructor.name`, donc littéralement
+ * « Error » — une extraction morte pendant dix jours restait indiagnosticable.
+ * L'intention (ne jamais journaliser de contenu de conversation) était juste,
+ * le remède trop radical.
+ *
+ * Compromis retenu : on garde le message, mais TRONQUÉ et passé par le gate
+ * secrets — un message de provider peut contenir une clé ou un extrait de
+ * prompt. Ce qui sert au diagnostic (statut HTTP, code réseau, finish_reason)
+ * est court et tient dans la limite.
+ */
+export function errorSignature(error: unknown, redactor: Redactor | null): string {
+  if (!(error instanceof Error)) return typeof error
+  const code = (error as { code?: string }).code
+  const raw = `${error.name}${code ? `(${code})` : ''}: ${error.message}`
+  const safe = redactor ? redactor.redact(raw).text : raw
+  return safe.replace(/\s+/g, ' ').slice(0, 300)
 }

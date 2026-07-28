@@ -62,13 +62,24 @@ export interface OpenAiProviderOptions extends OpenAiKeyOptions {
 }
 
 interface ChatCompletionResponse {
-  choices?: Array<{ message?: { content?: string } }>
+  choices?: Array<{ message?: { content?: string }; finish_reason?: string }>
+  usage?: {
+    completion_tokens?: number
+    completion_tokens_details?: { reasoning_tokens?: number }
+  }
 }
 
 /** Modèles à génération de tokens « completion » (gpt-5*, o1*, o3*…). */
 function usesCompletionTokens(model: string): boolean {
   return /^(gpt-5|o1|o3|o4)/.test(model)
 }
+
+/**
+ * Plancher de `max_completion_tokens` sur les modèles à raisonnement : le budget
+ * couvre raisonnement + réponse, et 1024 ne suffit pas à garantir qu'il reste de
+ * quoi écrire la réponse une fois le raisonnement payé.
+ */
+const REASONING_TOKEN_FLOOR = 4096
 
 export class OpenAiProvider implements LlmProvider {
   readonly name: string
@@ -116,8 +127,21 @@ export class OpenAiProvider implements LlmProvider {
       messages,
     }
     // gpt-5*/o* : max_completion_tokens ; autres : max_tokens.
-    if (usesCompletionTokens(this.model)) body['max_completion_tokens'] = opts.maxTokens ?? 1024
-    else body['max_tokens'] = opts.maxTokens ?? 1024
+    //
+    // ⚠ Sur ces modèles, le budget couvre AUSSI les tokens de raisonnement, qui
+    // sont facturés et consommés AVANT la réponse visible. Avec 1024, le
+    // raisonnement peut absorber tout le budget : l'API répond alors 200 avec un
+    // `content` VIDE et `finish_reason: "length"`. Observé en production —
+    // 154 extractions abandonnées, toutes sur « extraction LLM sans JSON : «  » ».
+    // On garantit donc un plancher de budget, et on demande un effort de
+    // raisonnement FAIBLE : extraire des faits est une tâche structurée, pas un
+    // problème de raisonnement.
+    if (usesCompletionTokens(this.model)) {
+      body['max_completion_tokens'] = Math.max(opts.maxTokens ?? 1024, REASONING_TOKEN_FLOOR)
+      body['reasoning_effort'] = 'low'
+    } else {
+      body['max_tokens'] = opts.maxTokens ?? 1024
+    }
     // Les modèles gpt-5*/o* ne prennent que temperature=1 (défaut) → on omet.
     if (opts.temperature !== undefined && !usesCompletionTokens(this.model)) body['temperature'] = opts.temperature
     if (opts.json) body['response_format'] = { type: 'json_object' }
@@ -143,9 +167,29 @@ export class OpenAiProvider implements LlmProvider {
       throw new Error(`${this.flavor} /chat/completions HTTP ${res.status} (modèle ${this.model}) : ${detail.slice(0, 200)}`)
     }
     const data = (await res.json()) as ChatCompletionResponse
-    const content = data.choices?.[0]?.message?.content
+    const choice = data.choices?.[0]
+    const content = choice?.message?.content
     if (typeof content !== 'string') {
       throw new Error(`réponse ${this.flavor} invalide : choices[0].message.content absent (modèle ${this.model})`)
+    }
+    // Une réponse VIDE n'est pas une réponse. Remonter `""` laissait l'appelant
+    // échouer plus loin sur « sans JSON : «  » », sans jamais dire POURQUOI.
+    // On expose ici les seuls éléments qui permettent de trancher : la raison
+    // d'arrêt et le détail des tokens (dont ceux de raisonnement).
+    if (content.trim() === '') {
+      const finish = choice?.finish_reason ?? 'inconnu'
+      const usage = data.usage
+      const reasoning = usage?.completion_tokens_details?.reasoning_tokens
+      const budget = usesCompletionTokens(this.model)
+        ? Math.max(opts.maxTokens ?? 1024, REASONING_TOKEN_FLOOR)
+        : (opts.maxTokens ?? 1024)
+      const hint =
+        finish === 'length'
+          ? ` — budget épuisé avant la réponse (max=${budget}${reasoning !== undefined ? `, raisonnement=${reasoning}` : ''}) : augmenter maxTokens ou baisser reasoning_effort`
+          : ''
+      throw new Error(
+        `${this.flavor} a renvoyé une réponse VIDE (modèle ${this.model}, finish_reason=${finish})${hint}`,
+      )
     }
     return content
   }

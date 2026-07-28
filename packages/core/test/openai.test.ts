@@ -51,14 +51,54 @@ describe('OpenAiProvider', () => {
     expect(body['response_format']).toEqual({ type: 'json_object' })
   })
 
-  it('gpt-5-mini → max_completion_tokens, pas de temperature', async () => {
+  it('gpt-5-mini → max_completion_tokens plancher, effort faible, pas de temperature', async () => {
     let body: Record<string, unknown> = {}
     mockChat(b => { body = b })
     const p = new OpenAiProvider({ apiKey: 'sk-x', model: 'gpt-5-mini' })
     await p.complete({ prompt: 'json please', maxTokens: 256, temperature: 0.1, json: true })
-    expect(body['max_completion_tokens']).toBe(256)
+    // Sur un modèle à raisonnement le budget couvre AUSSI le raisonnement :
+    // honorer 256 revenait à ne laisser aucun token pour la réponse (content
+    // vide + finish_reason=length, observé en production).
+    expect(body['max_completion_tokens']).toBe(4096)
+    expect(body['reasoning_effort']).toBe('low')
     expect(body['max_tokens']).toBeUndefined()
     expect(body['temperature']).toBeUndefined()
+  })
+
+  it('un budget déjà généreux est respecté tel quel', async () => {
+    let body: Record<string, unknown> = {}
+    mockChat(b => { body = b })
+    const p = new OpenAiProvider({ apiKey: 'sk-x', model: 'gpt-5-mini' })
+    await p.complete({ prompt: 'json', maxTokens: 8000, json: true })
+    expect(body['max_completion_tokens']).toBe(8000)
+  })
+
+  it('modèle NON raisonnant : budget honoré, pas de reasoning_effort', async () => {
+    let body: Record<string, unknown> = {}
+    mockChat(b => { body = b })
+    const p = new OpenAiProvider({ apiKey: 'sk-x', model: 'gpt-4o-mini' })
+    await p.complete({ prompt: 'json', maxTokens: 256, json: true })
+    expect(body['max_tokens']).toBe(256)
+    expect(body['reasoning_effort']).toBeUndefined()
+  })
+
+  it('réponse VIDE → erreur explicite avec finish_reason et tokens de raisonnement', async () => {
+    // Le cas réel : HTTP 200, content vide, budget consommé par le raisonnement.
+    // Avant, `''` remontait tel quel et échouait plus loin sur « sans JSON : «  » »
+    // sans jamais dire pourquoi — 154 extractions perdues, indiagnosticables.
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          choices: [{ message: { content: '' }, finish_reason: 'length' }],
+          usage: { completion_tokens: 4096, completion_tokens_details: { reasoning_tokens: 4096 } },
+        }),
+        { status: 200 },
+      ),
+    ))
+    const p = new OpenAiProvider({ apiKey: 'sk-x', model: 'gpt-5-mini' })
+    await expect(p.complete({ prompt: 'json', json: true })).rejects.toThrow(
+      /réponse VIDE.*finish_reason=length.*raisonnement=4096/s,
+    )
   })
 
   it('mode json sans « json » dans le prompt → directive ajoutée au system', async () => {
