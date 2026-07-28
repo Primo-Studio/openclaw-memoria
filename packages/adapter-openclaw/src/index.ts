@@ -284,6 +284,8 @@ export interface RecallItem {
    * l'agent voie qu'il est contesté, sinon il l'applique comme s'il faisait foi.
    */
   revision?: { kind: 'obsolete' | 'contradicted' | 'duplicate'; replacement_fact_id?: string }
+  /** Niveau de vérité : `inferred` = déduit par l'agent, personne ne l'a dit. */
+  origin?: 'declared' | 'extracted' | 'inferred' | 'confirmed'
   /** Champs de provenance — optionnels : un daemon antérieur peut ne pas les servir. */
   id?: string
   created_at?: string
@@ -332,6 +334,17 @@ export function sanitizeMemory(content: string): string {
  * On ne masque rien (un faux positif enterrerait un souvenir valide) : on
  * signale, et l'agent arbitre en connaissance de cause.
  */
+/**
+ * Marque les souvenirs DÉDUITS. Un fait que l'agent a inféré d'un motif récurrent
+ * n'a jamais été énoncé par personne : le présenter comme les autres, c'est
+ * laisser une hypothèse devenir une règle — le risque nommé par les deux retours.
+ * Les niveaux `declared`/`extracted`/`confirmed` ne sont PAS annotés : signaler
+ * l'ordinaire noierait le signal.
+ */
+export function originPrefix(item: RecallItem): string {
+  return item.origin === 'inferred' ? '~ [inferred, never stated] ' : ''
+}
+
 export function contestedPrefix(item: RecallItem): string {
   switch (item.revision?.kind) {
     case 'contradicted':
@@ -395,7 +408,7 @@ export function formatRecall(items: RecallItem[], opts: FormatRecallOptions = {}
       const text = sanitizeMemory(item.content)
       if (!text) continue
       const stamp = opts.showProvenance && item.created_at ? ` _(${item.created_at.slice(0, 10)})_` : ''
-      const line = `- ${contestedPrefix(item)}${text}${stamp}`
+      const line = `- ${contestedPrefix(item)}${originPrefix(item)}${text}${stamp}`
       const cost = line.length + 1 + (headerPending ? headerPending.join('\n').length + 1 : 0)
       if (used + cost > budgetChars) break
       if (headerPending) {

@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   buildActiveContext,
   contestedPrefix,
+  originPrefix,
   formatRecall,
   getStats,
   partsToText,
@@ -470,5 +471,32 @@ describe('souvenirs contestés — supersession visible', () => {
   it('la contestation apparaît dans la provenance du mode corpus', () => {
     const r = toCorpusResult(it2({ id: 'f-1', created_at: '2026-07-01T10:00:00Z', revision: { kind: 'contradicted' } }))
     expect(r.provenanceLabel).toContain('⚠ contradicted')
+  })
+})
+
+describe('niveaux de vérité — le déduit est signalé', () => {
+  const it3 = (over: Partial<RecallItem>): RecallItem => ({
+    kind: 'fact', content: 'contenu', category: 'general', score: 1, ...over,
+  })
+
+  it('un fait déduit est annoté, les autres non', () => {
+    expect(originPrefix(it3({ origin: 'inferred' }))).toContain('inferred, never stated')
+    // Annoter l'ordinaire noierait le signal.
+    expect(originPrefix(it3({ origin: 'extracted' }))).toBe('')
+    expect(originPrefix(it3({ origin: 'declared' }))).toBe('')
+    expect(originPrefix(it3({ origin: 'confirmed' }))).toBe('')
+    expect(originPrefix(it3({}))).toBe('')
+  })
+
+  it('le bloc injecté cumule contestation et origine', () => {
+    const block = formatRecall([
+      it3({ content: 'Néto préfère pnpm', origin: 'inferred', revision: { kind: 'contradicted' } }),
+    ])
+    expect(block).toContain('⚠ [contested by a more recent memory] ~ [inferred, never stated] Néto préfère pnpm')
+  })
+
+  it('la provenance corpus porte l’origine, sauf pour l’ordinaire', () => {
+    expect(toCorpusResult(it3({ origin: 'inferred' })).provenanceLabel).toContain('inferred')
+    expect(toCorpusResult(it3({ origin: 'extracted' })).provenanceLabel).not.toContain('extracted')
   })
 })

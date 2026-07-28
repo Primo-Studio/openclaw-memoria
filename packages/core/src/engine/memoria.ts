@@ -47,6 +47,7 @@ import {
 import { estimateTokens, newId, nowISO, sha256Hex } from '../util.js'
 import { createSecretProvider, RegexRedactor } from '../secrets/index.js'
 import type { SecretProvider } from '../secrets/types.js'
+import { factOrigin } from './origin.js'
 import { resolveLlmProfile, auditExtraction, auditEmbeddings, formatCloudSend } from '../llm/index.js'
 import type { CloudAuditSink } from '../llm/index.js'
 import type { LlmOptions } from '../llm/detect.js'
@@ -600,6 +601,7 @@ export class Memoria {
             source_db: relative(this.paths.root, target.dbPath),
             score: parts.total,
             created_at: hit.row.created_at,
+            origin: factOrigin(hit.row),
           },
         })
       }
@@ -644,6 +646,7 @@ export class Memoria {
               source_db: relative(this.paths.root, meta.dbPath),
               score: parts.total,
               created_at: row.created_at,
+              origin: factOrigin(row),
             },
           })
         }

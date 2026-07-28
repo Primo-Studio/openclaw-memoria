@@ -31,6 +31,8 @@ export {
 } from './control/autostart.js'
 export type { AutostartSpec, AutostartStatus } from './control/autostart.js'
 export { RegistryStore } from './storage/registry.js'
+export { factOrigin, originLabel, needsCaution } from './engine/origin.js'
+export type { FactOrigin } from './engine/origin.js'
 export { ContentStore, toFtsQuery, queryTokens, normalizeText, isContentWord, rowToFact } from './storage/content.js'
 export type { FactRow, InsertFactInput, FtsHit, FtsSearchOptions } from './storage/content.js'
 export { runMigrations, schemaVersion } from './storage/migrations.js'

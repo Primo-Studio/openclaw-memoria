@@ -321,6 +321,8 @@ export interface RecallInput {
  * On ne supersède rien automatiquement — trop risqué, un faux positif masquerait
  * un souvenir valide en silence — mais on rend la contestation VISIBLE.
  */
+import type { FactOrigin } from './engine/origin.js'
+
 export interface PendingRevision {
   kind: 'obsolete' | 'contradicted' | 'duplicate'
   /** Fait plus récent proposé en remplacement (absent pour un obsolète pur). */
@@ -338,6 +340,8 @@ export interface RecallItem {
   created_at: string
   /** Présent UNIQUEMENT si une révision est proposée et non tranchée. */
   revision?: PendingRevision
+  /** Niveau de vérité dérivé (déclaré / extrait / déduit / confirmé). */
+  origin?: FactOrigin
 }
 
 export interface RecallResult {
