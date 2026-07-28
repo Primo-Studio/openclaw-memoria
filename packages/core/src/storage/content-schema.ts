@@ -265,4 +265,21 @@ export const contentMigrations: Migration[] = [
       }
     },
   },
+  {
+    version: 4,
+    name: 'content-pin-and-ttl',
+    up(db) {
+      // ÉPINGLAGE et EXPIRATION (retour bêta) : « épingler un souvenir
+      // important » et « expiration/TTL » étaient les deux seuls contrôles
+      // manquants côté utilisateur — on pouvait tout oublier, rien retenir de
+      // force, et rien faire périmer volontairement.
+      const cols = (db.pragma('table_info(facts)') as Array<{ name: string }>).map(c => c.name)
+      if (!cols.includes('pinned')) db.exec('ALTER TABLE facts ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0')
+      if (!cols.includes('expires_at')) db.exec('ALTER TABLE facts ADD COLUMN expires_at TEXT')
+      // Index partiels : les épinglés et les périssables sont des minorités, on
+      // ne paie pas un index plein pour eux.
+      db.exec('CREATE INDEX IF NOT EXISTS idx_facts_pinned ON facts(pinned) WHERE pinned = 1')
+      db.exec('CREATE INDEX IF NOT EXISTS idx_facts_expires ON facts(expires_at) WHERE expires_at IS NOT NULL')
+    },
+  },
 ]

@@ -47,7 +47,9 @@ import {
 import { estimateTokens, newId, nowISO, sha256Hex } from '../util.js'
 import { createSecretProvider, RegexRedactor } from '../secrets/index.js'
 import type { SecretProvider } from '../secrets/types.js'
-import { resolveLlmProfile } from '../llm/index.js'
+import { factOrigin } from './origin.js'
+import { resolveLlmProfile, auditExtraction, auditEmbeddings, formatCloudSend } from '../llm/index.js'
+import type { CloudAuditSink } from '../llm/index.js'
 import type { LlmOptions } from '../llm/detect.js'
 import type { EmbeddingProvider, LlmProvider } from '../llm/provider.js'
 import { CapturePipeline, type CaptureTurnInput, type CaptureTurnResult } from './capture.js'
@@ -72,6 +74,8 @@ import type {
   PendingRevision,
   DoctorActivity,
   DoctorMemory,
+  DoctorCloud,
+  CaptureStatusResult,
   RecallResult,
   StoreFactInput,
 } from '../types.js'
@@ -598,6 +602,7 @@ export class Memoria {
             source_db: relative(this.paths.root, target.dbPath),
             score: parts.total,
             created_at: hit.row.created_at,
+            origin: factOrigin(hit.row),
           },
         })
       }
@@ -642,6 +647,7 @@ export class Memoria {
               source_db: relative(this.paths.root, meta.dbPath),
               score: parts.total,
               created_at: row.created_at,
+              origin: factOrigin(row),
             },
           })
         }
@@ -712,7 +718,7 @@ export class Memoria {
     this.mustInstance(input.instance)
     const mode = this.getCaptureMode()
     if (mode === 'incognito') {
-      return { appended: 0, processed: 0, facts_created: 0, deferred: 0, failed: 0, abandoned: 0, mode }
+      return { appended: 0, wal_ids: [], processed: 0, facts_created: 0, deferred: 0, failed: 0, abandoned: 0, mode }
     }
     const startedAt = Date.now()
     const pipeline = await this.ensurePipeline()
@@ -1049,6 +1055,208 @@ export class Memoria {
     return this.feedbackFor(this.openContent(db.path)).reinforce(factIds, { used })
   }
 
+  /**
+   * Statut des messages d'une capture — le « suivi de colis » réclamé en bêta.
+   *
+   * Dérivé du WAL et de l'audit, SANS table ni colonne supplémentaire :
+   *   processed=0, attempts=0  → pending    (en file)
+   *   processed=0, attempts>0  → retrying   (tentative n/max)
+   *   processed=1 + audit d'abandon → failed
+   *   processed=1 sinon        → done
+   *
+   * L'abandon n'est pas marqué sur la ligne WAL (elle est simplement
+   * `processed`), mais il est audité avec un hash de l'id : c'est ce hash qu'on
+   * recoupe ici. Un statut faux serait pire que pas de statut.
+   */
+  captureStatus(instanceId: string, walIds: number[]): CaptureStatusResult {
+    this.assertOpen()
+    const out: CaptureStatusResult = { entries: [], pending: 0, retrying: 0, done: 0, failed: 0 }
+    if (walIds.length === 0) return out
+    const db = this.registry.dbForInstance(instanceId)
+    if (!db || !existsSync(db.path)) return out
+    const store = this.openContent(db.path)
+
+    const placeholders = walIds.map(() => '?').join(',')
+    const rows = store.db
+      .prepare(`SELECT id, processed, attempts FROM wal_buffer WHERE id IN (${placeholders})`)
+      .all(...walIds) as Array<{ id: number; processed: number; attempts: number }>
+    const known = new Map(rows.map(r => [r.id, r]))
+
+    for (const id of walIds) {
+      const row = known.get(id)
+      if (!row) {
+        // Purgée par le cleanup borné : elle a forcément été traitée, sinon elle
+        // serait restée pending (le cleanup ne touche que `processed = 1`).
+        out.entries.push({ wal_id: id, status: 'done', attempts: 0 })
+        out.done++
+        continue
+      }
+      if (row.processed === 0) {
+        const status = row.attempts > 0 ? 'retrying' : 'pending'
+        out.entries.push({ wal_id: id, status, attempts: row.attempts })
+        if (status === 'retrying') out.retrying++
+        else out.pending++
+        continue
+      }
+      const abandoned = this.registry.db
+        .prepare("SELECT 1 FROM audit_log WHERE action = 'wal_entry_abandoned' AND target_id_hash = ? LIMIT 1")
+        .get(sha256Hex(`wal:${store.path}:${id}`)) as unknown
+      if (abandoned) {
+        out.entries.push({ wal_id: id, status: 'failed', attempts: row.attempts })
+        out.failed++
+      } else {
+        out.entries.push({ wal_id: id, status: 'done', attempts: row.attempts })
+        out.done++
+      }
+    }
+    return out
+  }
+
+  /**
+   * CORRIGE un souvenir : crée la version corrigée et marque l'ancienne
+   * supersédée, `superseded_by` pointant sur la nouvelle.
+   *
+   * On ne réécrit JAMAIS le contenu en place. Deux raisons : la chaîne de
+   * supersession reste navigable (« d'où vient cette correction ? »), et une
+   * correction erronée reste rattrapable — écraser le texte détruirait
+   * l'historique sans filet. C'est la même règle que `RevisionEngine.accept()`.
+   */
+  correctFact(instanceId: string, factId: string, content: string): { replacement: Fact | null } {
+    this.assertOpen()
+    const text = content.trim()
+    if (!text) throw new Error('contenu de correction vide')
+    const db = this.registry.dbForInstance(instanceId)
+    if (!db || !existsSync(db.path)) return { replacement: null }
+    const store = this.openContent(db.path)
+    const old = store.getFact(factId)
+    if (!old || old.superseded) return { replacement: null }
+
+    // La correction hérite du classement de l'original (catégorie, scope,
+    // épinglage) : corriger une formulation ne doit pas dégrader le rangement.
+    const replacement = this.storeFact({
+      instance: instanceId,
+      content: text,
+      category: old.category,
+      scope: old.scope_id,
+    })
+    store.db
+      .prepare("UPDATE facts SET superseded = 1, superseded_by = ?, updated_at = ? WHERE id = ? AND superseded = 0")
+      .run(replacement.id, nowISO(), factId)
+    // `Fact` (forme exposée) ne porte pas `pinned` : on relit la colonne brute.
+    const wasPinned = store.db.prepare('SELECT pinned FROM facts WHERE id = ?').get(factId) as { pinned?: number } | undefined
+    if (wasPinned?.pinned) store.db.prepare('UPDATE facts SET pinned = 1 WHERE id = ?').run(replacement.id)
+    this.registry.audit({
+      actor_type: 'user', actor_id: 'local', action: 'fact_correct',
+      target_id_hash: sha256Hex(factId), scope_id: null, reason: `replacement=${sha256Hex(replacement.id).slice(0, 12)}`,
+    })
+    return { replacement }
+  }
+
+  /**
+   * FUSIONNE des doublons : `keepId` survit, les autres sont supersédés en
+   * pointant sur lui. Aucun contenu n'est réécrit ni supprimé — un doublon
+   * fusionné reste consultable et la fusion reste traçable.
+   */
+  mergeFacts(instanceId: string, keepId: string, mergeIds: string[]): { merged: string[] } {
+    this.assertOpen()
+    const targets = mergeIds.filter(id => id !== keepId)
+    if (targets.length === 0) return { merged: [] }
+    const db = this.registry.dbForInstance(instanceId)
+    if (!db || !existsSync(db.path)) return { merged: [] }
+    const store = this.openContent(db.path)
+    const keep = store.getFact(keepId)
+    // Refuser plutôt que fusionner vers un fait absent ou déjà supersédé :
+    // on créerait une chaîne cassée, exactement le bug legacy 'split:'.
+    if (!keep || keep.superseded) throw new Error(`fusion impossible : le fait conservé ${keepId} est absent ou supersédé`)
+
+    const ts = nowISO()
+    const merged: string[] = []
+    const tx = store.db.transaction(() => {
+      for (const id of targets) {
+        const r = store.db
+          .prepare("UPDATE facts SET superseded = 1, superseded_by = ?, updated_at = ? WHERE id = ? AND superseded = 0")
+          .run(keepId, ts, id)
+        if (r.changes > 0) merged.push(id)
+      }
+    })
+    tx()
+    if (merged.length > 0) {
+      this.registry.audit({
+        actor_type: 'user', actor_id: 'local', action: 'fact_merge',
+        target_id_hash: sha256Hex(keepId), scope_id: null, reason: `merged=${merged.length}`,
+      })
+    }
+    return { merged }
+  }
+
+  /**
+   * Souvenirs JAMAIS utilisés — la matière du ménage réclamé en bêta
+   * (« afficher les mémoires jamais utilisées »).
+   */
+  neverUsedFacts(instanceId: string, limit = 100): Fact[] {
+    this.assertOpen()
+    const db = this.registry.dbForInstance(instanceId)
+    if (!db || !existsSync(db.path)) return []
+    const store = this.openContent(db.path)
+    const rows = store.db
+      .prepare(
+        `SELECT * FROM facts
+         WHERE superseded = 0 AND used_count = 0 AND pinned = 0
+         ORDER BY created_at ASC LIMIT ?`,
+      )
+      .all(Math.max(1, limit)) as FactRow[]
+    return rows.map(rowToFact)
+  }
+
+  /**
+   * Épingle ou désépingle un souvenir. Un fait épinglé remonte franchement au
+   * recall et échappe à l'atténuation des dormants — c'est le « garde ça sous
+   * la main » réclamé en bêta. Ne modifie jamais le contenu.
+   */
+  setPinned(instanceId: string, factId: string, pinned: boolean): boolean {
+    this.assertOpen()
+    const db = this.registry.dbForInstance(instanceId)
+    if (!db || !existsSync(db.path)) return false
+    const store = this.openContent(db.path)
+    const r = store.db
+      .prepare('UPDATE facts SET pinned = ?, updated_at = ? WHERE id = ?')
+      .run(pinned ? 1 : 0, nowISO(), factId)
+    if (r.changes > 0) {
+      this.registry.audit({
+        actor_type: 'user', actor_id: 'local',
+        action: pinned ? 'fact_pin' : 'fact_unpin',
+        target_id_hash: sha256Hex(factId), scope_id: null, reason: null,
+      })
+    }
+    return r.changes > 0
+  }
+
+  /**
+   * Fixe (ou lève, avec `null`) la date d'expiration d'un souvenir. Passé cette
+   * date il n'est plus RAPPELÉ — il n'est pas supprimé : l'utilisateur a demandé
+   * qu'on cesse de s'en servir, pas qu'on efface l'historique.
+   */
+  setExpiry(instanceId: string, factId: string, expiresAt: string | null): boolean {
+    this.assertOpen()
+    if (expiresAt !== null && Number.isNaN(Date.parse(expiresAt))) {
+      throw new Error(`date d'expiration invalide : ${expiresAt} (ISO 8601 attendu)`)
+    }
+    const db = this.registry.dbForInstance(instanceId)
+    if (!db || !existsSync(db.path)) return false
+    const store = this.openContent(db.path)
+    const r = store.db
+      .prepare('UPDATE facts SET expires_at = ?, updated_at = ? WHERE id = ?')
+      .run(expiresAt, nowISO(), factId)
+    if (r.changes > 0) {
+      this.registry.audit({
+        actor_type: 'user', actor_id: 'local', action: 'fact_expiry',
+        target_id_hash: sha256Hex(factId), scope_id: null,
+        reason: expiresAt ? `expires_at=${expiresAt}` : 'levée',
+      })
+    }
+    return r.changes > 0
+  }
+
   /** Domaines d'expertise de l'agent (où il « sait » le plus). */
   topExpertise(instanceId: string, limit = 10): Array<{ domain: string; level: number; evidence_count: number }> {
     this.assertOpen()
@@ -1255,7 +1463,22 @@ export class Memoria {
         return { extraction: this.llmOverride.extraction, embeddings: this.llmOverride.embeddings ?? null }
       }
       const profile = await resolveLlmProfile(this.resolved.config)
-      return { extraction: profile.extraction, embeddings: profile.embeddings }
+      // Journal des envois cloud : enveloppe ICI, seul point où les deux
+      // providers sont résolus. Les providers locaux ressortent inchangés.
+      const sink: CloudAuditSink = send => {
+        this.registry.audit({
+          actor_type: 'system',
+          actor_id: 'llm',
+          action: 'cloud_send',
+          target_id_hash: null,
+          scope_id: null,
+          reason: formatCloudSend(send),
+        })
+      }
+      return {
+        extraction: profile.extraction ? auditExtraction(profile.extraction, sink) : null,
+        embeddings: profile.embeddings ? auditEmbeddings(profile.embeddings, sink) : null,
+      }
     })()
     return this.profilePromise
   }
@@ -2280,6 +2503,7 @@ export class Memoria {
 
     const activity = this.doctorActivity()
     const memory = this.doctorMemory()
+    const cloud = this.doctorCloud()
 
     // Les avertissements sont ce que l'utilisateur doit ACTION­NER — pas une
     // reformulation des compteurs. On ne signale que l'anormal.
@@ -2306,8 +2530,41 @@ export class Memoria {
       network_guard: { on_network_volume: onNetwork, journal_mode: journalMode },
       activity,
       memory,
+      cloud,
       warnings,
     }
+  }
+
+  /** Envois cloud des dernières 24 h, agrégés depuis `audit_log`. */
+  private doctorCloud(): DoctorCloud {
+    const db = this.registry.db
+    const since = new Date(Date.now() - 86_400_000).toISOString()
+    const rows = db
+      .prepare("SELECT ts, reason FROM audit_log WHERE action = 'cloud_send' AND ts >= ? ORDER BY id DESC")
+      .all(since) as Array<{ ts: string; reason: string }>
+
+    const groups = new Map<string, { provider: string; model: string; purpose: string; calls: number; items: number; chars: number; failures: number }>()
+    let chars = 0
+    for (const r of rows) {
+      const provider = field(r.reason, 'provider') ?? '?'
+      const model = field(r.reason, 'model') ?? '?'
+      const purpose = field(r.reason, 'purpose') ?? '?'
+      const key = `${provider}|${model}|${purpose}`
+      const g = groups.get(key) ?? { provider, model, purpose, calls: 0, items: 0, chars: 0, failures: 0 }
+      g.calls += 1
+      g.items += metric(r.reason, 'items') ?? 0
+      const c = metric(r.reason, 'chars') ?? 0
+      g.chars += c
+      chars += c
+      if (field(r.reason, 'ok') === 'false') g.failures += 1
+      groups.set(key, g)
+    }
+    const out: DoctorCloud = { sends_24h: [...groups.values()].sort((a, b) => b.chars - a.chars), chars_24h: chars }
+    const last = db
+      .prepare("SELECT ts FROM audit_log WHERE action = 'cloud_send' ORDER BY ts DESC LIMIT 1")
+      .get() as { ts: string } | undefined
+    if (last) out.last_send_at = last.ts
+    return out
   }
 
   /** Activité récente, lue dans `audit_log` (aucune table de métriques dédiée). */
@@ -2532,6 +2789,12 @@ function pendingRevisionsFor(store: ContentStore, ids: string[]): Map<string, Pe
   }
   return out
 }
+/** Lit `clé=mot` dans une raison d'audit (`provider=openai purpose=extraction`). */
+function field(reason: string, key: string): string | undefined {
+  const m = new RegExp(`\\b${key}=([^\\s]+)`).exec(reason)
+  return m ? m[1] : undefined
+}
+
 /** Lit `clé=nombre` dans une raison d'audit (`returned=3 tokens=120 ms=41`). */
 function metric(reason: string, key: string): number | undefined {
   const m = new RegExp(`\\b${key}=(\\d+)\\b`).exec(reason)

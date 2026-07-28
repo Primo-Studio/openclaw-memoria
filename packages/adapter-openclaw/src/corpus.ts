@@ -103,6 +103,7 @@ export function provenanceLabel(item: RecallItem): string {
   if (item.category && item.category !== 'general') parts.push(item.category)
   // La contestation passe AUSSI par la provenance : en mode corpus, c'est elle
   // que l'hôte affiche à côté de l'extrait.
+  if (item.origin && item.origin !== 'extracted') parts.push(item.origin)
   if (item.revision) parts.push(`⚠ ${item.revision.kind}`)
   return parts.join(' · ')
 }

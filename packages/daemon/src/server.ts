@@ -797,6 +797,8 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       else if (route === 'POST /v1/memory/store_fact') sendJson(res, 200, { fact: null, disabled: true })
       else if (route === 'POST /v1/memory/capture_turn') sendJson(res, 200, { captured: 0, facts: [], disabled: true })
       else if (route === 'POST /v1/memory/feedback') sendJson(res, 200, { updated: [], domains: [], disabled: true })
+      else if (route === 'POST /v1/memory/capture_status')
+        sendJson(res, 200, { entries: [], pending: 0, retrying: 0, done: 0, failed: 0, disabled: true })
       else throw new HttpError(404, `route mémoire inconnue : ${route}`)
       return
     }
@@ -827,6 +829,49 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
           active_context: body['active_context'] as CaptureTurnInput['active_context'],
         })
         sendJson(res, 200, result)
+        return
+      }
+      case 'POST /v1/memory/correct': {
+        const body = await readJson(req)
+        const factId = String(body['fact_id'] ?? '')
+        const content = String(body['content'] ?? '')
+        if (!factId || !content.trim()) throw new HttpError(400, 'fact_id et content requis')
+        sendJson(res, 200, memoria.correctFact(instanceId, factId, content))
+        return
+      }
+      case 'POST /v1/memory/merge': {
+        const body = await readJson(req)
+        const keep = String(body['keep_fact_id'] ?? '')
+        const ids = body['merge_fact_ids']
+        if (!keep || !Array.isArray(ids)) throw new HttpError(400, 'keep_fact_id et merge_fact_ids requis')
+        sendJson(res, 200, memoria.mergeFacts(instanceId, keep, ids.filter((v): v is string => typeof v === 'string')))
+        return
+      }
+      case 'POST /v1/memory/pin': {
+        const body = await readJson(req)
+        const factId = String(body['fact_id'] ?? '')
+        if (!factId) throw new HttpError(400, 'fact_id requis')
+        if (typeof body['pinned'] !== 'boolean') throw new HttpError(400, 'pinned requis (booléen)')
+        sendJson(res, 200, { updated: memoria.setPinned(instanceId, factId, body['pinned']) })
+        return
+      }
+      case 'POST /v1/memory/expiry': {
+        const body = await readJson(req)
+        const factId = String(body['fact_id'] ?? '')
+        if (!factId) throw new HttpError(400, 'fact_id requis')
+        const raw = body['expires_at']
+        const expires = raw === null || raw === undefined || raw === '' ? null : String(raw)
+        sendJson(res, 200, { updated: memoria.setExpiry(instanceId, factId, expires) })
+        return
+      }
+      case 'POST /v1/memory/capture_status': {
+        // Suivi post-timeout : `capture_turn` rend des `wal_ids`, cette route dit
+        // ce qu'ils sont devenus. Sans elle, un appelant dont la requête expire
+        // ne sait pas si son tour a fini par être mémorisé.
+        const body = await readJson(req)
+        const ids = body['wal_ids']
+        if (!Array.isArray(ids)) throw new HttpError(400, 'wal_ids requis (tableau d’entiers)')
+        sendJson(res, 200, memoria.captureStatus(instanceId, ids.filter((v): v is number => typeof v === 'number')))
         return
       }
       case 'POST /v1/memory/feedback': {

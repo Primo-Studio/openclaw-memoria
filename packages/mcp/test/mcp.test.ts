@@ -60,6 +60,13 @@ function fakeGateway(): DaemonGateway & { calls: Array<{ method: string; input: 
       calls.push({ method: 'feedback', input })
       return { updated: ['f1'], domains: ['preference'] }
     },
+    captureStatus: async input => {
+      calls.push({ method: 'captureStatus', input })
+      return { entries: [{ wal_id: 1, status: 'done', attempts: 0 }], pending: 0, retrying: 0, done: 1, failed: 0 }
+    },
+    pin: async input => { calls.push({ method: 'pin', input }); return { updated: true } },
+    correct: async input => { calls.push({ method: 'correct', input }); return { replacement: { id: 'f2' } } },
+    expiry: async input => { calls.push({ method: 'expiry', input }); return { updated: true } },
   }
 }
 
@@ -172,6 +179,10 @@ describe('buildServer handlers', () => {
       captureTurn: async () => ({}),
       identifyInterlocutor: async () => ({ match: null }),
       feedback: async () => ({ updated: [], domains: [] }),
+      captureStatus: async () => ({ entries: [], pending: 0, retrying: 0, done: 0, failed: 0 }),
+      pin: async () => ({ updated: false }),
+      correct: async () => ({ replacement: null }),
+      expiry: async () => ({ updated: false }),
     }
     const { handlers } = buildServer({
       instanceId: 'i',
@@ -207,7 +218,7 @@ describe('buildServer handlers', () => {
     expect(getPayload.active_context.project_id).toBe('jamboard')
   })
 
-  it('le serveur MCP expose bien les 8 outils', () => {
+  it('le serveur MCP expose bien les 12 outils', () => {
     const { server } = buildServer({
       instanceId: 'i',
       tracker: new ActiveContextTracker(),
@@ -216,13 +227,17 @@ describe('buildServer handlers', () => {
     // registre privé du SDK — vérification structurelle volontairement minimale
     const tools = (server as unknown as { _registeredTools: Record<string, unknown> })._registeredTools
     expect(Object.keys(tools).sort()).toEqual([
+      'memoria_capture_status',
       'memoria_capture_turn',
+      'memoria_correct',
       'memoria_feedback',
       'memoria_get_context',
       'memoria_identify_interlocutor',
       'memoria_identify_or_create_interlocutor',
+      'memoria_pin',
       'memoria_recall',
       'memoria_set_context',
+      'memoria_set_expiry',
       'memoria_store_fact',
     ])
   })

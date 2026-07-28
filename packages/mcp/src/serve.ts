@@ -27,6 +27,10 @@ export interface DaemonGateway {
   identifyInterlocutor(input: Record<string, unknown>): Promise<unknown>
   identifyOrCreateInterlocutor(input: Record<string, unknown>): Promise<unknown>
   feedback(input: Record<string, unknown>): Promise<unknown>
+  captureStatus(input: Record<string, unknown>): Promise<unknown>
+  pin(input: Record<string, unknown>): Promise<unknown>
+  expiry(input: Record<string, unknown>): Promise<unknown>
+  correct(input: Record<string, unknown>): Promise<unknown>
 }
 
 /**
@@ -61,6 +65,22 @@ export class HttpDaemonGateway implements DaemonGateway {
 
   feedback(input: Record<string, unknown>): Promise<unknown> {
     return this.postMemory('/v1/memory/feedback', input)
+  }
+
+  captureStatus(input: Record<string, unknown>): Promise<unknown> {
+    return this.postMemory('/v1/memory/capture_status', input)
+  }
+
+  pin(input: Record<string, unknown>): Promise<unknown> {
+    return this.postMemory('/v1/memory/pin', input)
+  }
+
+  correct(input: Record<string, unknown>): Promise<unknown> {
+    return this.postMemory('/v1/memory/correct', input)
+  }
+
+  expiry(input: Record<string, unknown>): Promise<unknown> {
+    return this.postMemory('/v1/memory/expiry', input)
   }
 
   identifyOrCreateInterlocutor(input: Record<string, unknown>): Promise<unknown> {
@@ -106,6 +126,10 @@ export interface ToolHandlers {
   identifyInterlocutor(args: { phone?: string; email?: string; telegram?: string; whatsapp?: string; handle?: string; name?: string }): Promise<CallToolResult>
   identifyOrCreateInterlocutor(args: { phone?: string; email?: string; telegram?: string; whatsapp?: string; handle?: string; name?: string; relation?: string }): Promise<CallToolResult>
   feedback(args: { fact_ids: string[]; verdict: 'useful' | 'noise' }): Promise<CallToolResult>
+  captureStatus(args: { wal_ids: number[] }): Promise<CallToolResult>
+  correct(args: { fact_id: string; content: string }): Promise<CallToolResult>
+  pin(args: { fact_id: string; pinned: boolean }): Promise<CallToolResult>
+  expiry(args: { fact_id: string; expires_at?: string }): Promise<CallToolResult>
 }
 
 export interface BuiltServer {
@@ -196,6 +220,38 @@ export function buildServer(opts: BuildServerOptions): BuiltServer {
       }
     },
 
+    async correct(args) {
+      try {
+        return ok(await withDaemon(g => g.correct({ fact_id: args.fact_id, content: args.content })))
+      } catch (err) {
+        return fail(err)
+      }
+    },
+
+    async pin(args) {
+      try {
+        return ok(await withDaemon(g => g.pin({ fact_id: args.fact_id, pinned: args.pinned })))
+      } catch (err) {
+        return fail(err)
+      }
+    },
+
+    async expiry(args) {
+      try {
+        return ok(await withDaemon(g => g.expiry({ fact_id: args.fact_id, expires_at: args.expires_at ?? null })))
+      } catch (err) {
+        return fail(err)
+      }
+    },
+
+    async captureStatus(args) {
+      try {
+        return ok(await withDaemon(g => g.captureStatus({ wal_ids: args.wal_ids })))
+      } catch (err) {
+        return fail(err)
+      }
+    },
+
     async feedback(args) {
       try {
         // `verdict` plutôt qu'un booléen nu : « useful/noise » se lit sans
@@ -249,7 +305,8 @@ export function buildServer(opts: BuildServerOptions): BuiltServer {
     {
       description:
         'Search the user\'s long-term memory (facts, preferences, decisions, procedures) and return the most relevant items for a query. Call this at the start of a task to load context. The current active context (project/client/repo) is applied automatically. '
-        + 'An item carrying a `revision` field is CONTESTED: a more recent memory contradicts or duplicates it, pending the user\'s decision. Treat it as doubtful, prefer the memory named by `replacement_fact_id`, and say so rather than acting on it silently.',
+        + 'An item carrying a `revision` field is CONTESTED: a more recent memory contradicts or duplicates it, pending the user\'s decision. Treat it as doubtful, prefer the memory named by `replacement_fact_id`, and say so rather than acting on it silently. '
+        + 'The `origin` field says how much to trust an item: "declared" was stated explicitly, "extracted" comes from a conversation, "confirmed" proved useful in past answers, and "inferred" was deduced by an agent and never actually stated by anyone — treat inferred items as hypotheses, not rules.',
       inputSchema: {
         query: z.string().min(1).describe('Natural-language search query, e.g. "deployment rules for project X".'),
         limit: z.number().int().min(1).max(50).optional().describe('Maximum number of items to return (default chosen by the daemon).'),
@@ -294,6 +351,63 @@ export function buildServer(opts: BuildServerOptions): BuiltServer {
       },
     },
     async args => handlers.captureTurn(args),
+  )
+
+  server.registerTool(
+    'memoria_correct',
+    {
+      description:
+        'Correct a memory that is wrong or outdated. Stores the corrected version and marks the old one as replaced by it — the old text is kept and stays traceable, never overwritten. Prefer this over storing a second contradictory memory, which would leave both active.',
+      inputSchema: {
+        fact_id: z.string().min(1).describe('Id of the memory to correct, from memoria_recall.'),
+        content: z.string().min(1).describe('The corrected statement, self-contained, in the user\'s language.'),
+      },
+    },
+    async args => handlers.correct(args),
+  )
+
+  server.registerTool(
+    'memoria_pin',
+    {
+      description:
+        'Pin or unpin a memory. A pinned memory ranks strongly at recall and is never faded by disuse — use it when the user says something must always be kept in mind. It never edits or deletes the memory itself.',
+      inputSchema: {
+        fact_id: z.string().min(1).describe('Id of the memory, from the `id` field returned by memoria_recall.'),
+        pinned: z.boolean().describe('true to pin, false to unpin.'),
+      },
+    },
+    async args => handlers.pin(args),
+  )
+
+  server.registerTool(
+    'memoria_set_expiry',
+    {
+      description:
+        'Give a memory an expiry date, or lift it. Past that date the memory stops being recalled — it is NOT deleted, the history stays. Use it for things true only for a while (a temporary setup, a holiday closure, a stopgap decision). Omit `expires_at` to lift an existing expiry.',
+      inputSchema: {
+        fact_id: z.string().min(1).describe('Id of the memory, from the `id` field returned by memoria_recall.'),
+        expires_at: z
+          .string()
+          .optional()
+          .describe('ISO 8601 date after which the memory is no longer recalled. Omit to lift the expiry.'),
+      },
+    },
+    async args => handlers.expiry(args),
+  )
+
+  server.registerTool(
+    'memoria_capture_status',
+    {
+      description:
+        'Check what became of messages you handed to memoria_capture_turn. Pass the `wal_ids` it returned. Extraction runs in the background, so a capture that timed out may well have succeeded afterwards — use this instead of re-capturing, which would create duplicates. Statuses: "pending" (queued), "retrying" (extraction failed, will retry), "done" (processed), "failed" (given up after repeated failures).',
+      inputSchema: {
+        wal_ids: z
+          .array(z.number().int())
+          .min(1)
+          .describe('Ids returned in `wal_ids` by memoria_capture_turn.'),
+      },
+    },
+    async args => handlers.captureStatus(args),
   )
 
   server.registerTool(

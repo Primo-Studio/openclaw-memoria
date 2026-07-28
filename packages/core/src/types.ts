@@ -321,6 +321,8 @@ export interface RecallInput {
  * On ne supersède rien automatiquement — trop risqué, un faux positif masquerait
  * un souvenir valide en silence — mais on rend la contestation VISIBLE.
  */
+import type { FactOrigin } from './engine/origin.js'
+
 export interface PendingRevision {
   kind: 'obsolete' | 'contradicted' | 'duplicate'
   /** Fait plus récent proposé en remplacement (absent pour un obsolète pur). */
@@ -338,6 +340,8 @@ export interface RecallItem {
   created_at: string
   /** Présent UNIQUEMENT si une révision est proposée et non tranchée. */
   revision?: PendingRevision
+  /** Niveau de vérité dérivé (déclaré / extrait / déduit / confirmé). */
+  origin?: FactOrigin
 }
 
 export interface RecallResult {
@@ -392,6 +396,33 @@ export interface DoctorMemory {
   wal_stuck: number
 }
 
+/**
+ * Ce qui a QUITTÉ la machine. Vide sur une installation tout-local — ce qui est
+ * en soi l'information la plus utile : rien n'est parti.
+ */
+export interface DoctorCloud {
+  /** Envois sur 24 h, par fournisseur/modèle/finalité. */
+  sends_24h: Array<{ provider: string; model: string; purpose: string; calls: number; items: number; chars: number; failures: number }>
+  last_send_at?: string
+  /** Volume total en caractères sur 24 h — jamais le contenu. */
+  chars_24h: number
+}
+
+/** Statut d'un message confié à la capture (suivi post-timeout). */
+export interface CaptureStatusEntry {
+  wal_id: number
+  status: 'pending' | 'retrying' | 'done' | 'failed'
+  attempts: number
+}
+
+export interface CaptureStatusResult {
+  entries: CaptureStatusEntry[]
+  pending: number
+  retrying: number
+  done: number
+  failed: number
+}
+
 export interface DoctorReport {
   ok: boolean
   storage_root: string
@@ -401,6 +432,7 @@ export interface DoctorReport {
   network_guard: { on_network_volume: boolean; journal_mode: string }
   activity: DoctorActivity
   memory: DoctorMemory
+  cloud: DoctorCloud
   warnings: string[]
 }
 
