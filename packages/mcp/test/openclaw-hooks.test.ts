@@ -39,7 +39,11 @@ describe('installOpenClawHooks', () => {
 
     // openclaw.json correct
     const cfg = JSON.parse(readFileSync(join(oc, 'openclaw.json'), 'utf8'))
-    expect(cfg.plugins.allow).toContain('memoria')
+    // `plugins.allow` reste ABSENT sur une config qui n'en avait pas : l'absence
+    // signifie « tout autoriser », et la créer pour y mettre `memoria` la
+    // transformerait en liste blanche EXCLUSIVE, coupant tous les autres plugins.
+    // Régression observée en production (12 plugins chargés → 2).
+    expect(cfg.plugins.allow).toBeUndefined()
     expect(cfg.plugins.entries.memoria.enabled).toBe(true)
     expect(cfg.plugins.entries.memoria.hooks.allowConversationAccess).toBe(true) // ← LE point critique
     expect(cfg.plugins.entries.memoria.hooks.allowPromptInjection).toBe(true)
