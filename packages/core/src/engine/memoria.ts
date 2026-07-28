@@ -75,6 +75,7 @@ import type {
   DoctorActivity,
   DoctorMemory,
   DoctorCloud,
+  CaptureStatusResult,
   RecallResult,
   StoreFactInput,
 } from '../types.js'
@@ -717,7 +718,7 @@ export class Memoria {
     this.mustInstance(input.instance)
     const mode = this.getCaptureMode()
     if (mode === 'incognito') {
-      return { appended: 0, processed: 0, facts_created: 0, deferred: 0, failed: 0, abandoned: 0, mode }
+      return { appended: 0, wal_ids: [], processed: 0, facts_created: 0, deferred: 0, failed: 0, abandoned: 0, mode }
     }
     const startedAt = Date.now()
     const pipeline = await this.ensurePipeline()
@@ -1052,6 +1053,63 @@ export class Memoria {
     const db = this.registry.dbForInstance(instanceId)
     if (!db) return { updated: [], domains: [] }
     return this.feedbackFor(this.openContent(db.path)).reinforce(factIds, { used })
+  }
+
+  /**
+   * Statut des messages d'une capture — le « suivi de colis » réclamé en bêta.
+   *
+   * Dérivé du WAL et de l'audit, SANS table ni colonne supplémentaire :
+   *   processed=0, attempts=0  → pending    (en file)
+   *   processed=0, attempts>0  → retrying   (tentative n/max)
+   *   processed=1 + audit d'abandon → failed
+   *   processed=1 sinon        → done
+   *
+   * L'abandon n'est pas marqué sur la ligne WAL (elle est simplement
+   * `processed`), mais il est audité avec un hash de l'id : c'est ce hash qu'on
+   * recoupe ici. Un statut faux serait pire que pas de statut.
+   */
+  captureStatus(instanceId: string, walIds: number[]): CaptureStatusResult {
+    this.assertOpen()
+    const out: CaptureStatusResult = { entries: [], pending: 0, retrying: 0, done: 0, failed: 0 }
+    if (walIds.length === 0) return out
+    const db = this.registry.dbForInstance(instanceId)
+    if (!db || !existsSync(db.path)) return out
+    const store = this.openContent(db.path)
+
+    const placeholders = walIds.map(() => '?').join(',')
+    const rows = store.db
+      .prepare(`SELECT id, processed, attempts FROM wal_buffer WHERE id IN (${placeholders})`)
+      .all(...walIds) as Array<{ id: number; processed: number; attempts: number }>
+    const known = new Map(rows.map(r => [r.id, r]))
+
+    for (const id of walIds) {
+      const row = known.get(id)
+      if (!row) {
+        // Purgée par le cleanup borné : elle a forcément été traitée, sinon elle
+        // serait restée pending (le cleanup ne touche que `processed = 1`).
+        out.entries.push({ wal_id: id, status: 'done', attempts: 0 })
+        out.done++
+        continue
+      }
+      if (row.processed === 0) {
+        const status = row.attempts > 0 ? 'retrying' : 'pending'
+        out.entries.push({ wal_id: id, status, attempts: row.attempts })
+        if (status === 'retrying') out.retrying++
+        else out.pending++
+        continue
+      }
+      const abandoned = this.registry.db
+        .prepare("SELECT 1 FROM audit_log WHERE action = 'wal_entry_abandoned' AND target_id_hash = ? LIMIT 1")
+        .get(sha256Hex(`wal:${store.path}:${id}`)) as unknown
+      if (abandoned) {
+        out.entries.push({ wal_id: id, status: 'failed', attempts: row.attempts })
+        out.failed++
+      } else {
+        out.entries.push({ wal_id: id, status: 'done', attempts: row.attempts })
+        out.done++
+      }
+    }
+    return out
   }
 
   /** Domaines d'expertise de l'agent (où il « sait » le plus). */

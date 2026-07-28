@@ -797,6 +797,8 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       else if (route === 'POST /v1/memory/store_fact') sendJson(res, 200, { fact: null, disabled: true })
       else if (route === 'POST /v1/memory/capture_turn') sendJson(res, 200, { captured: 0, facts: [], disabled: true })
       else if (route === 'POST /v1/memory/feedback') sendJson(res, 200, { updated: [], domains: [], disabled: true })
+      else if (route === 'POST /v1/memory/capture_status')
+        sendJson(res, 200, { entries: [], pending: 0, retrying: 0, done: 0, failed: 0, disabled: true })
       else throw new HttpError(404, `route mémoire inconnue : ${route}`)
       return
     }
@@ -827,6 +829,16 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
           active_context: body['active_context'] as CaptureTurnInput['active_context'],
         })
         sendJson(res, 200, result)
+        return
+      }
+      case 'POST /v1/memory/capture_status': {
+        // Suivi post-timeout : `capture_turn` rend des `wal_ids`, cette route dit
+        // ce qu'ils sont devenus. Sans elle, un appelant dont la requête expire
+        // ne sait pas si son tour a fini par être mémorisé.
+        const body = await readJson(req)
+        const ids = body['wal_ids']
+        if (!Array.isArray(ids)) throw new HttpError(400, 'wal_ids requis (tableau d’entiers)')
+        sendJson(res, 200, memoria.captureStatus(instanceId, ids.filter((v): v is number => typeof v === 'number')))
         return
       }
       case 'POST /v1/memory/feedback': {

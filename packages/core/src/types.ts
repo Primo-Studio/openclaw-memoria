@@ -408,6 +408,21 @@ export interface DoctorCloud {
   chars_24h: number
 }
 
+/** Statut d'un message confié à la capture (suivi post-timeout). */
+export interface CaptureStatusEntry {
+  wal_id: number
+  status: 'pending' | 'retrying' | 'done' | 'failed'
+  attempts: number
+}
+
+export interface CaptureStatusResult {
+  entries: CaptureStatusEntry[]
+  pending: number
+  retrying: number
+  done: number
+  failed: number
+}
+
 export interface DoctorReport {
   ok: boolean
   storage_root: string

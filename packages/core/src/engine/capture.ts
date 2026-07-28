@@ -38,6 +38,14 @@ export interface CaptureTurnInput {
 export interface CaptureTurnResult {
   /** Messages écrits au WAL (étape 1 — garantis même si tout le reste échoue). */
   appended: number
+  /**
+   * Identifiants WAL des messages écrits — le « reçu » de la capture.
+   * Retour bêta : « memoria_capture_turn a expiré après 120 s ; il faudrait un
+   * statut consultable, avec un identifiant de capture ». Sans ces ids,
+   * l'appelant dont la requête expire n'a AUCUN moyen de savoir si son tour a
+   * fini par être mémorisé ou non.
+   */
+  wal_ids: number[]
   /** Entrées WAL consommées avec succès pendant ce tour. */
   processed: number
   facts_created: number
@@ -135,6 +143,7 @@ export class CapturePipeline {
     const run = await this.processorFor(input.instance, store).processPending()
     return {
       appended: ids.length,
+      wal_ids: ids,
       processed: run.processed,
       facts_created: run.facts_created,
       deferred: run.deferred,

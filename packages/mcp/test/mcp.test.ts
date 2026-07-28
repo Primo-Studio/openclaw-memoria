@@ -60,6 +60,10 @@ function fakeGateway(): DaemonGateway & { calls: Array<{ method: string; input: 
       calls.push({ method: 'feedback', input })
       return { updated: ['f1'], domains: ['preference'] }
     },
+    captureStatus: async input => {
+      calls.push({ method: 'captureStatus', input })
+      return { entries: [{ wal_id: 1, status: 'done', attempts: 0 }], pending: 0, retrying: 0, done: 1, failed: 0 }
+    },
   }
 }
 
@@ -172,6 +176,7 @@ describe('buildServer handlers', () => {
       captureTurn: async () => ({}),
       identifyInterlocutor: async () => ({ match: null }),
       feedback: async () => ({ updated: [], domains: [] }),
+      captureStatus: async () => ({ entries: [], pending: 0, retrying: 0, done: 0, failed: 0 }),
     }
     const { handlers } = buildServer({
       instanceId: 'i',
@@ -207,7 +212,7 @@ describe('buildServer handlers', () => {
     expect(getPayload.active_context.project_id).toBe('jamboard')
   })
 
-  it('le serveur MCP expose bien les 8 outils', () => {
+  it('le serveur MCP expose bien les 9 outils', () => {
     const { server } = buildServer({
       instanceId: 'i',
       tracker: new ActiveContextTracker(),
@@ -216,6 +221,7 @@ describe('buildServer handlers', () => {
     // registre privé du SDK — vérification structurelle volontairement minimale
     const tools = (server as unknown as { _registeredTools: Record<string, unknown> })._registeredTools
     expect(Object.keys(tools).sort()).toEqual([
+      'memoria_capture_status',
       'memoria_capture_turn',
       'memoria_feedback',
       'memoria_get_context',

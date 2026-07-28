@@ -27,6 +27,7 @@ export interface DaemonGateway {
   identifyInterlocutor(input: Record<string, unknown>): Promise<unknown>
   identifyOrCreateInterlocutor(input: Record<string, unknown>): Promise<unknown>
   feedback(input: Record<string, unknown>): Promise<unknown>
+  captureStatus(input: Record<string, unknown>): Promise<unknown>
 }
 
 /**
@@ -61,6 +62,10 @@ export class HttpDaemonGateway implements DaemonGateway {
 
   feedback(input: Record<string, unknown>): Promise<unknown> {
     return this.postMemory('/v1/memory/feedback', input)
+  }
+
+  captureStatus(input: Record<string, unknown>): Promise<unknown> {
+    return this.postMemory('/v1/memory/capture_status', input)
   }
 
   identifyOrCreateInterlocutor(input: Record<string, unknown>): Promise<unknown> {
@@ -106,6 +111,7 @@ export interface ToolHandlers {
   identifyInterlocutor(args: { phone?: string; email?: string; telegram?: string; whatsapp?: string; handle?: string; name?: string }): Promise<CallToolResult>
   identifyOrCreateInterlocutor(args: { phone?: string; email?: string; telegram?: string; whatsapp?: string; handle?: string; name?: string; relation?: string }): Promise<CallToolResult>
   feedback(args: { fact_ids: string[]; verdict: 'useful' | 'noise' }): Promise<CallToolResult>
+  captureStatus(args: { wal_ids: number[] }): Promise<CallToolResult>
 }
 
 export interface BuiltServer {
@@ -191,6 +197,14 @@ export function buildServer(opts: BuildServerOptions): BuiltServer {
           active_context: opts.tracker.current(),
         }
         return ok(await withDaemon(g => g.captureTurn(input)))
+      } catch (err) {
+        return fail(err)
+      }
+    },
+
+    async captureStatus(args) {
+      try {
+        return ok(await withDaemon(g => g.captureStatus({ wal_ids: args.wal_ids })))
       } catch (err) {
         return fail(err)
       }
@@ -295,6 +309,21 @@ export function buildServer(opts: BuildServerOptions): BuiltServer {
       },
     },
     async args => handlers.captureTurn(args),
+  )
+
+  server.registerTool(
+    'memoria_capture_status',
+    {
+      description:
+        'Check what became of messages you handed to memoria_capture_turn. Pass the `wal_ids` it returned. Extraction runs in the background, so a capture that timed out may well have succeeded afterwards — use this instead of re-capturing, which would create duplicates. Statuses: "pending" (queued), "retrying" (extraction failed, will retry), "done" (processed), "failed" (given up after repeated failures).',
+      inputSchema: {
+        wal_ids: z
+          .array(z.number().int())
+          .min(1)
+          .describe('Ids returned in `wal_ids` by memoria_capture_turn.'),
+      },
+    },
+    async args => handlers.captureStatus(args),
   )
 
   server.registerTool(
