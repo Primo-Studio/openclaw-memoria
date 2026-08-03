@@ -8,9 +8,11 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   autostartStatus,
+  buildPlist,
   isEnabled,
   Memoria,
   moveStorage,
+  servicePath,
   setEnabled,
 } from '../src/index.js'
 
@@ -148,5 +150,41 @@ describe('autostartStatus', () => {
     expect(s.plistPath).toContain('fr.primo-studio.memoria.plist')
     // sur cette machine (darwin) c'est pris en charge, mais on n'installe rien ici
     expect(typeof s.installed).toBe('boolean')
+  })
+})
+
+describe('PATH du service (régression « spawn npm ENOENT »)', () => {
+  it('servicePath place le dossier du node courant en tête, sans doublon', () => {
+    const p = servicePath('/opt/node/v24/bin/node').split(':')
+    expect(p[0]).toBe('/opt/node/v24/bin')
+    expect(p).toContain('/opt/homebrew/bin')
+    expect(p).toContain('/usr/local/bin')
+    expect(p).toContain('/usr/bin')
+    expect(new Set(p).size).toBe(p.length)
+  })
+
+  it('n’ajoute pas deux fois un dossier déjà dans le PATH par défaut', () => {
+    const p = servicePath('/usr/bin/node').split(':')
+    expect(p.filter(d => d === '/usr/bin')).toHaveLength(1)
+  })
+
+  it('le plist déclare un PATH — sans lui launchd n’en donne aucun où npm existe', () => {
+    const plist = buildPlist({
+      label: 'test.memoria',
+      programArguments: ['/opt/node/v24/bin/node', '/x/bin.js'],
+      path: servicePath('/opt/node/v24/bin/node'),
+    })
+    expect(plist).toContain('<key>EnvironmentVariables</key>')
+    expect(plist).toContain('<key>PATH</key>')
+    expect(plist).toContain('/opt/node/v24/bin:')
+  })
+
+  it('échappe le XML du PATH (un & dans un chemin casserait le plist)', () => {
+    const plist = buildPlist({
+      label: 'test.memoria',
+      programArguments: ['/x/node'],
+      path: '/Users/a&b/bin',
+    })
+    expect(plist).toContain('/Users/a&amp;b/bin')
   })
 })

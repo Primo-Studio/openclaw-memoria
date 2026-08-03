@@ -5,10 +5,18 @@
  *
  * Best-effort et HONNÊTE : renvoie le log réel ; si ce n'est pas un dépôt git
  * (paquet npm publié plus tard), le dit clairement au lieu d'échouer en silence.
+ *
+ * ⚠️ Ce module tourne SOUS LAUNCHD, pas dans un terminal. Le daemon est démarré
+ * par le LaunchAgent, qui ne transmet aucun environnement de shell : son PATH
+ * vaut `/usr/bin:/bin:/usr/sbin:/sbin`. `git` s'y trouve (/usr/bin/git), `npm`
+ * JAMAIS — nvm, Homebrew et le pkg officiel l'installent tous ailleurs. Un
+ * `execFile('npm', …)` échouait donc en `spawn npm ENOENT`, mais seulement quand
+ * il y avait vraiment une mise à jour à installer (le bloc npm est conditionné
+ * par `changed`), d'où un bug invisible sur une machine déjà à jour.
  */
 import { execFile } from 'node:child_process'
 import { spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
@@ -30,6 +38,71 @@ export interface UpdateResult {
   message: string
 }
 
+// ------------------------------------------------------------ résolution de npm
+
+/** Comment lancer npm : un binaire et les arguments qui précèdent les siens. */
+export interface NpmLauncher {
+  cmd: string
+  prefixArgs: string[]
+}
+
+/**
+ * Emplacements possibles de npm, du plus fiable au plus opportuniste.
+ *
+ * On part de `process.execPath` — un chemin ABSOLU que le daemon connaît déjà,
+ * puisque le plist lance node par son chemin complet. Deux dispositions coexistent :
+ *
+ *  - nvm / pkg officiel : npm est sous le préfixe du node courant
+ *    (`…/v24.18.0/lib/node_modules/npm/bin/npm-cli.js`).
+ *  - Homebrew : le npm du Cellar est un lien vers `/opt/homebrew/lib/node_modules/…`,
+ *    HORS du préfixe du node. D'où le passage par le shim voisin + `realpath`.
+ */
+export function npmCandidates(execPath: string = process.execPath): string[] {
+  const binDir = dirname(execPath)
+  return [
+    join(dirname(binDir), 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+    join(binDir, 'npm'),
+    '/opt/homebrew/bin/npm',
+    '/usr/local/bin/npm',
+    '/usr/bin/npm',
+  ]
+}
+
+/**
+ * Trouve un npm exécutable SANS dépendre du PATH.
+ *
+ * Un candidat qui se résout (après symlinks) sur un `.js` est lancé par le node
+ * courant : on évite le shim shell ET on garantit la même version de Node que
+ * le service. Sinon on lance le binaire directement. `null` = rien trouvé.
+ */
+export function resolveNpm(execPath: string = process.execPath): NpmLauncher | null {
+  for (const candidate of npmCandidates(execPath)) {
+    if (!existsSync(candidate)) continue
+    let real = candidate
+    try {
+      real = realpathSync(candidate)
+    } catch {
+      /* lien cassé : on tente le chemin brut */
+    }
+    if (real.endsWith('.js')) return { cmd: execPath, prefixArgs: [real] }
+    return { cmd: real, prefixArgs: [] }
+  }
+  return null
+}
+
+/** Message actionnable : `spawn npm ENOENT` n'aide personne, surtout pas un non-dev. */
+export const NPM_MISSING_MESSAGE =
+  'npm est introuvable depuis le service Memoria. Installe Node.js (nodejs.org), ' +
+  'ou mets à jour depuis le Terminal : `git pull && npm install && npm run build`.'
+
+async function npmRun(args: string[], opts: { timeout: number }): Promise<{ stdout: string }> {
+  const npm = resolveNpm()
+  if (!npm) throw new Error(NPM_MISSING_MESSAGE)
+  return run(npm.cmd, [...npm.prefixArgs, ...args], opts)
+}
+
+// ------------------------------------------------------------ git
+
 async function gitSha(dir: string): Promise<string | null> {
   try {
     const { stdout } = await run('git', ['-C', dir, 'rev-parse', '--short', 'HEAD'])
@@ -44,12 +117,24 @@ export async function currentVersion(): Promise<{ version: string; sha: string |
   const sha = await gitSha(dir)
   let version = '0.1.0'
   try {
-    const pkg = JSON.parse((await run('cat', [join(dir, 'package.json')])).stdout) as { version?: string }
+    // Lecture directe : passer par `cat` spawnait un process pour rien et
+    // ajoutait une dépendance au PATH là où le disque suffit.
+    const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as { version?: string }
     if (pkg.version) version = pkg.version
   } catch {
     /* garde le défaut */
   }
   return { version, sha, is_git: sha !== null }
+}
+
+/** Traduit une panne d'outil manquant en consigne exploitable. */
+export function explainFailure(err: Error): string {
+  const m = err.message
+  if (m.includes('ENOENT') && m.includes('npm')) return NPM_MISSING_MESSAGE
+  if (m.includes('ENOENT') && m.includes('git')) {
+    return 'git est introuvable depuis le service Memoria. Installe les outils en ligne de commande Xcode (`xcode-select --install`).'
+  }
+  return m
 }
 
 /**
@@ -69,9 +154,9 @@ export async function pullAndBuild(): Promise<UpdateResult> {
     const after = await gitSha(dir)
     const changed = before !== after
     if (changed) {
-      const install = await run('npm', ['install', '--prefix', dir, '--no-audit', '--no-fund'], { timeout: 600_000 })
+      const install = await npmRun(['install', '--prefix', dir, '--no-audit', '--no-fund'], { timeout: 600_000 })
       log.push(install.stdout.trim().split('\n').slice(-3).join('\n'))
-      const build = await run('npm', ['run', 'build', '--prefix', dir], { timeout: 600_000 })
+      const build = await npmRun(['run', 'build', '--prefix', dir], { timeout: 600_000 })
       log.push(build.stdout.trim().split('\n').slice(-3).join('\n'))
     }
     return {
@@ -84,7 +169,19 @@ export async function pullAndBuild(): Promise<UpdateResult> {
       message: changed ? `Mis à jour ${before} → ${after}. Redémarrage du service…` : 'Déjà à jour.',
     }
   } catch (err) {
-    return { ok: false, is_git: true, before, after: before, changed: false, log: log.join('\n'), message: `Échec de la mise à jour : ${(err as Error).message}` }
+    // `after` reflète le dépôt RÉEL, pas `before` : si le pull est passé et que
+    // c'est le build qui a cassé, le source est déjà en avance sur le dist — le
+    // dire évite de croire l'installation intacte.
+    const after = await gitSha(dir)
+    return {
+      ok: false,
+      is_git: true,
+      before,
+      after,
+      changed: before !== after,
+      log: log.join('\n'),
+      message: `Échec de la mise à jour : ${explainFailure(err as Error)}`,
+    }
   }
 }
 

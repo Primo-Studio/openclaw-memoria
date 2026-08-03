@@ -26,8 +26,10 @@ export type { MemoriaConfig, ResolvedConfig, ResolveOptions } from './config.js'
 export {
   AUTOSTART_LABEL,
   autostartStatus,
+  buildPlist,
   enableAutostart,
   disableAutostart,
+  servicePath,
 } from './control/autostart.js'
 export type { AutostartSpec, AutostartStatus } from './control/autostart.js'
 export { RegistryStore } from './storage/registry.js'

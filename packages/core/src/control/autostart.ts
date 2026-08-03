@@ -17,6 +17,28 @@ import { dirname, join } from 'node:path'
 
 export const AUTOSTART_LABEL = 'fr.primo-studio.memoria'
 
+/** PATH minimal que launchd donne à un agent sans EnvironmentVariables. */
+const LAUNCHD_DEFAULT_PATH = ['/usr/bin', '/bin', '/usr/sbin', '/sbin']
+
+/**
+ * PATH à inscrire dans le plist.
+ *
+ * Sans cette clé, le daemon hérite de `/usr/bin:/bin:/usr/sbin:/sbin` — où `git`
+ * existe mais où `npm` n'est JAMAIS présent (nvm, Homebrew et le pkg officiel
+ * l'installent tous ailleurs). C'est ce qui faisait échouer la mise à jour depuis
+ * l'UI en `spawn npm ENOENT`.
+ *
+ * Ce n'est qu'une ceinture : le résolveur de `daemon/update.ts` trouve npm par
+ * chemin absolu sans rien devoir au PATH. Mais tout futur outil externe lancé
+ * par le daemon profite de ces dossiers, alors autant les poser une fois.
+ * On préfixe le dossier du node COURANT : c'est celui qui a démarré le service,
+ * donc son npm est cohérent avec lui.
+ */
+export function servicePath(execPath: string = process.execPath): string {
+  const dirs = [dirname(execPath), '/opt/homebrew/bin', '/usr/local/bin', ...LAUNCHD_DEFAULT_PATH]
+  return [...new Set(dirs)].join(':')
+}
+
 export interface AutostartSpec {
   /** Identifiant launchd (défaut fr.primo-studio.memoria). */
   label?: string
@@ -26,6 +48,8 @@ export interface AutostartSpec {
   workingDirectory?: string
   /** Fichiers de log stdout/stderr (défaut ~/Library/Logs/memoria.*.log). */
   logDir?: string
+  /** PATH du service (défaut : dossier du node courant + emplacements usuels). */
+  path?: string
 }
 
 export interface AutostartStatus {
@@ -43,12 +67,14 @@ function xmlEscape(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
-function buildPlist(spec: Required<Pick<AutostartSpec, 'label'>> & AutostartSpec): string {
+/** Exporté pour les tests : vérifier le plist sans écrire dans ~/Library. */
+export function buildPlist(spec: Required<Pick<AutostartSpec, 'label'>> & AutostartSpec): string {
   const args = spec.programArguments.map(a => `      <string>${xmlEscape(a)}</string>`).join('\n')
   const logDir = spec.logDir ?? join(homedir(), 'Library', 'Logs')
   const out = join(logDir, 'memoria.out.log')
   const err = join(logDir, 'memoria.err.log')
   const wd = spec.workingDirectory ? `  <key>WorkingDirectory</key>\n  <string>${xmlEscape(spec.workingDirectory)}</string>\n` : ''
+  const path = spec.path ?? servicePath()
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -59,6 +85,11 @@ function buildPlist(spec: Required<Pick<AutostartSpec, 'label'>> & AutostartSpec
   <array>
 ${args}
   </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>${xmlEscape(path)}</string>
+  </dict>
 ${wd}  <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
