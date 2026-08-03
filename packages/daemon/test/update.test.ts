@@ -14,7 +14,15 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { NPM_MISSING_MESSAGE, explainFailure, npmCandidates, resolveNpm } from '../src/update.js'
+import {
+  NPM_MISSING_MESSAGE,
+  buildMarkerPath,
+  explainFailure,
+  lastBuiltSha,
+  needsRebuild,
+  npmCandidates,
+  resolveNpm,
+} from '../src/update.js'
 
 let root: string
 
@@ -90,6 +98,50 @@ describe('resolveNpm', () => {
     const npm = resolveNpm(node)
     if (npm === null) return
     expect(npm.cmd.startsWith('/')).toBe(true)
+  })
+})
+
+/**
+ * Régression du piège découvert en corrigeant le ENOENT : le `git pull` passe,
+ * le build échoue. Au clic suivant, `changed === false` → aucun rebuild → la
+ * réponse est « Déjà à jour » alors que le dist reste périmé. L'installation
+ * restait cassée en se déclarant saine, sans issue par l'UI.
+ */
+describe('needsRebuild', () => {
+  it('nouveauté git → build, quel que soit le marqueur', () => {
+    expect(needsRebuild(true, 'abc123', 'abc123')).toBe(true)
+  })
+
+  it('pas de nouveauté MAIS marqueur en retard → build de rattrapage', () => {
+    // Exactement le cas de la machine où le pull avait réussi avant l'échec npm.
+    expect(needsRebuild(false, 'def456', 'abc123')).toBe(true)
+  })
+
+  it('pas de nouveauté et marqueur à jour → aucun build', () => {
+    expect(needsRebuild(false, 'abc123', 'abc123')).toBe(false)
+  })
+
+  it('marqueur absent (install antérieure au mécanisme) → build une fois', () => {
+    expect(needsRebuild(false, 'abc123', null)).toBe(true)
+  })
+
+  it('HEAD illisible → on ne devine pas, pas de build', () => {
+    expect(needsRebuild(false, null, 'abc123')).toBe(false)
+  })
+})
+
+describe('lastBuiltSha', () => {
+  it('absent → null ; présent → sha nettoyé', () => {
+    expect(lastBuiltSha(root)).toBeNull()
+    writeFileSync(buildMarkerPath(root), 'abc123\n')
+    expect(lastBuiltSha(root)).toBe('abc123')
+  })
+
+  it('fichier vide → null (et non chaîne vide, qui vaudrait un faux « à jour »)', () => {
+    writeFileSync(buildMarkerPath(root), '   \n')
+    expect(lastBuiltSha(root)).toBeNull()
+    // …et un marqueur vide doit bien redéclencher un build
+    expect(needsRebuild(false, 'abc123', lastBuiltSha(root))).toBe(true)
   })
 })
 

@@ -16,7 +16,7 @@
  */
 import { execFile } from 'node:child_process'
 import { spawn } from 'node:child_process'
-import { existsSync, readFileSync, realpathSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
@@ -33,7 +33,15 @@ export interface UpdateResult {
   is_git: boolean
   before: string | null
   after: string | null
+  /** Le `git pull` a rapporté une nouvelle révision. */
   changed: boolean
+  /**
+   * Un build a réellement eu lieu — ce qui arrive AUSSI sans nouveauté git,
+   * quand le précédent avait échoué. C'est ce drapeau, et non `changed`, qui
+   * doit décider d'un redémarrage : sans lui le service garde en mémoire le
+   * code qu'on vient de remplacer sur le disque.
+   */
+  rebuilt: boolean
   log: string
   message: string
 }
@@ -127,6 +135,49 @@ export async function currentVersion(): Promise<{ version: string; sha: string |
   return { version, sha, is_git: sha !== null }
 }
 
+// ------------------------------------------------------------ marqueur de build
+
+/**
+ * Dernière révision RÉELLEMENT reconstruite.
+ *
+ * `changed` compare deux SHA git : il dit si le `git pull` a rapporté quelque
+ * chose, PAS si le `dist/` correspond aux sources. Quand un build échoue (npm
+ * introuvable, erreur de compilation…), le pull reste acquis — et l'appel
+ * suivant voit `changed === false`, ne reconstruit rien, et annonce « Déjà à
+ * jour » alors que le service tourne sur un dist périmé. L'installation restait
+ * cassée en se déclarant saine, sans aucun moyen de s'en sortir par l'UI.
+ *
+ * Le marqueur tranche : on reconstruit tant qu'il ne coïncide pas avec HEAD.
+ */
+const BUILD_MARKER = '.memoria-built-sha'
+
+export function buildMarkerPath(dir: string): string {
+  return join(dir, BUILD_MARKER)
+}
+
+export function lastBuiltSha(dir: string): string | null {
+  try {
+    const raw = readFileSync(buildMarkerPath(dir), 'utf8').trim()
+    return raw === '' ? null : raw
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Faut-il (re)construire ? `changed` ne suffit pas — voir BUILD_MARKER.
+ *
+ * Marqueur absent (installation antérieure à ce mécanisme) → on reconstruit une
+ * fois. C'est le seul choix sûr : on ne peut pas distinguer un dist à jour d'un
+ * dist périmé, et se tromper dans ce sens ne coûte qu'un build, tandis que se
+ * tromper dans l'autre laisse tourner du code périmé indéfiniment.
+ */
+export function needsRebuild(changed: boolean, headSha: string | null, builtSha: string | null): boolean {
+  if (changed) return true
+  if (headSha === null) return false // dépôt illisible : on ne devine pas
+  return builtSha !== headSha
+}
+
 /** Traduit une panne d'outil manquant en consigne exploitable. */
 export function explainFailure(err: Error): string {
   const m = err.message
@@ -144,7 +195,7 @@ export function explainFailure(err: Error): string {
 export async function pullAndBuild(): Promise<UpdateResult> {
   const dir = repoRoot()
   if (!existsSync(join(dir, '.git'))) {
-    return { ok: false, is_git: false, before: null, after: null, changed: false, log: '', message: 'Installation non-git (paquet figé) — mets à jour via ton gestionnaire de paquets.' }
+    return { ok: false, is_git: false, before: null, after: null, changed: false, rebuilt: false, log: '', message: 'Installation non-git (paquet figé) — mets à jour via ton gestionnaire de paquets.' }
   }
   const before = await gitSha(dir)
   const log: string[] = []
@@ -153,11 +204,15 @@ export async function pullAndBuild(): Promise<UpdateResult> {
     log.push(pull.stdout.trim())
     const after = await gitSha(dir)
     const changed = before !== after
-    if (changed) {
+    const rebuilt = needsRebuild(changed, after, lastBuiltSha(dir))
+    if (rebuilt) {
       const install = await npmRun(['install', '--prefix', dir, '--no-audit', '--no-fund'], { timeout: 600_000 })
       log.push(install.stdout.trim().split('\n').slice(-3).join('\n'))
       const build = await npmRun(['run', 'build', '--prefix', dir], { timeout: 600_000 })
       log.push(build.stdout.trim().split('\n').slice(-3).join('\n'))
+      // Marqueur posé APRÈS le build seulement : un échec doit laisser la
+      // reconstruction en attente, pas la déclarer faite.
+      if (after) writeFileSync(buildMarkerPath(dir), after, 'utf8')
     }
     return {
       ok: true,
@@ -165,8 +220,13 @@ export async function pullAndBuild(): Promise<UpdateResult> {
       before,
       after,
       changed,
+      rebuilt,
       log: log.join('\n'),
-      message: changed ? `Mis à jour ${before} → ${after}. Redémarrage du service…` : 'Déjà à jour.',
+      message: changed
+        ? `Mis à jour ${before} → ${after}. Redémarrage du service…`
+        : rebuilt
+          ? `Aucune nouveauté, mais le build était en retard sur les sources — reconstruit. Redémarrage du service…`
+          : 'Déjà à jour.',
     }
   } catch (err) {
     // `after` reflète le dépôt RÉEL, pas `before` : si le pull est passé et que
@@ -179,6 +239,7 @@ export async function pullAndBuild(): Promise<UpdateResult> {
       before,
       after,
       changed: before !== after,
+      rebuilt: false,
       log: log.join('\n'),
       message: `Échec de la mise à jour : ${explainFailure(err as Error)}`,
     }
