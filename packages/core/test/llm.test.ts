@@ -368,4 +368,39 @@ describe('resolveLlmProfile — embeddings épinglés (llm.embeddings)', () => {
     const profile = await resolveLlmProfile({ llm: { profile: '100-local' } }, withOpenAiKey())
     expect(profile.embeddings?.name).toBe('ollama')
   })
+
+  it('repli cloud OpenAI sans knownEmbeddingModels → plus de cri au loup systématique', async () => {
+    fetchMock.mockRejectedValue(new TypeError('fetch failed')) // Ollama KO
+    warnSpy.mockClear()
+    await resolveLlmProfile(
+      { llm: { extraction: { provider: 'openai', model: 'gpt-5-mini' } } },
+      withOpenAiKey(),
+    )
+    expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('ne sont plus comparables'))
+  })
+
+  it('knownEmbeddingModels hétérogène → warn conditionnel au contenu réel de la base', async () => {
+    fetchMock.mockRejectedValue(new TypeError('fetch failed'))
+    warnSpy.mockClear()
+    await resolveLlmProfile(
+      { llm: { extraction: { provider: 'openai' }, embeddings: { provider: 'openai' } } },
+      { ...withOpenAiKey(), knownEmbeddingModels: ['nomic-embed-text'] },
+    )
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('nomic-embed-text'))
+  })
+})
+
+describe('maybeWarnEmbeddingMismatch', () => {
+  it('silence si knownModels vide/homogène ; warn seulement si modèle étranger', async () => {
+    const { maybeWarnEmbeddingMismatch } = await import('../src/index.js')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    maybeWarnEmbeddingMismatch('text-embedding-3-small', undefined)
+    maybeWarnEmbeddingMismatch('text-embedding-3-small', [])
+    maybeWarnEmbeddingMismatch('text-embedding-3-small', ['text-embedding-3-small'])
+    expect(warn).not.toHaveBeenCalled()
+    maybeWarnEmbeddingMismatch('text-embedding-3-small', ['nomic-embed-text'])
+    expect(warn).toHaveBeenCalledOnce()
+    expect(String(warn.mock.calls[0]?.[0])).toMatch(/nomic-embed-text/)
+    warn.mockRestore()
+  })
 })

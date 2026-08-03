@@ -107,6 +107,13 @@ export interface ResolveLlmProfileOptions {
    * (ou échouait) pour de mauvaises raisons. Même exigence que pour Anthropic.
    */
   openaiKeyFile?: string
+  /**
+   * Modèles déjà présents en base (`SELECT DISTINCT model FROM embeddings`).
+   * Si fourni, l'avertissement de non-comparabilité n'est émis QUE s'il existe
+   * au moins un modèle différent de celui retenu — plus de cri au loup à chaque
+   * boot OpenAI quand la base est déjà homogène.
+   */
+  knownEmbeddingModels?: readonly string[]
 }
 
 function normalizeProfileName(raw: string | undefined): LlmProfileName {
@@ -324,11 +331,6 @@ export async function resolveLlmProfile(
     embeddings = ollamaEmbeddings
   } else if (cloudAllowed && (await openaiEmbeddings.isAvailable())) {
     embeddings = openaiEmbeddings
-    console.warn(
-      `[memoria:llm] embeddings via ${openaiEmbeddings.name}/${openaiEmbeddings.model} (${openaiEmbeddings.dimensions}d) — ` +
-        `Ollama indisponible. Les vecteurs d'un autre modèle restent en base mais ne sont plus comparables : ` +
-        `relancer l'indexation pour rétablir la recherche sémantique.`,
-    )
   }
 
   if (extraction === null) {
@@ -336,7 +338,30 @@ export async function resolveLlmProfile(
   }
   if (embeddings === null) {
     console.warn(`[memoria:llm] embeddings indisponibles — recherche sémantique désactivée (FTS seul)`)
+  } else {
+    // Avertissement cross-modèle : uniquement si la base est connue ET hétérogène.
+    // Sans knownEmbeddingModels, silence (évite le faux positif à chaque boot).
+    maybeWarnEmbeddingMismatch(embeddings.model, opts.knownEmbeddingModels)
   }
 
   return { extraction, embeddings }
+}
+
+/**
+ * Émet l'avertissement cross-modèle uniquement si la base expose déjà des
+ * vecteurs d'un autre modèle que celui retenu.
+ */
+export function maybeWarnEmbeddingMismatch(
+  activeModel: string,
+  knownModels: readonly string[] | undefined,
+): void {
+  if (!knownModels || knownModels.length === 0) return
+  const foreign = knownModels.filter(m => m !== activeModel)
+  if (foreign.length === 0) return
+  console.warn(
+    `[memoria:llm] embeddings actifs « ${activeModel} » alors que la base contient ` +
+      `déjà [${foreign.join(', ')}] — vecteurs non comparables entre modèles : ` +
+      `le rattrapage d'indexation (boot daemon) comble les faits manquants pour le modèle actif ; ` +
+      `les anciens vecteurs restent sous leur propre model.`,
+  )
 }
