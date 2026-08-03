@@ -268,3 +268,104 @@ describe('resolveLlmProfile', () => {
     expect(profile.extraction?.model).toBe(DEFAULT_LOCAL_EXTRACTION_MODEL)
   })
 })
+
+/**
+ * `llm.embeddings` était déclaré dans la config mais lu NULLE PART : impossible
+ * d'épingler un provider. Conséquence concrète en production : Ollama gardant la
+ * priorité dès qu'il répond, un Ollama démarré pour un autre projet captait les
+ * embeddings et la base accumulait des vecteurs de deux modèles — non
+ * comparables, donc rappel sémantique faux.
+ */
+describe('resolveLlmProfile — embeddings épinglés (llm.embeddings)', () => {
+  /** Clés injectées : sans keyFile explicite, on lirait la VRAIE clé de la machine. */
+  const noKey = () => ({
+    env: {} as NodeJS.ProcessEnv,
+    anthropicKeyFile: join(tmp, 'absent-anthropic'),
+    openaiKeyFile: join(tmp, 'absent-openai'),
+  })
+  const withOpenAiKey = () => ({
+    env: { OPENAI_API_KEY: 'sk-test' } as NodeJS.ProcessEnv,
+    anthropicKeyFile: join(tmp, 'absent-anthropic'),
+    openaiKeyFile: join(tmp, 'absent-openai'),
+  })
+  const tagsWithAll = async (): Promise<Response> =>
+    jsonResponse({ models: [{ name: 'qwen2.5:3b' }, { name: 'nomic-embed-text:latest' }] })
+
+  it('openai épinglé gagne sur Ollama, MÊME disponible — c’est tout l’objet du réglage', async () => {
+    fetchMock.mockImplementation(tagsWithAll) // Ollama répond et a le modèle
+    const profile = await resolveLlmProfile(
+      { llm: { profile: '100-local', embeddings: { provider: 'openai' } } },
+      withOpenAiKey(),
+    )
+    expect(profile.embeddings?.name).toBe('openai')
+    expect(profile.embeddings?.model).toBe('text-embedding-3-small')
+    expect(profile.embeddings?.dimensions).toBe(1536)
+  })
+
+  it('openai épinglé gagne même sans extraction OpenAI : le cloud DEMANDÉ n’est pas le cloud SUBI', async () => {
+    // La garde `cloudAllowed` protège du repli automatique, pas du choix explicite.
+    fetchMock.mockRejectedValue(new TypeError('fetch failed')) // Ollama absent
+    const profile = await resolveLlmProfile(
+      { llm: { profile: '100-local', embeddings: { provider: 'openai' } } },
+      withOpenAiKey(),
+    )
+    expect(profile.extraction).toBeNull() // aucune extraction dispo
+    expect(profile.embeddings?.name).toBe('openai')
+  })
+
+  it('ollama épinglé reste honoré', async () => {
+    fetchMock.mockImplementation(tagsWithAll)
+    const profile = await resolveLlmProfile({ llm: { embeddings: { provider: 'ollama' } } }, withOpenAiKey())
+    expect(profile.embeddings?.name).toBe('ollama')
+  })
+
+  it('modèle épinglé connu → dimensions de la table, pas le défaut du provider', async () => {
+    fetchMock.mockRejectedValue(new TypeError('fetch failed'))
+    const profile = await resolveLlmProfile(
+      { llm: { embeddings: { provider: 'openai', model: 'text-embedding-3-large' } } },
+      withOpenAiKey(),
+    )
+    // 3072 et non 1536 : hériter du défaut graverait des dimensions fausses.
+    expect(profile.embeddings?.dimensions).toBe(3072)
+    expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('dimensions inconnues'))
+  })
+
+  it('modèle inconnu sans dimensions → warn explicite (une valeur fausse corrompt la base)', async () => {
+    fetchMock.mockRejectedValue(new TypeError('fetch failed'))
+    await resolveLlmProfile(
+      { llm: { embeddings: { provider: 'openai', model: 'text-embedding-9-experimental' } } },
+      withOpenAiKey(),
+    )
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('dimensions inconnues'))
+  })
+
+  it('dimensions déclarées → pas de warn, valeur respectée', async () => {
+    fetchMock.mockRejectedValue(new TypeError('fetch failed'))
+    const profile = await resolveLlmProfile(
+      { llm: { embeddings: { provider: 'openai', model: 'maison-v1', dimensions: 512 } } },
+      withOpenAiKey(),
+    )
+    expect(profile.embeddings?.dimensions).toBe(512)
+    expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('dimensions inconnues'))
+  })
+
+  it('provider épinglé indisponible (pas de clé) → warn + repli sur la détection, pas de plantage', async () => {
+    fetchMock.mockImplementation(tagsWithAll) // Ollama dispo
+    const profile = await resolveLlmProfile({ llm: { embeddings: { provider: 'openai' } } }, noKey())
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("provider d'embeddings « openai » indisponible"))
+    expect(profile.embeddings?.name).toBe('ollama')
+  })
+
+  it('provider épinglé inconnu → warn + repli, jamais d’embeddings inventés', async () => {
+    fetchMock.mockImplementation(tagsWithAll)
+    const profile = await resolveLlmProfile({ llm: { embeddings: { provider: 'mistral' } } }, noKey())
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("provider d'embeddings inconnu « mistral »"))
+    expect(profile.embeddings?.name).toBe('ollama')
+  })
+
+  it('sans llm.embeddings, le comportement d’avant est INCHANGÉ (Ollama prioritaire)', async () => {
+    fetchMock.mockImplementation(tagsWithAll)
+    const profile = await resolveLlmProfile({ llm: { profile: '100-local' } }, withOpenAiKey())
+    expect(profile.embeddings?.name).toBe('ollama')
+  })
+})
