@@ -99,6 +99,14 @@ export interface ResolveLlmProfileOptions {
   env?: NodeJS.ProcessEnv
   /** Chemin du fichier de clé Anthropic, injectable pour les tests. */
   anthropicKeyFile?: string
+  /**
+   * Chemin du fichier de clé OpenAI, injectable pour les tests.
+   *
+   * Sans lui, `resolveOpenAiApiKey` retombe sur le fichier de HOME : un test
+   * lancé sur une machine réellement configurée lisait la VRAIE clé et passait
+   * (ou échouait) pour de mauvaises raisons. Même exigence que pour Anthropic.
+   */
+  openaiKeyFile?: string
 }
 
 function normalizeProfileName(raw: string | undefined): LlmProfileName {
@@ -127,10 +135,20 @@ async function buildExplicitProvider(
       p = new AnthropicProvider({ env: opts.env, keyFilePath: opts.anthropicKeyFile, ...(model ? { model } : {}) })
       break
     case 'openai':
-      p = new OpenAiProvider({ flavor: 'openai', env: opts.env, model: model ?? DEFAULT_OPENAI_MODEL })
+      p = new OpenAiProvider({
+        flavor: 'openai',
+        env: opts.env,
+        ...(opts.openaiKeyFile ? { keyFilePath: opts.openaiKeyFile } : {}),
+        model: model ?? DEFAULT_OPENAI_MODEL,
+      })
       break
     case 'openrouter':
-      p = new OpenAiProvider({ flavor: 'openrouter', env: opts.env, model: model ?? DEFAULT_OPENROUTER_MODEL })
+      p = new OpenAiProvider({
+        flavor: 'openrouter',
+        env: opts.env,
+        ...(opts.openaiKeyFile ? { keyFilePath: opts.openaiKeyFile } : {}),
+        model: model ?? DEFAULT_OPENROUTER_MODEL,
+      })
       break
     default:
       console.warn(`[memoria:llm] provider inconnu « ${provider} »`)
@@ -140,10 +158,77 @@ async function buildExplicitProvider(
 }
 
 /**
+ * Dimensions connues par modèle d'embedding.
+ *
+ * Les dimensions sont GRAVÉES avec chaque vecteur (cf. `assertVectorDimensions`) :
+ * en déduire une fausse corrompt la base silencieusement. Épingler
+ * `text-embedding-3-large` (3072d) en héritant du défaut 1536 produirait
+ * exactement ce dégât — d'où cette table, et un avertissement franc quand le
+ * modèle demandé n'y figure pas.
+ */
+export const EMBEDDING_DIMENSIONS: Record<string, number> = {
+  'text-embedding-3-small': 1536,
+  'text-embedding-3-large': 3072,
+  'text-embedding-ada-002': 1536,
+  'nomic-embed-text': 768,
+  'mxbai-embed-large': 1024,
+  'all-minilm': 384,
+}
+
+/** Choix explicite du provider d'embeddings, ou null si indisponible/inconnu. */
+async function buildExplicitEmbeddings(
+  provider: string,
+  model: string | undefined,
+  dimensions: number | undefined,
+  opts: ResolveLlmProfileOptions,
+  baseUrl?: string,
+): Promise<EmbeddingProvider | null> {
+  // Dimensions : config > table connue > défaut du provider. On n'avertit que
+  // si le modèle est nommé ET inconnu ET sans dimensions déclarées : c'est le
+  // seul cas où le défaut a des chances d'être faux.
+  const known = model ? EMBEDDING_DIMENSIONS[model] : undefined
+  if (model && known === undefined && dimensions === undefined) {
+    console.warn(
+      `[memoria:llm] dimensions inconnues pour le modèle d'embeddings « ${model} » — ` +
+        `le défaut du provider sera utilisé. Si elles diffèrent, déclare llm.embeddings.dimensions : ` +
+        `les dimensions sont gravées avec chaque vecteur et une valeur fausse corrompt la base.`,
+    )
+  }
+  const dims = dimensions ?? known
+
+  let p: EmbeddingProvider | null = null
+  switch (provider) {
+    case 'ollama':
+      p = new OllamaEmbeddingProvider({
+        ...(model ? { model } : {}),
+        ...(dims ? { dimensions: dims } : {}),
+        baseUrl: baseUrl ?? opts.ollamaBaseUrl,
+      })
+      break
+    case 'openai':
+      p = new OpenAiEmbeddingProvider({
+        ...(opts.env ? { env: opts.env } : {}),
+        ...(opts.openaiKeyFile ? { keyFilePath: opts.openaiKeyFile } : {}),
+        ...(model ? { model } : {}),
+        ...(dims ? { dimensions: dims } : {}),
+        ...(baseUrl ? { baseUrl } : {}),
+      })
+      break
+    default:
+      console.warn(`[memoria:llm] provider d'embeddings inconnu « ${provider} » — repli sur la détection automatique`)
+      return null
+  }
+  return (await p.isAvailable()) ? p : null
+}
+
+/**
  * Résout le profil LLM depuis la config :
  * - '100-local'       : extraction Ollama qwen2.5:3b · embeddings Ollama nomic-embed-text.
  * - 'local-plus-cloud': extraction Anthropic Haiku si clé, sinon Ollama · embeddings Ollama.
- * - 'cloud'           : extraction Anthropic si clé · embeddings Ollama (pas d'embeddings cloud en V1).
+ * - 'cloud'           : extraction Anthropic si clé · embeddings Ollama.
+ *
+ * `llm.extraction` et `llm.embeddings` priment chacun sur le profil pour leur
+ * couche : le profil est un raccourci, pas une contrainte.
  * Chaque slot indisponible vaut null (et c'est dit dans les logs).
  */
 export async function resolveLlmProfile(
@@ -185,11 +270,42 @@ export async function resolveLlmProfile(
     }
   }
 
-  // Embeddings — LOCAL-FIRST : Ollama garde la priorité dès qu'il est
-  // disponible, quel que soit le profil. Une installation tout-local conserve
-  // donc exactement le comportement d'avant.
+  // Embeddings — (0) choix EXPLICITE, (1) Ollama, (2) repli cloud.
   //
-  // Repli CLOUD (OpenAI) seulement si Ollama n'a pas le modèle : sans lui, une
+  // Le choix explicite prime sur tout : la détection automatique préfère Ollama
+  // dès qu'il RÉPOND, ce qui suffisait à faire rebasculer les embeddings en local
+  // le jour où un Ollama tournait pour un autre projet — et à remplir la base de
+  // vecteurs de deux modèles différents, non comparables entre eux. Un parc qui a
+  // choisi le cloud (machines trop justes pour du local) doit pouvoir l'épingler.
+  //
+  // Il prime AUSSI sur la garde `cloudAllowed` ci-dessous : elle protège d'un
+  // départ vers le cloud SUBI, pas d'un départ DEMANDÉ. Nommer openai dans sa
+  // config est une action explicite — c'est précisément ce que le principe
+  // local-first réserve à l'utilisateur. L'audit cloud (`auditEmbeddings`)
+  // continue de journaliser chaque envoi dans tous les cas.
+  let embeddings: EmbeddingProvider | null = null
+  const explicitEmbeddings = config.llm?.embeddings
+  if (explicitEmbeddings?.provider) {
+    embeddings = await buildExplicitEmbeddings(
+      explicitEmbeddings.provider,
+      explicitEmbeddings.model,
+      explicitEmbeddings.dimensions,
+      opts,
+      explicitEmbeddings.base_url,
+    )
+    if (embeddings === null) {
+      console.warn(
+        `[memoria:llm] provider d'embeddings « ${explicitEmbeddings.provider} » indisponible ` +
+          `(clé/modèle ?) — repli sur la détection automatique`,
+      )
+    }
+  }
+
+  // (1) LOCAL-FIRST : Ollama garde la priorité dès qu'il est disponible, quel que
+  // soit le profil. Une installation tout-local conserve exactement le
+  // comportement d'avant.
+  //
+  // (2) Repli CLOUD (OpenAI) seulement si Ollama n'a pas le modèle : sans lui, une
   // machine sans modèle local n'avait AUCUNE recherche sémantique, et le seul
   // remède était d'installer Ollama. Anthropic n'expose pas d'embeddings, d'où
   // le choix d'OpenAI ici.
@@ -197,10 +313,14 @@ export async function resolveLlmProfile(
   // même fournisseur, donc aucun nouveau destinataire des données. Un profil
   // 100-local, ou une extraction Anthropic/LM Studio, ne doit JAMAIS voir ses
   // souvenirs partir vers un tiers pour cause d'embeddings manquants.
-  const openaiEmbeddings = new OpenAiEmbeddingProvider({ ...(opts.env ? { env: opts.env } : {}) })
+  const openaiEmbeddings = new OpenAiEmbeddingProvider({
+    ...(opts.env ? { env: opts.env } : {}),
+    ...(opts.openaiKeyFile ? { keyFilePath: opts.openaiKeyFile } : {}),
+  })
   const cloudAllowed = extraction?.name === 'openai'
-  let embeddings: EmbeddingProvider | null = null
-  if (await ollamaEmbeddings.isAvailable()) {
+  if (embeddings !== null) {
+    /* choix explicite honoré : ni détection, ni repli */
+  } else if (await ollamaEmbeddings.isAvailable()) {
     embeddings = ollamaEmbeddings
   } else if (cloudAllowed && (await openaiEmbeddings.isAvailable())) {
     embeddings = openaiEmbeddings

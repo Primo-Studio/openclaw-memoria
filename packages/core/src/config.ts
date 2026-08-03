@@ -53,8 +53,20 @@ export interface MemoriaConfig {
      * http://127.0.0.1:1234/v1) ou Ollama hors port standard.
      */
     extraction?: { provider?: string; model?: string; base_url?: string }
-    /** Choix explicite des embeddings (provider ollama uniquement en V1). */
-    embeddings?: { provider?: string; model?: string }
+    /**
+     * Choix EXPLICITE du provider d'embeddings (prioritaire sur la détection
+     * automatique, qui préfère Ollama dès qu'il répond). provider ∈ ollama|openai.
+     *
+     * Sans ce réglage, un Ollama démarré pour un autre projet capte les
+     * embeddings et la base se retrouve avec des vecteurs de deux modèles
+     * différents — non comparables, donc recherche sémantique fausse. L'épingler
+     * est le seul moyen de garantir un modèle unique dans la durée.
+     *
+     * `dimensions` n'est nécessaire que pour un modèle inconnu de
+     * `EMBEDDING_DIMENSIONS` : les dimensions sont gravées avec chaque vecteur,
+     * une valeur fausse corrompt la base.
+     */
+    embeddings?: { provider?: string; model?: string; dimensions?: number; base_url?: string }
   }
 }
 
