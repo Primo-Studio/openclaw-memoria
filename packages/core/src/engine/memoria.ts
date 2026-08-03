@@ -4,7 +4,7 @@
  * doctor/stats. Capture pipeline (WAL→redaction→extraction) arrive en P2,
  * MCP/UI en P3 — voir docs/v3/STATUS.md.
  */
-import { existsSync, rmSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { hostname } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import DatabaseCtor from 'better-sqlite3'
@@ -1462,7 +1462,11 @@ export class Memoria {
       if (this.llmOverride !== undefined) {
         return { extraction: this.llmOverride.extraction, embeddings: this.llmOverride.embeddings ?? null }
       }
-      const profile = await resolveLlmProfile(this.resolved.config)
+      // Passe les modèles déjà en base pour que l'avertissement cross-modèle
+      // ne crie au loup que s'il y a vraiment un mélange (pas à chaque boot).
+      const profile = await resolveLlmProfile(this.resolved.config, {
+        knownEmbeddingModels: this.listKnownEmbeddingModels(),
+      })
       // Journal des envois cloud : enveloppe ICI, seul point où les deux
       // providers sont résolus. Les providers locaux ressortent inchangés.
       const sink: CloudAuditSink = send => {
@@ -1481,6 +1485,34 @@ export class Memoria {
       }
     })()
     return this.profilePromise
+  }
+
+  /**
+   * `SELECT DISTINCT model FROM embeddings` sur chaque memory.sqlite d'assistant.
+   * Lecture seule, best-effort — un fichier verrouillé n'empêche pas le boot.
+   */
+  private listKnownEmbeddingModels(): string[] {
+    const assistantsDir = join(this.resolved.storageRoot, 'assistants')
+    if (!existsSync(assistantsDir)) return []
+    const models = new Set<string>()
+    for (const id of readdirSync(assistantsDir)) {
+      const dbPath = this.paths.assistantDb(id)
+      if (!existsSync(dbPath)) continue
+      try {
+        const db = new DatabaseCtor(dbPath, { readonly: true, fileMustExist: true })
+        try {
+          const rows = db.prepare('SELECT DISTINCT model FROM embeddings').all() as Array<{ model: string }>
+          for (const r of rows) {
+            if (r.model) models.add(r.model)
+          }
+        } finally {
+          db.close()
+        }
+      } catch {
+        // base absente / schéma ancien / lock — ignorer
+      }
+    }
+    return [...models].sort()
   }
 
   private async ensureEmbeddings(): Promise<EmbeddingProvider | null> {

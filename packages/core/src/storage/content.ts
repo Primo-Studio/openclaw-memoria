@@ -457,6 +457,14 @@ export class ContentStore {
     return r.c
   }
 
+  /** Modèles d'embedding déjà stockés (`SELECT DISTINCT model FROM embeddings`). */
+  listEmbeddingModels(): string[] {
+    const rows = this.db.prepare('SELECT DISTINCT model FROM embeddings ORDER BY model').all() as Array<{
+      model: string
+    }>
+    return rows.map(r => r.model)
+  }
+
   close(): void {
     this.db.close()
   }
