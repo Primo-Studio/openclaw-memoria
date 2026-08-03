@@ -175,7 +175,8 @@ export function resolveBaseUrl(cfg: Pick<AdapterConfig, 'daemonUrl' | 'storageRo
  * C'est la clé de voûte du scoring : sans lui, `scoreFact` applique boost=×1 et
  * `passesClientIsolation` ne peut rien isoler. Les identifiants projet/client ne
  * sont PAS devinables depuis OpenClaw — ils viennent de la config du workspace ;
- * `repo_path` est le seul signal dérivable automatiquement (cwd de la session).
+ * `repo_path` n'est envoyé QUE s'il vient du cwd de la session (hook), jamais
+ * de `process.cwd()` du gateway (souvent un autre répertoire → faux boost).
  */
 export interface ActiveContextPayload {
   repo_path?: string
@@ -187,15 +188,29 @@ export interface ActiveContextPayload {
 export function buildActiveContext(
   cfg: Pick<AdapterConfig, 'projectId' | 'clientOrgId' | 'orgId'>,
   ctx: HookContext | undefined,
-  cwd: string | undefined,
 ): ActiveContextPayload | undefined {
   const out: ActiveContextPayload = {}
-  const repo = ctx?.cwd ?? cwd
-  if (repo) out.repo_path = repo
+  // Uniquement le cwd de session. process.cwd() du gateway OpenClaw n'est PAS
+  // le dépôt de la conversation (corpus appelle sans ctx → pas de repo_path).
+  if (ctx?.cwd) out.repo_path = ctx.cwd
   if (cfg.projectId) out.project_id = cfg.projectId
   if (cfg.clientOrgId) out.client_org_id = cfg.clientOrgId
   if (cfg.orgId) out.org_id = cfg.orgId
   return Object.keys(out).length > 0 ? out : undefined
+}
+
+/**
+ * Map ordonnée par insertion : `set` sur une clé existante ne rafraîchit PAS
+ * l'ordre Map. Pour une vraie LRU, delete+set à chaque accès.
+ */
+export function lruSet<K, V>(map: Map<K, V>, key: K, value: V, maxSize: number): void {
+  map.delete(key)
+  map.set(key, value)
+  while (map.size > maxSize) {
+    const oldest = map.keys().next().value
+    if (oldest === undefined) break
+    map.delete(oldest)
+  }
 }
 
 // ------------------------------------------------------------ extraction défensive des payloads
@@ -513,7 +528,7 @@ export function register(api: OpenClawPluginApi): void {
         limit,
         // Sans active_context, le core applique boost=×1 et n'isole aucun client :
         // toute la machinerie de pertinence contextuelle restait inerte.
-        active_context: buildActiveContext(cfg, ctx, safeCwd()),
+        active_context: buildActiveContext(cfg, ctx),
         token_budget: cfg.tokenBudget,
       },
       cfg.recallTimeoutMs,
@@ -605,16 +620,18 @@ export function register(api: OpenClawPluginApi): void {
 
   // (2) AUTO-CAPTURE — agent_end est un CONVERSATION hook : exige
   //     allowConversationAccess=true (posé à l'install).
-  //     VRAI fire-and-forget : on ne bloque PAS la fin de tour de l'agent. Le
-  //     daemon journalise (WAL) AVANT d'extraire → même si le timeout coupe
-  //     l'extraction, les messages sont rejoués au prochain boot.
-  //     ⚠️ Le WAL protège ce qui EST ARRIVÉ au daemon : si le process OpenClaw
-  //     sort avant la fin du fetch (run one-shot), la capture est perdue. D'où le
-  //     drain sur `beforeExit` plus bas.
+  //     Fire-and-forget : on ne bloque PAS la fin de tour de l'agent. Le daemon
+  //     journalise (WAL) AVANT d'extraire → timeout d'extraction rejouable.
+  //
+  //     Limite honnête (pas de faux filet) :
+  //     - Si le process meurt avant que le fetch n'atteigne le daemon, la
+  //       capture est perdue. Le WAL ne protège que ce qui est arrivé.
+  //     - Un handler `beforeExit` a été retiré : il ne se déclenchait ni sur
+  //       `process.exit()` ni sur SIGTERM/SIGINT ; et un fetch encore en vol
+  //       maintient déjà la boucle d'événements, donc le « drain » était un no-op.
+  //     - Un drain SIGTERM qui appelle process.exit casserait le gateway long-running.
   if (cfg.autoCapture) {
     const lastTurn = new Map<string, string>()
-    const inFlight = new Set<Promise<unknown>>()
-    let drainRegistered = false
 
     api.on<AgentEndEvent, void>('agent_end', (event, ctx) => {
       const all = toMemoriaMessages(event.messages)
@@ -627,15 +644,16 @@ export function register(api: OpenClawPluginApi): void {
       const key = event.runId ?? ctx?.sessionId ?? ctx?.agentId ?? 'default'
       const sig = turnSignature(turn)
       if (lastTurn.get(key) === sig) {
+        // Touche LRU : le run actif ne doit pas être évincé avant les inactifs.
+        lruSet(lastTurn, key, sig, MAX_TRACKED_RUNS)
         stats.captureSkipped++
         return
       }
-      lastTurn.set(key, sig)
-      if (lastTurn.size > MAX_TRACKED_RUNS) lastTurn.delete(lastTurn.keys().next().value as string)
+      lruSet(lastTurn, key, sig, MAX_TRACKED_RUNS)
 
-      const pending = post(
+      void post(
         '/v1/memory/capture_turn',
-        { messages: turn, active_context: buildActiveContext(cfg, ctx, safeCwd()) },
+        { messages: turn, active_context: buildActiveContext(cfg, ctx) },
         CAPTURE_TIMEOUT_MS,
       )
         .then(res => {
@@ -650,18 +668,6 @@ export function register(api: OpenClawPluginApi): void {
         .catch(() => {
           stats.captureFail++
         })
-        .finally(() => inFlight.delete(pending))
-
-      inFlight.add(pending)
-
-      // Drain : sans ça, un `openclaw run` qui rend la main juste après agent_end
-      // sortait avant que la requête ne parte — capture silencieusement perdue.
-      if (!drainRegistered && typeof process?.once === 'function') {
-        drainRegistered = true
-        process.once('beforeExit', () => {
-          if (inFlight.size > 0) void Promise.allSettled([...inFlight])
-        })
-      }
     })
   }
 
@@ -669,14 +675,6 @@ export function register(api: OpenClawPluginApi): void {
     `[memoria] connecté (instance ${cfg.instance}) — recall:${cfg.autoRecall ? 'on' : 'off'} capture:${cfg.autoCapture ? 'on' : 'off'}` +
       (cfg.projectId || cfg.clientOrgId ? ` contexte:${cfg.clientOrgId ?? cfg.projectId}` : ' contexte:non configuré (isolation projet/client inactive)'),
   )
-}
-
-function safeCwd(): string | undefined {
-  try {
-    return process.cwd()
-  } catch {
-    return undefined
-  }
 }
 
 export default { register }
