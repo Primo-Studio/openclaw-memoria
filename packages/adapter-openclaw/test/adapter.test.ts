@@ -9,6 +9,7 @@ import {
   originPrefix,
   formatRecall,
   getStats,
+  lruSet,
   partsToText,
   queryFromEvent,
   register,
@@ -181,20 +182,36 @@ describe('formatRecall', () => {
 })
 
 describe('buildActiveContext', () => {
-  it('dérive repo_path du cwd et reprend projet/client de la config', () => {
-    expect(buildActiveContext({ projectId: 'primo', clientOrgId: 'soc' }, undefined, '/repo/x')).toEqual({
-      repo_path: '/repo/x',
+  it('reprend projet/client de la config sans inventer de repo_path', () => {
+    expect(buildActiveContext({ projectId: 'primo', clientOrgId: 'soc', orgId: 'org-1' }, undefined)).toEqual({
       project_id: 'primo',
       client_org_id: 'soc',
+      org_id: 'org-1',
     })
   })
 
-  it('le cwd du hook prime sur celui du process', () => {
-    expect(buildActiveContext({}, { cwd: '/depuis/hook' }, '/depuis/process')).toEqual({ repo_path: '/depuis/hook' })
+  it('repo_path uniquement depuis le cwd de session (hook), jamais un fallback process', () => {
+    expect(buildActiveContext({}, { cwd: '/depuis/hook' })).toEqual({ repo_path: '/depuis/hook' })
+    // Corpus / recall sans ctx : pas de repo_path (process.cwd() du gateway serait faux)
+    expect(buildActiveContext({ projectId: 'p' }, undefined)).toEqual({ project_id: 'p' })
   })
 
   it('undefined si rien à déclarer', () => {
-    expect(buildActiveContext({}, undefined, undefined)).toBeUndefined()
+    expect(buildActiveContext({}, undefined)).toBeUndefined()
+  })
+})
+
+describe('lruSet', () => {
+  it('rafraîchit l’ordre d’insertion et évince le moins récemment touché', () => {
+    const m = new Map<string, string>()
+    lruSet(m, 'a', '1', 2)
+    lruSet(m, 'b', '2', 2)
+    // Re-touche a → b devient le plus vieux
+    lruSet(m, 'a', '1b', 2)
+    lruSet(m, 'c', '3', 2)
+    expect([...m.keys()]).toEqual(['a', 'c'])
+    expect(m.get('a')).toBe('1b')
+    expect(m.has('b')).toBe(false)
   })
 })
 
