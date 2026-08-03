@@ -121,7 +121,7 @@ export class UpdateCommand extends Command {
       out.write('Téléchargement + reconstruction…\n')
       const r = await pullAndBuild()
       out.write(`${r.message}\n`)
-      if (r.ok && r.changed) {
+      if (r.ok && r.rebuilt) {
         const { storageRoot } = resolveCommon({ storageRoot: this.storageRoot, configPath: this.config })
         scheduleRestart(storageRoot)
         out.write('Le daemon redémarre dans quelques secondes (memoria stop && start).\n')

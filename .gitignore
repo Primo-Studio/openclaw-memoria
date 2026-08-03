@@ -8,6 +8,9 @@ node_modules/
 dist/
 *.tsbuildinfo
 
+# marqueur de la dernière révision réellement reconstruite (local à la machine)
+.memoria-built-sha
+
 # snapshots de migration (bases legacy rapatriées — ne pas committer)
 .koda-import/
 .*-import/

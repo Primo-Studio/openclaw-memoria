@@ -810,8 +810,10 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       case 'POST /v1/admin/update': {
         const result = await pullAndBuild()
         sendJson(res, 200, result)
-        // si du neuf a été buildé, on planifie un redémarrage APRÈS l'envoi de la réponse
-        if (result.ok && result.changed) scheduleRestart(storageRoot)
+        // Redémarrage planifié APRÈS l'envoi de la réponse, dès qu'un build a eu
+        // lieu — `rebuilt` et non `changed` : un rattrapage de build sans
+        // nouveauté git remplace bien le code sur le disque, il faut recharger.
+        if (result.ok && result.rebuilt) scheduleRestart(storageRoot)
         return
       }
       default:
