@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   autostartStatus,
   buildPlist,
+  reloadService,
   isEnabled,
   Memoria,
   moveStorage,
@@ -150,6 +151,110 @@ describe('autostartStatus', () => {
     expect(s.plistPath).toContain('fr.primo-studio.memoria.plist')
     // sur cette machine (darwin) c'est pris en charge, mais on n'installe rien ici
     expect(typeof s.installed).toBe('boolean')
+  })
+})
+
+/**
+ * Régression vécue : `memoria autostart on` a affiché « ✓ Lancement auto
+ * installé » alors que le service n'était PAS chargé — daemon à terre, sorti
+ * seulement par un `launchctl bootstrap` manuel.
+ *
+ * Deux pièges combinés : launchd ne libère pas le nom du service instantanément
+ * après un `bootout` (le `bootstrap` immédiat échoue), et le repli
+ * `launchctl load -w` est un shim déprécié qui rend 0 SANS RIEN FAIRE — donc
+ * aucune exception, donc un faux succès.
+ */
+describe('reloadService (régression « ✓ affiché, service absent »)', () => {
+  /** Faux launchctl : `loaded` est l'état, les compteurs disent qui a été appelé. */
+  function fakeOps(init: {
+    loaded: boolean
+    /** Nb d'appels bootstrap avant que le service se charge réellement. */
+    bootstrapWorksOnAttempt?: number
+    /** bootstrap lève-t-il ? (macOS ancien) */
+    bootstrapThrows?: boolean
+    /** load -w charge-t-il vraiment, ou rend-il 0 sans rien faire ? */
+    legacyWorks?: boolean
+    /** Nb de sondages avant que le bootout soit effectif. */
+    unloadAfterPolls?: number
+  }) {
+    const calls = { bootout: 0, bootstrap: 0, legacy: 0, sleep: 0 }
+    let loaded = init.loaded
+    let unloadPending = 0
+    const ops = {
+      isLoaded: () => {
+        if (unloadPending > 0) {
+          unloadPending--
+          return true // pas encore libéré par launchd
+        }
+        return loaded
+      },
+      bootout: () => {
+        calls.bootout++
+        unloadPending = init.unloadAfterPolls ?? 0
+        loaded = false
+      },
+      bootstrap: () => {
+        calls.bootstrap++
+        if (init.bootstrapThrows) throw new Error('Bootstrap failed: 5: Input/output error')
+        if (calls.bootstrap >= (init.bootstrapWorksOnAttempt ?? 1)) loaded = true
+      },
+      loadLegacy: () => {
+        calls.legacy++
+        // Défaut : le shim rend 0 sans charger — le piège exact rencontré.
+        if (init.legacyWorks) loaded = true
+      },
+      sleep: () => {
+        calls.sleep++
+      },
+    }
+    return { ops, calls, isLoaded: () => loaded }
+  }
+
+  it('cas nominal : bootout puis bootstrap, service chargé', () => {
+    const f = fakeOps({ loaded: true })
+    expect(() => reloadService(f.ops)).not.toThrow()
+    expect(f.calls.bootout).toBe(1)
+    expect(f.calls.bootstrap).toBe(1)
+    expect(f.isLoaded()).toBe(true)
+  })
+
+  it('service pas encore chargé → pas de bootout inutile', () => {
+    const f = fakeOps({ loaded: false })
+    reloadService(f.ops)
+    expect(f.calls.bootout).toBe(0)
+    expect(f.isLoaded()).toBe(true)
+  })
+
+  it('attend la libération du nom avant de rebootstraper', () => {
+    // launchd met 3 sondages à libérer : sans attente, le bootstrap partirait trop tôt.
+    const f = fakeOps({ loaded: true, unloadAfterPolls: 3 })
+    reloadService(f.ops)
+    expect(f.calls.sleep).toBeGreaterThan(0)
+    expect(f.isLoaded()).toBe(true)
+  })
+
+  it('bootstrap qui échoue au 1er essai → retenté, et ça passe', () => {
+    const f = fakeOps({ loaded: false, bootstrapWorksOnAttempt: 2 })
+    expect(() => reloadService(f.ops)).not.toThrow()
+    expect(f.calls.bootstrap).toBe(2)
+  })
+
+  it('LE piège : bootstrap lève, load -w rend 0 sans charger → THROW au lieu d’un faux succès', () => {
+    const f = fakeOps({ loaded: false, bootstrapThrows: true, legacyWorks: false })
+    expect(() => reloadService(f.ops)).toThrow(/n’est pas chargé après/)
+    expect(f.calls.legacy).toBeGreaterThan(0)
+    expect(f.isLoaded()).toBe(false)
+  })
+
+  it('le message d’échec donne la commande de secours', () => {
+    const f = fakeOps({ loaded: false, bootstrapThrows: true })
+    expect(() => reloadService(f.ops)).toThrow(/launchctl bootstrap/)
+  })
+
+  it('macOS ancien : bootstrap lève mais load -w charge vraiment → succès', () => {
+    const f = fakeOps({ loaded: false, bootstrapThrows: true, legacyWorks: true })
+    expect(() => reloadService(f.ops)).not.toThrow()
+    expect(f.isLoaded()).toBe(true)
   })
 })
 

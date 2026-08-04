@@ -89,7 +89,17 @@ export class AutostartCommand extends Command {
           programArguments: [process.execPath, daemonBinPath(), '--storage-root', storageRoot],
           workingDirectory: storageRoot,
         })
-        out.write(`✓ Lancement auto installé — le daemon démarrera à chaque login.\n  plist : ${s.plistPath}\n`)
+        // `enableAutostart` lève désormais si le chargement n'a pas pris, mais on
+        // ne réaffirme un succès que sur l'état RÉEL : un ✓ affiché pendant que
+        // le daemon est à terre est pire qu'une erreur.
+        if (!s.loaded) {
+          return fail(
+            this.context.stderr,
+            `autostart : plist écrit (${s.plistPath}) mais le service n’est pas chargé — le daemon ne tourne pas. ` +
+              'Réessaie, ou : launchctl bootstrap gui/$(id -u) ' + s.plistPath,
+          )
+        }
+        out.write(`✓ Lancement auto installé et chargé — le daemon démarrera à chaque login.\n  plist : ${s.plistPath}\n`)
         return 0
       }
       if (this.mode === 'off') {
