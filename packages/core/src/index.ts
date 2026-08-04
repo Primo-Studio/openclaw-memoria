@@ -27,11 +27,12 @@ export {
   AUTOSTART_LABEL,
   autostartStatus,
   buildPlist,
+  reloadService,
   enableAutostart,
   disableAutostart,
   servicePath,
 } from './control/autostart.js'
-export type { AutostartSpec, AutostartStatus } from './control/autostart.js'
+export type { AutostartSpec, AutostartStatus, LaunchctlOps } from './control/autostart.js'
 export { RegistryStore } from './storage/registry.js'
 export { factOrigin, originLabel, needsCaution } from './engine/origin.js'
 export type { FactOrigin } from './engine/origin.js'

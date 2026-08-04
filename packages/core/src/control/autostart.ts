@@ -130,8 +130,104 @@ export function autostartStatus(label: string = AUTOSTART_LABEL): AutostartStatu
 }
 
 /**
+ * Opérations launchctl, injectables pour tester l'orchestration sans launchd.
+ * `bootstrap` remonte son erreur ; les autres sont best-effort côté appelant.
+ */
+export interface LaunchctlOps {
+  isLoaded(): boolean
+  bootout(): void
+  bootstrap(): void
+  /** Repli `launchctl load -w` pour les macOS antérieurs à bootstrap. */
+  loadLegacy(): void
+  sleep(ms: number): void
+}
+
+/** Attente d'un état launchd : bornée, courte, et on n'attend jamais pour rien. */
+const RELOAD_POLL_MS = 100
+const UNLOAD_TIMEOUT_MS = 3_000
+const LOAD_TIMEOUT_MS = 3_000
+
+function waitFor(ops: LaunchctlOps, wanted: boolean, timeoutMs: number): boolean {
+  for (let waited = 0; waited <= timeoutMs; waited += RELOAD_POLL_MS) {
+    if (ops.isLoaded() === wanted) return true
+    ops.sleep(RELOAD_POLL_MS)
+  }
+  return ops.isLoaded() === wanted
+}
+
+/**
+ * Décharge puis recharge le service, et VÉRIFIE que c'est arrivé.
+ *
+ * Le code précédent enchaînait `bootout` et `bootstrap` sans respirer, puis
+ * annonçait un succès sans rien vérifier. Deux pièges se combinaient :
+ *
+ *  - launchd ne libère pas le nom du service instantanément après un `bootout` ;
+ *    un `bootstrap` immédiat échoue.
+ *  - le repli `launchctl load -w` est un shim déprécié qui rend 0 SANS RIEN FAIRE
+ *    sur les macOS récents. Aucune exception n'était donc levée.
+ *
+ * Résultat observé en vrai : « ✓ Lancement auto installé » affiché, service
+ * absent, daemon à terre — il a fallu un `launchctl bootstrap` à la main pour
+ * s'en sortir. On attend donc le déchargement effectif, on retente le
+ * chargement, et on ÉCHOUE BRUYAMMENT s'il n'a pas pris.
+ */
+export function reloadService(ops: LaunchctlOps, attempts = 2): void {
+  if (ops.isLoaded()) {
+    try {
+      ops.bootout()
+    } catch {
+      /* pas chargé, ou déjà en cours de déchargement */
+    }
+    // Sans cette attente, le bootstrap suivant se heurte à un nom encore pris.
+    waitFor(ops, false, UNLOAD_TIMEOUT_MS)
+  }
+
+  let lastError: Error | null = null
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      ops.bootstrap()
+    } catch (err) {
+      lastError = err as Error
+      try {
+        ops.loadLegacy()
+      } catch (legacyErr) {
+        lastError = legacyErr as Error
+      }
+    }
+    // La seule preuve qui vaille : ni le code de sortie de bootstrap, ni celui
+    // de load -w ne disent la vérité. On demande à launchd.
+    if (waitFor(ops, true, LOAD_TIMEOUT_MS)) return
+  }
+
+  throw new Error(
+    `lancement auto : le service n’est pas chargé après ${attempts} tentative(s)` +
+      (lastError ? ` (${lastError.message})` : '') +
+      '. Réessaie, ou charge-le à la main : launchctl bootstrap gui/$(id -u) <plist>',
+  )
+}
+
+function realOps(uid: number, label: string, path: string): LaunchctlOps {
+  return {
+    isLoaded: () => isLoaded(label),
+    bootout: () => execFileSync('launchctl', ['bootout', `gui/${uid}/${label}`], { stdio: 'ignore' }),
+    bootstrap: () => execFileSync('launchctl', ['bootstrap', `gui/${uid}`, path], { stdio: 'ignore' }),
+    loadLegacy: () => execFileSync('launchctl', ['load', '-w', path], { stdio: 'ignore' }),
+    sleep: sleepSync,
+  }
+}
+
+/** Pause synchrone : `enableAutostart` est sync, et le rendre async remonterait
+ *  jusqu'à la route HTTP et à la CLI pour une attente de quelques centaines de ms. */
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+
+/**
  * Installe et charge le LaunchAgent (idempotent : recharge si déjà présent).
  * Le daemon démarre immédiatement (RunAtLoad) puis à chaque login.
+ *
+ * Lève si le service n'est pas chargé au retour : un appelant ne doit jamais
+ * pouvoir annoncer un succès alors que le daemon est resté à terre.
  */
 export function enableAutostart(spec: AutostartSpec): AutostartStatus {
   if (platform() !== 'darwin') {
@@ -144,23 +240,7 @@ export function enableAutostart(spec: AutostartSpec): AutostartStatus {
   mkdirSync(logDir, { recursive: true })
   writeFileSync(path, buildPlist({ ...spec, label }), 'utf8')
 
-  const uid = process.getuid?.() ?? 501
-  // bootout d'abord (ignore l'échec si pas chargé) puis bootstrap → recharge propre.
-  try {
-    execFileSync('launchctl', ['bootout', `gui/${uid}/${label}`], { stdio: 'ignore' })
-  } catch {
-    /* pas encore chargé : normal */
-  }
-  try {
-    execFileSync('launchctl', ['bootstrap', `gui/${uid}`, path], { stdio: 'ignore' })
-  } catch (err) {
-    // fallback legacy (anciennes versions macOS)
-    try {
-      execFileSync('launchctl', ['load', '-w', path], { stdio: 'ignore' })
-    } catch {
-      throw new Error(`lancement auto : launchctl a refusé le chargement (${(err as Error).message})`)
-    }
-  }
+  reloadService(realOps(process.getuid?.() ?? 501, label, path))
   return autostartStatus(label)
 }
 
