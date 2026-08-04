@@ -3,6 +3,11 @@
 > **But** : reprendre le travail SANS contexte oral. Lire d'abord `STATUS.md`, puis ce fichier,
 > puis `DECISIONS-LOG.md`. Spec gelée = `~/Downloads/Memoria-V3-Dossier-Dev-2026-06-10/PLAN-Memoria-v3-2026-06-03.md`.
 > Carte des agents/mémoires à récupérer = `AGENTS-RESEAU.md`.
+>
+> **Dernière session : `PASSATION-2026-08-04.md`** — PR #14 à #18 (mise à jour depuis l'UI,
+> embeddings épinglables, adaptateur, autostart). À lire avant de toucher à `update.ts`,
+> `control/autostart.ts`, `llm/index.ts` ou l'adaptateur. Contient aussi les pièges de
+> diagnostic : plusieurs machines, deux copies du dépôt par machine, logs trompeurs.
 
 ## Reprendre le travail
 
