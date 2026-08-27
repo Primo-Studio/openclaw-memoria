@@ -401,11 +401,75 @@ export interface DoctorMemory {
  * en soi l'information la plus utile : rien n'est parti.
  */
 export interface DoctorCloud {
-  /** Envois sur 24 h, par fournisseur/modèle/finalité. */
-  sends_24h: Array<{ provider: string; model: string; purpose: string; calls: number; items: number; chars: number; failures: number }>
+  /** Envois sur 24 h, par fournisseur/modèle/finalité (tokens quand le fournisseur les a rapportés). */
+  sends_24h: Array<{
+    provider: string
+    model: string
+    purpose: string
+    calls: number
+    items: number
+    chars: number
+    failures: number
+    tokens_in?: number
+    tokens_out?: number
+  }>
   last_send_at?: string
   /** Volume total en caractères sur 24 h — jamais le contenu. */
   chars_24h: number
+}
+
+/** Fenêtre d'agrégation de la consommation des modèles. */
+export type LlmUsagePeriod = '24h' | '7d' | '30d' | 'all'
+
+/** Agrégat brut (registry) d'un couple fournisseur/modèle/finalité. */
+export interface LlmUsageAggregate {
+  provider: string
+  model: string
+  purpose: 'extraction' | 'embeddings'
+  /** Modèle exécuté sur la machine (rien ne sort, coût nul). */
+  local: boolean
+  calls: number
+  failures: number
+  items: number
+  chars: number
+  ms_total: number
+  /** null = aucun appel mesuré (le fournisseur ne rapporte pas ses tokens). */
+  input_tokens: number | null
+  output_tokens: number | null
+  reasoning_tokens: number | null
+  /** Appels pour lesquels le fournisseur a rapporté des tokens. */
+  calls_metered: number
+  first_ts: string | null
+  last_ts: string | null
+}
+
+/** Ligne enrichie du coût estimé (tarifs indicatifs, `pricing.ts`). */
+export interface LlmUsageRow extends LlmUsageAggregate {
+  /** USD. null = tarif inconnu ou aucun token mesuré (cloud). Local → 0. */
+  estimated_cost_usd: number | null
+  price_known: boolean
+}
+
+export interface LlmUsageReport {
+  period: LlmUsagePeriod
+  /** Borne basse ISO, null pour `all`. */
+  since: string | null
+  generated_at: string
+  /** Date de référence des tarifs utilisés pour l'estimation. */
+  pricing_as_of: string
+  rows: LlmUsageRow[]
+  totals: {
+    calls: number
+    failures: number
+    input_tokens: number | null
+    output_tokens: number | null
+    /** null si aucune ligne n'a pu être chiffrée. */
+    estimated_cost_usd: number | null
+    /** Appels dont le coût n'a pas pu être estimé (tarif inconnu / non mesuré). */
+    unpriced_calls: number
+    /** Appels sans mesure de tokens. */
+    unmetered_calls: number
+  }
 }
 
 /** Statut d'un message confié à la capture (suivi post-timeout). */
@@ -433,6 +497,8 @@ export interface DoctorReport {
   activity: DoctorActivity
   memory: DoctorMemory
   cloud: DoctorCloud
+  /** Consommation des modèles sur 24 h (tous fournisseurs, locaux compris). */
+  usage: LlmUsageReport
   warnings: string[]
 }
 

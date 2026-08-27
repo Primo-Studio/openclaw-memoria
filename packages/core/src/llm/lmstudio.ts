@@ -11,7 +11,7 @@
  * LM Studio le rejettent sans json_schema) — on injecte une directive
  * « objet JSON » dans le system, comme le provider OpenAI.
  */
-import type { CompleteOptions, LlmProvider } from './provider.js'
+import type { CompleteOptions, CompletionResult, LlmProvider, LlmUsage } from './provider.js'
 
 export const DEFAULT_LMSTUDIO_BASE_URL = 'http://127.0.0.1:1234/v1'
 /** Sentinelle « premier modèle chargé » (résolu via /models au 1er appel). */
@@ -59,6 +59,7 @@ export interface LmStudioProviderOptions {
 
 interface ChatCompletionResponse {
   choices?: Array<{ message?: { content?: string } }>
+  usage?: { prompt_tokens?: number; completion_tokens?: number }
 }
 
 export class LmStudioProvider implements LlmProvider {
@@ -109,6 +110,10 @@ export class LmStudioProvider implements LlmProvider {
   }
 
   async complete(opts: CompleteOptions): Promise<string> {
+    return (await this.completeDetailed(opts)).text
+  }
+
+  async completeDetailed(opts: CompleteOptions): Promise<CompletionResult> {
     const model = await this.effectiveModel()
 
     // Mode JSON : directive explicite dans le system (pas de response_format —
@@ -150,6 +155,9 @@ export class LmStudioProvider implements LlmProvider {
     if (typeof content !== 'string') {
       throw new Error(`réponse lmstudio invalide : choices[0].message.content absent (modèle ${model})`)
     }
-    return content
+    const usage: LlmUsage = {}
+    if (typeof data.usage?.prompt_tokens === 'number') usage.input_tokens = data.usage.prompt_tokens
+    if (typeof data.usage?.completion_tokens === 'number') usage.output_tokens = data.usage.completion_tokens
+    return { text: content, usage: Object.keys(usage).length > 0 ? usage : undefined }
   }
 }

@@ -11,7 +11,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import type { CompleteOptions, EmbeddingProvider, LlmProvider } from './provider.js'
+import type { CompleteOptions, CompletionResult, EmbeddingProvider, EmbeddingResult, LlmProvider, LlmUsage } from './provider.js'
 import { assertVectorDimensions } from './embeddings-guard.js'
 
 export const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini'
@@ -65,9 +65,21 @@ export interface OpenAiProviderOptions extends OpenAiKeyOptions {
 interface ChatCompletionResponse {
   choices?: Array<{ message?: { content?: string }; finish_reason?: string }>
   usage?: {
+    prompt_tokens?: number
     completion_tokens?: number
     completion_tokens_details?: { reasoning_tokens?: number }
   }
+}
+
+/** `usage` OpenAI → mesure Memoria. `undefined` si l'API n'a rien dit. */
+function usageOf(u: ChatCompletionResponse['usage']): LlmUsage | undefined {
+  if (!u) return undefined
+  const out: LlmUsage = {}
+  if (typeof u.prompt_tokens === 'number') out.input_tokens = u.prompt_tokens
+  if (typeof u.completion_tokens === 'number') out.output_tokens = u.completion_tokens
+  const reasoning = u.completion_tokens_details?.reasoning_tokens
+  if (typeof reasoning === 'number') out.reasoning_tokens = reasoning
+  return Object.keys(out).length > 0 ? out : undefined
 }
 
 /** Modèles à génération de tokens « completion » (gpt-5*, o1*, o3*…). */
@@ -104,6 +116,10 @@ export class OpenAiProvider implements LlmProvider {
   }
 
   async complete(opts: CompleteOptions): Promise<string> {
+    return (await this.completeDetailed(opts)).text
+  }
+
+  async completeDetailed(opts: CompleteOptions): Promise<CompletionResult> {
     if (this.apiKey === null) {
       throw new Error(`${this.flavor} : aucune clé API (param, env ou fichier de clé)`)
     }
@@ -200,7 +216,7 @@ export class OpenAiProvider implements LlmProvider {
         `${this.flavor} a renvoyé une réponse VIDE (modèle ${this.model}, finish_reason=${finish})${hint}`,
       )
     }
-    return content
+    return { text: content, usage: usageOf(data.usage) }
   }
 }
 
@@ -264,7 +280,11 @@ export class OpenAiEmbeddingProvider implements EmbeddingProvider {
   }
 
   async embed(texts: string[]): Promise<Float32Array[]> {
-    if (texts.length === 0) return []
+    return (await this.embedDetailed(texts)).vectors
+  }
+
+  async embedDetailed(texts: string[]): Promise<EmbeddingResult> {
+    if (texts.length === 0) return { vectors: [] }
     if (!this.apiKey) throw new Error('embeddings openai : aucune clé API disponible')
     const body: Record<string, unknown> = { model: this.model, input: texts }
     // `dimensions` n'est accepté que par les modèles v3 ; on ne l'envoie que si
@@ -281,7 +301,10 @@ export class OpenAiEmbeddingProvider implements EmbeddingProvider {
       const detail = await res.text().catch(() => '')
       throw new Error(`openai /embeddings HTTP ${res.status} (modèle ${this.model}) : ${detail.slice(0, 200)}`)
     }
-    const data = (await res.json()) as { data?: Array<{ embedding?: number[]; index?: number }> }
+    const data = (await res.json()) as {
+      data?: Array<{ embedding?: number[]; index?: number }>
+      usage?: { prompt_tokens?: number }
+    }
     const rows = data.data
     if (!Array.isArray(rows) || rows.length !== texts.length) {
       throw new Error(`réponse openai /embeddings invalide : ${rows?.length ?? 0} vecteur(s) pour ${texts.length} texte(s)`)
@@ -290,11 +313,14 @@ export class OpenAiEmbeddingProvider implements EmbeddingProvider {
     const ordered = rows.every(r => typeof r.index === 'number')
       ? [...rows].sort((a, b) => (a.index ?? 0) - (b.index ?? 0))
       : rows
-    return ordered.map(r => {
+    const vectors = ordered.map(r => {
       const vec = r.embedding
       if (!Array.isArray(vec)) throw new Error('réponse openai /embeddings : vecteur absent')
       assertVectorDimensions(vec, this.dimensions, this.model)
       return Float32Array.from(vec)
     })
+    const usage: LlmUsage | undefined =
+      typeof data.usage?.prompt_tokens === 'number' ? { input_tokens: data.usage.prompt_tokens } : undefined
+    return { vectors, usage }
   }
 }

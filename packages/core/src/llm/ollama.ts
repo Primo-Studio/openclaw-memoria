@@ -4,7 +4,7 @@
  * isAvailable() vérifie que le serveur répond ET que le modèle est tiré
  * (GET /api/tags) — un échec réseau retourne false mais N'EST JAMAIS muet.
  */
-import type { CompleteOptions, EmbeddingProvider, LlmProvider } from './provider.js'
+import type { CompleteOptions, CompletionResult, EmbeddingProvider, EmbeddingResult, LlmProvider, LlmUsage } from './provider.js'
 import { assertVectorDimensions } from './embeddings-guard.js'
 
 export const DEFAULT_OLLAMA_BASE_URL = 'http://127.0.0.1:11434'
@@ -66,6 +66,10 @@ export class OllamaProvider implements LlmProvider {
   }
 
   async complete(opts: CompleteOptions): Promise<string> {
+    return (await this.completeDetailed(opts)).text
+  }
+
+  async completeDetailed(opts: CompleteOptions): Promise<CompletionResult> {
     const messages: Array<{ role: string; content: string }> = []
     if (opts.system) messages.push({ role: 'system', content: opts.system })
     messages.push({ role: 'user', content: opts.prompt })
@@ -89,12 +93,16 @@ export class OllamaProvider implements LlmProvider {
       const detail = await res.text().catch(() => '')
       throw new Error(`ollama /api/chat HTTP ${res.status} (modèle ${this.model}) : ${detail.slice(0, 200)}`)
     }
-    const data = (await res.json()) as { message?: { content?: string } }
+    const data = (await res.json()) as { message?: { content?: string }; prompt_eval_count?: number; eval_count?: number }
     const content = data.message?.content
     if (typeof content !== 'string') {
       throw new Error(`réponse ollama invalide : message.content absent (modèle ${this.model})`)
     }
-    return content
+    // Ollama compte lui-même : prompt_eval_count (entrée) + eval_count (sortie).
+    const usage: LlmUsage = {}
+    if (typeof data.prompt_eval_count === 'number') usage.input_tokens = data.prompt_eval_count
+    if (typeof data.eval_count === 'number') usage.output_tokens = data.eval_count
+    return { text: content, usage: Object.keys(usage).length > 0 ? usage : undefined }
   }
 }
 
@@ -124,7 +132,11 @@ export class OllamaEmbeddingProvider implements EmbeddingProvider {
   }
 
   async embed(texts: string[]): Promise<Float32Array[]> {
-    if (texts.length === 0) return []
+    return (await this.embedDetailed(texts)).vectors
+  }
+
+  async embedDetailed(texts: string[]): Promise<EmbeddingResult> {
+    if (texts.length === 0) return { vectors: [] }
     const res = await fetch(`${this.baseUrl}/api/embed`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -135,7 +147,7 @@ export class OllamaEmbeddingProvider implements EmbeddingProvider {
       const detail = await res.text().catch(() => '')
       throw new Error(`ollama /api/embed HTTP ${res.status} (modèle ${this.model}) : ${detail.slice(0, 200)}`)
     }
-    const data = (await res.json()) as { embeddings?: number[][] }
+    const data = (await res.json()) as { embeddings?: number[][]; prompt_eval_count?: number }
     const embeddings = data.embeddings
     if (!Array.isArray(embeddings) || embeddings.length !== texts.length) {
       throw new Error(
@@ -143,11 +155,14 @@ export class OllamaEmbeddingProvider implements EmbeddingProvider {
           `vecteurs pour ${texts.length} textes (modèle ${this.model})`,
       )
     }
-    return embeddings.map(vec => {
+    const vectors = embeddings.map(vec => {
       const f32 = Float32Array.from(vec)
       // LA garde anti-768/1536 : aucun vecteur cross-dimension ne sort d'ici.
       assertVectorDimensions(f32, this.dimensions, this.model)
       return f32
     })
+    const usage: LlmUsage | undefined =
+      typeof data.prompt_eval_count === 'number' ? { input_tokens: data.prompt_eval_count } : undefined
+    return { vectors, usage }
   }
 }

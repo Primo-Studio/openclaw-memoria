@@ -403,6 +403,16 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         sendJson(res, 200, { provider, model: body['model'] ?? null, pending: await memoria.embeddingsPending() })
         return
       }
+      case 'GET /v1/admin/llm_usage': {
+        // Consommation des modèles (appels, tokens, coût estimé) — tous
+        // fournisseurs, locaux compris. ?period=24h|7d|30d|all (défaut 24h).
+        const period = url.searchParams.get('period') ?? '24h'
+        if (period !== '24h' && period !== '7d' && period !== '30d' && period !== 'all') {
+          throw new HttpError(400, 'period invalide (attendu : 24h | 7d | 30d | all)')
+        }
+        sendJson(res, 200, memoria.llmUsage(period))
+        return
+      }
       case 'GET /v1/admin/machine_caps': {
         // Scan matériel : l'UI s'en sert pour proposer/déconseiller le local.
         sendJson(res, 200, memoria.machineCaps())

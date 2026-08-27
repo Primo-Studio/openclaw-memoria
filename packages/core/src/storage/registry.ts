@@ -7,6 +7,8 @@ import type { Database } from 'better-sqlite3'
 import { openDatabase } from './sqlite.js'
 import { runMigrations } from './migrations.js'
 import { registryMigrations } from './registry-schema.js'
+import type { LlmCall } from '../llm/usage-meter.js'
+import type { LlmUsageAggregate } from '../types.js'
 import { fromJsonArray, newId, newPairingCode, newToken, nowISO, sha256Hex, toJson } from '../util.js'
 import type {
   Assistant,
@@ -674,6 +676,61 @@ export class RegistryStore {
     this.db
       .prepare('INSERT INTO audit_log (ts, actor_type, actor_id, action, target_id_hash, scope_id, reason) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .run(nowISO(), entry.actor_type, entry.actor_id, entry.action, entry.target_id_hash, entry.scope_id, entry.reason)
+  }
+
+  // ------------------------------------------------------------- llm usage
+
+  /** Un appel de modèle = une ligne (nombres seulement, jamais de contenu). */
+  recordLlmUsage(call: LlmCall): void {
+    this.db
+      .prepare(
+        'INSERT INTO llm_usage (ts, provider, model, purpose, local, items, chars, ms, ok, input_tokens, output_tokens, reasoning_tokens) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      )
+      .run(
+        nowISO(),
+        call.provider,
+        call.model,
+        call.purpose,
+        call.local ? 1 : 0,
+        call.items,
+        call.chars,
+        call.ms,
+        call.ok ? 1 : 0,
+        call.input_tokens,
+        call.output_tokens,
+        call.reasoning_tokens,
+      )
+  }
+
+  /**
+   * Agrégat par fournisseur/modèle/finalité depuis `sinceIso` (null = tout).
+   * `SUM` d'une colonne entièrement NULL vaut NULL : on le garde tel quel —
+   * « non mesuré » ne devient jamais « 0 ».
+   */
+  llmUsageRows(sinceIso: string | null): LlmUsageAggregate[] {
+    const rows = this.db
+      .prepare(
+        `SELECT provider, model, purpose, MAX(local) AS local,
+                COUNT(*) AS calls,
+                SUM(CASE WHEN ok = 0 THEN 1 ELSE 0 END) AS failures,
+                SUM(items) AS items, SUM(chars) AS chars, SUM(ms) AS ms_total,
+                SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens, SUM(reasoning_tokens) AS reasoning_tokens,
+                SUM(CASE WHEN input_tokens IS NOT NULL OR output_tokens IS NOT NULL THEN 1 ELSE 0 END) AS calls_metered,
+                MIN(ts) AS first_ts, MAX(ts) AS last_ts
+         FROM llm_usage
+         WHERE (? IS NULL OR ts >= ?)
+         GROUP BY provider, model, purpose
+         ORDER BY calls DESC, provider, model`,
+      )
+      .all(sinceIso, sinceIso) as Array<Omit<LlmUsageAggregate, 'local' | 'purpose'> & { local: number; purpose: string }>
+    return rows.map(r => ({
+      ...r,
+      purpose: r.purpose === 'embeddings' ? 'embeddings' : 'extraction',
+      local: r.local === 1,
+      input_tokens: r.input_tokens ?? null,
+      output_tokens: r.output_tokens ?? null,
+      reasoning_tokens: r.reasoning_tokens ?? null,
+    }))
   }
 
   auditTail(limit = 100): AuditEntry[] {
