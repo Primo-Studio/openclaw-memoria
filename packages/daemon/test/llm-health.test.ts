@@ -139,3 +139,55 @@ describe('POST /v1/admin/openclaw_copy_key', () => {
     expect(res.status).toBe(400)
   })
 })
+
+describe('GET /v1/admin/machine_caps (scan matériel pour proposer le local)', () => {
+  it('renvoie RAM, cœurs, verdict cohérent et recommend_local', async () => {
+    const res = await admin('GET', '/v1/admin/machine_caps')
+    expect(res.status).toBe(200)
+    const caps = (await res.json()) as {
+      ram_gb: number
+      cpu_cores: number
+      verdict: string
+      recommend_local: boolean
+      apple_silicon: boolean
+    }
+    expect(typeof caps.ram_gb).toBe('number')
+    expect(caps.ram_gb).toBeGreaterThan(0)
+    expect(caps.cpu_cores).toBeGreaterThan(0)
+    expect(['great', 'ok', 'weak']).toContain(caps.verdict)
+    // recommend_local est vrai ssi le verdict n'est pas « weak »
+    expect(caps.recommend_local).toBe(caps.verdict !== 'weak')
+  })
+})
+
+describe('POST /v1/admin/llm_embeddings (choix du moteur de recherche sémantique)', () => {
+  it('provider openai + modèle persistés dans [llm.embeddings], relus par llm_profile', async () => {
+    const res = await admin('POST', '/v1/admin/llm_embeddings', {
+      provider: 'openai',
+      model: 'text-embedding-3-small',
+    })
+    expect(res.status).toBe(200)
+    const out = (await res.json()) as { provider: string; model: string | null; pending: number }
+    expect(out.provider).toBe('openai')
+    expect(typeof out.pending).toBe('number')
+
+    const profile = await admin('GET', '/v1/admin/llm_profile')
+    const config = (await profile.json()) as { embeddings?: { provider?: string; model?: string } }
+    expect(config.embeddings).toMatchObject({ provider: 'openai', model: 'text-embedding-3-small' })
+  })
+
+  it('provider ollama accepté et persisté', async () => {
+    const res = await admin('POST', '/v1/admin/llm_embeddings', { provider: 'ollama' })
+    expect(res.status).toBe(200)
+    const profile = await admin('GET', '/v1/admin/llm_profile')
+    const config = (await profile.json()) as { embeddings?: { provider?: string } }
+    expect(config.embeddings).toMatchObject({ provider: 'ollama' })
+  })
+
+  it('provider non supporté (lmstudio / anthropic / farfelu) → 400', async () => {
+    for (const provider of ['lmstudio', 'anthropic', 'gpt-embed-9000']) {
+      const res = await admin('POST', '/v1/admin/llm_embeddings', { provider })
+      expect(res.status).toBe(400)
+    }
+  })
+})

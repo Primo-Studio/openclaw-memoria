@@ -7,8 +7,11 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import { Wizard, type WizardStep } from '../components/Wizard'
+import { EmbeddingsChooser } from '../components/EmbeddingsChooser'
+import { MachineAgents } from './Agents'
 import { useT } from '../i18n'
 import {
+  getAgents,
   ApiError,
   copyOpenClawKey,
   getDoctor,
@@ -58,6 +61,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   const [type, setType] = useState<AgentType>('claude-code')
   const [pair, setPair] = useState<PairResult | null>(null)
   const [copied, setCopied] = useState(false)
+  const [agentConnected, setAgentConnected] = useState(false)
 
   // --- état de l'étape moteur
   const [health, setHealth] = useState<LlmHealth | null>(null)
@@ -200,6 +204,20 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   const engineOk = health?.extraction.available === true
   const engineGateOpen = engineOk || degraded || healthUnavailable
 
+  // P0 : vérifie si au moins un agent est connecté (chemin facile OU pairing).
+  const refreshAgentConnected = useCallback(() => {
+    getAgents().then(a => setAgentConnected(a.length > 0)).catch(() => {})
+  }, [])
+
+  // Sur l'étape « connecter un agent » (index 3), sonde la connexion en continu
+  // → débloque « Terminer » et évite la boucle « onboarding relancé sans raison ».
+  useEffect(() => {
+    if (step !== 3) return
+    refreshAgentConnected()
+    const id = window.setInterval(refreshAgentConnected, 3000)
+    return () => window.clearInterval(id)
+  }, [step, refreshAgentConnected])
+
   const steps: WizardStep[] = [
     {
       id: 'welcome',
@@ -261,32 +279,41 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
               {t('onboarding.agent.degraded')}
             </p>
           )}
-          {!pair ? (
-            <>
-              <p>{t('onboarding.agent.question')}</p>
-              <div className="ob-types">
-                {AGENT_TYPES.map(at => (
-                  <button key={at.id} type="button" className={`capture-option${type === at.id ? ' capture-active' : ''}`} onClick={() => setType(at.id)}>
-                    {at.id === 'generic' ? t('onboarding.agent.typeGeneric') : at.label}
-                  </button>
-                ))}
-              </div>
-              <button type="button" className="btn btn-primary" onClick={() => void startPairing()}>{t('onboarding.agent.generate')}</button>
-            </>
-          ) : (
-            <>
-              <p>{t('onboarding.agent.pasteCommand')}</p>
-              <pre className="command">{pair.command}</pre>
-              <button
-                type="button"
-                className="btn btn-ghost"
-                onClick={() => { void navigator.clipboard.writeText(pair.command); setCopied(true) }}
-              >
-                {copied ? t('onboarding.agent.copied') : t('onboarding.agent.copy')}
-              </button>
-              <p className="muted">{t('onboarding.agent.codeLabel')}<strong>{pair.pairing_code}</strong>{t('onboarding.agent.codeValidity')}</p>
-            </>
-          )}
+          <p className={agentConnected ? 'ok' : 'muted'}>
+            {agentConnected ? t('onboarding.agent.connected') : t('onboarding.agent.waiting')}
+          </p>
+          {/* Chemin facile : détection sur cette machine + connexion en 1 clic. */}
+          <MachineAgents onChanged={refreshAgentConnected} />
+          {/* Repli : connexion manuelle par commande (autre machine / cas avancé). */}
+          <details className="ob-manual">
+            <summary>{t('onboarding.agent.manualToggle')}</summary>
+            {!pair ? (
+              <>
+                <p>{t('onboarding.agent.question')}</p>
+                <div className="ob-types">
+                  {AGENT_TYPES.map(at => (
+                    <button key={at.id} type="button" className={`capture-option${type === at.id ? ' capture-active' : ''}`} onClick={() => setType(at.id)}>
+                      {at.id === 'generic' ? t('onboarding.agent.typeGeneric') : at.label}
+                    </button>
+                  ))}
+                </div>
+                <button type="button" className="btn btn-primary" onClick={() => void startPairing()}>{t('onboarding.agent.generate')}</button>
+              </>
+            ) : (
+              <>
+                <p>{t('onboarding.agent.pasteCommand')}</p>
+                <pre className="command">{pair.command}</pre>
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={() => { void navigator.clipboard.writeText(pair.command); setCopied(true) }}
+                >
+                  {copied ? t('onboarding.agent.copied') : t('onboarding.agent.copy')}
+                </button>
+                <p className="muted">{t('onboarding.agent.codeLabel')}<strong>{pair.pairing_code}</strong>{t('onboarding.agent.codeValidity')}</p>
+              </>
+            )}
+          </details>
         </div>
       ),
     },
@@ -303,7 +330,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
           onNext={() => setStep(s => Math.min(steps.length - 1, s + 1))}
           onFinish={onDone}
           nextLabel={step === steps.length - 1 ? t('onboarding.wizard.finish') : t('onboarding.wizard.continue')}
-          nextDisabled={step === 2 && !engineGateOpen}
+          nextDisabled={(step === 2 && !engineGateOpen) || (step === 3 && !agentConnected)}
         />
       </div>
     </div>
@@ -424,6 +451,13 @@ function EngineStep({
       {(selected === 'openai' || selected === 'openrouter' || selected === 'anthropic') && (
         <ApiKeyGuide provider={selected} available={o[selected].available} onReverify={onReverify} checking={checking} />
       )}
+
+      <EmbeddingsChooser
+        health={health}
+        current={health.embeddings.available ? health.embeddings.provider : undefined}
+        currentModel={health.embeddings.available ? health.embeddings.model : undefined}
+        onChanged={onReverify}
+      />
 
       <div className="engine-test">
         <button type="button" className="btn btn-ghost" disabled={checking} onClick={onTest}>

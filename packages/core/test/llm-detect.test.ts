@@ -226,8 +226,11 @@ describe('Memoria.llmHealth', () => {
       expect(h.extraction.available).toBe(false)
       expect(h.extraction.provider).toBe('ollama') // défaut 100-local
       expect(h.extraction.reason).toContain('Ollama injoignable')
+      // Aucun moteur d'embeddings explicite résolu → indisponible, avec une
+      // reco actionnable (OpenAI ou Ollama selon l'environnement). Invariant
+      // indépendant de la présence d'une clé sur la machine de test :
       expect(h.embeddings.available).toBe(false)
-      expect(h.embeddings.reason).toContain('nécessite Ollama')
+      expect(h.embeddings.reason).toContain('Recherche sémantique inactive')
       expect(h.wal_pending).toBe(0)
       expect(h.options.ollama.kind).toBe('ollama')
       expect(h.options.lmstudio.kind).toBe('lmstudio')
@@ -264,9 +267,11 @@ describe('Memoria.llmHealth', () => {
       m.setExtractionProvider('lmstudio', 'qwen2.5-7b-instruct')
       const h = await m.llmHealth()
       expect(h.extraction).toMatchObject({ provider: 'lmstudio', model: 'qwen2.5-7b-instruct', available: true })
-      // embeddings restent Ollama-only en V1 : indisponible ET DIT explicitement
+      // Embeddings : LM Studio n'en fait pas, et aucun choix explicite n'a été
+      // épinglé → recherche sémantique inactive, avec une reco actionnable
+      // (OpenAI clé / Ollama local). On n'impose plus Ollama.
       expect(h.embeddings.available).toBe(false)
-      expect(h.embeddings.reason).toContain('nécessite Ollama (nomic-embed-text)')
+      expect(h.embeddings.reason).toContain('Recherche sémantique inactive')
     } finally {
       m.close()
     }

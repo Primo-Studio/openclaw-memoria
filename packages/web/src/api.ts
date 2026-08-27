@@ -350,6 +350,7 @@ export type LlmProviderName = 'ollama' | 'lmstudio' | 'anthropic' | 'openai' | '
 export interface LlmConfig {
   profile: string
   extraction?: { provider?: string; model?: string; base_url?: string }
+  embeddings?: { provider?: string; model?: string; dimensions?: number; base_url?: string }
 }
 
 export async function getLlmProfile(): Promise<LlmConfig> {
@@ -363,6 +364,36 @@ export async function setLlmProfile(profile: LlmProfile): Promise<void> {
 /** Choix explicite du provider/modèle d'extraction (« l'utilisateur décide »). */
 export async function setExtractionProvider(provider: LlmProviderName, model?: string): Promise<void> {
   await request<unknown>('POST', '/v1/admin/llm_extraction', { provider, ...(model ? { model } : {}) })
+}
+
+/** Scan matériel : pour proposer (ou déconseiller) un modèle local selon la
+ *  puissance de la machine. */
+export interface MachineCaps {
+  platform: string
+  arch: string
+  ram_gb: number
+  cpu_cores: number
+  apple_silicon: boolean
+  verdict: 'great' | 'ok' | 'weak'
+  recommend_local: boolean
+}
+
+export async function getMachineCaps(): Promise<MachineCaps> {
+  return request<MachineCaps>('GET', '/v1/admin/machine_caps')
+}
+
+/** Choix explicite du moteur d'embeddings (recherche sémantique). Deux
+ *  fournisseurs réels : 'openai' (clé API, le plus simple) ou 'ollama' (local).
+ *  Renvoie le nombre de souvenirs à (ré)indexer sous le nouveau modèle. */
+export async function setEmbeddingsProvider(
+  provider: 'openai' | 'ollama',
+  model?: string,
+): Promise<{ provider: string; model: string | null; pending: number }> {
+  return request<{ provider: string; model: string | null; pending: number }>(
+    'POST',
+    '/v1/admin/llm_embeddings',
+    { provider, ...(model ? { model } : {}) },
+  )
 }
 
 /** Enregistre une clé API saisie par l'utilisateur (écrite côté daemon dans
@@ -380,6 +411,8 @@ export interface LlmEngineState {
   available: boolean
   /** Toujours présent quand available=false. */
   reason?: string
+  /** Embeddings seulement : souvenirs actifs sans vecteur pour le modèle courant. */
+  pending?: number
 }
 
 export interface OllamaOptionState {

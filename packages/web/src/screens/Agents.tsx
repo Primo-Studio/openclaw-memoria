@@ -3,7 +3,7 @@
  * des souvenirs avec progression (missions B1/B2/B3/B4), connexion par code de
  * pairing (TTL 10 min, voir PAIRING_TTL_MS côté core) et révocation.
  */
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   connectAgent,
   deleteAgent,
@@ -200,7 +200,7 @@ type ImportFlow =
   | { step: 'failed'; agent: DetectedAgent; message: string }
 
 /** Section « Sur cette machine » : détection, connexion 1 clic, import des souvenirs. */
-function MachineAgents({ onChanged, onOpenReview }: { onChanged: () => void; onOpenReview?: () => void }) {
+export function MachineAgents({ onChanged, onOpenReview }: { onChanged: () => void; onOpenReview?: () => void }) {
   const { t } = useT()
   const [detected, setDetected] = useState<DetectedAgent[] | null>(null)
   const [detecting, setDetecting] = useState(false)
@@ -273,20 +273,33 @@ function MachineAgents({ onChanged, onOpenReview }: { onChanged: () => void; onO
     )
   }
 
+  // P0 : détection automatique au montage (ne pas exiger un clic « Détecter »).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { detect() }, [])
+
+  // Compte des erreurs de polling consécutives : au-delà d'un seuil, le service
+  // est considéré injoignable → on sort le spinner de son état infini (P0).
+  const pollErrors = useRef(0)
+
   // Polling du job (1 s) tant que la modale est en étape « running ».
   useEffect(() => {
     if (flow.step !== 'running') return
+    pollErrors.current = 0
     const agent = flow.agent
     const id = window.setInterval(() => {
       getImportStatus().then(
         status => {
+          pollErrors.current = 0
           if (status.state === 'done') setFlow({ step: 'done', agent, status })
           else if (status.state === 'error') setFlow({ step: 'failed', agent, message: status.error ?? t('agents.import.unknownError') })
           else setFlow({ step: 'running', agent, status })
         },
         (err: unknown) => {
-          // erreur de polling : visible en console, on retentera au tick suivant
+          // Erreur de polling : on retente, mais au bout de ~8 s sans réponse on
+          // abandonne proprement au lieu de tourner à l'infini.
           console.warn('memoria-ui : statut d’import illisible', err)
+          pollErrors.current += 1
+          if (pollErrors.current >= 8) setFlow({ step: 'failed', agent, message: t('agents.import.lost') })
         },
       )
     }, 1000)
@@ -339,7 +352,19 @@ function MachineAgents({ onChanged, onOpenReview }: { onChanged: () => void; onO
           {flow.step === 'done' && (
             <ImportDone agent={flow.agent} status={flow.status} onOpenReview={onOpenReview} onClose={() => { setFlow({ step: 'closed' }); onChanged() }} />
           )}
-          {flow.step === 'failed' && <ErrorBanner message={flow.message} />}
+          {flow.step === 'failed' && (
+            <>
+              <ErrorBanner message={flow.message} />
+              <div className="modal-foot">
+                <button type="button" className="btn" onClick={() => setFlow({ step: 'closed' })}>
+                  {t('common.close')}
+                </button>
+                <button type="button" className="btn btn-primary" onClick={() => launchImport(flow.agent)}>
+                  {t('common.retry')}
+                </button>
+              </div>
+            </>
+          )}
         </Modal>
       )}
     </div>

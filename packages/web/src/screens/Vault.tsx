@@ -38,7 +38,7 @@ export function Vault() {
             <p className="muted">{t('vault.empty.body')}</p>
           </div>
         ) : (
-          <table className="table">
+          <div className="table-wrap"><table className="table">
             <thead>
               <tr><th>{t('vault.col.reference')}</th><th>{t('vault.col.type')}</th><th>{t('vault.col.location')}</th><th>{t('vault.col.added')}</th></tr>
             </thead>
@@ -52,7 +52,7 @@ export function Vault() {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </table></div>
         )
       )}
     </section>

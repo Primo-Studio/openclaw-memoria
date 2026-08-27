@@ -4,6 +4,7 @@
  * de page avec navigation. La logique métier reste dans l'écran appelant.
  */
 import type { ReactNode } from "react";
+import { useT } from "../i18n";
 
 export interface WizardStep {
   /** Identifiant stable de l'étape. */
@@ -42,6 +43,7 @@ export function Wizard({
   nextLabel,
   nextDisabled,
 }: WizardProps) {
+  const { t } = useT();
   const step = steps[current];
   const isFirst = current === 0;
   const isLast = current === steps.length - 1;
@@ -54,6 +56,7 @@ export function Wizard({
           <div key={s.id} className={`wizard-step-dot${i <= current ? " done" : ""}`} />
         ))}
       </div>
+      <p className="muted wizard-progress">{t("wizard.progress", { current: String(current + 1), total: String(steps.length) })}</p>
 
       <h1>{step.title}</h1>
       <div className="wizard-body">{step.render()}</div>
@@ -62,14 +65,14 @@ export function Wizard({
         <div>
           {!isFirst && (
             <button type="button" className="btn-ghost btn" onClick={onBack}>
-              Retour
+              {t("wizard.back")}
             </button>
           )}
         </div>
         <div style={{ display: "flex", gap: 12 }}>
           {onSkip && !isLast && (
             <button type="button" className="btn btn-ghost" onClick={onSkip}>
-              Passer
+              {t("wizard.skip")}
             </button>
           )}
           <button
@@ -78,7 +81,7 @@ export function Wizard({
             disabled={nextDisabled}
             onClick={isLast ? onFinish : onNext}
           >
-            {nextLabel ?? (isLast ? "Terminer" : "Continuer")}
+            {nextLabel ?? (isLast ? t("wizard.finish") : t("wizard.continue"))}
           </button>
         </div>
       </div>

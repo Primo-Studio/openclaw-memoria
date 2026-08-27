@@ -62,6 +62,7 @@ function MemoryBrowser({ agents }: { agents: AgentEntry[] }) {
   const [instanceId, setInstanceId] = useState(first ? first.instance.id : '')
   const [query, setQuery] = useState('')
   const [search, setSearch] = useState<SearchState>({ status: 'idle' })
+  const [notice, setNotice] = useState<string | null>(null)
 
   const runSearch = (q: string) => {
     setSearch({ status: 'loading' })
@@ -80,12 +81,23 @@ function MemoryBrowser({ agents }: { agents: AgentEntry[] }) {
     runSearch(query.trim())
   }
 
+  // P1 : cliquer un badge (thème/catégorie) filtre = relance une recherche dessus.
+  const filterBy = (value: string) => {
+    setQuery(value)
+    runSearch(value)
+  }
+
   const forget = (fact: AdminFact) => {
     forgetFacts([fact.id]).then(
       deleted => {
         if (deleted === 0) {
+          // Le service n'a rien supprimé : NE PAS retirer la ligne (sinon on
+          // ment à l'utilisateur), et signaler que l'oubli n'a pas pris.
           console.warn(`memoria-ui : oubli sans effet pour ${fact.id}`)
+          setNotice(t('memory.forget_no_effect'))
+          return
         }
+        setNotice(null)
         setSearch(prev =>
           prev.status === 'ready' ? { ...prev, facts: prev.facts.filter(f => f.id !== fact.id) } : prev,
         )
@@ -143,6 +155,7 @@ function MemoryBrowser({ agents }: { agents: AgentEntry[] }) {
         </button>
       </form>
 
+      {notice && <p className="warn" role="status">{notice}</p>}
       {search.status === 'idle' && (
         <p className="muted">{t('memory.hint')}</p>
       )}
@@ -159,6 +172,12 @@ function MemoryBrowser({ agents }: { agents: AgentEntry[] }) {
             }
           />
         ) : (
+          <>
+          <p className="muted result-count">
+            {search.facts.length > 1
+              ? t('memory.count_plural', { count: String(search.facts.length) })
+              : t('memory.count', { count: String(search.facts.length) })}
+          </p>
           <ul className="fact-list">
             {search.facts.map(fact => (
               <li key={fact.id} className="fact-card">
@@ -168,9 +187,9 @@ function MemoryBrowser({ agents }: { agents: AgentEntry[] }) {
                     <span className="badge badge-ok" title={t('memory.badge_agent_source')}>{agentTypeLabel(fact.agent_type)}</span>
                   )}
                   {(fact.topics ?? []).map(topic => (
-                    <span key={topic} className="badge badge-theme" title={t('memory.badge_topic')}>{topic}</span>
+                    <button key={topic} type="button" className="badge badge-theme badge-btn" title={t('memory.badge_topic_filter')} onClick={() => filterBy(topic)}>{topic}</button>
                   ))}
-                  <span className="badge badge-muted">{fact.category}</span>
+                  <button type="button" className="badge badge-muted badge-btn" title={t('memory.badge_category_filter')} onClick={() => filterBy(fact.category)}>{fact.category}</button>
                   <span className="badge badge-muted">{scopeLabel(t, fact)}</span>
                   <span className="muted">{formatDate(fact.created_at)}</span>
                   <span className="fact-actions">
@@ -180,6 +199,7 @@ function MemoryBrowser({ agents }: { agents: AgentEntry[] }) {
               </li>
             ))}
           </ul>
+          </>
         ))}
     </>
   )

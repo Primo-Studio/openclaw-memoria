@@ -4,6 +4,7 @@
  */
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { ApiError } from '../api'
+import { translate, useT } from '../i18n'
 
 // ------------------------------------------------------------------- helpers
 
@@ -37,12 +38,12 @@ export function agentTypeLabel(type: string): string {
 /** Traduit une erreur technique en message lisible — jamais de jargon brut. */
 export function humanError(err: unknown): string {
   if (err instanceof ApiError) {
-    if (err.status === 401) return 'Session expirée ou clé invalide — relancez `memoria` depuis votre terminal.'
-    if (err.status === 404) return 'Cette fonction n’est pas encore disponible dans votre version du service Memoria.'
+    if (err.status === 401) return translate('error.session_expired')
+    if (err.status === 404) return translate('error.not_available')
     return err.message
   }
   if (err instanceof TypeError) {
-    return 'Le service Memoria ne répond pas. Vérifiez qu’il tourne (commande `memoria`).'
+    return translate('error.no_response')
   }
   return err instanceof Error ? err.message : String(err)
 }
@@ -91,22 +92,24 @@ export function useLoad<T>(loader: () => Promise<T>, deps: readonly unknown[] = 
 
 // --------------------------------------------------------------- composants
 
-export function Spinner({ label = 'Chargement…' }: { label?: string }) {
+export function Spinner({ label }: { label?: string }) {
+  const { t } = useT()
   return (
     <div className="spinner-row" role="status">
       <span className="spinner" aria-hidden="true" />
-      <span className="muted">{label}</span>
+      <span className="muted">{label ?? t('common.loading')}</span>
     </div>
   )
 }
 
 export function ErrorBanner({ message, onRetry }: { message: string; onRetry?: () => void }) {
+  const { t } = useT()
   return (
     <div className="error-banner" role="alert">
       <span>{message}</span>
       {onRetry && (
         <button type="button" className="btn btn-ghost" onClick={onRetry}>
-          Réessayer
+          {t('common.retry')}
         </button>
       )}
     </div>
@@ -124,7 +127,8 @@ export function EmptyState({ title, body, action }: { title: string; body?: stri
 }
 
 /** Copie dans le presse-papiers avec retour visuel ; l'échec est visible aussi. */
-export function CopyButton({ text, label = 'Copier' }: { text: string; label?: string }) {
+export function CopyButton({ text, label }: { text: string; label?: string }) {
+  const { t } = useT()
   const [feedback, setFeedback] = useState<'idle' | 'done' | 'failed'>('idle')
 
   const copy = () => {
@@ -140,7 +144,7 @@ export function CopyButton({ text, label = 'Copier' }: { text: string; label?: s
 
   return (
     <button type="button" className="btn btn-ghost" onClick={copy}>
-      {feedback === 'done' ? 'Copié !' : feedback === 'failed' ? 'Échec de copie' : label}
+      {feedback === 'done' ? t('common.copied') : feedback === 'failed' ? t('common.copy_failed') : (label ?? t('common.copy'))}
     </button>
   )
 }
@@ -151,7 +155,7 @@ export function CopyButton({ text, label = 'Copier' }: { text: string; label?: s
  */
 export function ConfirmButton({
   label,
-  confirmLabel = 'Confirmer ?',
+  confirmLabel,
   onConfirm,
   disabled = false,
 }: {
@@ -160,6 +164,7 @@ export function ConfirmButton({
   onConfirm: () => void
   disabled?: boolean
 }) {
+  const { t } = useT()
   const [armed, setArmed] = useState(false)
   const timer = useRef<number | null>(null)
 
@@ -183,7 +188,7 @@ export function ConfirmButton({
 
   return (
     <button type="button" className={`btn ${armed ? 'btn-danger' : 'btn-ghost'}`} onClick={click} disabled={disabled}>
-      {armed ? confirmLabel : label}
+      {armed ? (confirmLabel ?? t('common.confirm')) : label}
     </button>
   )
 }

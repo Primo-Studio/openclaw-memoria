@@ -5,6 +5,7 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import { ApiError, getReview, reviewDecision, type ReviewItem } from '../api'
+import { ConfirmButton } from '../components/ui'
 import { useT } from '../i18n'
 
 export function Review() {
@@ -109,14 +110,12 @@ export function Review() {
                   >
                     {t('review.approve')}
                   </button>
-                  <button
-                    type="button"
-                    className="btn btn-danger"
+                  <ConfirmButton
+                    label={t('review.reject')}
+                    confirmLabel={t('review.reject_confirm')}
                     disabled={busy}
-                    onClick={() => void decide([item.id], 'reject')}
-                  >
-                    {t('review.reject')}
-                  </button>
+                    onConfirm={() => void decide([item.id], 'reject')}
+                  />
                 </span>
               </div>
             </li>
