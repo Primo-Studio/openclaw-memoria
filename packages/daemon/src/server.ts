@@ -32,6 +32,8 @@ import {
   saveCredentials,
   serveInvocation,
   type AssistantType,
+  type AutostartSpec,
+  type AutostartStatus,
   type CaptureMode,
   type CaptureTurnInput,
   type ForgetFilter,
@@ -44,8 +46,7 @@ import {
 } from '@memoria/core'
 import { OllamaPullJob } from './ollama-pull.js'
 import { ImportJobRunner } from './import-job.js'
-import { daemonProgramArguments } from './client.js'
-import { currentVersion, lastBuiltSha, pullAndBuild, repoRoot, scheduleRestart } from './update.js'
+import { currentVersion, lastBuiltSha, pullAndBuild, repoRoot, scheduleAutostartHandover, scheduleRestart } from './update.js'
 import { findUiDist, serveUi } from './static.js'
 import { acquireLock, clearDaemonState, writeDaemonState, type DaemonState } from './state.js'
 
@@ -70,6 +71,22 @@ export interface DaemonOptions {
   credentialsDir?: string
   /** Override LLM transmis au moteur (tests : extraction mockée, zéro réseau). */
   llm?: MemoriaInitOptions['llm']
+  /** Lancement auto / superviseur (tests : launchd simulé — jamais de launchctl réel). */
+  control?: Partial<DaemonControlHooks>
+}
+
+/**
+ * Ce que le daemon sait faire du lancement auto. Tout est injectable : la
+ * route admin ne doit jamais toucher le vrai launchctl dans un test.
+ */
+export interface DaemonControlHooks {
+  /** Ce process est-il celui du service launchd ? (XPC_SERVICE_NAME posé par launchd) */
+  isSupervised(): boolean
+  autostartStatus(): AutostartStatus
+  enableAutostart(spec: AutostartSpec): AutostartStatus
+  disableAutostart(): AutostartStatus
+  /** Passe la main à `memoria autostart on|off` (détaché) après la réponse ; lève si impossible. */
+  handoverAutostart(mode: 'on' | 'off', storageRoot: string, configPath: string): void
 }
 
 export interface RunningDaemon {
@@ -110,9 +127,17 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const adminToken = newToken()
   const daemonId = newToken().slice(0, 16)
   const startedAt = nowISO()
-  // Ce process est-il celui du service launchd ? launchd pose XPC_SERVICE_NAME
-  // sur ses agents (visible dans `launchctl print … environment`).
-  const supervisor: 'launchd' | null = process.env['XPC_SERVICE_NAME'] === AUTOSTART_LABEL ? 'launchd' : null
+  const control: DaemonControlHooks = {
+    // launchd pose XPC_SERVICE_NAME sur ses agents (visible dans
+    // `launchctl print … environment`) : c'est ce qui dit « je SUIS le service ».
+    isSupervised: () => process.env['XPC_SERVICE_NAME'] === AUTOSTART_LABEL,
+    autostartStatus: () => autostartStatus(),
+    enableAutostart,
+    disableAutostart: () => disableAutostart(),
+    handoverAutostart: scheduleAutostartHandover,
+    ...opts.control,
+  }
+  const supervisor: 'launchd' | null = control.isSupervised() ? 'launchd' : null
   // Build réellement chargé : après une mise à jour, c'est le seul moyen de
   // vérifier que le daemon n'exécute pas encore l'ancien dist.
   const builtSha = lastBuiltSha(repoRoot())
@@ -660,7 +685,8 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       case 'GET /v1/admin/control': {
         sendJson(res, 200, {
           enabled: memoria.isEnabled(),
-          autostart: autostartStatus(),
+          autostart: control.autostartStatus(),
+          supervisor,
           storage: memoria.storageInfo(),
         })
         return
@@ -674,13 +700,29 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         return
       }
       case 'POST /v1/admin/autostart': {
+        // JAMAIS de launchctl bootout/bootstrap depuis le process supervisé :
+        // bootout = ordre à launchd de tuer CE daemon (bloqué dans execFileSync,
+        // SIGKILL après 5 s, daemon.json/lock périmés, réponse jamais envoyée) ;
+        // et depuis un daemon direct, bootstrap lance un second daemon qui
+        // bute sur notre verrou. Dans ces deux cas on répond `handover: true`
+        // puis la CLI détachée fait le travail proprement (arrêt, attente,
+        // relance) — voir scheduleAutostartHandover.
         const body = await readJson(req)
-        if (body['enabled'] === true) {
-          const args = daemonProgramArguments(storageRoot, configPath)
-          sendJson(res, 200, { autostart: enableAutostart({ programArguments: args, workingDirectory: storageRoot }) })
-        } else {
-          sendJson(res, 200, { autostart: disableAutostart() })
+        const enabled = requireBoolean(body, 'enabled')
+        const supervised = control.isSupervised()
+        if (enabled && supervised) {
+          // Déjà sous launchd : idempotent, et recharger tuerait le daemon pour rien.
+          sendJson(res, 200, { autostart: control.autostartStatus(), handover: false })
+          return
         }
+        if (!enabled && !supervised) {
+          sendJson(res, 200, { autostart: control.disableAutostart(), handover: false })
+          return
+        }
+        const mode = enabled ? 'on' : 'off'
+        // Vérifié AVANT la réponse : une passation impossible doit se voir (500), pas se perdre.
+        control.handoverAutostart(mode, storageRoot, configPath)
+        sendJson(res, 200, { autostart: control.autostartStatus(), handover: true, mode })
         return
       }
       case 'POST /v1/admin/delete_agent': {

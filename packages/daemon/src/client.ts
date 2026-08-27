@@ -230,7 +230,7 @@ const REAL_LAUNCHD: NonNullable<EnsureDaemonHooks['launchd']> = {
 }
 
 /** Attend qu'un daemon réponde au health pour ce storage_root (null = délai dépassé). */
-async function waitForHealthy(storageRoot: string, ms: number): Promise<DaemonState | null> {
+export async function waitForDaemon(storageRoot: string, ms: number): Promise<DaemonState | null> {
   const deadline = Date.now() + ms
   while (Date.now() < deadline) {
     await new Promise(r => setTimeout(r, 150))
@@ -241,6 +241,20 @@ async function waitForHealthy(storageRoot: string, ms: number): Promise<DaemonSt
     }
   }
   return null
+}
+
+/** Attend la mort d'un process (kill 0) ; false si toujours vivant au bout de `ms`. */
+export async function waitForExit(pid: number, ms: number): Promise<boolean> {
+  const deadline = Date.now() + ms
+  for (;;) {
+    try {
+      process.kill(pid, 0)
+    } catch {
+      return true
+    }
+    if (Date.now() >= deadline) return false
+    await new Promise(r => setTimeout(r, 100))
+  }
 }
 
 export async function ensureDaemon(opts: ClientOptions = {}, hooks: EnsureDaemonHooks = {}): Promise<DaemonState> {
@@ -256,7 +270,7 @@ export async function ensureDaemon(opts: ClientOptions = {}, hooks: EnsureDaemon
   // et après un `memoria stop` (sortie propre) launchd ne relance pas seul.
   const launchd = hooks.launchd ?? REAL_LAUNCHD
   if (launchd.targets(storageRoot) && launchd.kickstart()) {
-    const viaLaunchd = await waitForHealthy(storageRoot, launchd.waitMs ?? 15_000)
+    const viaLaunchd = await waitForDaemon(storageRoot, launchd.waitMs ?? 15_000)
     if (viaLaunchd) return viaLaunchd
     console.warn('[memoria] launchd n’a pas relancé le daemon à temps — démarrage direct en repli (voir ~/Library/Logs/memoria.err.log)')
   }
@@ -269,7 +283,7 @@ export async function ensureDaemon(opts: ClientOptions = {}, hooks: EnsureDaemon
   if (opts.configPath) args.push('--config', opts.configPath)
   ;(hooks.spawnDaemon ?? spawnDetachedDaemon)(args, storageRoot)
 
-  const started = await waitForHealthy(storageRoot, 15_000)
+  const started = await waitForDaemon(storageRoot, 15_000)
   if (started) return started
   throw new Error('le daemon n’a pas démarré dans les 15 s (voir memoria doctor)')
 }

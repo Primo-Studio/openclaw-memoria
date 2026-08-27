@@ -252,7 +252,7 @@ export async function pullAndBuild(): Promise<UpdateResult> {
  * `memoria start`. Survit à la mort du parent (detached + unref).
  */
 export function scheduleRestart(storageRoot: string): void {
-  const cliBin = fileURLToPath(new URL('../../cli/dist/bin.js', import.meta.url))
+  const cliBin = cliBinPath()
   if (!existsSync(cliBin)) return
   const node = process.execPath
   // STOP (libère le lock + vide daemon.json) puis START : le nouveau process
@@ -260,6 +260,41 @@ export function scheduleRestart(storageRoot: string): void {
   const script =
     `sleep 1; "${node}" "${cliBin}" stop --storage-root "${storageRoot}" >/dev/null 2>&1; ` +
     `sleep 1; "${node}" "${cliBin}" start --storage-root "${storageRoot}" >/dev/null 2>&1`
-  const child = spawn('/bin/sh', ['-c', script], { detached: true, stdio: 'ignore', cwd: dirname(cliBin) })
+  spawnDetachedShell(script, dirname(cliBin))
+}
+
+/** `memoria` (cli/dist/bin.js), voisin du daemon dans le monorepo. */
+function cliBinPath(): string {
+  return fileURLToPath(new URL('../../cli/dist/bin.js', import.meta.url))
+}
+
+function spawnDetachedShell(script: string, cwd: string): void {
+  const child = spawn('/bin/sh', ['-c', script], { detached: true, stdio: 'ignore', cwd })
   child.unref()
+}
+
+/**
+ * Passe la main à `memoria autostart on|off` dans un process DÉTACHÉ, après
+ * que la réponse HTTP est partie.
+ *
+ * Pourquoi pas dans le daemon : quand ce process EST le service launchd, un
+ * `launchctl bootout` depuis lui est l'ordre de NOUS tuer — bloqués dans
+ * execFileSync/sleepSync, le handler SIGTERM ne tourne pas, launchd applique
+ * « exit timeout = 5 » → SIGKILL, close() jamais appelé (daemon.json et
+ * daemon.lock périmés, réponse jamais envoyée, mémoire perdue jusqu'à
+ * relance manuelle). Et depuis un daemon direct, un `bootstrap` lance un
+ * second daemon qui se heurte à notre verrou. La CLI, elle, arrête le bon
+ * daemon, attend sa mort, puis laisse launchd (ou `memoria start`) reprendre.
+ * Sa sortie va dans daemon.log pour rester diagnosticable.
+ */
+export function scheduleAutostartHandover(mode: 'on' | 'off', storageRoot: string, configPath: string): void {
+  const cliBin = cliBinPath()
+  if (!existsSync(cliBin)) {
+    throw new Error(`passation impossible : CLI introuvable (${cliBin}) — lance « memoria autostart ${mode} » depuis le Terminal`)
+  }
+  const node = process.execPath
+  const log = join(storageRoot, 'daemon.log')
+  const script =
+    `sleep 1; "${node}" "${cliBin}" autostart ${mode} --storage-root "${storageRoot}" --config "${configPath}" >>"${log}" 2>&1`
+  spawnDetachedShell(script, dirname(cliBin))
 }

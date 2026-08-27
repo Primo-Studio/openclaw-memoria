@@ -3,12 +3,12 @@
  * HTTP 127.0.0.1 + tokens (admin / instance), singleton lock-file.
  */
 export { startDaemon, DAEMON_VERSION } from './server.js'
-export type { DaemonOptions, RunningDaemon } from './server.js'
+export type { DaemonControlHooks, DaemonOptions, RunningDaemon } from './server.js'
 export { ImportJobRunner } from './import-job.js'
 export type { ImportJobKind, ImportJobProgress, ImportJobState, ImportJobStatus } from './import-job.js'
-export { DaemonClient, ensureDaemon, daemonBinPath, daemonProgramArguments } from './client.js'
+export { DaemonClient, ensureDaemon, daemonBinPath, daemonProgramArguments, waitForDaemon, waitForExit } from './client.js'
 export type { DaemonHealth, EnsureDaemonHooks } from './client.js'
-export { currentVersion, pullAndBuild, scheduleRestart, repoRoot } from './update.js'
+export { currentVersion, pullAndBuild, scheduleRestart, scheduleAutostartHandover, repoRoot } from './update.js'
 export type { UpdateResult } from './update.js'
 export type { ClientOptions } from './client.js'
 export {
