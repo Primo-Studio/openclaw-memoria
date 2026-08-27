@@ -23,6 +23,7 @@ use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 // ---------------------------------------------------------------------------
@@ -545,10 +546,12 @@ async fn open_memoria() -> Result<String, String> {
 
 // ---------------------------------------------------------------------------
 // Barre d'état (menu bar macOS / zone de notification Windows)
-// Lettre « M » VERTE = daemon actif, ROUGE = éteint, GRISE = en cours de
-// démarrage. Sondage toutes les 5 s. Icônes 44×44 (@2x) : tray-icon les
-// redimensionne à la hauteur de la barre de menus, en couleur (non « template »,
-// sinon macOS les aplatirait en monochrome et l'état serait perdu).
+// Lettre « M » VERTE = daemon actif, ROUGE = éteint, GRISE = on ne sait pas
+// (démarrage en cours, 1er sondage pas encore fait, ou impossible de sonder :
+// la cause est alors dans l'info-bulle). Sondage toutes les 5 s. Icônes
+// 44×44 (@2x) : tray-icon les redimensionne à la hauteur de la barre de
+// menus, en couleur (non « template », sinon macOS les aplatirait en
+// monochrome et l'état serait perdu).
 // ---------------------------------------------------------------------------
 
 const TRAY_ID: &str = "memoria-status";
@@ -562,42 +565,94 @@ enum TrayState {
     Down,
     /// Démarrage demandé, résultat pas encore connu.
     Starting,
+    /// Impossible de conclure (pas encore sondé, ou sonde en erreur).
+    Unknown,
 }
 
 impl TrayState {
-    fn from_healthy(healthy: bool) -> Self {
-        if healthy {
-            TrayState::Active
-        } else {
-            TrayState::Down
-        }
-    }
-
     fn icon(self) -> Image<'static> {
         match self {
             TrayState::Active => Image::from_bytes(include_bytes!("../icons/m-green.png")).expect("icône M verte invalide"),
             TrayState::Down => Image::from_bytes(include_bytes!("../icons/m-red.png")).expect("icône M rouge invalide"),
-            TrayState::Starting => Image::from_bytes(include_bytes!("../icons/m-gray.png")).expect("icône M grise invalide"),
-        }
-    }
-
-    fn tooltip(self) -> &'static str {
-        match self {
-            TrayState::Active => "Memoria — actif",
-            TrayState::Down => "Memoria — éteint (clic → Démarrer)",
-            TrayState::Starting => "Memoria — démarrage…",
+            TrayState::Starting | TrayState::Unknown => {
+                Image::from_bytes(include_bytes!("../icons/m-gray.png")).expect("icône M grise invalide")
+            }
         }
     }
 }
 
-/// Le daemon répond-il ? (mêmes primitives que `daemon_health`, en synchrone.)
-fn daemon_is_healthy() -> bool {
-    match resolve_storage_root() {
-        Ok(root) => read_daemon_state(&root)
-            .map(|s| http_health(s.port))
-            .unwrap_or(false),
-        Err(_) => false,
+/// Ce que la barre d'état affiche : couleur du M + info-bulle. L'info-bulle
+/// porte la cause quand l'état n'est pas trivial (« jamais de mort
+/// silencieuse » : une sonde en erreur ou un démarrage raté doivent se voir).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TrayView {
+    state: TrayState,
+    tooltip: String,
+}
+
+impl TrayView {
+    /// Avant le 1er sondage (fait hors thread principal, cf. `run`).
+    fn checking() -> Self {
+        Self { state: TrayState::Unknown, tooltip: "Memoria — vérification…".into() }
     }
+
+    fn starting() -> Self {
+        Self { state: TrayState::Starting, tooltip: "Memoria — démarrage…".into() }
+    }
+
+    /// Résultat d'un sondage : `Err` = on ne SAIT pas (config.toml invalide,
+    /// HOME absent…), à ne pas confondre avec « éteint » — Démarrer échouerait
+    /// pour la même raison, sans que l'utilisateur voie jamais laquelle.
+    fn from_probe(probe: &Result<bool, String>) -> Self {
+        match probe {
+            Ok(true) => Self { state: TrayState::Active, tooltip: "Memoria — actif".into() },
+            Ok(false) => Self {
+                state: TrayState::Down,
+                tooltip: "Memoria — éteint (clic → Démarrer)".into(),
+            },
+            Err(e) => Self { state: TrayState::Unknown, tooltip: format!("Memoria — état inconnu : {e}") },
+        }
+    }
+
+    /// « Démarrer » a échoué : rouge, avec la cause (le log seul est invisible en GUI).
+    fn down_after_failed_start(error: &str) -> Self {
+        Self { state: TrayState::Down, tooltip: format!("Memoria — démarrage échoué : {error}") }
+    }
+}
+
+/// Sondage du daemon (mêmes primitives que `daemon_health`, en synchrone).
+/// `Err` = impossible de sonder, remonté tel quel (jamais aplati en `false`).
+fn daemon_probe() -> Result<bool, String> {
+    let root = resolve_storage_root()?;
+    Ok(read_daemon_state(&root).map(|s| http_health(s.port)).unwrap_or(false))
+}
+
+/// Dernière erreur de « Démarrer », gardée tant que le daemon n'est pas revenu :
+/// sans elle, la sonde 5 s écraserait la cause par un simple « éteint ».
+static LAST_START_FAILURE: Mutex<Option<String>> = Mutex::new(None);
+
+fn remember_start_failure(error: Option<&str>) {
+    let mut slot = LAST_START_FAILURE.lock().unwrap_or_else(|e| e.into_inner());
+    *slot = error.map(str::to_string);
+}
+
+/// Vue issue d'un sondage, en tenant compte d'un démarrage raté encore d'actualité.
+fn probe_view(probe: &Result<bool, String>, last_start_failure: Option<&str>) -> TrayView {
+    match (probe, last_start_failure) {
+        (Ok(false), Some(error)) => TrayView::down_after_failed_start(error),
+        _ => TrayView::from_probe(probe),
+    }
+}
+
+/// Sonde puis construit la vue courante (efface l'erreur de démarrage dès que
+/// le daemon répond).
+fn current_tray_view() -> TrayView {
+    let probe = daemon_probe();
+    if probe == Ok(true) {
+        remember_start_failure(None);
+    }
+    let failure = LAST_START_FAILURE.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    probe_view(&probe, failure.as_deref())
 }
 
 /// « Ouvrir Memoria » : ramène la fenêtre de l'app (jamais le navigateur
@@ -651,11 +706,11 @@ fn show_main_window(app: &tauri::AppHandle) {
     }
 }
 
-/// Applique l'état (icône « M » + info-bulle) à la barre d'état.
-fn apply_tray_state(app: &tauri::AppHandle, state: TrayState) {
+/// Applique la vue (icône « M » + info-bulle) à la barre d'état.
+fn apply_tray_view(app: &tauri::AppHandle, view: &TrayView) {
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
-        let _ = tray.set_icon(Some(state.icon()));
-        let _ = tray.set_tooltip(Some(String::from(state.tooltip())));
+        let _ = tray.set_icon(Some(view.state.icon()));
+        let _ = tray.set_tooltip(Some(view.tooltip.clone()));
     }
 }
 
@@ -675,12 +730,15 @@ pub fn run() {
             let quit = MenuItem::with_id(app, "quit", "Quitter", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&open, &start, &sep, &quit])?;
 
-            // État initial (avant le 1er sondage) : selon la santé courante.
-            let initial = TrayState::from_healthy(daemon_is_healthy());
+            // État initial : gris « vérification… ». Le 1er sondage est fait
+            // par le thread de fond (ci-dessous, sans délai) : sonder ici
+            // bloquerait le thread principal jusqu'à 4 s (timeouts TCP) si le
+            // daemon est gelé, et la fenêtre n'apparaîtrait pas pendant ce temps.
+            let initial = TrayView::checking();
 
             TrayIconBuilder::with_id(TRAY_ID)
-                .icon(initial.icon())
-                .tooltip(initial.tooltip())
+                .icon(initial.state.icon())
+                .tooltip(&initial.tooltip)
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "open" => {
@@ -690,10 +748,16 @@ pub fn run() {
                     "start" => {
                         let app = app.clone();
                         // Gris pendant le démarrage : l'utilisateur voit que le clic a pris.
-                        apply_tray_state(&app, TrayState::Starting);
+                        apply_tray_view(&app, &TrayView::starting());
                         std::thread::spawn(move || {
-                            let ok = start_daemon_blocking().is_ok();
-                            apply_tray_state(&app, TrayState::from_healthy(ok || daemon_is_healthy()));
+                            match start_daemon_blocking() {
+                                Ok(_) => remember_start_failure(None),
+                                Err(e) => {
+                                    eprintln!("memoria-desktop: démarrage du daemon échoué : {e}");
+                                    remember_start_failure(Some(&e));
+                                }
+                            }
+                            apply_tray_view(&app, &current_tray_view());
                         });
                     }
                     "quit" => app.exit(0),
@@ -701,10 +765,10 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            // Sonde de fond : rafraîchit la pastille toutes les 5 s.
+            // Sonde de fond : 1er sondage immédiat, puis toutes les 5 s.
             let handle = app.handle().clone();
             std::thread::spawn(move || loop {
-                apply_tray_state(&handle, TrayState::from_healthy(daemon_is_healthy()));
+                apply_tray_view(&handle, &current_tray_view());
                 std::thread::sleep(Duration::from_secs(5));
             });
 
@@ -901,5 +965,28 @@ mod tests {
             open_target(ui, Some((7438, "tok2"))).as_deref(),
             Some("http://127.0.0.1:7438/ui/#token=tok2")
         );
+    }
+
+    #[test]
+    fn la_pastille_distingue_inconnu_d_eteint() {
+        // Sonde concluante : vert / rouge.
+        assert_eq!(TrayView::from_probe(&Ok(true)).state, TrayState::Active);
+        assert_eq!(TrayView::from_probe(&Ok(false)).state, TrayState::Down);
+        // Impossible de sonder (config.toml invalide, HOME absent…) : gris
+        // « inconnu » avec la cause dans l'info-bulle — pas un faux « éteint »
+        // qui inviterait à Démarrer (et échouerait pour la même raison).
+        let view = TrayView::from_probe(&Err("config.toml invalide (/x) : ligne 3".into()));
+        assert_eq!(view.state, TrayState::Unknown);
+        assert!(view.tooltip.contains("inconnu"), "{}", view.tooltip);
+        assert!(view.tooltip.contains("config.toml invalide"), "{}", view.tooltip);
+        // Avant le 1er sondage (fait hors thread principal) : gris aussi.
+        assert_eq!(TrayView::checking().state, TrayState::Unknown);
+        // Échec de « Démarrer » : rouge, mais la cause reste visible tant que
+        // le daemon n'est pas revenu (la sonde 5 s ne l'écrase pas).
+        let view = probe_view(&Ok(false), Some("Node.js ≥ 20 introuvable"));
+        assert_eq!(view.state, TrayState::Down);
+        assert!(view.tooltip.contains("Node.js ≥ 20 introuvable"), "{}", view.tooltip);
+        assert_eq!(probe_view(&Ok(true), Some("vieille erreur")).state, TrayState::Active);
+        assert_eq!(probe_view(&Ok(false), None), TrayView::from_probe(&Ok(false)));
     }
 }
