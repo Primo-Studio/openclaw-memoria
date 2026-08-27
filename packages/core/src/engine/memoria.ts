@@ -571,18 +571,29 @@ export class Memoria {
 
   // ------------------------------------------------------------------- mémoire
 
+  /**
+   * Déclaration EXPLICITE (MCP store_fact, CLI, import) : dédoublonnage EXACT
+   * seulement. Le near-dup (Jaccard > 0,85) appliqué ici jetait sans bruit
+   * toute variante à un mot près d'une phrase longue — « 13 octobre » →
+   * « 14 octobre », « avec option » → « sans option », « toujours » → « jamais » —
+   * et renvoyait l'ANCIEN fait à l'agent comme si c'était le sien : la
+   * correction ou la contradiction était perdue, seul un audit en gardait
+   * trace. Un agent qui déclare a choisi ses mots ; seule la capture (bruit
+   * conversationnel, redites) garde le near-dup.
+   */
   storeFact(input: StoreFactInput): Fact {
-    return this.storeFactInternal(input).fact
+    return this.storeFactInternal(input, { nearDup: false }).fact
   }
 
   /**
    * Écriture gouvernée + HYGIÈNE (audit 27/08) : contenu vide refusé,
    * catégorie normalisée (« Preference » ≠ « preference » donnait deux
-   * domaines d'expertise), et dédoublonnage PAR SCOPE (findDuplicate, le même
-   * mécanisme que la capture) — deux memoria_store_fact identiques (ou à un
-   * point près) créaient deux lignes actives. Un doublon DORMANT (revue en
-   * attente) redéclaré explicitement est validé : déclarer = confirmer.
-   * `created=false` = l'existant a été renvoyé.
+   * domaines d'expertise), et dédoublonnage PAR SCOPE (findDuplicate). Le
+   * near-dup n'est activé QUE par la capture (`opts.nearDup`) ; storeFact et
+   * correctFact ne dédoublonnent qu'en exact. Un doublon DORMANT (revue en
+   * attente) redéclaré explicitement à l'IDENTIQUE est validé : déclarer =
+   * confirmer — jamais sur un simple rapprochement, qui validerait un fait
+   * que l'agent n'a pas énoncé. `created=false` = l'existant a été renvoyé.
    */
   private storeFactInternal(input: StoreFactInput, opts: { nearDup?: boolean } = {}): { fact: Fact; created: boolean } {
     this.assertOpen()
@@ -614,7 +625,7 @@ export class Memoria {
     const store = this.storeForScope(scope, instance)
     const dup = findDuplicate(store, scope.id, content, opts)
     if (dup) {
-      if (dup.existing.lifecycle_state === 'dormant') this.activateFact(store, dup.existing.id)
+      if (dup.kind === 'exact' && dup.existing.lifecycle_state === 'dormant') this.activateFact(store, dup.existing.id)
       this.registry.audit({
         actor_type: 'assistant',
         actor_id: instance.id,
@@ -1974,7 +1985,9 @@ export class Memoria {
     // Transaction : INSERT actif → dormant → item de revue. Un crash entre les
     // deux publiait un fait jamais revu.
     const tx = store.db.transaction((): Fact => {
-      const { fact, created } = this.storeFactInternal({ ...input, source: input.source ?? 'capture' })
+      // near-dup ASSUMÉ ici : la capture voit des redites bruitées d'un même
+      // souvenir ; une déclaration explicite (storeFact) ne l'a pas.
+      const { fact, created } = this.storeFactInternal({ ...input, source: input.source ?? 'capture' }, { nearDup: true })
       // Un fait DÉJÀ connu (dédup) n'a rien à faire en revue : le mettre dormant
       // ferait disparaître du recall un souvenir validé.
       if (!created || this.getCaptureMode() !== 'review-first') return fact

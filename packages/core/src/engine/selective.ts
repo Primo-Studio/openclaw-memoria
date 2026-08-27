@@ -63,7 +63,9 @@ export function findDuplicate(
   // (b) near-dup — FTS borné au scope, dormants inclus, sensibilité non filtrée
   // (le dedup est interne : il n'expose pas de contenu au lecteur).
   // Désactivable : une CORRECTION est par nature proche de l'original — la
-  // prendre pour un doublon la ferait disparaître (correctFact).
+  // prendre pour un doublon la ferait disparaître (correctFact). Idem pour une
+  // DÉCLARATION explicite (storeFact) : « 13 octobre » → « 14 octobre » n'est
+  // pas une redite, c'est une autre information. Seule la capture le garde.
   if (opts.nearDup === false) return null
   const tokens = new Set(normalized.split(' '))
   const hits = store.searchFacts(factText, {

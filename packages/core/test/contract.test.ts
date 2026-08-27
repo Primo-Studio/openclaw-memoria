@@ -122,6 +122,58 @@ describe('storeFact — hygiène (audit 27/08)', () => {
     expect(first.category).toBe('preference')
   })
 
+  it('une variante à un mot près (date, négation) n’est PAS avalée par le dédoublonnage', () => {
+    // Relecture audit 27/08 : le near-dup (Jaccard > 0,85) appliqué aux
+    // déclarations EXPLICITES jetait le fait corrigé/contradictoire sans bruit
+    // et renvoyait l'ancien à l'agent comme si c'était le sien. Sur une phrase
+    // ≥ 13 tokens, tout changement d'UN mot (date, montant, négation) était perdu.
+    const a = m.pairAssistant({ type: 'claude-code' })
+    const inst = a.assistant_instance_id
+    const base = 'La plénière annuelle du GCSMS est fixée au 13 octobre 2026 à Cayenne avec option vidéo pour Marion Dol'
+    const first = m.storeFact({ instance: inst, content: base })
+    const date = m.storeFact({ instance: inst, content: base.replace('13 octobre', '14 octobre') })
+    const negation = m.storeFact({ instance: inst, content: base.replace('avec option', 'sans option') })
+    expect(date.id).not.toBe(first.id)
+    expect(negation.id).not.toBe(first.id)
+    expect(negation.id).not.toBe(date.id)
+    const store = m['openContent'](m.paths.assistantDb(inst))
+    expect(store.countFacts()).toBe(3)
+    // Le dédoublonnage EXACT reste : même phrase à la ponctuation près → 3 lignes toujours.
+    expect(m.storeFact({ instance: inst, content: `${base}.` }).id).toBe(first.id)
+    expect(store.countFacts()).toBe(3)
+  })
+
+  it('un dormant proche (un mot près) n’est pas activé par une déclaration différente', () => {
+    const a = m.pairAssistant({ type: 'claude-code' })
+    const inst = a.assistant_instance_id
+    const store = m['openContent'](m.paths.assistantDb(inst))
+    const scope = m.registry.getScopeByName(`private:${inst}`)!
+    const base = 'Le devis salon du livre jeunesse de la mairie est envoyé à Joëlle Mimba le 24 août 2026 sans acompte'
+    const dormant = store.insertFact({ fact: base, scope_id: scope.id, lifecycle_state: 'dormant' })
+    const declared = m.storeFact({ instance: inst, content: base.replace('sans acompte', 'avec acompte') })
+    expect(declared.id).not.toBe(dormant.id)
+    expect(declared.lifecycle_state).toBe('active')
+    expect(store.getFact(dormant.id)?.lifecycle_state).toBe('dormant')
+    expect(store.countFacts()).toBe(2)
+  })
+
+  it('la capture garde le near-dup : une redite à un point près ne crée pas de doublon en revue', () => {
+    m.setCaptureMode('review-first')
+    const a = m.pairAssistant({ type: 'claude-code' })
+    const inst = a.assistant_instance_id
+    const store = m['openContent'](m.paths.assistantDb(inst))
+    const scope = m.registry.getScopeByName(`private:${inst}`)!
+    const base = 'Néto préfère les messages courts avec le détail dans un fichier du dépôt pour chaque projet'
+    const dormant = store.insertFact({ fact: base, scope_id: scope.id, lifecycle_state: 'dormant' })
+    // Redite quasi identique (un token de plus) : near-dup → l'existant, PAS activé
+    // (une capture ne valide pas une revue en attente : seul l'humain ou une
+    // déclaration explicite EXACTE le fait).
+    const captured = m['storeCaptured']({ instance: inst, content: `${base} ok` })
+    expect(captured.id).toBe(dormant.id)
+    expect(store.getFact(dormant.id)?.lifecycle_state).toBe('dormant')
+    expect(store.countFacts()).toBe(1)
+  })
+
   it('contenu vide ou blanc → refus explicite', () => {
     const a = m.pairAssistant({ type: 'claude-code' })
     expect(() => m.storeFact({ instance: a.assistant_instance_id, content: '   ' })).toThrow(/vide/)
