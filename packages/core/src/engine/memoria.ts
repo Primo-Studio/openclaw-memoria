@@ -47,6 +47,7 @@ import {
 import { estimateTokens, newId, nowISO, sha256Hex } from '../util.js'
 import { createSecretProvider, RegexRedactor } from '../secrets/index.js'
 import type { SecretProvider } from '../secrets/types.js'
+import { EXPERTISE_MAX } from '../cognition/feedback.js'
 import { factOrigin } from './origin.js'
 import { findDuplicate, normalizeFact, type DuplicateMatch } from './selective.js'
 import {
@@ -144,6 +145,8 @@ export interface MemoriaInitOptions extends ResolveOptions {
 
 const DEFAULT_TOKEN_BUDGET = 1500
 const DEFAULT_RECALL_LIMIT = 12
+/** Plafond du niveau d'expertise AMORCÉ depuis le volume de thèmes (jamais « expert » sans usage réel). */
+const BOOTSTRAP_EXPERTISE_CAP = 0.4
 
 export class Memoria {
   readonly resolved: ResolvedConfig
@@ -1524,7 +1527,19 @@ export class Memoria {
     const topics = this.topicFor(store, null).listTopics({ minFacts: 3 })
     let domains = 0
     for (const t of topics.slice(0, 30)) {
-      feedback.updateExpertise(t.name, Math.log1p(t.fact_count))
+      // AMORCE, pas verdict : accumuler des souvenirs sur un sujet n'en fait
+      // pas un « expert confirmé ». Avant : delta = log1p(fact_count) ≥ 1.39
+      // dans la saturation `prev + delta × (1 − prev)` → 1.0 en un pas pour
+      // TOUS les thèmes (30 domaines à 1.0 en prod, « maîtrise : Environ GB »).
+      // Cible bornée (3 faits ≈ 0.14, 50 faits ≈ 0.39, jamais > 0.4) ; on ne
+      // fait que COMBLER l'écart jusqu'à cette cible : idempotent d'un boot à
+      // l'autre, et un niveau gagné par l'usage réel (reinforce) n'est jamais
+      // abaissé.
+      const target = Math.min(BOOTSTRAP_EXPERTISE_CAP, 0.1 * Math.log1p(t.fact_count))
+      const current = feedback.getExpertise(t.name)?.level ?? 0
+      if (current >= target) continue
+      // updateExpertise applique prev + delta × (MAX − prev) : delta pour atteindre `target`.
+      feedback.updateExpertise(t.name, (target - current) / (EXPERTISE_MAX - current))
       domains++
     }
     return { domains }
