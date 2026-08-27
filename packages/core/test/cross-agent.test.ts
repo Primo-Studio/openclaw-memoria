@@ -85,3 +85,39 @@ describe('partage d’un fait dormant (review-first)', () => {
     expect(m.reviewDecision(pending.map(p => p.id), 'accepted')).toEqual({ updated: 0 })
   })
 })
+
+/**
+ * Écriture DIRECTE dans le scope partagé « user » (décision produit 27/08 :
+ * « améliorer les souvenirs entre les modèles »). Un agent déclare un fait sur
+ * l'utilisateur → tous les autres modèles le voient, sans clic de partage.
+ */
+describe('écriture directe dans `user`', () => {
+  it('un fait posé par Codex dans `user` est rappelé par Claude, sans jamais toucher son privé', () => {
+    const f = m.storeFact({ instance: codex.assistant_instance_id, scope: 'user', content: 'Néto travaille depuis Saint-Laurent-du-Maroni', category: 'identity' })
+    expect(f.visibility).toBe('shared')
+    const seen = m.recall({ instance: claude.assistant_instance_id, query: 'Néto travaille Saint-Laurent-du-Maroni' }).items
+    expect(seen).toHaveLength(1)
+    expect(seen[0]!.source_db).toBe('shared/user.sqlite')
+    expect(privateDb(claude).getFact(f.id)).toBeNull()
+    expect(userDb().getFact(f.id)).not.toBeNull()
+  })
+
+  it('refuse si la gouvernance a retiré can_write sur `user`', () => {
+    const userScope = m.registry.getScopeByName('user')!
+    m.setScopeAccess(codex.assistant_id, userScope.id, { can_write: false })
+    expect(() => m.storeFact({ instance: codex.assistant_instance_id, scope: 'user', content: 'tentative' })).toThrow(/écriture refusée/)
+  })
+
+  it('migration douce : une policy user sans can_write jamais touchée à la main est ouverte au redémarrage', () => {
+    const userScope = m.registry.getScopeByName('user')!
+    // Codex : ancienne policy (avant la décision), jamais modifiée manuellement → ouverte.
+    m.registry.setPolicy({ assistant_id: codex.assistant_id, scope_id: userScope.id, can_read: true, can_write: false, can_share: false, secret_access: 'none' })
+    // Claude : l'utilisateur a EXPLICITEMENT retiré l'écriture (audité) → respecté.
+    m.setScopeAccess(claude.assistant_id, userScope.id, { can_write: false })
+    m.close()
+
+    m = Memoria.init({ storageRoot: root, configPath: join(root, 'config.toml'), llm: { extraction: llm }, secretsVault: 'aes-vault' })
+    expect(m.registry.getPolicy(codex.assistant_id, userScope.id)?.can_write).toBe(true)
+    expect(m.registry.getPolicy(claude.assistant_id, userScope.id)?.can_write).toBe(false)
+  })
+})

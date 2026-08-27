@@ -176,6 +176,36 @@ export class Memoria {
     this.registry.registerDb({ kind: 'registry', path: this.paths.registry, assistant_instance_id: null, scope_id: null })
     this.secretProvider = createSecretProvider(this.paths.secretsDir, { force: opts.secretsVault })
     this.llmOverride = opts.llm
+    this.grantDefaultUserWrite()
+  }
+
+  /**
+   * Décision produit (27/08, « améliorer les souvenirs entre les modèles ») :
+   * les agents ÉCRIVENT dans `user` par défaut. Migration douce des installations
+   * existantes : une policy `user` sans can_write est ouverte SAUF si
+   * l'utilisateur l'a réglée lui-même (audit set_scope_access) — son choix
+   * prime. Idempotent (rien à faire une fois ouverte).
+   */
+  private grantDefaultUserWrite(): void {
+    const userScope = this.registry.getScopeByName('user')
+    if (!userScope) return
+    const touched = this.registry.db.prepare(
+      "SELECT 1 FROM audit_log WHERE action = 'set_scope_access' AND target_id_hash = ? LIMIT 1",
+    )
+    for (const assistant of this.registry.listAssistants()) {
+      const policy = this.registry.getPolicy(assistant.id, userScope.id)
+      if (!policy || policy.can_write) continue
+      if (touched.get(sha256Hex(`${assistant.id}:${userScope.id}`))) continue
+      this.registry.setPolicy({ ...policy, can_write: true })
+      this.registry.audit({
+        actor_type: 'system',
+        actor_id: 'migration',
+        action: 'grant_user_write_default',
+        target_id_hash: sha256Hex(`${assistant.id}:${userScope.id}`),
+        scope_id: userScope.id,
+        reason: null,
+      })
+    }
   }
 
   /** Point d'entrée unique. `Memoria.init({ storageRoot })` pour les tests/daemon. */
@@ -198,7 +228,11 @@ export class Memoria {
     this.openContent(dbPath)
     this.registry.registerDb({ kind: 'assistant', path: dbPath, assistant_instance_id: instance.id, scope_id: privateScope.id })
 
-    // Policies par défaut : privé = lecture/écriture ; `user` = lecture (partage volontaire en P5)
+    // Policies par défaut : privé = lecture/écriture ; `user` = lecture ET
+    // écriture (décision 27/08 : ce qu'un agent apprend SUR l'utilisateur doit
+    // pouvoir être déclaré une fois pour tous les modèles ; avant, 10 faits
+    // partagés pour ~4 000 privés). La gouvernance reste modifiable dans
+    // l'écran Partage (setScopeAccess).
     this.registry.setPolicy({
       assistant_id: assistant.id,
       scope_id: privateScope.id,
@@ -208,12 +242,12 @@ export class Memoria {
       secret_access: 'none',
     })
     const userScope = this.registry.getScopeByName('user')
-    if (userScope) {
+    if (userScope && !this.registry.getPolicy(assistant.id, userScope.id)) {
       this.registry.setPolicy({
         assistant_id: assistant.id,
         scope_id: userScope.id,
         can_read: true,
-        can_write: false,
+        can_write: true,
         can_share: false,
         secret_access: 'none',
       })
