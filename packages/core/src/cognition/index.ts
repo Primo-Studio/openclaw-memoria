@@ -169,6 +169,12 @@ export class CognitionEngine {
       confidence: fact.confidence,
     })
 
+    // 4. Marqueur « traité » — y compris quand rien n'a été trouvé : c'est
+    // précisément ce cas qui repartait au LLM à chaque capture.
+    this.db
+      .prepare('INSERT OR REPLACE INTO fact_cognition (fact_id, processed_at, via, entities) VALUES (?, ?, ?, ?)')
+      .run(factId, new Date().toISOString(), via, entityCount)
+
     return {
       fact_id: factId,
       entities: entityCount,
@@ -177,6 +183,21 @@ export class CognitionEngine {
       processed: true,
       via,
     }
+  }
+
+  /** Faits actifs jamais traités — ou vus en heuristique seulement, si un LLM est là pour mieux faire. */
+  pendingFactIds(llmAvailable: boolean, limit = 2000): string[] {
+    const rows = this.db
+      .prepare(
+        `SELECT f.id FROM facts f
+         LEFT JOIN fact_cognition fc ON fc.fact_id = f.id
+         WHERE f.superseded = 0
+           AND (fc.fact_id IS NULL OR (fc.via = 'heuristic' AND ? = 1))
+         ORDER BY f.created_at
+         LIMIT ?`,
+      )
+      .all(llmAvailable ? 1 : 0, limit) as Array<{ id: string }>
+    return rows.map(r => r.id)
   }
 
   /**

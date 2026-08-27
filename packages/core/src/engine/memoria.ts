@@ -779,17 +779,13 @@ export class Memoria {
       if (!entry || !existsSync(entry.path)) continue
       const store = this.openContent(entry.path)
       const engine = this.cognitionFor(store, extraction)
-      // faits actifs sans entité encore liée
-      const pending = store.db
-        .prepare(
-          `SELECT f.id FROM facts f
-           WHERE f.superseded = 0
-             AND NOT EXISTS (SELECT 1 FROM fact_entities fe WHERE fe.fact_id = f.id)
-           LIMIT 2000`,
-        )
-        .all() as Array<{ id: string }>
-      for (const row of pending) {
-        const r = await engine.processFact(row.id)
+      // Faits jamais traités (marqueur fact_cognition), + ceux vus en
+      // heuristique seulement si un LLM est disponible maintenant (une fois).
+      // Avant : « sans entité liée » → un fait où le LLM ne trouve rien
+      // repartait au cloud à CHAQUE capture, sans fin.
+      const llmAvailable = extraction !== null && (await extraction.isAvailable())
+      for (const id of engine.pendingFactIds(llmAvailable)) {
+        const r = await engine.processFact(id)
         if (r.processed) processed++
       }
       // TOPICS : ranger les faits par thème APRÈS que les entités existent (entité-first).

@@ -640,9 +640,11 @@ function fmtTokens(n: number | null): string {
   return n === null ? '—' : n.toLocaleString()
 }
 
-/** Coût estimé en dollars : 4 décimales sous le cent, sinon 2. */
+/** Coût estimé en dollars : « < 0,0001 $ » plutôt qu'un faux « 0,0000 $ ». */
 function fmtUsd(v: number): string {
-  return `${v.toFixed(v > 0 && v < 0.01 ? 4 : 2)} $`
+  if (v === 0) return '0 $'
+  if (v < 0.0001) return `< ${(0.0001).toLocaleString(undefined, { maximumFractionDigits: 4 })} $`
+  return `${v.toLocaleString(undefined, { maximumFractionDigits: v < 0.01 ? 4 : 2 })} $`
 }
 
 /**
