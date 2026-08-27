@@ -20,7 +20,7 @@ import {
 } from '../config.js'
 import { RegistryStore } from '../storage/registry.js'
 import { isOnNetworkVolume } from '../storage/network-guard.js'
-import { ContentStore, rowToFact, type FactRow, type FtsHit, type FtsSearchOptions } from '../storage/content.js'
+import { ContentStore, normalizeText, queryTokens, rowToFact, type FactRow, type FtsHit, type FtsSearchOptions } from '../storage/content.js'
 import { EmbeddingIndexer, hybridSearchFacts } from '../vector/index.js'
 import {
   CognitionEngine,
@@ -47,7 +47,9 @@ import {
 import { estimateTokens, newId, nowISO, sha256Hex } from '../util.js'
 import { createSecretProvider, RegexRedactor } from '../secrets/index.js'
 import type { SecretProvider } from '../secrets/types.js'
+import { EXPERTISE_MAX } from '../cognition/feedback.js'
 import { factOrigin } from './origin.js'
+import { findDuplicate, normalizeFact, type DuplicateMatch } from './selective.js'
 import {
   resolveLlmProfile,
   auditExtraction,
@@ -143,6 +145,10 @@ export interface MemoriaInitOptions extends ResolveOptions {
 
 const DEFAULT_TOKEN_BUDGET = 1500
 const DEFAULT_RECALL_LIMIT = 12
+/** Délai de regroupement des indexations d'embeddings déclenchées par storeFact. */
+const EMBEDDINGS_DEBOUNCE_MS = 250
+/** Plafond du niveau d'expertise AMORCÉ depuis le volume de thèmes (jamais « expert » sans usage réel). */
+const BOOTSTRAP_EXPERTISE_CAP = 0.4
 
 export class Memoria {
   readonly resolved: ResolvedConfig
@@ -157,6 +163,20 @@ export class Memoria {
   private readonly llmOverride: MemoriaInitOptions['llm']
   private pipelinePromise: Promise<CapturePipeline> | null = null
   private profilePromise: Promise<{ extraction: LlmProvider | null; embeddings: EmbeddingProvider | null }> | null = null
+  /** Empreinte (provider/modèle) du dernier profil résolu — pour détecter un changement réel. */
+  private profileSnapshot: { extraction: string | null; embeddings: string | null } | null = null
+  private profileResolvedAt = 0
+  /**
+   * Délai avant de RE-résoudre un profil INCOMPLET (extraction ou embeddings
+   * à null). Le daemon est lancé par launchd avant l'app Ollama : sans cela,
+   * un Ollama éteint au boot laissait la capture en « defer no-llm » pour
+   * toute la vie du processus, pendant que llmHealth affichait « prêt ».
+   * Public pour les tests (0 = relance immédiate).
+   */
+  profileRetryMs = 60_000
+  /** Instances dont l'indexation d'embeddings est planifiée (storeFact, debounce). */
+  private readonly indexQueue = new Set<string>()
+  private indexTimer: NodeJS.Timeout | null = null
   private indexers = new WeakMap<ContentStore, EmbeddingIndexer>()
   private readonly cognitionEngines = new WeakMap<ContentStore, CognitionEngine>()
   private readonly topicEngines = new WeakMap<ContentStore, TopicEngine>()
@@ -176,6 +196,36 @@ export class Memoria {
     this.registry.registerDb({ kind: 'registry', path: this.paths.registry, assistant_instance_id: null, scope_id: null })
     this.secretProvider = createSecretProvider(this.paths.secretsDir, { force: opts.secretsVault })
     this.llmOverride = opts.llm
+    this.grantDefaultUserWrite()
+  }
+
+  /**
+   * Décision produit (27/08, « améliorer les souvenirs entre les modèles ») :
+   * les agents ÉCRIVENT dans `user` par défaut. Migration douce des installations
+   * existantes : une policy `user` sans can_write est ouverte SAUF si
+   * l'utilisateur l'a réglée lui-même (audit set_scope_access) — son choix
+   * prime. Idempotent (rien à faire une fois ouverte).
+   */
+  private grantDefaultUserWrite(): void {
+    const userScope = this.registry.getScopeByName('user')
+    if (!userScope) return
+    const touched = this.registry.db.prepare(
+      "SELECT 1 FROM audit_log WHERE action = 'set_scope_access' AND target_id_hash = ? LIMIT 1",
+    )
+    for (const assistant of this.registry.listAssistants()) {
+      const policy = this.registry.getPolicy(assistant.id, userScope.id)
+      if (!policy || policy.can_write) continue
+      if (touched.get(sha256Hex(`${assistant.id}:${userScope.id}`))) continue
+      this.registry.setPolicy({ ...policy, can_write: true })
+      this.registry.audit({
+        actor_type: 'system',
+        actor_id: 'migration',
+        action: 'grant_user_write_default',
+        target_id_hash: sha256Hex(`${assistant.id}:${userScope.id}`),
+        scope_id: userScope.id,
+        reason: null,
+      })
+    }
   }
 
   /** Point d'entrée unique. `Memoria.init({ storageRoot })` pour les tests/daemon. */
@@ -198,7 +248,11 @@ export class Memoria {
     this.openContent(dbPath)
     this.registry.registerDb({ kind: 'assistant', path: dbPath, assistant_instance_id: instance.id, scope_id: privateScope.id })
 
-    // Policies par défaut : privé = lecture/écriture ; `user` = lecture (partage volontaire en P5)
+    // Policies par défaut : privé = lecture/écriture ; `user` = lecture ET
+    // écriture (décision 27/08 : ce qu'un agent apprend SUR l'utilisateur doit
+    // pouvoir être déclaré une fois pour tous les modèles ; avant, 10 faits
+    // partagés pour ~4 000 privés). La gouvernance reste modifiable dans
+    // l'écran Partage (setScopeAccess).
     this.registry.setPolicy({
       assistant_id: assistant.id,
       scope_id: privateScope.id,
@@ -208,12 +262,12 @@ export class Memoria {
       secret_access: 'none',
     })
     const userScope = this.registry.getScopeByName('user')
-    if (userScope) {
+    if (userScope && !this.registry.getPolicy(assistant.id, userScope.id)) {
       this.registry.setPolicy({
         assistant_id: assistant.id,
         scope_id: userScope.id,
         can_read: true,
-        can_write: false,
+        can_write: true,
         can_share: false,
         secret_access: 'none',
       })
@@ -379,15 +433,23 @@ export class Memoria {
    * Reconnaît l'interlocuteur courant via un ou plusieurs identifiants
    * (Telegram/WhatsApp/mail/handle…). Renvoie la personne + ses faits connus
    * pour que l'agent sache à QUI il parle. Aucun identifiant → null (= owner par défaut).
+   *
+   * `instanceId` = l'agent qui demande : `known` est alors borné à SES scopes
+   * lisibles (même fan-out que son recall). Sans instance (UI locale / route
+   * admin) : vue globale. Un appel agent DOIT passer son instance — sinon un
+   * bot WhatsApp recevrait les souvenirs privés (et critiques) de Claude Code.
    */
-  identifyInterlocutor(input: {
-    phone?: string
-    email?: string
-    telegram?: string
-    whatsapp?: string
-    handle?: string
-    name?: string
-  }): { person: PersonProfile; known: string[] } | null {
+  identifyInterlocutor(
+    input: {
+      phone?: string
+      email?: string
+      telegram?: string
+      whatsapp?: string
+      handle?: string
+      name?: string
+    },
+    instanceId?: string,
+  ): { person: PersonProfile; known: string[] } | null {
     this.assertOpen()
     const tries: Array<[PersonIdentifier['kind'], string | undefined]> = [
       ['telegram', input.telegram],
@@ -408,7 +470,7 @@ export class Memoria {
       if (match) person = match
     }
     if (!person) return null
-    return { person, known: this.knownAboutPerson(person.display_name) }
+    return { person, known: this.knownAboutPerson(person.display_name, instanceId) }
   }
 
   /**
@@ -418,17 +480,20 @@ export class Memoria {
    * `created` indique si une nouvelle personne a été créée. Sans aucun identifiant
    * fourni → comportement identique à identifyInterlocutor (pas de création).
    */
-  identifyOrCreateInterlocutor(input: {
-    phone?: string
-    email?: string
-    telegram?: string
-    whatsapp?: string
-    handle?: string
-    name?: string
-    relation?: string | null
-  }): { person: PersonProfile; known: string[]; created: boolean } | null {
+  identifyOrCreateInterlocutor(
+    input: {
+      phone?: string
+      email?: string
+      telegram?: string
+      whatsapp?: string
+      handle?: string
+      name?: string
+      relation?: string | null
+    },
+    instanceId?: string,
+  ): { person: PersonProfile; known: string[]; created: boolean } | null {
     this.assertOpen()
-    const existing = this.identifyInterlocutor(input)
+    const existing = this.identifyInterlocutor(input, instanceId)
     if (existing) return { ...existing, created: false }
 
     // Aucune personne connue : on tente la création si on a AU MOINS un identifiant.
@@ -455,13 +520,34 @@ export class Memoria {
     this.registry.audit({ actor_type: 'assistant', actor_id: 'local', action: 'person_autocreate', target_id_hash: sha256Hex(person.id), scope_id: null, reason: null })
     const profile = this.registry.getPerson(person.id)
     if (!profile) throw new Error('person auto-create: profil introuvable après création')
-    return { person: profile, known: this.knownAboutPerson(profile.display_name), created: true }
+    return { person: profile, known: this.knownAboutPerson(profile.display_name, instanceId), created: true }
   }
 
-  /** Faits connus mentionnant cette personne (cross-agent, scopes partagés). */
-  private knownAboutPerson(name: string, limit = 8): string[] {
-    const hits = this.globalSearch(name, limit)
-    return hits.map(h => h.fact)
+  /**
+   * Faits connus mentionnant cette personne. Avec `instanceId` : fan-out
+   * GOUVERNÉ (DB privée de l'agent + scopes partagés lisibles, dormants exclus,
+   * sensibilité plafonnée comme au recall). Sans : recherche globale (admin).
+   * Avant : toujours globale → n'importe quel agent lisait les faits privés et
+   * critiques de tous les autres via un simple identifiant.
+   */
+  private knownAboutPerson(name: string, instanceId?: string, limit = 8): string[] {
+    if (instanceId === undefined) return this.globalSearch(name, limit).map(h => h.fact)
+    const instance = this.mustInstance(instanceId)
+    const hits: FtsHit[] = []
+    for (const target of this.resolveReadTargets(instance)) {
+      hits.push(
+        ...this.openContent(target.dbPath).searchFacts(name, {
+          limit,
+          includeDormant: false,
+          maxSensitivity: 'sensitive',
+          scopeIds: target.scopeIds,
+        }),
+      )
+    }
+    return hits
+      .sort((a, b) => b.relevance - a.relevance)
+      .slice(0, limit)
+      .map(h => h.row.fact)
   }
 
   /** Texte court « tu parles à X » pour l'injection de contexte (recall). */
@@ -485,12 +571,46 @@ export class Memoria {
 
   // ------------------------------------------------------------------- mémoire
 
+  /**
+   * Déclaration EXPLICITE (MCP store_fact, CLI, import) : dédoublonnage EXACT
+   * seulement. Le near-dup (Jaccard > 0,85) appliqué ici jetait sans bruit
+   * toute variante à un mot près d'une phrase longue — « 13 octobre » →
+   * « 14 octobre », « avec option » → « sans option », « toujours » → « jamais » —
+   * et renvoyait l'ANCIEN fait à l'agent comme si c'était le sien : la
+   * correction ou la contradiction était perdue, seul un audit en gardait
+   * trace. Un agent qui déclare a choisi ses mots ; seule la capture (bruit
+   * conversationnel, redites) garde le near-dup.
+   */
   storeFact(input: StoreFactInput): Fact {
+    return this.storeFactInternal(input, { nearDup: false }).fact
+  }
+
+  /**
+   * Écriture gouvernée + HYGIÈNE (audit 27/08) : contenu vide refusé,
+   * catégorie normalisée (« Preference » ≠ « preference » donnait deux
+   * domaines d'expertise), et dédoublonnage PAR SCOPE (findDuplicate). Le
+   * near-dup n'est activé QUE par la capture (`opts.nearDup`) ; storeFact et
+   * correctFact ne dédoublonnent qu'en exact. Un doublon DORMANT (revue en
+   * attente) redéclaré explicitement à l'IDENTIQUE est validé : déclarer =
+   * confirmer — jamais sur un simple rapprochement, qui validerait un fait
+   * que l'agent n'a pas énoncé. `created=false` = l'existant a été renvoyé.
+   */
+  private storeFactInternal(input: StoreFactInput, opts: { nearDup?: boolean } = {}): { fact: Fact; created: boolean } {
     this.assertOpen()
     const instance = this.mustInstance(input.instance)
     const scope = this.resolveTargetScope(instance, input.scope)
+    const trimmed = input.content.trim()
+    if (!trimmed) throw new Error('storeFact : contenu vide refusé')
+    const category = (input.category ?? 'general').trim().toLowerCase() || 'general'
 
-    if (scope.type !== 'private') {
+    if (scope.type === 'private') {
+      // Seul SON scope privé : un fait écrit sous le scope privé d'un autre
+      // agent atterrissait dans la DB de l'appelant avec un scope étranger →
+      // exclu du recall des deux (invisible pour tous, perdu sans bruit).
+      if (scope.name !== `private:${instance.id}`) {
+        throw new Error(`écriture refusée : le scope « ${scope.name} » est le privé d'un autre agent`)
+      }
+    } else {
       const policy = this.registry.getPolicy(instance.assistant_id, scope.id)
       if (!policy?.can_write) {
         throw new Error(`écriture refusée : l'assistant n'a pas can_write sur le scope « ${scope.name} »`)
@@ -500,13 +620,28 @@ export class Memoria {
     // GATE SECRETS — défense en profondeur (audit QW1) : tout fait, même posé
     // en direct (store_fact MCP) ou issu d'un import, passe par la redaction
     // AVANT le stockage. La valeur détectée part au coffre, jamais dans facts.
-    const content = this.redactBeforeStore(input.content)
+    const content = this.redactBeforeStore(trimmed)
+
+    const store = this.storeForScope(scope, instance)
+    const dup = findDuplicate(store, scope.id, content, opts)
+    if (dup) {
+      if (dup.kind === 'exact' && dup.existing.lifecycle_state === 'dormant') this.activateFact(store, dup.existing.id)
+      this.registry.audit({
+        actor_type: 'assistant',
+        actor_id: instance.id,
+        action: 'store_fact_dedup',
+        target_id_hash: sha256Hex(dup.existing.id),
+        scope_id: scope.id,
+        reason: dup.kind,
+      })
+      const fact = store.getFact(dup.existing.id) ?? dup.existing
+      return { fact, created: false }
+    }
 
     // PROVENANCE (synchro) : les faits d'un scope PARTAGÉ portent l'origine
     // (machine + révision logique) + un hash de contenu, pour la convergence LWW
     // inter-machines. Les faits privés n'en ont pas besoin (jamais synchronisés).
     const shared = scope.type !== 'private'
-    const category = input.category ?? 'general'
     const provenance = shared
       ? {
           origin_machine_id: localMachineId(this.registry),
@@ -515,10 +650,9 @@ export class Memoria {
         }
       : {}
 
-    const store = this.storeForScope(scope, instance)
     const fact = store.insertFact({
       fact: content,
-      category: input.category,
+      category,
       fact_type: input.fact_type,
       confidence: input.confidence,
       source: input.source ?? 'manual',
@@ -540,7 +674,72 @@ export class Memoria {
       scope_id: scope.id,
       reason: null,
     })
-    return fact
+    // Un fait posé directement (MCP store_fact, partage, correction) n'était
+    // embeddé qu'à la capture suivante ou au redémarrage → invisible à la
+    // branche vectorielle du recall entre-temps. Bucket B, jamais bloquant.
+    this.scheduleEmbeddings(instance.id)
+    return { fact, created: true }
+  }
+
+  /**
+   * Indexation différée (debounce court) des DB lisibles par l'instance :
+   * une rafale de storeFact (import, correction en série) donne UNE passe.
+   * Le timer n'empêche pas le process de se terminer ; close() l'annule.
+   */
+  private scheduleEmbeddings(instanceId: string): void {
+    this.indexQueue.add(instanceId)
+    if (this.indexTimer) return
+    this.indexTimer = setTimeout(() => {
+      this.indexTimer = null
+      const ids = [...this.indexQueue]
+      this.indexQueue.clear()
+      if (this.closed) return
+      for (const id of ids) {
+        void this.indexEmbeddings(id).catch((err: unknown) =>
+          console.warn('[memoria] indexation embeddings différée en échec :', (err as Error).message),
+        )
+      }
+    }, EMBEDDINGS_DEBOUNCE_MS)
+    this.indexTimer.unref()
+  }
+
+  /**
+   * Active un fait dormant et clôt ses items de revue `pending` (même règle
+   * que le partage : valider par un autre chemin = sortir de la revue, sans
+   * item orphelin qui répondrait « updated: 1 » pour rien).
+   */
+  private activateFact(store: ContentStore, factId: string): void {
+    const tx = store.db.transaction(() => {
+      store.db.prepare("UPDATE facts SET lifecycle_state = 'active', updated_at = ? WHERE id = ?").run(nowISO(), factId)
+      store.db
+        .prepare(
+          `UPDATE memory_import_items SET status = 'accepted', reviewed_by = 'local', reviewed_at = ?
+           WHERE status = 'pending' AND target_memory_id = ?`,
+        )
+        .run(nowISO(), factId)
+    })
+    tx()
+  }
+
+  /**
+   * Doublon d'un énoncé dans TOUTES les DB lisibles par l'instance (privée +
+   * partagées autorisées) — le même mécanisme que la capture, étendu au
+   * fan-out du recall. Sert à la capture, à l'import de transcripts et à tout
+   * appelant qui veut savoir « est-ce déjà su quelque part ? » avant d'écrire.
+   */
+  findKnownDuplicate(instanceId: string, factText: string, opts: { includePrivate?: boolean } = {}): DuplicateMatch | null {
+    this.assertOpen()
+    const instance = this.mustInstance(instanceId)
+    const privateDbPath = this.paths.assistantDb(instance.id)
+    for (const target of this.resolveReadTargets(instance)) {
+      if (opts.includePrivate === false && target.dbPath === privateDbPath) continue
+      const store = this.openContent(target.dbPath)
+      for (const scopeId of target.scopeIds) {
+        const dup = findDuplicate(store, scopeId, factText)
+        if (dup) return dup
+      }
+    }
+    return null
   }
 
   /**
@@ -597,7 +796,10 @@ export class Memoria {
       const store = this.openContent(target.dbPath)
       const hits = search(store, input.query, {
         limit: 50,
-        includeDormant: input.include_dormant ?? false,
+        // JAMAIS de dormant au recall : un fait dormant attend une validation
+        // (review-first, quarantaine d'import). `include_dormant` arrivait tel
+        // quel du body HTTP → tout client pouvait lire l'inapprouvé.
+        includeDormant: false,
         maxSensitivity: 'sensitive',
         scopeIds: target.scopeIds,
       })
@@ -669,6 +871,36 @@ export class Memoria {
         }
       }
     }
+
+    // DÉDOUBLONNAGE inter-DB : le même énoncé en privé ET dans un scope
+    // partagé (cas courant : deux agents ont appris la même préférence, l'une
+    // des copies a été partagée) remontait deux fois, consommant budget et
+    // `limit`. On garde la copie du scope le plus large (partagé > privé) avec
+    // le meilleur score des deux ; l'autre n'est ni renvoyée ni comptée.
+    // Deux copies dans la MÊME DB ne sont pas touchées : c'est le travail de
+    // la révision (doublons proposés), pas du recall.
+    const privateDbPath = this.paths.assistantDb(instance.id)
+    const byText = new Map<string, number[]>()
+    const deduped: typeof candidates = []
+    for (const c of candidates) {
+      const key = normalizeFact(c.item.content)
+      const indices = byText.get(key) ?? []
+      const twinIdx = indices.find(i => deduped[i]!.store !== c.store)
+      if (twinIdx === undefined) {
+        indices.push(deduped.length)
+        byText.set(key, indices)
+        deduped.push(c)
+        continue
+      }
+      const kept = deduped[twinIdx]!
+      const keptShared = kept.store.path !== privateDbPath
+      const thisShared = c.store.path !== privateDbPath
+      const winner = thisShared && !keptShared ? c : kept
+      winner.item.score = Math.max(kept.item.score, c.item.score)
+      deduped[twinIdx] = winner
+    }
+    candidates.length = 0
+    candidates.push(...deduped)
 
     candidates.sort((a, b) => b.item.score - a.item.score)
 
@@ -771,13 +1003,9 @@ export class Memoria {
   async processCognition(instanceId?: string): Promise<{ processed: number }> {
     this.assertOpen()
     const { extraction } = await this.ensureProfile()
-    const targets = instanceId
-      ? [this.registry.dbForInstance(instanceId)].filter(Boolean)
-      : this.registry.listDbs().filter(e => e.kind !== 'registry')
     let processed = 0
-    for (const entry of targets) {
-      if (!entry || !existsSync(entry.path)) continue
-      const store = this.openContent(entry.path)
+    for (const path of this.contentDbPathsFor(instanceId)) {
+      const store = this.openContent(path)
       const engine = this.cognitionFor(store, extraction)
       // Faits jamais traités (marqueur fact_cognition), + ceux vus en
       // heuristique seulement si un LLM est disponible maintenant (une fois).
@@ -835,21 +1063,53 @@ export class Memoria {
     return this.patternFor(this.openContent(db.path)).listProposed()
   }
 
-  decidePattern(instanceId: string, patternId: string, decision: 'accept' | 'dismiss'): { ok: boolean } {
+  /**
+   * Tranche une récurrence. Accepter = CONSOLIDER (c'est ce que promet le
+   * bouton « Consolider ») : un seul membre reste actif — le canonique, le
+   * plus récent (celui dont le pattern a tiré `canonical_fact`) — et les
+   * autres membres encore actifs sont supersédés EN POINTANT SUR LUI
+   * (superseded_by), comme mergeFacts. Rien n'est effacé, la chaîne reste
+   * navigable et réversible. Avant : accept() ne changeait rien à la mémoire ;
+   * PatternEngine.consolidate (jamais câblé) aurait supersédé TOUS les
+   * membres sans remplaçant — perte nette de souvenirs.
+   */
+  decidePattern(instanceId: string, patternId: string, decision: 'accept' | 'dismiss'): { ok: boolean; superseded: number } {
     this.assertOpen()
     const db = this.registry.dbForInstance(instanceId)
-    if (!db || !existsSync(db.path)) return { ok: false }
-    const engine = this.patternFor(this.openContent(db.path))
+    if (!db || !existsSync(db.path)) return { ok: false, superseded: 0 }
+    const store = this.openContent(db.path)
+    const engine = this.patternFor(store)
+    let superseded = 0
     const result = decision === 'accept' ? engine.accept(patternId) : engine.dismiss(patternId)
+    if (decision === 'accept' && result) {
+      const ph = result.member_fact_ids.map(() => '?').join(',')
+      const members = result.member_fact_ids.length
+        ? (store.db
+            .prepare(`SELECT id, fact, created_at FROM facts WHERE id IN (${ph}) AND superseded = 0 ORDER BY created_at DESC`)
+            .all(...result.member_fact_ids) as Array<{ id: string; fact: string; created_at: string }>)
+        : []
+      const canonical = members.find(f => f.fact === result.canonical_fact) ?? members[0]
+      if (canonical && members.length > 1) {
+        const ts = nowISO()
+        const tx = store.db.transaction(() => {
+          const stmt = store.db.prepare('UPDATE facts SET superseded = 1, superseded_by = ?, updated_at = ? WHERE id = ? AND superseded = 0')
+          for (const f of members) {
+            if (f.id === canonical.id) continue
+            superseded += stmt.run(canonical.id, ts, f.id).changes
+          }
+        })
+        tx()
+      }
+    }
     this.registry.audit({
       actor_type: 'user',
       actor_id: 'local',
       action: `pattern_${decision}`,
       target_id_hash: sha256Hex(patternId),
       scope_id: null,
-      reason: null,
+      reason: decision === 'accept' ? `superseded=${superseded}` : null,
     })
-    return { ok: result !== null }
+    return { ok: result !== null, superseded }
   }
 
   /**
@@ -1066,9 +1326,64 @@ export class Memoria {
    */
   reinforceFacts(instanceId: string, factIds: string[], used: boolean): ReinforceResult {
     this.assertOpen()
-    const db = this.registry.dbForInstance(instanceId)
-    if (!db) return { updated: [], domains: [] }
-    return this.feedbackFor(this.openContent(db.path)).reinforce(factIds, { used })
+    const instance = this.mustInstance(instanceId)
+    // Même fan-out que le recall : les ids viennent de N'IMPORTE quelle DB
+    // lisible (privée OU partagée). Ne chercher que dans la privée laissait
+    // la mémoire partagée sans aucun signal d'usage (used_count figé à 0).
+    const remaining = new Set(factIds)
+    const updated: string[] = []
+    const domains = new Set<string>()
+    for (const target of this.resolveReadTargets(instance)) {
+      if (remaining.size === 0) break
+      const store = this.openContent(target.dbPath)
+      const present = this.factsPresentIn(store, [...remaining], target.scopeIds)
+      if (present.length === 0) continue
+      const r = this.feedbackFor(store).reinforce(present, { used })
+      for (const id of r.updated) {
+        updated.push(id)
+        remaining.delete(id)
+      }
+      for (const d of r.domains) domains.add(d)
+    }
+    return { updated, domains: [...domains] }
+  }
+
+  /** Ids (parmi `ids`) existant dans `store` sous l'un des scopes autorisés. */
+  private factsPresentIn(store: ContentStore, ids: string[], scopeIds: string[]): string[] {
+    if (ids.length === 0 || scopeIds.length === 0) return []
+    const ip = ids.map(() => '?').join(',')
+    const sp = scopeIds.map(() => '?').join(',')
+    const rows = store.db
+      .prepare(`SELECT id FROM facts WHERE id IN (${ip}) AND scope_id IN (${sp})`)
+      .all(...ids, ...scopeIds) as Array<{ id: string }>
+    return rows.map(r => r.id)
+  }
+
+  /**
+   * Localise un fait par id dans les DB LISIBLES par l'instance (sa privée +
+   * les partagées dont le scope est autorisé) — là d'où viennent les ids que
+   * memoria_recall lui a donnés. Null = introuvable dans SES scopes (un fait
+   * privé d'un autre agent reste invisible, même par son id).
+   */
+  private locateFact(instance: AssistantInstance, factId: string): { store: ContentStore; row: FactRow; scope: MemoryScope } | null {
+    for (const target of this.resolveReadTargets(instance)) {
+      const store = this.openContent(target.dbPath)
+      const row = store.db.prepare('SELECT * FROM facts WHERE id = ?').get(factId) as FactRow | undefined
+      if (!row || !target.scopeIds.includes(row.scope_id)) continue
+      const scope = this.registry.getScope(row.scope_id)
+      if (!scope) continue
+      return { store, row, scope }
+    }
+    return null
+  }
+
+  /** Modifier un fait partagé exige can_write sur son scope (le privé est toujours à soi). */
+  private assertWritable(instance: AssistantInstance, scope: MemoryScope): void {
+    if (scope.type === 'private') return
+    const policy = this.registry.getPolicy(instance.assistant_id, scope.id)
+    if (!policy?.can_write) {
+      throw new Error(`écriture refusée : l'assistant n'a pas can_write sur le scope « ${scope.name} »`)
+    }
   }
 
   /**
@@ -1141,26 +1456,35 @@ export class Memoria {
     this.assertOpen()
     const text = content.trim()
     if (!text) throw new Error('contenu de correction vide')
-    const db = this.registry.dbForInstance(instanceId)
-    if (!db || !existsSync(db.path)) return { replacement: null }
-    const store = this.openContent(db.path)
-    const old = store.getFact(factId)
-    if (!old || old.superseded) return { replacement: null }
+    const instance = this.mustInstance(instanceId)
+    const located = this.locateFact(instance, factId)
+    if (!located || located.row.superseded) return { replacement: null }
+    const { store, row: old, scope } = located
+    this.assertWritable(instance, scope)
 
     // La correction hérite du classement de l'original (catégorie, scope,
     // épinglage) : corriger une formulation ne doit pas dégrader le rangement.
-    const replacement = this.storeFact({
-      instance: instanceId,
-      content: text,
-      category: old.category,
-      scope: old.scope_id,
+    // Le remplaçant naît dans la MÊME DB que l'original (storeForScope) : la
+    // chaîne superseded_by reste navigable dans une seule base.
+    // Dédup EXACTE seulement : une correction est proche de l'original par
+    // construction, le near-dup la prendrait pour un doublon. Texte identique
+    // à l'existant = rien à corriger (sinon l'original pointerait sur lui-même).
+    // Le tout dans UNE transaction (même DB) : un échec entre l'insertion du
+    // remplaçant et la supersession laissait deux faits actifs.
+    const tx = store.db.transaction((): Fact | null => {
+      const { fact: replacement } = this.storeFactInternal(
+        { instance: instanceId, content: text, category: old.category, scope: old.scope_id },
+        { nearDup: false },
+      )
+      if (replacement.id === factId) return null
+      store.db
+        .prepare("UPDATE facts SET superseded = 1, superseded_by = ?, updated_at = ? WHERE id = ? AND superseded = 0")
+        .run(replacement.id, nowISO(), factId)
+      if (old.pinned) store.db.prepare('UPDATE facts SET pinned = 1 WHERE id = ?').run(replacement.id)
+      return replacement
     })
-    store.db
-      .prepare("UPDATE facts SET superseded = 1, superseded_by = ?, updated_at = ? WHERE id = ? AND superseded = 0")
-      .run(replacement.id, nowISO(), factId)
-    // `Fact` (forme exposée) ne porte pas `pinned` : on relit la colonne brute.
-    const wasPinned = store.db.prepare('SELECT pinned FROM facts WHERE id = ?').get(factId) as { pinned?: number } | undefined
-    if (wasPinned?.pinned) store.db.prepare('UPDATE facts SET pinned = 1 WHERE id = ?').run(replacement.id)
+    const replacement = tx()
+    if (!replacement) return { replacement: null }
     this.registry.audit({
       actor_type: 'user', actor_id: 'local', action: 'fact_correct',
       target_id_hash: sha256Hex(factId), scope_id: null, reason: `replacement=${sha256Hex(replacement.id).slice(0, 12)}`,
@@ -1177,13 +1501,15 @@ export class Memoria {
     this.assertOpen()
     const targets = mergeIds.filter(id => id !== keepId)
     if (targets.length === 0) return { merged: [] }
-    const db = this.registry.dbForInstance(instanceId)
-    if (!db || !existsSync(db.path)) return { merged: [] }
-    const store = this.openContent(db.path)
-    const keep = store.getFact(keepId)
+    const instance = this.mustInstance(instanceId)
+    const located = this.locateFact(instance, keepId)
     // Refuser plutôt que fusionner vers un fait absent ou déjà supersédé :
     // on créerait une chaîne cassée, exactement le bug legacy 'split:'.
-    if (!keep || keep.superseded) throw new Error(`fusion impossible : le fait conservé ${keepId} est absent ou supersédé`)
+    if (!located || located.row.superseded) throw new Error(`fusion impossible : le fait conservé ${keepId} est absent ou supersédé`)
+    const { store, scope } = located
+    this.assertWritable(instance, scope)
+    // Les doublons fusionnés doivent vivre dans la MÊME DB que le conservé
+    // (superseded_by ne traverse pas les bases) : un id d'ailleurs est ignoré.
 
     const ts = nowISO()
     const merged: string[] = []
@@ -1231,9 +1557,11 @@ export class Memoria {
    */
   setPinned(instanceId: string, factId: string, pinned: boolean): boolean {
     this.assertOpen()
-    const db = this.registry.dbForInstance(instanceId)
-    if (!db || !existsSync(db.path)) return false
-    const store = this.openContent(db.path)
+    const instance = this.mustInstance(instanceId)
+    const located = this.locateFact(instance, factId)
+    if (!located) return false
+    this.assertWritable(instance, located.scope)
+    const { store } = located
     const r = store.db
       .prepare('UPDATE facts SET pinned = ?, updated_at = ? WHERE id = ?')
       .run(pinned ? 1 : 0, nowISO(), factId)
@@ -1257,9 +1585,11 @@ export class Memoria {
     if (expiresAt !== null && Number.isNaN(Date.parse(expiresAt))) {
       throw new Error(`date d'expiration invalide : ${expiresAt} (ISO 8601 attendu)`)
     }
-    const db = this.registry.dbForInstance(instanceId)
-    if (!db || !existsSync(db.path)) return false
-    const store = this.openContent(db.path)
+    const instance = this.mustInstance(instanceId)
+    const located = this.locateFact(instance, factId)
+    if (!located) return false
+    this.assertWritable(instance, located.scope)
+    const { store } = located
     const r = store.db
       .prepare('UPDATE facts SET expires_at = ?, updated_at = ? WHERE id = ?')
       .run(expiresAt, nowISO(), factId)
@@ -1295,7 +1625,19 @@ export class Memoria {
     const topics = this.topicFor(store, null).listTopics({ minFacts: 3 })
     let domains = 0
     for (const t of topics.slice(0, 30)) {
-      feedback.updateExpertise(t.name, Math.log1p(t.fact_count))
+      // AMORCE, pas verdict : accumuler des souvenirs sur un sujet n'en fait
+      // pas un « expert confirmé ». Avant : delta = log1p(fact_count) ≥ 1.39
+      // dans la saturation `prev + delta × (1 − prev)` → 1.0 en un pas pour
+      // TOUS les thèmes (30 domaines à 1.0 en prod, « maîtrise : Environ GB »).
+      // Cible bornée (3 faits ≈ 0.14, 50 faits ≈ 0.39, jamais > 0.4) ; on ne
+      // fait que COMBLER l'écart jusqu'à cette cible : idempotent d'un boot à
+      // l'autre, et un niveau gagné par l'usage réel (reinforce) n'est jamais
+      // abaissé.
+      const target = Math.min(BOOTSTRAP_EXPERTISE_CAP, 0.1 * Math.log1p(t.fact_count))
+      const current = feedback.getExpertise(t.name)?.level ?? 0
+      if (current >= target) continue
+      // updateExpertise applique prev + delta × (MAX − prev) : delta pour atteindre `target`.
+      feedback.updateExpertise(t.name, (target - current) / (EXPERTISE_MAX - current))
       domains++
     }
     return { domains }
@@ -1419,21 +1761,38 @@ export class Memoria {
   }
 
   /**
+   * DB de contenu à traiter pour une instance : SA DB privée + les DB partagées
+   * dont le scope lui est lisible (même fan-out que le recall) — sans
+   * instance : toutes. Avant, les jobs par instance (embeddings, cognition)
+   * ne voyaient que la DB privée : un fait posé dans `user` restait sans
+   * vecteur ni entités jusqu'au prochain redémarrage.
+   */
+  private contentDbPathsFor(instanceId?: string): string[] {
+    if (!instanceId) {
+      return this.registry
+        .listDbs()
+        .filter(e => e.kind !== 'registry' && existsSync(e.path))
+        .map(e => e.path)
+    }
+    const instance = this.registry.getInstance(instanceId)
+    if (!instance || instance.revoked_at) return []
+    return this.resolveReadTargets(instance)
+      .map(t => t.dbPath)
+      .filter(p => existsSync(p))
+  }
+
+  /**
    * Indexe les faits sans embedding (une instance, ou toutes). Appelé après
-   * chaque capture (fire-and-forget) et au boot du daemon. Sans provider
-   * d'embeddings → no-op.
+   * chaque capture (fire-and-forget), après chaque storeFact (différé) et au
+   * boot du daemon. Sans provider d'embeddings → no-op.
    */
   async indexEmbeddings(instanceId?: string): Promise<{ indexed: number }> {
     this.assertOpen()
     const provider = await this.ensureEmbeddings()
     if (!provider) return { indexed: 0 }
     let indexed = 0
-    const targets = instanceId
-      ? [this.registry.dbForInstance(instanceId)].filter(Boolean)
-      : this.registry.listDbs().filter(e => e.kind !== 'registry')
-    for (const entry of targets) {
-      if (!entry || !existsSync(entry.path)) continue
-      const store = this.openContent(entry.path)
+    for (const path of this.contentDbPathsFor(instanceId)) {
+      const store = this.openContent(path)
       let indexer = this.indexers.get(store)
       if (!indexer) {
         indexer = new EmbeddingIndexer({ store, provider })
@@ -1477,8 +1836,21 @@ export class Memoria {
     }
   }
 
-  /** Profil LLM résolu UNE fois (override tests/daemon > résolution auto). */
+  /**
+   * Profil LLM résolu une fois (override tests/daemon > résolution auto) —
+   * mais un profil INCOMPLET est retenté après `profileRetryMs` : ce que le
+   * pipeline utilise doit finir par refléter ce qui tourne sur la machine.
+   */
   private ensureProfile(): Promise<{ extraction: LlmProvider | null; embeddings: EmbeddingProvider | null }> {
+    if (
+      this.profilePromise &&
+      this.llmOverride === undefined &&
+      this.profileSnapshot &&
+      (this.profileSnapshot.extraction === null || this.profileSnapshot.embeddings === null) &&
+      Date.now() - this.profileResolvedAt >= this.profileRetryMs
+    ) {
+      this.profilePromise = null
+    }
     this.profilePromise ??= (async () => {
       // Compteur de consommation : TOUS les providers (locaux compris, et
       // ceux injectés par les tests/daemon) — c'est une mesure, pas un audit.
@@ -1506,6 +1878,7 @@ export class Memoria {
           reason: formatCloudSend(send),
         })
       }
+      this.adoptProfileSnapshot(profile)
       // Ordre : compteur à l'extérieur, audit cloud à l'intérieur — l'audit
       // expose aussi la variante détaillée, le compteur voit donc les tokens.
       return {
@@ -1514,6 +1887,33 @@ export class Memoria {
       }
     })()
     return this.profilePromise
+  }
+
+  /**
+   * Enregistre l'empreinte du profil résolu et jette ce qui a mémoïsé
+   * l'ANCIEN provider : le pipeline de capture (extraction figée dans
+   * CapturePipeline) si l'extraction change, les indexeurs si les embeddings
+   * changent. Rien n'est jeté quand rien ne change (les groupes de tours en
+   * mémoire du pipeline survivent à une simple re-vérification).
+   */
+  private adoptProfileSnapshot(profile: { extraction: LlmProvider | null; embeddings: EmbeddingProvider | null }): void {
+    const next = {
+      extraction: profile.extraction ? `${profile.extraction.name}/${profile.extraction.model}` : null,
+      embeddings: profile.embeddings ? `${profile.embeddings.name}/${profile.embeddings.model}` : null,
+    }
+    const prev = this.profileSnapshot
+    if (prev && prev.extraction !== next.extraction) this.pipelinePromise = null
+    if (prev && prev.embeddings !== next.embeddings) this.indexers = new WeakMap<ContentStore, EmbeddingIndexer>()
+    this.profileSnapshot = next
+    this.profileResolvedAt = Date.now()
+  }
+
+  /** Oublie le profil mémoïsé (et tout ce qui en dépend) : re-résolu au prochain usage. */
+  private invalidateProfile(): void {
+    this.profilePromise = null
+    this.pipelinePromise = null
+    this.profileSnapshot = null
+    this.indexers = new WeakMap<ContentStore, EmbeddingIndexer>()
   }
 
   /**
@@ -1561,6 +1961,9 @@ export class Memoria {
           return scope.id
         },
         storeFact: input => this.storeCaptured(input),
+        // Le pipeline dédoublonne déjà contre le scope privé ; ici, les scopes
+        // PARTAGÉS lisibles (un fait déjà dans `user` ne revient pas en privé).
+        knownElsewhere: (id, text) => this.findKnownDuplicate(id, text, { includePrivate: false }) !== null,
         audit: entry => this.registry.audit(entry),
         redactor: this.redactor,
         secretSink: s => {
@@ -1578,19 +1981,27 @@ export class Memoria {
    * (invisible au recall) + entre en file de revue ; l'approbation l'active.
    */
   private storeCaptured(input: StoreFactInput): Fact {
-    const fact = this.storeFact({ ...input, source: input.source ?? 'capture' })
-    if (this.getCaptureMode() !== 'review-first') return fact
-
     const store = this.openContent(this.paths.assistantDb(input.instance))
-    store.db.prepare("UPDATE facts SET lifecycle_state = 'dormant' WHERE id = ?").run(fact.id)
-    const sourceId = this.ensureReviewSource(store, input.instance)
-    store.db
-      .prepare(
-        `INSERT INTO memory_import_items (id, source_id, target_memory_id, target_type, proposed_scope_id, status, confidence)
-         VALUES (?, ?, ?, 'fact', ?, 'pending', ?)`,
-      )
-      .run(newId(), sourceId, fact.id, fact.scope_id, fact.confidence)
-    return { ...fact, lifecycle_state: 'dormant' }
+    // Transaction : INSERT actif → dormant → item de revue. Un crash entre les
+    // deux publiait un fait jamais revu.
+    const tx = store.db.transaction((): Fact => {
+      // near-dup ASSUMÉ ici : la capture voit des redites bruitées d'un même
+      // souvenir ; une déclaration explicite (storeFact) ne l'a pas.
+      const { fact, created } = this.storeFactInternal({ ...input, source: input.source ?? 'capture' }, { nearDup: true })
+      // Un fait DÉJÀ connu (dédup) n'a rien à faire en revue : le mettre dormant
+      // ferait disparaître du recall un souvenir validé.
+      if (!created || this.getCaptureMode() !== 'review-first') return fact
+      store.db.prepare("UPDATE facts SET lifecycle_state = 'dormant' WHERE id = ?").run(fact.id)
+      const sourceId = this.ensureReviewSource(store, input.instance)
+      store.db
+        .prepare(
+          `INSERT INTO memory_import_items (id, source_id, target_memory_id, target_type, proposed_scope_id, status, confidence)
+           VALUES (?, ?, ?, 'fact', ?, 'pending', ?)`,
+        )
+        .run(newId(), sourceId, fact.id, fact.scope_id, fact.confidence)
+      return { ...fact, lifecycle_state: 'dormant' }
+    })
+    return tx()
   }
 
   /** Source unique « capture-review » par instance (provenance des items en revue). */
@@ -1821,6 +2232,11 @@ export class Memoria {
             ...row,
             scope_id: scope.id,
             visibility: 'shared',
+            // Partager = VALIDER. Un fait dormant (revue en attente) copié tel
+            // quel restait dormant à jamais dans la DB partagée : invisible au
+            // recall de tous, sorti de la revue (l'item pointait vers un fait
+            // parti), donc perdu — 4 238 dormants en prod étaient exposés à ça.
+            lifecycle_state: 'active',
             org_id: scope.org_id ?? row.org_id,
             client_org_id: scope.client_org_id ?? row.client_org_id,
             project_id: scope.project_id ?? row.project_id,
@@ -1829,7 +2245,21 @@ export class Memoria {
         }
       })
       tx()
-      store.hardDeleteFacts(rows.map(r => r.id))
+      const ids = rows.map(r => r.id)
+      const leave = store.db.transaction(() => {
+        // Clore les items de revue du fait déplacé : sinon ils restent
+        // `pending` en orphelins et une approbation ultérieure répond
+        // « updated: 1 » sans rien changer (faux succès).
+        const ph = ids.map(() => '?').join(',')
+        store.db
+          .prepare(
+            `UPDATE memory_import_items SET status = 'accepted', reviewed_by = 'local', reviewed_at = ?
+             WHERE status = 'pending' AND target_memory_id IN (${ph})`,
+          )
+          .run(nowISO(), ...ids)
+        store.hardDeleteFacts(ids)
+      })
+      leave()
     }
     if (shared > 0) {
       this.registry.audit({
@@ -1955,7 +2385,9 @@ export class Memoria {
     const db = this.registry.dbForInstance(instanceId)
     if (!db || !existsSync(db.path)) return []
     const store = this.openContent(db.path)
-    const rows = store.db.prepare('SELECT * FROM facts WHERE superseded = 0').all() as FactRow[]
+    // Actifs seulement : un fait dormant attend l'écran Revue, pas l'écran
+    // Partage — le proposer ici court-circuitait la revue.
+    const rows = store.db.prepare("SELECT * FROM facts WHERE superseded = 0 AND lifecycle_state = 'active'").all() as FactRow[]
     const user = this.registry.bootstrap().user
     const nameTokens = user.display_name.toLowerCase().split(/\s+/).filter(t => t.length > 2)
     const cues = [
@@ -1984,20 +2416,26 @@ export class Memoria {
     return this.sharedDbPath(scope)
   }
 
-  /** Hard-delete gouverné (spec §11). */
-  forget(filter: ForgetFilter): { deleted: number } {
+  /**
+   * Hard-delete gouverné (spec §11). `matched` = faits visés (utile en dry_run).
+   *
+   * Sans `ids`, la suppression est TOUJOURS « en masse » (confirm_bulk requis),
+   * requête comprise : la CLI l'exigeait déjà, le moteur laissait passer.
+   */
+  forget(filter: ForgetFilter): { deleted: number; matched: number } {
     this.assertOpen()
     const hasIds = (filter.ids?.length ?? 0) > 0
     if (!hasIds && !filter.query && !filter.category && !filter.scope_id) {
       throw new Error('forget : filtre vide refusé')
     }
-    if (!hasIds && !filter.query && filter.confirm_bulk !== true) {
+    if (!hasIds && filter.confirm_bulk !== true) {
       throw new Error('forget : suppression en masse — confirm_bulk requis')
     }
 
     let deleted = 0
+    let matched = 0
     for (const entry of this.registry.listDbs()) {
-      if (entry.kind === 'registry') continue
+      if (entry.kind === 'registry' || !existsSync(entry.path)) continue
       const store = this.openContent(entry.path)
       let ids = filter.ids ?? []
       if (!hasIds) {
@@ -2013,8 +2451,16 @@ export class Memoria {
         }
         let rows: Array<{ id: string }>
         if (filter.query) {
+          // La requête FTS est un OR (pensé pour le recall, qui note ensuite la
+          // couverture). Pour EFFACER, on exige tous les mots : « clé API
+          // Stripe » ne doit pas emporter « la clé du bureau est chez Badette ».
+          const tokens = queryTokens(filter.query)
           rows = store
             .searchFacts(filter.query, { limit: 500, includeDormant: true, maxSensitivity: 'critical', scopeIds: filter.scope_id ? [filter.scope_id] : undefined })
+            .filter(h => {
+              const text = normalizeText(h.row.fact)
+              return tokens.every(t => text.includes(t))
+            })
             .map(h => ({ id: h.row.id }))
           if (filter.category) rows = rows.filter(r => store.getFact(r.id)?.category === filter.category)
         } else {
@@ -2025,9 +2471,18 @@ export class Memoria {
         ids = rows.map(r => r.id)
       }
       if (ids.length === 0) continue
+      matched += ids.length
+      if (filter.dry_run) continue
       // Nettoyer thèmes + récurrences AVANT le hard-delete (lisent fact_topics).
       this.topicFor(store, null).onForget(ids)
       this.patternFor(store).onForget(ids)
+      // Oublier un REMPLAÇANT (correction, fusion, consolidation) rend la
+      // parole à l'original : sinon il restait `superseded_by = <id disparu>`,
+      // invisible au recall à jamais — la chaîne cassée du legacy « split: ».
+      const ph = ids.map(() => '?').join(',')
+      const restored = store.db
+        .prepare(`UPDATE facts SET superseded = 0, superseded_by = NULL, updated_at = ? WHERE superseded_by IN (${ph})`)
+        .run(nowISO(), ...ids).changes
       const n = store.hardDeleteFacts(ids)
       deleted += n
       if (n > 0) {
@@ -2037,11 +2492,11 @@ export class Memoria {
           action: 'forget',
           target_id_hash: sha256Hex(ids.slice().sort().join(',')),
           scope_id: filter.scope_id ?? null,
-          reason: `deleted=${n}`,
+          reason: `deleted=${n} restored=${restored}`,
         })
       }
     }
-    return { deleted }
+    return { deleted, matched }
   }
 
   // -------------------------------------------------------------------- admin
@@ -2178,6 +2633,19 @@ export class Memoria {
       ollamaBaseUrl: opts.ollamaBaseUrl,
       lmstudioBaseUrl: opts.lmstudioBaseUrl,
     })
+    // Ce que l'UI affiche DOIT être ce que le pipeline utilise : si cette
+    // résolution fraîche diffère du profil mémoïsé (Ollama démarré après le
+    // daemon, modèle tiré entre-temps), on jette le mémo — le prochain
+    // captureTurn repart sur les moteurs réellement disponibles.
+    if (this.llmOverride === undefined && this.profileSnapshot) {
+      const fresh = {
+        extraction: profile.extraction ? `${profile.extraction.name}/${profile.extraction.model}` : null,
+        embeddings: profile.embeddings ? `${profile.embeddings.name}/${profile.embeddings.model}` : null,
+      }
+      if (fresh.extraction !== this.profileSnapshot.extraction || fresh.embeddings !== this.profileSnapshot.embeddings) {
+        this.invalidateProfile()
+      }
+    }
 
     // ---- extraction : disponible (provider résolu) ou indisponible AVEC raison
     let extraction: LlmEngineHealth
@@ -2391,12 +2859,9 @@ export class Memoria {
 
   private persistLlmConfig(action: string): void {
     saveConfigFile(this.resolved.config, this.resolved.configPath)
-    // invalide la résolution mémoïsée → re-résolue au prochain usage
-    this.profilePromise = null
-    this.pipelinePromise = null
-    // Les indexeurs mémoïsent le provider d'embeddings résolu : après un
-    // changement de moteur, on les jette pour repartir du nouveau provider.
-    this.indexers = new WeakMap<ContentStore, EmbeddingIndexer>()
+    // invalide la résolution mémoïsée (pipeline et indexeurs compris) →
+    // re-résolue au prochain usage
+    this.invalidateProfile()
     this.registry.audit({ actor_type: 'user', actor_id: 'local', action, target_id_hash: null, scope_id: null, reason: null })
   }
 
@@ -2876,6 +3341,10 @@ export class Memoria {
   close(): void {
     if (this.closed) return
     this.closed = true
+    if (this.indexTimer) {
+      clearTimeout(this.indexTimer)
+      this.indexTimer = null
+    }
     for (const store of this.pool.values()) store.close()
     this.pool.clear()
     this.registry.close()

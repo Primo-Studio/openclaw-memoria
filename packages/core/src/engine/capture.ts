@@ -70,6 +70,12 @@ export interface CapturePipelineDeps {
   secretSink: ((s: DetectedSecret) => void) | null
   /** LLM d'extraction — null/indisponible = les entrées WAL restent pending. */
   extraction: LlmProvider | null
+  /**
+   * Dédup ÉTENDUE : le fait existe-t-il déjà ailleurs que dans le scope privé
+   * (scopes partagés lisibles, ex. `user`) ? Sans elle, plus on partage vers
+   * `user`, plus chaque agent recrée le même fait en privé au tour suivant.
+   */
+  knownElsewhere?: (instanceId: string, factText: string) => boolean
   maxAttempts?: number
   /** Plafond de faits retenus par entrée WAL (anti-spam LLM, défaut 8). */
   maxFactsPerEntry?: number
@@ -109,6 +115,15 @@ export class CapturePipeline {
   private readonly processors = new Map<string, WalProcessor>()
   /** id d'entrée WAL → groupe du tour (mémoire de process uniquement). */
   private readonly groups = new Map<number, TurnGroup>()
+  /**
+   * Consommation du WAL EN COURS, par instance. Le daemon sert les requêtes
+   * en parallèle : pendant l'`await` de l'extraction du tour 1, le tour 2
+   * relisait le WAL (entrée 1 encore `processed = 0`) et relançait
+   * l'extraction dessus — appels LLM (et envois cloud) doublés, compteurs
+   * faux. Une seule consommation à la fois par instance ; les suivantes
+   * s'enchaînent et trouvent le WAL déjà à jour.
+   */
+  private readonly inflight = new Map<string, Promise<void>>()
   private readonly maxFactsPerEntry: number
 
   constructor(deps: CapturePipelineDeps) {
@@ -140,7 +155,9 @@ export class CapturePipeline {
       for (const id of ids) this.groups.set(id, group)
     }
 
-    const run = await this.processorFor(input.instance, store).processPending()
+    // L'append ci-dessus est déjà fait (synchrone) : si le process tombe
+    // pendant l'attente, les messages sont en WAL et seront rejoués au boot.
+    const run = await this.serialized(input.instance, () => this.processorFor(input.instance, store).processPending())
     return {
       appended: ids.length,
       wal_ids: ids,
@@ -155,10 +172,25 @@ export class CapturePipeline {
   /** Rejeu au boot (daemon) pour une instance : pending → extraction, puis cleanup borné. */
   replayAtBoot(instanceId: string): Promise<WalReplaySummary> {
     const store = this.deps.openStore(instanceId)
-    return this.processorFor(instanceId, store).replayAtBoot()
+    return this.serialized(instanceId, () => this.processorFor(instanceId, store).replayAtBoot())
   }
 
   // ------------------------------------------------------------------ interne
+
+  /** Enchaîne `run` après la consommation en cours de l'instance (échec compris). */
+  private serialized<T>(instanceId: string, run: () => Promise<T>): Promise<T> {
+    const prev = this.inflight.get(instanceId) ?? Promise.resolve()
+    const next = prev.then(run)
+    const settled = next.then(
+      () => undefined,
+      () => undefined,
+    )
+    this.inflight.set(instanceId, settled)
+    void settled.then(() => {
+      if (this.inflight.get(instanceId) === settled) this.inflight.delete(instanceId)
+    })
+    return next
+  }
 
   private processorFor(instanceId: string, store: ContentStore): WalProcessor {
     let processor = this.processors.get(instanceId)
@@ -248,6 +280,7 @@ export class CapturePipeline {
     let created = 0
     for (const item of extracted) {
       if (findDuplicate(store, scopeId, item.fact)) continue
+      if (this.deps.knownElsewhere?.(instanceId, item.fact)) continue
       this.deps.storeFact({
         instance: instanceId,
         scope: scopeId,

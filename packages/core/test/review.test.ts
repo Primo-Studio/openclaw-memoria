@@ -42,6 +42,14 @@ afterEach(() => {
 })
 
 describe('review-first', () => {
+  it('include_dormant côté client n’expose pas un fait en attente de revue', async () => {
+    await m.captureTurn({ instance, messages: [{ role: 'assistant', content: 'Le staging est chez Scaleway.' }] })
+    expect(m.listReview()).toHaveLength(1)
+    // La route /v1/memory/recall relaie le body brut : un agent (ou tout client
+    // HTTP) pouvait lire les faits non approuvés en passant include_dormant.
+    expect(m.recall({ instance, query: 'serveur staging scaleway', include_dormant: true }).items).toHaveLength(0)
+  })
+
   it('capture → fait dormant + pending ; invisible au recall ; approbation → visible', async () => {
     const cap = await m.captureTurn({
       instance,

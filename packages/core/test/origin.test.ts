@@ -20,12 +20,15 @@ const row = (over: Partial<Parameters<typeof factOrigin>[0]> = {}) => ({
 describe('factOrigin', () => {
   it('posé explicitement → declared', () => {
     expect(factOrigin(row({ source: 'manual' }))).toBe('declared')
-    expect(factOrigin(row({ source: 'capture' }))).toBe('declared')
     expect(factOrigin(row({ source: 'import' }))).toBe('declared')
   })
 
-  it('extrait d’une conversation → extracted', () => {
+  it('extrait d’une conversation → extracted (capture v3 comme auto-capture legacy)', () => {
     expect(factOrigin(row({ source: 'auto-capture' }))).toBe('extracted')
+    // La CapturePipeline v3 pose `source: 'capture'` sur des faits extraits ET
+    // reformulés par le LLM : les présenter « stated explicitly » à un autre
+    // modèle transformait une hypothèse d'extraction en déclaration de l'utilisateur.
+    expect(factOrigin(row({ source: 'capture' }))).toBe('extracted')
   })
 
   it('produit par une couche cognitive → inferred (personne ne l’a dit)', () => {

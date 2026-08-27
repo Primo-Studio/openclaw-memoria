@@ -311,3 +311,28 @@ describe('parseFactArray — parse robuste des sorties LLM', () => {
     expect(() => parseFactArray('[{cassé]')).toThrow(/JSON invalide/)
   })
 })
+
+describe('captureTurn concurrents (daemon HTTP : requêtes en parallèle)', () => {
+  it('deux tours en Promise.all → exactement 2 appels LLM, chaque entrée WAL traitée une fois', async () => {
+    const llm = new FakeLlm()
+    // Latence simulée : pendant l'extraction du tour 1, le tour 2 arrive et
+    // relisait le WAL (l'entrée 1 encore `processed = 0`) → 4 appels au lieu de 2.
+    llm.complete = async (opts: CompleteOptions) => {
+      llm.calls++
+      await new Promise(r => setTimeout(r, 30))
+      return llm.completeImpl(opts)
+    }
+    const pipeline = makePipeline(llm)
+
+    const [r1, r2] = await Promise.all([
+      pipeline.captureTurn({ instance: INSTANCE, messages: [{ role: 'user', content: 'Le projet awara tourne sur vnnox' }] }),
+      pipeline.captureTurn({ instance: INSTANCE, messages: [{ role: 'user', content: 'Le projet fretto est une pwa en prod' }] }),
+    ])
+
+    expect(llm.calls).toBe(2)
+    expect(r1.processed + r2.processed).toBe(2)
+    expect(r1.facts_created + r2.facts_created).toBe(2)
+    expect(store.countFacts()).toBe(2)
+    expect(store.walPendingCount()).toBe(0)
+  })
+})

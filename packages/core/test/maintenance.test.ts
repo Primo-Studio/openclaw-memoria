@@ -57,6 +57,19 @@ describe('correctFact', () => {
     expect(raw(replacement!.id).pinned).toBe(1)
   })
 
+  it('oublier la correction restaure l’original (pas de chaîne vers un id disparu)', () => {
+    const old = m.storeFact({ instance, content: 'Badette gère les retours PixConsent', category: 'process' })
+    const { replacement } = m.correctFact(instance, old.id, 'Badette gère les retours PixConsent et JamBoard')
+    expect(m.recall({ instance, query: 'Badette PixConsent' }).items.map(i => i.id)).toEqual([replacement!.id])
+
+    m.forget({ ids: [replacement!.id] })
+
+    const restored = raw(old.id)
+    expect(restored.superseded).toBe(0)
+    expect(restored.superseded_by).toBeNull()
+    expect(m.recall({ instance, query: 'Badette PixConsent' }).items.map(i => i.id)).toEqual([old.id])
+  })
+
   it('refuse un contenu vide et ignore un fait déjà supersédé', () => {
     const f = m.storeFact({ instance, content: 'Un fait quelconque du studio', category: 'general' })
     expect(() => m.correctFact(instance, f.id, '   ')).toThrow(/vide/)

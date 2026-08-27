@@ -45,7 +45,10 @@ const INFERRED_PREFIXES = ['cluster:', 'pattern:', 'observation:', 'dialectic:']
 export function factOrigin(row: OriginInput): FactOrigin {
   const source = (row.source ?? '').toLowerCase()
   const inferred = INFERRED_PREFIXES.some(p => source.startsWith(p)) || row.fact_type === 'cluster' || row.fact_type === 'pattern'
-  const declared = source === 'manual' || source === 'capture' || source === 'import'
+  // `capture` (pipeline v3) = extrait ET reformulé par le LLM, exactement comme
+  // `auto-capture` (legacy) : jamais « declared », sinon un autre modèle lit
+  // une hypothèse d'extraction comme une déclaration explicite de l'utilisateur.
+  const declared = source === 'manual' || source === 'import'
 
   if (declared) return 'declared'
   // « Confirmé » = le feedback l'a fait remonter (relevance_weight > 1 n'est
