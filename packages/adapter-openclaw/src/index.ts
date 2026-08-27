@@ -238,6 +238,23 @@ export function partsToText(content: unknown): string {
   return ''
 }
 
+/**
+ * Rôles que le daemon accepte dans `capture_turn` (WAL : CHECK role IN
+ * user/assistant/tool ; l'outil MCP n'expose que user/assistant).
+ *
+ * Le SDK OpenClaw livre aussi `{ role: "toolResult" }` (ToolResultMessage) dans
+ * `agent_end` dès qu'un outil a été appelé, et parfois `system` (compaction).
+ * Transmis tels quels, ils faisaient exploser la contrainte SQL : 500 côté
+ * daemon, message user écrit seul (orphelin « pending ») et réponse de
+ * l'assistant jamais mémorisée — pour CHAQUE tour avec appel d'outil.
+ *
+ * Les résultats d'outils sont ÉCARTÉS plutôt que mappés en `tool` : c'est du
+ * contenu volumineux et non conversationnel (fichiers, pages web…) — un vecteur
+ * d'injection et du bruit pour l'extraction, pas de la mémoire. Ce que
+ * l'assistant en a retenu est dans sa propre réponse, qui, elle, est capturée.
+ */
+const CAPTURABLE_ROLES: ReadonlySet<string> = new Set(['user', 'assistant'])
+
 /** Normalise des messages hétérogènes vers le format Memoria {role, content}. */
 export function toMemoriaMessages(messages: unknown): Array<{ role: string; content: string }> {
   if (!Array.isArray(messages)) return []
@@ -245,7 +262,9 @@ export function toMemoriaMessages(messages: unknown): Array<{ role: string; cont
   for (const m of messages) {
     if (!m || typeof m !== 'object') continue
     const o = m as Record<string, unknown>
+    // Sans rôle = texte produit par l'agent (comportement historique conservé).
     const role = typeof o['role'] === 'string' ? o['role'] : 'assistant'
+    if (!CAPTURABLE_ROLES.has(role)) continue
     const content = partsToText(o['content'] ?? o['text']).trim()
     if (content) out.push({ role, content })
   }

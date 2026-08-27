@@ -72,6 +72,23 @@ describe('helpers purs', () => {
     ])
   })
 
+  it('toMemoriaMessages écarte les rôles hors user/assistant (toolResult, system) — CHECK SQL du WAL', () => {
+    // Le SDK OpenClaw livre `{ role: "toolResult" }` dans agent_end dès qu'un outil
+    // a été appelé ; le WAL du daemon n'accepte que user/assistant/tool → 500 et
+    // tour perdu. Le rôle doit être normalisé AVANT de quitter l'adaptateur.
+    const out = toMemoriaMessages([
+      { role: 'user', content: 'liste mes fichiers' },
+      { role: 'assistant', content: [{ type: 'toolCall', name: 'ls' }] },
+      { role: 'toolResult', content: [{ type: 'text', text: 'a.txt\nb.txt' }] },
+      { role: 'assistant', content: 'tu as a.txt et b.txt' },
+      { role: 'system', content: 'résumé de compaction' },
+    ])
+    expect(out).toEqual([
+      { role: 'user', content: 'liste mes fichiers' },
+      { role: 'assistant', content: 'tu as a.txt et b.txt' },
+    ])
+  })
+
   it('queryFromEvent : prompt texte > dernier message user', () => {
     expect(queryFromEvent({ prompt: 'ma question' })).toBe('ma question')
     expect(
@@ -296,6 +313,31 @@ describe('register → hooks → daemon', () => {
       { role: 'user', content: 'salut' },
       { role: 'assistant', content: 'bonjour Néto' },
     ])
+  })
+
+  it('agent_end avec un résultat d’outil ne poste que des rôles valides (user/assistant)', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ appended: 2 }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { api, handlers } = fakeApi(baseConfig)
+    register(api)
+
+    await handlers.get('agent_end')!(
+      {
+        success: true,
+        runId: 'run-tool',
+        messages: [
+          { role: 'user', content: 'quelle heure est-il ?' },
+          { role: 'assistant', content: [{ type: 'toolCall', name: 'clock' }] },
+          { role: 'toolResult', content: [{ type: 'text', text: '14:32' }] },
+          { role: 'assistant', content: 'il est 14 h 32' },
+        ],
+      },
+      { sessionId: 's1' },
+    )
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const body = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string) as { messages: Array<{ role: string }> }
+    expect(body.messages.map(m => m.role)).toEqual(['user', 'assistant'])
+    expect(body.messages.every(m => m.role === 'user' || m.role === 'assistant')).toBe(true)
   })
 
   it('agent_end rejoué pour le même tour → une seule capture', async () => {
