@@ -66,13 +66,25 @@ const STOPWORDS = new Set([
   'are', 'was', 'were', 'you', 'your', 'always', 'never', 'all', 'any', 'not', 'now', 'plus',
 ])
 
-/** Marqueurs de négation FR/EN : leur présence inverse la polarité d'une assertion. */
+/**
+ * Marqueurs de négation FR/EN : leur présence inverse la polarité d'une assertion.
+ *
+ * ⚠ « plus de » seul n'y figure PAS : hors « ne … plus de », il veut dire
+ * DAVANTAGE (« plus de 1 900 € », « plus de 94 €/h le week-end »), et « sans »
+ * (« café sans sucre ») n'inverse pas non plus une assertion. Les compter comme
+ * négations faisait proposer en contradiction des faits qui s'accordent — 3 des
+ * 5 propositions live étaient de ce type. À l'inverse, « impossible » et
+ * « aucun » nient bel et bien : « X est impossible » et « X ne peut pas » disent
+ * la même chose et doivent avoir la MÊME polarité.
+ */
 const NEGATION_PATTERNS: RegExp[] = [
   /\bne\s+\w+\s+(?:pas|plus|jamais|guere|point)\b/u, // ne … pas / plus / jamais
   /\bn['’]\w+\s+(?:pas|plus|jamais|guere|point)\b/u, // n'aime plus
+  /\bn['’]y\s+a\s+(?:pas|plus|jamais)\b/u, // il n'y a plus de
   /\bne\s+(?:pas|plus|jamais)\b/u,
-  /\b(?:pas|plus|jamais)\s+de\b/u, // pas de / plus de
-  /\bsans\b/u,
+  /\b(?:pas|jamais)\s+de\b/u, // pas de / jamais de (PAS « plus de » = davantage)
+  /\bimpossible\b/u,
+  /\baucune?s?\b/u,
   /\bno\s+longer\b/u,
   /\bnot\b/u,
   /\bnever\b/u,
@@ -222,7 +234,7 @@ export async function detectContradiction(
     }
 
     // 2b) Opposition par VALEUR : même attribut, valeur différente.
-    const valueClash = attributeClash(newAttrs, attributeValues(row.fact)) || numericClash(newValues, valueTokens(row.fact), newTokens, exTokens)
+    const valueClash = attributeClash(newAttrs, attributeValues(row.fact)) || numericClash(text, row.fact, newValues, valueTokens(row.fact))
     if (valueClash) {
       const confidence = round(0.5 + 0.5 * overlap)
       if (confidence >= minConfidence) {
@@ -296,23 +308,56 @@ function attributeClash(a: Map<string, Set<string>>, b: Map<string, Set<string>>
 }
 
 /**
- * Clash numérique : les deux faits portent des nombres DIFFÉRENTS alors qu'ils
- * partagent un noyau de sujet textuel fort (≥1 token non-numérique commun
- * significatif). Couvre « port 8080 » vs « port 9090 » même sans verbe explicite.
+ * Nombres d'un fait rattachés à leur ANCRE : le mot significatif qui les
+ * précède (« port 8080 » → port ↦ {8080} ; « depuis 3 jours » → depuis ↦ {3}).
+ * Un nombre ne veut rien dire seul : 27/03, 2026.4.9, 13/14, 17 ne sont
+ * comparables que s'ils qualifient le MÊME attribut.
  */
-function numericClash(
-  newValues: Set<string>,
-  exValues: Set<string>,
-  newTokens: Set<string>,
-  exTokens: Set<string>,
-): boolean {
+function numberAnchors(text: string): Map<string, Set<string>> {
+  const words = normalizeText(text)
+    .split(/[^\p{L}\p{N}_.:/-]+/u)
+    .map(w => w.trim())
+    .filter(w => w.length > 0)
+  const out = new Map<string, Set<string>>()
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i]!
+    if (!/\d/.test(w)) continue
+    const value = w.replace(/^v(?=\d)/, '') // v3.2.1 ≡ 3.2.1
+    for (let k = i - 1; k >= Math.max(0, i - 3); k--) {
+      const cand = words[k]!
+      if (/\d/.test(cand) || cand.length < 3 || STOPWORDS.has(cand)) continue
+      if (!out.has(cand)) out.set(cand, new Set())
+      out.get(cand)!.add(value)
+      break
+    }
+  }
+  return out
+}
+
+/**
+ * Clash numérique : un MÊME attribut (ancre commune) porte des nombres
+ * DIFFÉRENTS des deux côtés, et les deux faits ne partagent AUCUN nombre.
+ * Couvre « port 8080 » vs « port 9090 » sans verbe explicite.
+ *
+ * Avant, UN token textuel commun suffisait : « mise à jour le 27/03 » vs « mise à
+ * jour passée en 2026.4.9 », ou « réunion 13/14 » vs « réunion de préparation
+ * 13 », ressortaient en contradiction — des dates, des versions, des détails,
+ * jamais le même attribut. Et un nombre partagé (« build 17 » des deux côtés)
+ * dit que les faits parlent de la même chose : les nombres secondaires qui
+ * diffèrent (« depuis 3 jours » / « depuis le 12 mai ») sont des précisions.
+ */
+function numericClash(newText: string, exText: string, newValues: Set<string>, exValues: Set<string>): boolean {
   if (newValues.size === 0 || exValues.size === 0) return false
-  // Sujet textuel partagé (hors nombres) : au moins un token commun significatif.
-  const sharedText = [...newTokens].some(t => !/^\d/.test(t) && exTokens.has(t))
-  if (!sharedText) return false
-  // Aucune valeur numérique commune → valeurs en conflit.
   const sharedValue = [...newValues].some(v => exValues.has(v))
-  return !sharedValue
+  if (sharedValue) return false
+  const a = numberAnchors(newText)
+  const b = numberAnchors(exText)
+  for (const [anchor, valsA] of a) {
+    const valsB = b.get(anchor)
+    if (!valsB) continue
+    if (![...valsA].some(v => valsB.has(v))) return true
+  }
+  return false
 }
 
 function round(n: number): number {
