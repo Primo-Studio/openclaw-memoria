@@ -1034,6 +1034,7 @@ export const de: Messages = {
   'themes.view_aria': 'Anzeige der Themen',
   'themes.view_relations': 'Beziehungen',
   'themes.view_tiles': 'Kacheln',
+  'themes.node_open_aria': 'Erinnerungen des Themas „{name}“ öffnen',
   'vault.col.added': 'Hinzugefügt',
   'vault.col.location': 'Speicherort',
   'vault.col.reference': 'Referenz',

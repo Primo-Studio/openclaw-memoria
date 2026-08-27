@@ -1034,6 +1034,7 @@ export const pt: Messages = {
   'themes.view_aria': 'Apresentação dos temas',
   'themes.view_relations': 'Relações',
   'themes.view_tiles': 'Mosaicos',
+  'themes.node_open_aria': 'Abrir as memórias do tema “{name}”',
   'vault.col.added': 'Adicionado',
   'vault.col.location': 'Localização',
   'vault.col.reference': 'Referência',

@@ -1036,6 +1036,7 @@ export const fr: Messages = {
   'themes.view_aria': 'Affichage des thèmes',
   'themes.view_relations': 'Relations',
   'themes.view_tiles': 'Tuiles',
+  'themes.node_open_aria': 'Ouvrir les souvenirs du thème « {name} »',
   'vault.col.added': 'Ajouté',
   'vault.col.location': 'Emplacement',
   'vault.col.reference': 'Référence',

@@ -155,7 +155,16 @@ export function Themes() {
           <p className="muted">{tr('themes.empty_body')}</p>
         </div>
       ) : view === 'graph' ? (
-        <ThemeRelations instance={instance} onOpen={t => void openTopic(t)} onError={setError} />
+        <ThemeRelations
+          instance={instance}
+          // Le détail n'est rendu qu'en vue Tuiles : on y bascule, sinon le clic
+          // lançait un GET sans rien changer à l'écran.
+          onOpen={t => {
+            setView('tiles')
+            void openTopic(t)
+          }}
+          onError={setError}
+        />
       ) : (
         <div className="theme-cloud">
           {topics.map(t => {
@@ -286,9 +295,21 @@ function ThemeRelations({ instance, onOpen, onError }: { instance: string; onOpe
               key={t.id}
               className="theme-node"
               opacity={dim ? 0.25 : 1}
+              role="button"
+              tabIndex={0}
+              aria-label={tr('themes.node_open_aria', { name: t.name })}
               onMouseEnter={() => setHover(t.id)}
               onMouseLeave={() => setHover(null)}
+              onFocus={() => setHover(t.id)}
+              onBlur={() => setHover(null)}
               onClick={() => onOpen(t)}
+              onKeyDown={e => {
+                // accès clavier : Entrée / Espace = clic
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  onOpen(t)
+                }
+              }}
               style={{ cursor: 'pointer' }}
             >
               <circle cx={x} cy={y} r={r} fill="var(--accent)" fillOpacity={0.85} />

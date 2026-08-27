@@ -1034,6 +1034,7 @@ export const es: Messages = {
   'themes.view_aria': 'Visualización de los temas',
   'themes.view_relations': 'Relaciones',
   'themes.view_tiles': 'Teselas',
+  'themes.node_open_aria': 'Abrir los recuerdos del tema «{name}»',
   'vault.col.added': 'Añadido',
   'vault.col.location': 'Ubicación',
   'vault.col.reference': 'Referencia',
