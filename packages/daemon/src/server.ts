@@ -112,10 +112,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const ollamaPull = new OllamaPullJob(opts.ollamaBaseUrl)
 
   const server = createServer((req, res) => {
-    void handle(req, res).catch((err: unknown) => {
-      const status = err instanceof HttpError ? err.status : 500
-      sendJson(res, status, { error: (err as Error).message ?? 'erreur interne' })
-    })
+    void handle(req, res).catch((err: unknown) => reportAndSend(req, res, err))
   })
 
   const uiDist = findUiDist(opts.uiDist)
@@ -172,14 +169,14 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         const facts = memoria.browseFacts({
           instance: url.searchParams.get('instance') ?? undefined,
           q: url.searchParams.get('q') ?? undefined,
-          limit: url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : undefined,
+          limit: intParam(url, 'limit', { def: undefined, min: 1, max: 200 }),
         })
         sendJson(res, 200, { facts })
         return
       }
       case 'GET /v1/admin/search': {
         const q = url.searchParams.get('q') ?? ''
-        const limit = url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : 80
+        const limit = intParam(url, 'limit', { def: 80, min: 1, max: 500 })
         sendJson(res, 200, { facts: memoria.globalSearch(q, limit) })
         return
       }
@@ -224,7 +221,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       case 'GET /v1/admin/topics': {
         const instance = url.searchParams.get('instance')
         if (!instance) throw new HttpError(400, 'instance requise')
-        const minFacts = url.searchParams.has('min_facts') ? Number(url.searchParams.get('min_facts')) : 1
+        const minFacts = intParam(url, 'min_facts', { def: 1, min: 1, max: 100_000 })
         sendJson(res, 200, { topics: memoria.listTopics(instance, minFacts) })
         return
       }
@@ -238,7 +235,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       case 'GET /v1/admin/topic_relations': {
         const instance = url.searchParams.get('instance')
         if (!instance) throw new HttpError(400, 'instance requise')
-        const minFacts = url.searchParams.has('min_facts') ? Number(url.searchParams.get('min_facts')) : 2
+        const minFacts = intParam(url, 'min_facts', { def: 2, min: 1, max: 100_000 })
         sendJson(res, 200, memoria.topicRelations(instance, minFacts))
         return
       }
@@ -329,8 +326,8 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       case 'GET /v1/admin/never_used': {
         const instance = url.searchParams.get('instance') ?? ''
         if (!instance) throw new HttpError(400, 'paramètre instance requis')
-        const limit = Number(url.searchParams.get('limit') ?? '100')
-        sendJson(res, 200, { facts: memoria.neverUsedFacts(instance, Number.isFinite(limit) ? limit : 100) })
+        const limit = intParam(url, 'limit', { def: 100, min: 1, max: 1000 })
+        sendJson(res, 200, { facts: memoria.neverUsedFacts(instance, limit) })
         return
       }
       case 'POST /v1/admin/propose_revisions': {
@@ -648,8 +645,10 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         return
       }
       case 'POST /v1/admin/enabled': {
+        // Booléen OBLIGATOIRE : `body.enabled === true` sinon false transformait un
+        // `{}` ou un `{enabled:'true'}` en mise en pause persistée dans config.toml.
         const body = await readJson(req)
-        const enabled = memoria.setEnabled(body['enabled'] === true)
+        const enabled = memoria.setEnabled(requireBoolean(body, 'enabled'))
         sendJson(res, 200, { enabled })
         return
       }
@@ -1088,10 +1087,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   if (syncCfg?.enabled && syncCfg.role === 'hub' && syncCfg.listen_lan) {
     const [lanHost, lanPortStr] = parseHostPort(syncCfg.listen_lan)
     lanServer = createServer((req, res) => {
-      void handleSync(req, res).catch((err: unknown) => {
-        const status = err instanceof HttpError ? err.status : 500
-        sendJson(res, status, { error: (err as Error).message ?? 'erreur interne' })
-      })
+      void handleSync(req, res).catch((err: unknown) => reportAndSend(req, res, err))
     })
     lanServer.on('error', e => console.warn('[memoria-daemon] listener LAN sync en échec :', (e as Error).message))
     lanServer.listen(lanPortStr, lanHost, () => console.log(`[memoria-daemon] synchro HUB à l'écoute sur ${lanHost}:${lanPortStr} (/v1/sync/*)`))
@@ -1212,11 +1208,56 @@ function bearerToken(req: IncomingMessage): string | null {
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
   const raw = await readRawBody(req)
   if (raw.length === 0) return {}
+  let parsed: unknown
   try {
-    return JSON.parse(raw) as Record<string, unknown>
+    parsed = JSON.parse(raw)
   } catch {
     throw new HttpError(400, 'JSON invalide')
   }
+  // `JSON.parse('null')` est valide : sans cette garde, `body['code']` levait un
+  // TypeError → 500 « Cannot read properties of null » au lieu d'un 400 net.
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new HttpError(400, 'objet JSON attendu dans le corps de la requête')
+  }
+  return parsed as Record<string, unknown>
+}
+
+/** Champ booléen obligatoire du corps — `{}` ne vaut ni true ni false. */
+function requireBoolean(body: Record<string, unknown>, name: string): boolean {
+  const v = body[name]
+  if (typeof v !== 'boolean') throw new HttpError(400, `${name} requis (booléen true|false)`)
+  return v
+}
+
+/**
+ * Paramètre d'URL entier borné. `Number('abc')` = NaN, que better-sqlite3
+ * refuse en « datatype mismatch » (500) — l'utilisateur voyait « erreur »
+ * sans raison. Ici : 400 avec le nom du paramètre et les bornes.
+ */
+function intParam<D extends number | undefined>(url: URL, name: string, opts: { def: D; min: number; max: number }): number | D {
+  const raw = url.searchParams.get(name)
+  if (raw === null || raw === '') return opts.def
+  const n = Number(raw)
+  if (!Number.isInteger(n) || n < opts.min || n > opts.max) {
+    throw new HttpError(400, `${name} doit être un entier entre ${opts.min} et ${opts.max} (reçu : ${raw})`)
+  }
+  return n
+}
+
+/**
+ * Réponse d'erreur + JOURNAL des pannes internes. Un 500 sans trace était une
+ * mort silencieuse : le client voyait « erreur », daemon.log restait vide et
+ * `memoria doctor` n'avait rien à dire. Les HttpError (4xx attendus) ne sont
+ * pas des pannes : pas de bruit dans les logs.
+ */
+function reportAndSend(req: IncomingMessage, res: ServerResponse, err: unknown): void {
+  const status = err instanceof HttpError ? err.status : 500
+  const message = (err as Error)?.message ?? 'erreur interne'
+  if (status >= 500) {
+    const detail = (err as Error)?.stack ?? message
+    console.error(`[memoria-daemon] ${req.method ?? '?'} ${req.url ?? '?'} → ${status} : ${detail}`)
+  }
+  sendJson(res, status, { error: message })
 }
 
 /** Corps BRUT (string) — nécessaire au HMAC de synchro (sha256 du corps exact). */
