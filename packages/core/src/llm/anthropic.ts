@@ -7,7 +7,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import type { CompleteOptions, CompletionResult, LlmProvider, LlmUsage } from './provider.js'
+import { LlmTruncatedError, type CompleteOptions, type CompletionResult, type LlmProvider, type LlmUsage } from './provider.js'
 
 export const DEFAULT_ANTHROPIC_MODEL = 'claude-haiku-4-5-20251001'
 export const DEFAULT_ANTHROPIC_BASE_URL = 'https://api.anthropic.com'
@@ -54,6 +54,7 @@ export interface AnthropicProviderOptions extends AnthropicKeyOptions {
 
 interface AnthropicMessageResponse {
   content?: Array<{ type?: string; text?: string }>
+  stop_reason?: string
   usage?: { input_tokens?: number; output_tokens?: number }
 }
 
@@ -115,6 +116,17 @@ export class AnthropicProvider implements LlmProvider {
     const first = data.content?.[0]
     if (!first || typeof first.text !== 'string') {
       throw new Error(`réponse anthropic invalide : content[0].text absent (modèle ${this.model})`)
+    }
+    // Coupé par max_tokens : un JSON incomplet n'est pas une réponse (voir LlmTruncatedError).
+    if (data.stop_reason === 'max_tokens') {
+      throw new LlmTruncatedError({
+        provider: 'anthropic',
+        model: this.model,
+        budget: opts.maxTokens ?? 1024,
+        empty: first.text.trim() === '',
+        outputTokens: data.usage?.output_tokens,
+        finishField: 'stop_reason=max_tokens',
+      })
     }
     const usage: LlmUsage = {}
     if (typeof data.usage?.input_tokens === 'number') usage.input_tokens = data.usage.input_tokens

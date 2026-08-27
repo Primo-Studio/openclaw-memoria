@@ -60,6 +60,43 @@ export interface EmbeddingProvider {
   embedDetailed?(texts: string[]): Promise<EmbeddingResult>
 }
 
+/**
+ * Le modèle a été COUPÉ par le budget de tokens (`finish_reason: length`,
+ * `stop_reason: max_tokens`, `done_reason: length`). Un JSON coupé rendu tel
+ * quel échouait plus loin en « JSON invalide » sans jamais dire pourquoi : des
+ * souvenirs perdus déguisés en erreur de format. Erreur typée pour que
+ * l'appelant puisse retenter avec un budget plus large.
+ */
+export class LlmTruncatedError extends Error {
+  readonly provider: string
+  readonly model: string
+  /** Budget de sortie demandé (tokens). */
+  readonly budget: number
+  constructor(opts: {
+    provider: string
+    model: string
+    budget: number
+    /** Contenu vide (tout le budget parti en raisonnement) ou coupé en route. */
+    empty: boolean
+    outputTokens?: number | undefined
+    reasoningTokens?: number | undefined
+    /** Champ d'arrêt tel que nommé par l'API (pour recouper avec ses logs). */
+    finishField: string
+  }) {
+    const details = [`modèle ${opts.model}`, `${opts.finishField}`, `max=${opts.budget}`]
+    if (opts.outputTokens !== undefined) details.push(`completion_tokens=${opts.outputTokens}`)
+    if (opts.reasoningTokens !== undefined) details.push(`raisonnement=${opts.reasoningTokens}`)
+    const remedy = opts.reasoningTokens !== undefined ? 'augmenter maxTokens ou baisser reasoning_effort' : 'augmenter maxTokens'
+    super(
+      `${opts.provider} : réponse ${opts.empty ? 'VIDE' : 'tronquée'} — budget de tokens épuisé (${details.join(', ')}) : ${remedy}`,
+    )
+    this.name = 'LlmTruncatedError'
+    this.provider = opts.provider
+    this.model = opts.model
+    this.budget = opts.budget
+  }
+}
+
 /** Appel détaillé si le provider le sait, sinon repli sur `complete` (usage absent). */
 export async function completeDetailed(provider: LlmProvider, opts: CompleteOptions): Promise<CompletionResult> {
   if (provider.completeDetailed) return provider.completeDetailed(opts)

@@ -11,7 +11,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import type { CompleteOptions, CompletionResult, EmbeddingProvider, EmbeddingResult, LlmProvider, LlmUsage } from './provider.js'
+import { LlmTruncatedError, type CompleteOptions, type CompletionResult, type EmbeddingProvider, type EmbeddingResult, type LlmProvider, type LlmUsage } from './provider.js'
 import { assertVectorDimensions } from './embeddings-guard.js'
 
 export const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini'
@@ -197,24 +197,26 @@ export class OpenAiProvider implements LlmProvider {
     if (typeof content !== 'string') {
       throw new Error(`réponse ${this.flavor} invalide : choices[0].message.content absent (modèle ${this.model})`)
     }
-    // Une réponse VIDE n'est pas une réponse. Remonter `""` laissait l'appelant
-    // échouer plus loin sur « sans JSON : «  » », sans jamais dire POURQUOI.
-    // On expose ici les seuls éléments qui permettent de trancher : la raison
-    // d'arrêt et le détail des tokens (dont ceux de raisonnement).
+    // Budget épuisé (`finish_reason: length`) : contenu VIDE (tout parti en
+    // raisonnement, cas gpt-5) ou COUPÉ en route (JSON incomplet). Dans les deux
+    // cas, rendre le texte laissait l'appelant échouer plus loin sur « sans
+    // JSON » / « JSON invalide » sans jamais dire POURQUOI. On expose ce qui
+    // permet de trancher : la raison d'arrêt et le détail des tokens.
+    const finish = choice?.finish_reason
+    if (finish === 'length') {
+      throw new LlmTruncatedError({
+        provider: this.flavor,
+        model: this.model,
+        budget: usesCompletionTokens(this.model) ? Math.max(opts.maxTokens ?? 1024, REASONING_TOKEN_FLOOR) : (opts.maxTokens ?? 1024),
+        empty: content.trim() === '',
+        outputTokens: data.usage?.completion_tokens,
+        reasoningTokens: data.usage?.completion_tokens_details?.reasoning_tokens,
+        finishField: 'finish_reason=length',
+      })
+    }
+    // Une réponse VIDE n'est pas une réponse, même hors troncature.
     if (content.trim() === '') {
-      const finish = choice?.finish_reason ?? 'inconnu'
-      const usage = data.usage
-      const reasoning = usage?.completion_tokens_details?.reasoning_tokens
-      const budget = usesCompletionTokens(this.model)
-        ? Math.max(opts.maxTokens ?? 1024, REASONING_TOKEN_FLOOR)
-        : (opts.maxTokens ?? 1024)
-      const hint =
-        finish === 'length'
-          ? ` — budget épuisé avant la réponse (max=${budget}${reasoning !== undefined ? `, raisonnement=${reasoning}` : ''}) : augmenter maxTokens ou baisser reasoning_effort`
-          : ''
-      throw new Error(
-        `${this.flavor} a renvoyé une réponse VIDE (modèle ${this.model}, finish_reason=${finish})${hint}`,
-      )
+      throw new Error(`${this.flavor} a renvoyé une réponse VIDE (modèle ${this.model}, finish_reason=${finish ?? 'inconnu'})`)
     }
     return { text: content, usage: usageOf(data.usage) }
   }

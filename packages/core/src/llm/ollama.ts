@@ -4,7 +4,7 @@
  * isAvailable() vérifie que le serveur répond ET que le modèle est tiré
  * (GET /api/tags) — un échec réseau retourne false mais N'EST JAMAIS muet.
  */
-import type { CompleteOptions, CompletionResult, EmbeddingProvider, EmbeddingResult, LlmProvider, LlmUsage } from './provider.js'
+import { LlmTruncatedError, type CompleteOptions, type CompletionResult, type EmbeddingProvider, type EmbeddingResult, type LlmProvider, type LlmUsage } from './provider.js'
 import { assertVectorDimensions } from './embeddings-guard.js'
 
 export const DEFAULT_OLLAMA_BASE_URL = 'http://127.0.0.1:11434'
@@ -93,10 +93,26 @@ export class OllamaProvider implements LlmProvider {
       const detail = await res.text().catch(() => '')
       throw new Error(`ollama /api/chat HTTP ${res.status} (modèle ${this.model}) : ${detail.slice(0, 200)}`)
     }
-    const data = (await res.json()) as { message?: { content?: string }; prompt_eval_count?: number; eval_count?: number }
+    const data = (await res.json()) as {
+      message?: { content?: string }
+      done_reason?: string
+      prompt_eval_count?: number
+      eval_count?: number
+    }
     const content = data.message?.content
     if (typeof content !== 'string') {
       throw new Error(`réponse ollama invalide : message.content absent (modèle ${this.model})`)
+    }
+    // Coupé par num_predict : un JSON incomplet n'est pas une réponse (voir LlmTruncatedError).
+    if (data.done_reason === 'length') {
+      throw new LlmTruncatedError({
+        provider: 'ollama',
+        model: this.model,
+        budget: opts.maxTokens ?? 1024,
+        empty: content.trim() === '',
+        outputTokens: data.eval_count,
+        finishField: 'done_reason=length',
+      })
     }
     // Ollama compte lui-même : prompt_eval_count (entrée) + eval_count (sortie).
     const usage: LlmUsage = {}

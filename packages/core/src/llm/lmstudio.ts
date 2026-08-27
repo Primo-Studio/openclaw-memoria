@@ -11,7 +11,7 @@
  * LM Studio le rejettent sans json_schema) — on injecte une directive
  * « objet JSON » dans le system, comme le provider OpenAI.
  */
-import type { CompleteOptions, CompletionResult, LlmProvider, LlmUsage } from './provider.js'
+import { LlmTruncatedError, type CompleteOptions, type CompletionResult, type LlmProvider, type LlmUsage } from './provider.js'
 
 export const DEFAULT_LMSTUDIO_BASE_URL = 'http://127.0.0.1:1234/v1'
 /** Sentinelle « premier modèle chargé » (résolu via /models au 1er appel). */
@@ -58,7 +58,7 @@ export interface LmStudioProviderOptions {
 }
 
 interface ChatCompletionResponse {
-  choices?: Array<{ message?: { content?: string } }>
+  choices?: Array<{ message?: { content?: string }; finish_reason?: string }>
   usage?: { prompt_tokens?: number; completion_tokens?: number }
 }
 
@@ -151,9 +151,21 @@ export class LmStudioProvider implements LlmProvider {
       throw new Error(`lmstudio /chat/completions HTTP ${res.status} (modèle ${model}) : ${detail.slice(0, 200)}`)
     }
     const data = (await res.json()) as ChatCompletionResponse
-    const content = data.choices?.[0]?.message?.content
+    const choice = data.choices?.[0]
+    const content = choice?.message?.content
     if (typeof content !== 'string') {
       throw new Error(`réponse lmstudio invalide : choices[0].message.content absent (modèle ${model})`)
+    }
+    // Coupé par max_tokens : un JSON incomplet n'est pas une réponse (voir LlmTruncatedError).
+    if (choice?.finish_reason === 'length') {
+      throw new LlmTruncatedError({
+        provider: 'lmstudio',
+        model,
+        budget: opts.maxTokens ?? 1024,
+        empty: content.trim() === '',
+        outputTokens: data.usage?.completion_tokens,
+        finishField: 'finish_reason=length',
+      })
     }
     const usage: LlmUsage = {}
     if (typeof data.usage?.prompt_tokens === 'number') usage.input_tokens = data.usage.prompt_tokens

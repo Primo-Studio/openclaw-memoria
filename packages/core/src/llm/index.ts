@@ -24,7 +24,7 @@ export type {
   LlmProfile,
   LlmProvider,
 } from './provider.js'
-export { NullLlmProvider } from './provider.js'
+export { LlmTruncatedError, NullLlmProvider } from './provider.js'
 export {
   DEFAULT_LOCAL_EXTRACTION_MODEL,
   DEFAULT_OLLAMA_BASE_URL,
