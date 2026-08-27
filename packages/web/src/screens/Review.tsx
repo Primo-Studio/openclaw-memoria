@@ -5,7 +5,7 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import { ApiError, getReview, reviewDecision, type ReviewItem } from '../api'
-import { ConfirmButton } from '../components/ui'
+import { ConfirmButton, ErrorBanner, Spinner, listPhase } from '../components/ui'
 import { useT } from '../i18n'
 
 export function Review() {
@@ -42,6 +42,8 @@ export function Review() {
     [refresh, t],
   )
 
+  const phase = listPhase(items, error)
+
   return (
     <section>
       <header className="screen-head">
@@ -75,14 +77,11 @@ export function Review() {
         )}
       </header>
 
-      {error && <div className="error-banner">{error}</div>}
+      {error && <ErrorBanner message={error} onRetry={() => void refresh()} />}
 
-      {items === null ? (
-        <div className="spinner-row">
-          <span className="spinner" aria-hidden />
-          {t('common.loading')}
-        </div>
-      ) : items.length === 0 ? (
+      {phase === 'loading' ? (
+        <Spinner />
+      ) : phase === 'failed' || items === null ? null : items.length === 0 ? (
         <div className="empty-state">
           <p>{t('review.empty_title')}</p>
           <p className="muted">{t('review.empty_body')}</p>

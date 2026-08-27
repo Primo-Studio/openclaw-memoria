@@ -90,6 +90,18 @@ export function useLoad<T>(loader: () => Promise<T>, deps: readonly unknown[] = 
   return { state, reload: () => setTick(t => t + 1) }
 }
 
+/**
+ * Phase d'affichage d'une liste chargée « à la main » (items null = pas encore
+ * reçu). Sans ça, un échec du premier chargement laissait items à null → le
+ * spinner « Chargement… » tournait pour toujours SOUS la bannière d'erreur.
+ */
+export type ListPhase = 'loading' | 'failed' | 'empty' | 'ready'
+
+export function listPhase<T>(items: readonly T[] | null, error: string | null): ListPhase {
+  if (items === null) return error ? 'failed' : 'loading'
+  return items.length === 0 ? 'empty' : 'ready'
+}
+
 // --------------------------------------------------------------- composants
 
 export function Spinner({ label }: { label?: string }) {

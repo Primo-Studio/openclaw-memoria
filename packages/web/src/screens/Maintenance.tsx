@@ -26,6 +26,7 @@ import {
   type AgentEntry,
 } from '../api'
 import { useT } from '../i18n'
+import { EmptyState, ErrorBanner, Spinner, humanError, listPhase } from '../components/ui'
 
 type Source = 'search' | 'never-used'
 
@@ -41,9 +42,12 @@ export function Maintenance() {
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // Aucun agent actif → état vide explicite au lieu d'un spinner sans fin.
+  const [noAgent, setNoAgent] = useState(false)
+  const [tick, setTick] = useState(0)
 
   const fail = useCallback(
-    (err: unknown, fallback: string) => setError(err instanceof ApiError ? err.message : fallback),
+    (err: unknown, fallback: string) => setError(err instanceof ApiError ? err.message : err instanceof TypeError ? humanError(err) : fallback),
     [],
   )
 
@@ -52,10 +56,11 @@ export function Maintenance() {
       .then(list => {
         const active = list.filter(a => a.instance.revoked_at === null)
         setAgents(active)
+        setNoAgent(active.length === 0)
         if (active[0]) setInstance(active[0].instance.id)
       })
       .catch(err => fail(err, t('maintenance.agents_failed')))
-  }, [fail, t])
+  }, [fail, t, tick])
 
   const load = useCallback(async () => {
     if (!instance) return
@@ -64,14 +69,21 @@ export function Maintenance() {
     try {
       setFacts(source === 'never-used' ? await neverUsedFacts(instance) : await searchFacts(instance, query))
     } catch (err) {
+      // facts reste tel quel : listPhase() affiche l'erreur, pas un faux « vide ».
       fail(err, t('maintenance.load_failed'))
-      setFacts([])
     }
   }, [instance, source, query, fail, t])
 
   useEffect(() => {
     void load()
-  }, [load])
+  }, [load, tick])
+
+  const retry = useCallback(() => {
+    setError(null)
+    setTick(n => n + 1)
+  }, [])
+
+  const phase = listPhase(facts, error)
 
   const toggle = (id: string): void =>
     setSelected(prev => {
@@ -162,7 +174,7 @@ export function Maintenance() {
         )}
       </div>
 
-      {error && <div className="error-banner">{error}</div>}
+      {error && <ErrorBanner message={error} onRetry={retry} />}
       {notice && <div className="info-banner">{notice}</div>}
 
       {selected.size > 0 && (
@@ -180,12 +192,11 @@ export function Maintenance() {
       {/* La règle de fusion doit être lisible AVANT de cliquer, pas découverte après. */}
       {selected.size >= 2 && <p className="muted">{t('maintenance.merge_hint')}</p>}
 
-      {facts === null ? (
-        <div className="spinner-row">
-          <span className="spinner" aria-hidden />
-          {t('common.loading')}
-        </div>
-      ) : facts.length === 0 ? (
+      {noAgent ? (
+        <EmptyState title={t('memory.no_agent_title')} body={t('memory.no_agent_body')} />
+      ) : phase === 'loading' ? (
+        <Spinner />
+      ) : phase === 'failed' || facts === null ? null : facts.length === 0 ? (
         <div className="empty-state">
           <p>{t(source === 'never-used' ? 'maintenance.empty_never_used' : 'maintenance.empty_search')}</p>
         </div>
