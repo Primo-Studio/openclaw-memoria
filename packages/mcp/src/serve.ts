@@ -202,6 +202,14 @@ export function buildServer(opts: BuildServerOptions): BuiltServer {
         if (args.category !== undefined) input['category'] = args.category
         if (args.tags !== undefined) input['tags'] = args.tags
         if (args.sensitivity !== undefined) input['sensitivity'] = args.sensitivity
+        // Le fait déclaré hérite du contexte actif, comme capture_turn : sans
+        // project_id/client_org_id, `passesClientIsolation` le laissait remonter
+        // chez un autre client et le boost projet ne s'appliquait jamais.
+        // repo_path/topic ne sont pas des identifiants de scoping → non envoyés.
+        const ctx = opts.tracker.current()
+        if (ctx.project_id) input['project_id'] = ctx.project_id
+        if (ctx.client_org_id) input['client_org_id'] = ctx.client_org_id
+        if (ctx.org_id) input['org_id'] = ctx.org_id
         return ok(await withDaemon(g => g.storeFact(input)))
       } catch (err) {
         return fail(err)

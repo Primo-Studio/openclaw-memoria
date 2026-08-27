@@ -168,6 +168,26 @@ describe('buildServer handlers', () => {
     expect(gateway.calls[1]?.input).toMatchObject({ messages: [{ role: 'user', content: 'salut' }] })
   })
 
+  it('memoria_store_fact transmet project/client/org du contexte actif (isolation client)', async () => {
+    // Sans ça, un fait déclaré en travaillant pour le client A était stocké avec
+    // client_org_id=null : visible sous le client B, jamais boosté par le projet.
+    const gateway = fakeGateway()
+    const tracker = new ActiveContextTracker()
+    tracker.set({ project: 'site-primo', client: 'primo', org: 'primo-studio' })
+    const { handlers } = buildServer({ instanceId: 'i', tracker, connect: async () => gateway })
+
+    await handlers.storeFact({ content: 'Le site est déployé sur Vercel' })
+    expect(gateway.calls[0]?.input).toMatchObject({
+      content: 'Le site est déployé sur Vercel',
+      project_id: 'site-primo',
+      client_org_id: 'primo',
+      org_id: 'primo-studio',
+    })
+    // repo_path/topic auto-détectés ne sont PAS des identifiants de scoping :
+    // ils ne doivent pas être envoyés comme tels.
+    expect(gateway.calls[0]?.input).not.toHaveProperty('repo_path')
+  })
+
   it('daemon mort → UNE re-connexion puis erreur MCP propre (jamais de throw)', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     let attempts = 0
