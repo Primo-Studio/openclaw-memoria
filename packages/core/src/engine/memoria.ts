@@ -1821,6 +1821,11 @@ export class Memoria {
             ...row,
             scope_id: scope.id,
             visibility: 'shared',
+            // Partager = VALIDER. Un fait dormant (revue en attente) copié tel
+            // quel restait dormant à jamais dans la DB partagée : invisible au
+            // recall de tous, sorti de la revue (l'item pointait vers un fait
+            // parti), donc perdu — 4 238 dormants en prod étaient exposés à ça.
+            lifecycle_state: 'active',
             org_id: scope.org_id ?? row.org_id,
             client_org_id: scope.client_org_id ?? row.client_org_id,
             project_id: scope.project_id ?? row.project_id,
@@ -1829,7 +1834,21 @@ export class Memoria {
         }
       })
       tx()
-      store.hardDeleteFacts(rows.map(r => r.id))
+      const ids = rows.map(r => r.id)
+      const leave = store.db.transaction(() => {
+        // Clore les items de revue du fait déplacé : sinon ils restent
+        // `pending` en orphelins et une approbation ultérieure répond
+        // « updated: 1 » sans rien changer (faux succès).
+        const ph = ids.map(() => '?').join(',')
+        store.db
+          .prepare(
+            `UPDATE memory_import_items SET status = 'accepted', reviewed_by = 'local', reviewed_at = ?
+             WHERE status = 'pending' AND target_memory_id IN (${ph})`,
+          )
+          .run(nowISO(), ...ids)
+        store.hardDeleteFacts(ids)
+      })
+      leave()
     }
     if (shared > 0) {
       this.registry.audit({
@@ -1955,7 +1974,9 @@ export class Memoria {
     const db = this.registry.dbForInstance(instanceId)
     if (!db || !existsSync(db.path)) return []
     const store = this.openContent(db.path)
-    const rows = store.db.prepare('SELECT * FROM facts WHERE superseded = 0').all() as FactRow[]
+    // Actifs seulement : un fait dormant attend l'écran Revue, pas l'écran
+    // Partage — le proposer ici court-circuitait la revue.
+    const rows = store.db.prepare("SELECT * FROM facts WHERE superseded = 0 AND lifecycle_state = 'active'").all() as FactRow[]
     const user = this.registry.bootstrap().user
     const nameTokens = user.display_name.toLowerCase().split(/\s+/).filter(t => t.length > 2)
     const cues = [
