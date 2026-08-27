@@ -347,25 +347,111 @@ fn start_daemon_blocking() -> Result<DaemonInfo, String> {
         }
     }
 
+    // Service launchd (`memoria autostart on`) installé pour CE stockage :
+    // c'est LUI qui doit lancer le daemon. Spawner ici prendrait daemon.lock et
+    // ferait boucler launchd en échec ; et après un arrêt propre, launchd ne
+    // relance pas seul (KeepAlive.SuccessfulExit=false) → kickstart explicite.
+    #[cfg(target_os = "macos")]
+    if let Some(label) = launchd_service_for(&storage_root) {
+        if launchd_kickstart(&label) {
+            if let Some(info) = wait_for_health(&storage_root, Duration::from_secs(15)) {
+                return Ok(info);
+            }
+            eprintln!("[memoria-desktop] launchd n'a pas relancé le daemon à temps — démarrage direct en repli");
+        }
+    }
+
     let node = find_node()?;
     let home = home_dir()?;
     let config = load_config(&config_path(&home))?;
     let bin = find_daemon_bin(&config)?;
     let log_path = spawn_daemon(&node, &bin)?;
 
-    let deadline = Instant::now() + Duration::from_secs(15);
+    wait_for_health(&storage_root, Duration::from_secs(15)).ok_or_else(|| {
+        format!(
+            "le daemon n'a pas démarré dans les 15 s — voir {}",
+            log_path.display()
+        )
+    })
+}
+
+/// Attend qu'un daemon réponde au health pour ce stockage (None = délai dépassé).
+fn wait_for_health(storage_root: &Path, timeout: Duration) -> Option<DaemonInfo> {
+    let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(200));
-        if let Some(state) = read_daemon_state(&storage_root) {
+        if let Some(state) = read_daemon_state(storage_root) {
             if http_health(state.port) {
-                return Ok(DaemonInfo { port: state.port, healthy: true });
+                return Some(DaemonInfo { port: state.port, healthy: true });
             }
         }
     }
-    Err(format!(
-        "le daemon n'a pas démarré dans les 15 s — voir {}",
-        log_path.display()
-    ))
+    None
+}
+
+/// Racine de stockage visée par un plist launchd (argument `--storage-root`),
+/// désechappée. Pure : testable sans launchd.
+fn storage_root_from_plist(xml: &str) -> Option<String> {
+    let marker = "<string>--storage-root</string>";
+    let rest = &xml[xml.find(marker)? + marker.len()..];
+    let start = rest.find("<string>")? + "<string>".len();
+    let end = rest[start..].find("</string>")? + start;
+    Some(
+        rest[start..end]
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&amp;", "&"),
+    )
+}
+
+/// UID courant pour le domaine launchd `gui/<uid>` (via `id -u`, sans crate libc).
+#[cfg(target_os = "macos")]
+fn current_uid() -> String {
+    Command::new("id")
+        .arg("-u")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "501".to_string())
+}
+
+/// Cible launchd (`gui/<uid>/fr.primo-studio.memoria`) si le service est
+/// installé, CHARGÉ, et vise ce stockage. Sinon None → démarrage direct.
+#[cfg(target_os = "macos")]
+fn launchd_service_for(storage_root: &Path) -> Option<String> {
+    let home = home_dir().ok()?;
+    let plist = home
+        .join("Library")
+        .join("LaunchAgents")
+        .join("fr.primo-studio.memoria.plist");
+    let xml = fs::read_to_string(plist).ok()?;
+    let target = storage_root_from_plist(&xml)?;
+    if Path::new(&target) != storage_root {
+        return None;
+    }
+    let label = format!("gui/{}/fr.primo-studio.memoria", current_uid());
+    let loaded = Command::new("launchctl")
+        .args(["print", &label])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    loaded.then_some(label)
+}
+
+/// `launchctl kickstart` : lance le service maintenant (no-op s'il tourne).
+#[cfg(target_os = "macos")]
+fn launchd_kickstart(label: &str) -> bool {
+    Command::new("launchctl")
+        .args(["kickstart", label])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 /// URL finale de l'UI : token admin en fragment (#…), jamais en query — il
@@ -426,16 +512,49 @@ async fn open_memoria() -> Result<String, String> {
 
 // ---------------------------------------------------------------------------
 // Barre d'état (menu bar macOS / zone de notification Windows)
-// Pastille VERTE = daemon actif, ROUGE = éteint. Sondage toutes les 5 s.
+// Lettre « M » VERTE = daemon actif, ROUGE = éteint, GRISE = en cours de
+// démarrage. Sondage toutes les 5 s. Icônes 44×44 (@2x) : tray-icon les
+// redimensionne à la hauteur de la barre de menus, en couleur (non « template »,
+// sinon macOS les aplatirait en monochrome et l'état serait perdu).
 // ---------------------------------------------------------------------------
 
 const TRAY_ID: &str = "memoria-status";
 
-fn icon_green() -> Image<'static> {
-    Image::from_bytes(include_bytes!("../icons/dot-green.png")).expect("icône verte invalide")
+/// État affiché par la barre d'état.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TrayState {
+    /// Le daemon répond au health check.
+    Active,
+    /// Aucun daemon joignable.
+    Down,
+    /// Démarrage demandé, résultat pas encore connu.
+    Starting,
 }
-fn icon_red() -> Image<'static> {
-    Image::from_bytes(include_bytes!("../icons/dot-red.png")).expect("icône rouge invalide")
+
+impl TrayState {
+    fn from_healthy(healthy: bool) -> Self {
+        if healthy {
+            TrayState::Active
+        } else {
+            TrayState::Down
+        }
+    }
+
+    fn icon(self) -> Image<'static> {
+        match self {
+            TrayState::Active => Image::from_bytes(include_bytes!("../icons/m-green.png")).expect("icône M verte invalide"),
+            TrayState::Down => Image::from_bytes(include_bytes!("../icons/m-red.png")).expect("icône M rouge invalide"),
+            TrayState::Starting => Image::from_bytes(include_bytes!("../icons/m-gray.png")).expect("icône M grise invalide"),
+        }
+    }
+
+    fn tooltip(self) -> &'static str {
+        match self {
+            TrayState::Active => "Memoria — actif",
+            TrayState::Down => "Memoria — éteint (clic → Démarrer)",
+            TrayState::Starting => "Memoria — démarrage…",
+        }
+    }
 }
 
 /// Le daemon répond-il ? (mêmes primitives que `daemon_health`, en synchrone.)
@@ -458,15 +577,11 @@ fn open_url_in_browser(url: &str) {
     let _ = Command::new("xdg-open").arg(url).spawn();
 }
 
-/// Applique l'état (icône + info-bulle) à la pastille de barre d'état.
-fn apply_tray_status(app: &tauri::AppHandle, healthy: bool) {
+/// Applique l'état (icône « M » + info-bulle) à la barre d'état.
+fn apply_tray_state(app: &tauri::AppHandle, state: TrayState) {
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
-        let _ = tray.set_icon(Some(if healthy { icon_green() } else { icon_red() }));
-        let _ = tray.set_tooltip(Some(String::from(if healthy {
-            "Memoria — actif"
-        } else {
-            "Memoria — éteint (clic → Démarrer)"
-        })));
+        let _ = tray.set_icon(Some(state.icon()));
+        let _ = tray.set_tooltip(Some(String::from(state.tooltip())));
     }
 }
 
@@ -487,11 +602,11 @@ pub fn run() {
             let menu = Menu::with_items(app, &[&open, &start, &sep, &quit])?;
 
             // État initial (avant le 1er sondage) : selon la santé courante.
-            let initial_healthy = daemon_is_healthy();
+            let initial = TrayState::from_healthy(daemon_is_healthy());
 
             TrayIconBuilder::with_id(TRAY_ID)
-                .icon(if initial_healthy { icon_green() } else { icon_red() })
-                .tooltip("Memoria")
+                .icon(initial.icon())
+                .tooltip(initial.tooltip())
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "open" => {
@@ -507,9 +622,11 @@ pub fn run() {
                     }
                     "start" => {
                         let app = app.clone();
+                        // Gris pendant le démarrage : l'utilisateur voit que le clic a pris.
+                        apply_tray_state(&app, TrayState::Starting);
                         std::thread::spawn(move || {
                             let ok = start_daemon_blocking().is_ok();
-                            apply_tray_status(&app, ok || daemon_is_healthy());
+                            apply_tray_state(&app, TrayState::from_healthy(ok || daemon_is_healthy()));
                         });
                     }
                     "quit" => app.exit(0),
@@ -520,7 +637,7 @@ pub fn run() {
             // Sonde de fond : rafraîchit la pastille toutes les 5 s.
             let handle = app.handle().clone();
             std::thread::spawn(move || loop {
-                apply_tray_status(&handle, daemon_is_healthy());
+                apply_tray_state(&handle, TrayState::from_healthy(daemon_is_healthy()));
                 std::thread::sleep(Duration::from_secs(5));
             });
 
@@ -536,6 +653,22 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn storage_root_from_plist_lit_l_argument_et_desechappe() {
+        let xml = r#"<array>
+      <string>/usr/local/bin/node</string>
+      <string>/x/bin.js</string>
+      <string>--storage-root</string>
+      <string>/Users/r&amp;d/.memoria/data</string>
+    </array>"#;
+        assert_eq!(
+            super::storage_root_from_plist(xml).as_deref(),
+            Some("/Users/r&d/.memoria/data")
+        );
+        assert_eq!(super::storage_root_from_plist("<plist/>"), None);
+        assert_eq!(super::storage_root_from_plist("<string>--storage-root</string>"), None);
+    }
+
     use super::*;
 
     /// Dossier temporaire unique, nettoyé au drop.
