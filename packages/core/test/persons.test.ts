@@ -114,3 +114,39 @@ describe('personnes & identifiants', () => {
     expect(m.listPersons()).toHaveLength(0)
   })
 })
+
+/**
+ * FUITE inter-agents (audit 27/08) : `known` renvoyé à un agent doit passer par
+ * le même fan-out gouverné que son recall — jamais par la recherche globale
+ * (qui lit les DB privées de TOUS les agents, dormants et critiques compris).
+ */
+describe('identifyInterlocutor — isolation des faits connus', () => {
+  it('un agent ne reçoit ni les faits privés d’un autre agent ni les faits critiques', () => {
+    const a = m.pairAssistant({ type: 'claude-code' })
+    const b = m.pairAssistant({ type: 'openclaw' })
+    const p = m.createPerson({ display_name: 'Badette', relation: 'collaboratrice' })
+    m.addPersonIdentifier(p.id, 'telegram', 'badette_primo')
+    m.storeFact({ instance: a.assistant_instance_id, content: 'Badette a un problème de santé confidentiel suivi à Cayenne', sensitivity: 'critical' })
+    m.storeFact({ instance: a.assistant_instance_id, content: 'Badette préfère être contactée le matin' })
+
+    // B (bot WhatsApp) : rien de la mémoire privée de A
+    expect(m.identifyInterlocutor({ telegram: 'badette_primo' }, b.assistant_instance_id)?.known).toEqual([])
+    expect(m.identifyOrCreateInterlocutor({ telegram: 'badette_primo' }, b.assistant_instance_id)?.known).toEqual([])
+    // A : son fait normal, jamais le critique (même plafond que le recall)
+    const knownA = m.identifyInterlocutor({ telegram: 'badette_primo' }, a.assistant_instance_id)?.known ?? []
+    expect(knownA).toEqual(['Badette préfère être contactée le matin'])
+  })
+
+  it('un fait partagé dans `user` est connu des deux agents', () => {
+    const a = m.pairAssistant({ type: 'claude-code' })
+    const b = m.pairAssistant({ type: 'openclaw' })
+    const p = m.createPerson({ display_name: 'Badette' })
+    m.addPersonIdentifier(p.id, 'telegram', 'badette_primo')
+    const f = m.storeFact({ instance: a.assistant_instance_id, content: 'Badette gère les builds iOS de Primo' })
+    m.shareFacts([f.id], 'user')
+    expect(m.identifyInterlocutor({ telegram: 'badette_primo' }, b.assistant_instance_id)?.known).toEqual(['Badette gère les builds iOS de Primo'])
+    expect(m.identifyInterlocutor({ telegram: 'badette_primo' }, a.assistant_instance_id)?.known).toEqual(['Badette gère les builds iOS de Primo'])
+    // sans instance (UI locale, route admin) : vue globale conservée
+    expect(m.identifyInterlocutor({ telegram: 'badette_primo' })?.known).toEqual(['Badette gère les builds iOS de Primo'])
+  })
+})

@@ -379,15 +379,23 @@ export class Memoria {
    * Reconnaît l'interlocuteur courant via un ou plusieurs identifiants
    * (Telegram/WhatsApp/mail/handle…). Renvoie la personne + ses faits connus
    * pour que l'agent sache à QUI il parle. Aucun identifiant → null (= owner par défaut).
+   *
+   * `instanceId` = l'agent qui demande : `known` est alors borné à SES scopes
+   * lisibles (même fan-out que son recall). Sans instance (UI locale / route
+   * admin) : vue globale. Un appel agent DOIT passer son instance — sinon un
+   * bot WhatsApp recevrait les souvenirs privés (et critiques) de Claude Code.
    */
-  identifyInterlocutor(input: {
-    phone?: string
-    email?: string
-    telegram?: string
-    whatsapp?: string
-    handle?: string
-    name?: string
-  }): { person: PersonProfile; known: string[] } | null {
+  identifyInterlocutor(
+    input: {
+      phone?: string
+      email?: string
+      telegram?: string
+      whatsapp?: string
+      handle?: string
+      name?: string
+    },
+    instanceId?: string,
+  ): { person: PersonProfile; known: string[] } | null {
     this.assertOpen()
     const tries: Array<[PersonIdentifier['kind'], string | undefined]> = [
       ['telegram', input.telegram],
@@ -408,7 +416,7 @@ export class Memoria {
       if (match) person = match
     }
     if (!person) return null
-    return { person, known: this.knownAboutPerson(person.display_name) }
+    return { person, known: this.knownAboutPerson(person.display_name, instanceId) }
   }
 
   /**
@@ -418,17 +426,20 @@ export class Memoria {
    * `created` indique si une nouvelle personne a été créée. Sans aucun identifiant
    * fourni → comportement identique à identifyInterlocutor (pas de création).
    */
-  identifyOrCreateInterlocutor(input: {
-    phone?: string
-    email?: string
-    telegram?: string
-    whatsapp?: string
-    handle?: string
-    name?: string
-    relation?: string | null
-  }): { person: PersonProfile; known: string[]; created: boolean } | null {
+  identifyOrCreateInterlocutor(
+    input: {
+      phone?: string
+      email?: string
+      telegram?: string
+      whatsapp?: string
+      handle?: string
+      name?: string
+      relation?: string | null
+    },
+    instanceId?: string,
+  ): { person: PersonProfile; known: string[]; created: boolean } | null {
     this.assertOpen()
-    const existing = this.identifyInterlocutor(input)
+    const existing = this.identifyInterlocutor(input, instanceId)
     if (existing) return { ...existing, created: false }
 
     // Aucune personne connue : on tente la création si on a AU MOINS un identifiant.
@@ -455,13 +466,34 @@ export class Memoria {
     this.registry.audit({ actor_type: 'assistant', actor_id: 'local', action: 'person_autocreate', target_id_hash: sha256Hex(person.id), scope_id: null, reason: null })
     const profile = this.registry.getPerson(person.id)
     if (!profile) throw new Error('person auto-create: profil introuvable après création')
-    return { person: profile, known: this.knownAboutPerson(profile.display_name), created: true }
+    return { person: profile, known: this.knownAboutPerson(profile.display_name, instanceId), created: true }
   }
 
-  /** Faits connus mentionnant cette personne (cross-agent, scopes partagés). */
-  private knownAboutPerson(name: string, limit = 8): string[] {
-    const hits = this.globalSearch(name, limit)
-    return hits.map(h => h.fact)
+  /**
+   * Faits connus mentionnant cette personne. Avec `instanceId` : fan-out
+   * GOUVERNÉ (DB privée de l'agent + scopes partagés lisibles, dormants exclus,
+   * sensibilité plafonnée comme au recall). Sans : recherche globale (admin).
+   * Avant : toujours globale → n'importe quel agent lisait les faits privés et
+   * critiques de tous les autres via un simple identifiant.
+   */
+  private knownAboutPerson(name: string, instanceId?: string, limit = 8): string[] {
+    if (instanceId === undefined) return this.globalSearch(name, limit).map(h => h.fact)
+    const instance = this.mustInstance(instanceId)
+    const hits: FtsHit[] = []
+    for (const target of this.resolveReadTargets(instance)) {
+      hits.push(
+        ...this.openContent(target.dbPath).searchFacts(name, {
+          limit,
+          includeDormant: false,
+          maxSensitivity: 'sensitive',
+          scopeIds: target.scopeIds,
+        }),
+      )
+    }
+    return hits
+      .sort((a, b) => b.relevance - a.relevance)
+      .slice(0, limit)
+      .map(h => h.row.fact)
   }
 
   /** Texte court « tu parles à X » pour l'injection de contexte (recall). */
