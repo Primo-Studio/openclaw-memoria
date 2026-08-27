@@ -48,7 +48,7 @@ import { estimateTokens, newId, nowISO, sha256Hex } from '../util.js'
 import { createSecretProvider, RegexRedactor } from '../secrets/index.js'
 import type { SecretProvider } from '../secrets/types.js'
 import { factOrigin } from './origin.js'
-import { normalizeFact } from './selective.js'
+import { findDuplicate, normalizeFact, type DuplicateMatch } from './selective.js'
 import {
   resolveLlmProfile,
   auditExtraction,
@@ -615,6 +615,27 @@ export class Memoria {
       reason: null,
     })
     return fact
+  }
+
+  /**
+   * Doublon d'un énoncé dans TOUTES les DB lisibles par l'instance (privée +
+   * partagées autorisées) — le même mécanisme que la capture, étendu au
+   * fan-out du recall. Sert à la capture, à l'import de transcripts et à tout
+   * appelant qui veut savoir « est-ce déjà su quelque part ? » avant d'écrire.
+   */
+  findKnownDuplicate(instanceId: string, factText: string, opts: { includePrivate?: boolean } = {}): DuplicateMatch | null {
+    this.assertOpen()
+    const instance = this.mustInstance(instanceId)
+    const privateDbPath = this.paths.assistantDb(instance.id)
+    for (const target of this.resolveReadTargets(instance)) {
+      if (opts.includePrivate === false && target.dbPath === privateDbPath) continue
+      const store = this.openContent(target.dbPath)
+      for (const scopeId of target.scopeIds) {
+        const dup = findDuplicate(store, scopeId, factText)
+        if (dup) return dup
+      }
+    }
+    return null
   }
 
   /**
@@ -1726,6 +1747,9 @@ export class Memoria {
           return scope.id
         },
         storeFact: input => this.storeCaptured(input),
+        // Le pipeline dédoublonne déjà contre le scope privé ; ici, les scopes
+        // PARTAGÉS lisibles (un fait déjà dans `user` ne revient pas en privé).
+        knownElsewhere: (id, text) => this.findKnownDuplicate(id, text, { includePrivate: false }) !== null,
         audit: entry => this.registry.audit(entry),
         redactor: this.redactor,
         secretSink: s => {

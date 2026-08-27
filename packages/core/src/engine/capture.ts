@@ -70,6 +70,12 @@ export interface CapturePipelineDeps {
   secretSink: ((s: DetectedSecret) => void) | null
   /** LLM d'extraction — null/indisponible = les entrées WAL restent pending. */
   extraction: LlmProvider | null
+  /**
+   * Dédup ÉTENDUE : le fait existe-t-il déjà ailleurs que dans le scope privé
+   * (scopes partagés lisibles, ex. `user`) ? Sans elle, plus on partage vers
+   * `user`, plus chaque agent recrée le même fait en privé au tour suivant.
+   */
+  knownElsewhere?: (instanceId: string, factText: string) => boolean
   maxAttempts?: number
   /** Plafond de faits retenus par entrée WAL (anti-spam LLM, défaut 8). */
   maxFactsPerEntry?: number
@@ -248,6 +254,7 @@ export class CapturePipeline {
     let created = 0
     for (const item of extracted) {
       if (findDuplicate(store, scopeId, item.fact)) continue
+      if (this.deps.knownElsewhere?.(instanceId, item.fact)) continue
       this.deps.storeFact({
         instance: instanceId,
         scope: scopeId,

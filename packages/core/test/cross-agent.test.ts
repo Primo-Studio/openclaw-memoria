@@ -210,3 +210,27 @@ describe('dédoublonnage inter-DB au recall', () => {
     expect((privateDb(claude).db.prepare('SELECT recall_count FROM facts WHERE id = ?').get(mine.id) as { recall_count: number }).recall_count).toBe(0)
   })
 })
+
+/**
+ * Plus on partage vers `user`, plus chaque agent recréait des doublons
+ * privés à la conversation suivante : la dédup de capture ne regardait que
+ * son scope privé.
+ */
+describe('dédup de capture contre les scopes partagés', () => {
+  it('un fait déjà présent dans `user` n’est pas re-capturé en privé', async () => {
+    m.storeFact({ instance: codex.assistant_instance_id, scope: 'user', content: 'Neto Pompeu préfère le café serré', category: 'preference' })
+    const cap = await m.captureTurn({ instance: claude.assistant_instance_id, messages: [{ role: 'user', content: 'Je préfère le café serré.' }] })
+    expect(cap.facts_created).toBe(0)
+    expect(privateDb(claude).countFacts()).toBe(0)
+    // Et le recall de Claude ne montre qu'une seule copie, la partagée.
+    expect(m.recall({ instance: claude.assistant_instance_id, query: 'café serré préfère' }).items.map(i => i.source_db)).toEqual(['shared/user.sqlite'])
+  })
+
+  it('findKnownDuplicate : cherche dans toutes les DB lisibles (privée + partagées)', () => {
+    const shared = m.storeFact({ instance: codex.assistant_instance_id, scope: 'user', content: 'Néto habite en Guyane' })
+    const mine = m.storeFact({ instance: claude.assistant_instance_id, content: 'Néto travaille sur Memoria' })
+    expect(m.findKnownDuplicate(claude.assistant_instance_id, 'Néto habite en Guyane.')?.existing.id).toBe(shared.id)
+    expect(m.findKnownDuplicate(claude.assistant_instance_id, 'Néto travaille sur Memoria')?.existing.id).toBe(mine.id)
+    expect(m.findKnownDuplicate(claude.assistant_instance_id, 'Rien de connu ici')).toBeNull()
+  })
+})
