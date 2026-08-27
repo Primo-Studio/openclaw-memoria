@@ -10,6 +10,7 @@ import { Wizard, type WizardStep } from '../components/Wizard'
 import { EmbeddingsChooser } from '../components/EmbeddingsChooser'
 import { MachineAgents } from './Agents'
 import { useT } from '../i18n'
+import { hasLiveAgent } from '../lib/agents'
 import {
   getAgents,
   ApiError,
@@ -204,9 +205,11 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   const engineOk = health?.extraction.available === true
   const engineGateOpen = engineOk || degraded || healthUnavailable
 
-  // P0 : vérifie si au moins un agent est connecté (chemin facile OU pairing).
+  // P0 : vérifie si au moins un agent est RÉELLEMENT connecté (vu au moins une
+  // fois). Générer un code de pairing crée déjà une instance côté service :
+  // compter les instances dirait « connecté » avant que l'agent n'ait parlé.
   const refreshAgentConnected = useCallback(() => {
-    getAgents().then(a => setAgentConnected(a.length > 0)).catch(() => {})
+    getAgents().then(a => setAgentConnected(hasLiveAgent(a))).catch(() => {})
   }, [])
 
   // Sur l'étape « connecter un agent » (index 3), sonde la connexion en continu

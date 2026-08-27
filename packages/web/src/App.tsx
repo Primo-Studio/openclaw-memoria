@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { getAgents, getCaptureMode, getReview, getVersion, hasToken, setCaptureMode, type CaptureMode } from './api'
 import { useT, LANGS, type Lang } from './i18n'
+import { hasLiveAgent } from './lib/agents'
 import { Dashboard } from './screens/Dashboard'
 import { Agents } from './screens/Agents'
 import { Memory } from './screens/Memory'
@@ -77,14 +78,16 @@ export function App() {
   // Le token est adopté avant le rendu (main.tsx) ; sa présence ne change plus ensuite.
   const [authed] = useState(hasToken)
   const [screen, setScreen] = useState<ScreenId>(screenFromHash)
-  // null = on ne sait pas encore (chargement) ; true = 0 agent → onboarding.
+  // null = on ne sait pas encore (chargement) ; true = aucun agent réellement
+  // connecté → onboarding (une instance « en attente » créée par un code de
+  // pairing jamais collé ne compte pas, cf. lib/agents.ts).
   const [onboarding, setOnboarding] = useState<boolean | null>(null)
   const [reviewCount, setReviewCount] = useState(0)
 
   useEffect(() => {
     if (!authed) return
     getAgents()
-      .then(agents => setOnboarding(agents.length === 0))
+      .then(agents => setOnboarding(!hasLiveAgent(agents)))
       .catch(() => setOnboarding(false))
   }, [authed])
 
