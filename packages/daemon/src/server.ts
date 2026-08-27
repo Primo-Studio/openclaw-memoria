@@ -884,7 +884,9 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     switch (route) {
       case 'POST /v1/memory/store_fact': {
         const body = await readJson(req)
-        const fact = memoria.storeFact({ ...(body as Omit<StoreFactInput, 'instance'>), instance: instanceId })
+        // `scope` (partage cross-modèle : 'user', id de scope…) est relayé tel
+        // quel ; les refus du moteur deviennent des codes HTTP parlants.
+        const fact = mapScopeErrors(() => memoria.storeFact({ ...(body as Omit<StoreFactInput, 'instance'>), instance: instanceId }))
         sendJson(res, 200, { fact })
         return
       }
@@ -1256,6 +1258,24 @@ function recallInputFromBody(body: Record<string, unknown>): Omit<RecallInput, '
     input.active_context = body['active_context'] as RecallInput['active_context']
   }
   return input
+}
+
+/**
+ * Refus du moteur sur le scope d'une écriture → HTTP parlant : 403 quand la
+ * policy interdit (`can_write`), 404 quand le scope n'existe pas. Sans ce
+ * mapping l'agent recevait un 500 indiscernable d'une panne — et le journal
+ * s'emplissait de stacks pour un refus attendu. Le moteur signale ces cas par
+ * message (pas de classe d'erreur dédiée côté core) : on reconnaît ses préfixes.
+ */
+function mapScopeErrors<T>(fn: () => T): T {
+  try {
+    return fn()
+  } catch (err) {
+    const message = (err as Error)?.message ?? ''
+    if (message.startsWith('écriture refusée')) throw new HttpError(403, message)
+    if (message.startsWith('scope inconnu')) throw new HttpError(404, message)
+    throw err
+  }
 }
 
 /** Champ booléen obligatoire du corps — `{}` ne vaut ni true ni false. */
