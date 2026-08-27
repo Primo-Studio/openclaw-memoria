@@ -74,6 +74,15 @@ export interface DaemonOptions {
   llm?: MemoriaInitOptions['llm']
   /** Lancement auto / superviseur (tests : launchd simulé — jamais de launchctl réel). */
   control?: Partial<DaemonControlHooks>
+  /** Mise à jour (tests : ni git pull, ni npm, ni redémarrage réels). */
+  updater?: Partial<DaemonUpdaterHooks>
+}
+
+/** Mise à jour de l'installation — injectable pour tester les routes sans toucher au dépôt. */
+export interface DaemonUpdaterHooks {
+  currentVersion: typeof currentVersion
+  pullAndBuild: typeof pullAndBuild
+  scheduleRestart: typeof scheduleRestart
 }
 
 /**
@@ -148,6 +157,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     ...opts.control,
   }
   const supervisor: 'launchd' | null = control.isSupervised() ? 'launchd' : null
+  const updater: DaemonUpdaterHooks = { currentVersion, pullAndBuild, scheduleRestart, ...opts.updater }
   // Build réellement chargé : après une mise à jour, c'est le seul moyen de
   // vérifier que le daemon n'exécute pas encore l'ancien dist.
   const builtSha = lastBuiltSha(repoRoot())
@@ -923,7 +933,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       }
       // ----------------------------------------------------------- mise à jour
       case 'GET /v1/admin/version': {
-        sendJson(res, 200, { ...(await currentVersion()), daemon: DAEMON_VERSION })
+        sendJson(res, 200, { ...(await updater.currentVersion()), daemon: DAEMON_VERSION })
         return
       }
       case 'POST /v1/admin/update': {
@@ -931,12 +941,12 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         if (importJobs.running) {
           throw new HttpError(409, 'un import est en cours — attends sa fin (GET /v1/admin/import_status) avant de mettre à jour')
         }
-        const result = await pullAndBuild()
+        const result = await updater.pullAndBuild()
         sendJson(res, 200, result)
         // Redémarrage planifié APRÈS l'envoi de la réponse, dès qu'un build a eu
         // lieu — `rebuilt` et non `changed` : un rattrapage de build sans
         // nouveauté git remplace bien le code sur le disque, il faut recharger.
-        if (result.ok && result.rebuilt) scheduleRestart(storageRoot)
+        if (result.ok && result.rebuilt) updater.scheduleRestart(storageRoot)
         return
       }
       default:

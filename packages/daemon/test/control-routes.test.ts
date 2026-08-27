@@ -154,3 +154,81 @@ describe('POST /v1/admin/autostart', () => {
     err.mockRestore()
   })
 })
+
+/** Routes de mise à jour : git/npm/redémarrage SIMULÉS (hooks `updater`). */
+describe('GET /v1/admin/version + POST /v1/admin/update', () => {
+  const baseResult = { ok: true, is_git: true, before: 'aaa', after: 'aaa', changed: false, rebuilt: false, log: '', message: 'Déjà à jour.' }
+
+  it('version : sha du dépôt (simulé) + version du daemon', async () => {
+    await boot({})
+    daemon = null
+    daemon = await startDaemon({
+      storageRoot: join(root, 'v'),
+      configPath: join(root, 'config.toml'),
+      llm: { extraction: null },
+      updater: { currentVersion: async () => ({ version: '9.9.9', sha: 'abc1234', is_git: true }) },
+    })
+    const { status, json } = await get('/v1/admin/version')
+    expect(status).toBe(200)
+    expect(json).toMatchObject({ version: '9.9.9', sha: 'abc1234', is_git: true })
+    expect(typeof json['daemon']).toBe('string')
+  })
+
+  it('« Déjà à jour » (rebuilt:false) → réponse telle quelle, AUCUN redémarrage', async () => {
+    const restarts: string[] = []
+    daemon = await startDaemon({
+      storageRoot: root,
+      configPath: join(root, 'config.toml'),
+      llm: { extraction: null },
+      updater: { pullAndBuild: async () => baseResult, scheduleRestart: r => restarts.push(r) },
+    })
+    const r = await post('/v1/admin/update', {})
+    expect(r.status).toBe(200)
+    expect(r.json).toMatchObject({ ok: true, rebuilt: false })
+    await new Promise(res => setTimeout(res, 50))
+    expect(restarts).toEqual([])
+  })
+
+  it('build effectué (rebuilt:true) → redémarrage planifié UNE fois, APRÈS la réponse', async () => {
+    const restarts: string[] = []
+    let respondedBeforeRestart = false
+    daemon = await startDaemon({
+      storageRoot: root,
+      configPath: join(root, 'config.toml'),
+      llm: { extraction: null },
+      updater: {
+        pullAndBuild: async () => ({ ...baseResult, after: 'bbb', changed: true, rebuilt: true, message: 'Mis à jour aaa → bbb.' }),
+        scheduleRestart: r => {
+          restarts.push(r)
+        },
+      },
+    })
+    const pending = post('/v1/admin/update', {}).then(r => {
+      respondedBeforeRestart = restarts.length <= 1
+      return r
+    })
+    const r = await pending
+    expect(r.status).toBe(200)
+    expect(r.json).toMatchObject({ ok: true, rebuilt: true })
+    expect(restarts).toEqual([root])
+    expect(respondedBeforeRestart).toBe(true)
+  })
+
+  it('échec (npm introuvable) → ok:false renvoyé au client, aucun redémarrage', async () => {
+    const restarts: string[] = []
+    daemon = await startDaemon({
+      storageRoot: root,
+      configPath: join(root, 'config.toml'),
+      llm: { extraction: null },
+      updater: {
+        pullAndBuild: async () => ({ ...baseResult, ok: false, rebuilt: false, message: 'Échec de la mise à jour : npm est introuvable depuis le service Memoria.' }),
+        scheduleRestart: r => restarts.push(r),
+      },
+    })
+    const r = await post('/v1/admin/update', {})
+    expect(r.status).toBe(200)
+    expect(r.json['ok']).toBe(false)
+    expect(String(r.json['message'])).toContain('npm est introuvable')
+    expect(restarts).toEqual([])
+  })
+})

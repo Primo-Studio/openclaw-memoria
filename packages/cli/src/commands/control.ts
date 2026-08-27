@@ -218,21 +218,27 @@ export class UpdateCommand extends Command {
   storageRoot = Option.String('--storage-root', { description: 'Racine du stockage' })
   config = Option.String('--config', { description: 'Fichier de découverte' })
 
+  /** Injectables pour les tests : ni git, ni npm, ni redémarrage réels. */
+  currentVersionFn: typeof currentVersion = currentVersion
+  pullAndBuildFn: typeof pullAndBuild = pullAndBuild
+  scheduleRestartFn: typeof scheduleRestart = scheduleRestart
+
   override async execute(): Promise<number> {
     const out = this.context.stdout
     try {
-      const v = await currentVersion()
+      const v = await this.currentVersionFn()
       out.write(`Version actuelle : ${v.version}${v.sha ? ` (${v.sha})` : ''}\n`)
       if (!v.is_git) return fail(this.context.stderr, 'update : installation non-git — mets à jour via ton gestionnaire de paquets.')
       out.write('Téléchargement + reconstruction…\n')
-      const r = await pullAndBuild()
+      const r = await this.pullAndBuildFn()
+      if (!r.ok) return fail(this.context.stderr, `update : ${r.message}`)
       out.write(`${r.message}\n`)
-      if (r.ok && r.rebuilt) {
+      if (r.rebuilt) {
         const { storageRoot } = resolveCommon({ storageRoot: this.storageRoot, configPath: this.config })
-        scheduleRestart(storageRoot)
+        this.scheduleRestartFn(storageRoot)
         out.write('Le daemon redémarre dans quelques secondes (memoria stop && start).\n')
       }
-      return r.ok ? 0 : 1
+      return 0
     } catch (err) {
       return fail(this.context.stderr, `update : ${(err as Error).message}`)
     }
