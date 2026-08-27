@@ -571,7 +571,7 @@ export class Memoria {
     if (!queryVector) return this.recall(input)
     const vec = queryVector
     return this.performRecall(input, (store, query, searchOpts) =>
-      hybridSearchFacts(store, query, { ...searchOpts, queryVector: vec, dimensions: provider.dimensions }),
+      hybridSearchFacts(store, query, { ...searchOpts, queryVector: vec, model: provider.model, dimensions: provider.dimensions }),
     )
   }
 

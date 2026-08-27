@@ -13,6 +13,7 @@ import {
   hybridSearchFacts,
   isVecAvailable,
   knn,
+  vecTableName,
   type EmbeddingProvider,
 } from '../src/index.js'
 
@@ -105,7 +106,7 @@ describe('EmbeddingIndexer', () => {
     const left = store.db.prepare('SELECT COUNT(*) AS c FROM embeddings WHERE owner_id = ?').get(f.id) as { c: number }
     expect(left.c).toBe(0)
     if (vecOk()) {
-      expect(knn(store.db, 8, FakeEmbedding.vectorFor('voiture'), 5).map(h => h.fact_id)).not.toContain(f.id)
+      expect(knn(store.db, { model: 'fake-8d', dimensions: 8 }, FakeEmbedding.vectorFor('voiture'), 5).map(h => h.fact_id)).not.toContain(f.id)
     }
   })
 })
@@ -123,6 +124,7 @@ describe('hybridSearchFacts', () => {
 
     const hybrid = hybridSearchFacts(store, 'voiture', {
       scopeIds: ['s1'],
+      model: 'fake-8d',
       queryVector: FakeEmbedding.vectorFor('voiture'),
     })
     expect(hybrid.length).toBeGreaterThan(0)
@@ -140,6 +142,7 @@ describe('hybridSearchFacts', () => {
     const hits = hybridSearchFacts(store, 'voiture', {
       scopeIds: ['s1'],
       maxSensitivity: 'sensitive',
+      model: 'fake-8d',
       queryVector: FakeEmbedding.vectorFor('voiture'),
     })
     const ids = hits.map(h => h.row.id)
@@ -152,7 +155,7 @@ describe('hybridSearchFacts', () => {
     store.insertFact({ fact: 'note sur la musique du concert', scope_id: 's1' })
     await indexer.runAll()
     if (!vecOk()) return
-    expect(() => knn(store.db, 8, new Float32Array(16), 5)).toThrow(/interdit/)
+    expect(() => knn(store.db, { model: 'fake-8d', dimensions: 8 }, new Float32Array(16), 5)).toThrow(/interdit/)
   })
 
   it('sans queryVector → résultat identique au FTS seul', () => {
@@ -160,5 +163,70 @@ describe('hybridSearchFacts', () => {
     const fts = store.searchFacts('serveur staging', { scopeIds: ['s1'] })
     const hybrid = hybridSearchFacts(store, 'serveur staging', { scopeIds: ['s1'] })
     expect(hybrid.map(h => h.row.id)).toEqual(fts.map(h => h.row.id))
+  })
+})
+
+/**
+ * Deux providers de MÊME dimension mais de modèles différents ne partagent
+ * JAMAIS le même index : sinon, après A → B → A, `pendingCount` vaut 0 (la
+ * table embeddings connaît déjà A) alors que l'index ne contient plus que des
+ * vecteurs B — le KNN compare des espaces incomparables, sans un mot.
+ */
+class AxisEmbedding implements EmbeddingProvider {
+  readonly name = 'fake'
+  readonly dimensions = 4
+  constructor(readonly model: string, private readonly axis: number) {}
+  isAvailable(): Promise<boolean> {
+    return Promise.resolve(true)
+  }
+  embed(texts: string[]): Promise<Float32Array[]> {
+    return Promise.resolve(
+      texts.map(() => {
+        const v = new Float32Array(4)
+        v[this.axis] = 1
+        return v
+      }),
+    )
+  }
+}
+
+describe('index vectoriel par (dimensions, modèle)', () => {
+  it('changement de modèle à dimension égale : chaque modèle garde son index, la requête A retrouve ses vecteurs', async () => {
+    const f = store.insertFact({ fact: 'note sur la voiture du garage', scope_id: 's1' })
+    const a = new AxisEmbedding('nomic-embed-text', 0)
+    const b = new AxisEmbedding('nomic-embed-text-v2-moe', 1)
+    await new EmbeddingIndexer({ store, provider: a }).runAll()
+    await new EmbeddingIndexer({ store, provider: b }).runAll()
+    const again = new EmbeddingIndexer({ store, provider: a })
+    expect(again.pendingCount()).toBe(0)
+    if (!vecOk()) return
+
+    const query = new Float32Array([1, 0, 0, 0])
+    const hitsA = knn(store.db, { model: a.model, dimensions: 4 }, query, 5)
+    expect(hitsA.map(h => h.fact_id)).toContain(f.id)
+    expect(hitsA[0]!.distance).toBeCloseTo(0, 5)
+    // et l'index de B ne connaît que des vecteurs B
+    const hitsB = knn(store.db, { model: b.model, dimensions: 4 }, query, 5)
+    expect(hitsB[0]!.distance).toBeGreaterThan(1)
+  })
+
+  it('index manquant ou incomplet → reconstruit depuis la table embeddings (repair)', async () => {
+    const f = store.insertFact({ fact: 'note sur la cuisine', scope_id: 's1' })
+    const a = new AxisEmbedding('nomic-embed-text', 0)
+    const idx = new EmbeddingIndexer({ store, provider: a })
+    await idx.runAll()
+    if (!vecOk()) return
+    const table = vecTableName({ model: a.model, dimensions: 4 })
+    store.db.exec(`DELETE FROM ${table}`) // index vidé, vérité (embeddings) intacte
+    // Rien à ré-embedder (la vérité est intacte)…
+    expect(idx.pendingCount()).toBe(0)
+    // …mais runAll répare l'index sans appel provider.
+    const run = await idx.runAll()
+    expect(run.indexed).toBe(0)
+    expect(knn(store.db, { model: a.model, dimensions: 4 }, new Float32Array([1, 0, 0, 0]), 5).map(h => h.fact_id)).toContain(f.id)
+  })
+
+  it('hybridSearchFacts exige le modèle avec queryVector (jamais de KNN sur un index anonyme)', () => {
+    expect(() => hybridSearchFacts(store, 'voiture', { queryVector: new Float32Array(8) })).toThrow(/mod[eè]le/)
   })
 })

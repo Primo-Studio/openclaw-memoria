@@ -7,7 +7,7 @@
 import type { ContentStore } from '../storage/content.js'
 import type { EmbeddingProvider } from '../llm/provider.js'
 import { newId, nowISO, vectorToBuffer } from '../util.js'
-import { ensureVecTable, removeVectors, upsertVector } from './vec-table.js'
+import { ensureVecTable, removeVectors, repairVecIndex, upsertVector, type VecIndexKey } from './vec-table.js'
 
 export interface IndexerRunResult {
   indexed: number
@@ -24,6 +24,11 @@ export class EmbeddingIndexer {
     this.store = opts.store
     this.provider = opts.provider
     this.batchSize = opts.batchSize ?? 16
+  }
+
+  /** Identité de l'index de CE provider : modèle + dimensions (jamais la dimension seule). */
+  private get key(): VecIndexKey {
+    return { model: this.provider.model, dimensions: this.provider.dimensions }
   }
 
   /** Faits actifs sans embedding pour ce modèle. */
@@ -63,7 +68,7 @@ export class EmbeddingIndexer {
   async runOnce(): Promise<IndexerRunResult> {
     const batch = this.pendingFacts()
     if (batch.length === 0) {
-      return { indexed: 0, remaining: 0, vec_available: ensureVecTable(this.store.db, this.provider.dimensions) }
+      return { indexed: 0, remaining: 0, vec_available: ensureVecTable(this.store.db, this.key) }
     }
 
     const vectors = await this.provider.embed(batch.map(f => f.fact))
@@ -71,7 +76,7 @@ export class EmbeddingIndexer {
       throw new Error(`embed : ${vectors.length} vecteurs pour ${batch.length} textes`)
     }
 
-    const vecOk = ensureVecTable(this.store.db, this.provider.dimensions)
+    const vecOk = ensureVecTable(this.store.db, this.key)
     const insert = this.store.db.prepare(
       `INSERT OR REPLACE INTO embeddings (id, owner_type, owner_id, model, dimensions, vector, created_at)
        VALUES (?, 'fact', ?, ?, ?, ?, ?)`,
@@ -85,7 +90,7 @@ export class EmbeddingIndexer {
           )
         }
         insert.run(newId(), batch[i]!.id, this.provider.model, this.provider.dimensions, vectorToBuffer(vec), nowISO())
-        if (vecOk) upsertVector(this.store.db, this.provider.dimensions, batch[i]!.id, vec)
+        if (vecOk) upsertVector(this.store.db, this.key, batch[i]!.id, vec)
       }
     })
     tx()
@@ -93,8 +98,23 @@ export class EmbeddingIndexer {
     return { indexed: batch.length, remaining: this.pendingCount(), vec_available: vecOk }
   }
 
+  /**
+   * Répare l'index vec0 de ce modèle depuis la table `embeddings` (vérité) :
+   * vecteurs déjà calculés mais absents de l'index → réinsérés, 0 appel
+   * provider. C'est ce qui rend l'index reconstructible, et ce qui comble un
+   * index créé après coup (nouveau nommage par modèle, table supprimée).
+   */
+  repairIndex(): number {
+    return repairVecIndex(this.store.db, this.key)
+  }
+
   /** Boucle jusqu'à épuisement (réindexation complète, embedding_jobs). */
   async runAll(maxBatches = 1000): Promise<IndexerRunResult> {
+    // Avant d'embedder quoi que ce soit : ce qui est déjà en base doit être
+    // dans l'index. `pendingCount` ne voit que la table embeddings — sans ça,
+    // un index vide avec une base pleine restait « à jour » et muet.
+    const repaired = this.repairIndex()
+    if (repaired > 0) console.warn(`[memoria] index vectoriel ${this.provider.model} : ${repaired} vecteur(s) réinséré(s) depuis la base`)
     let last: IndexerRunResult = { indexed: 0, remaining: this.pendingCount(), vec_available: false }
     let total = 0
     for (let i = 0; i < maxBatches && (i === 0 || last.remaining > 0); i++) {
@@ -112,6 +132,6 @@ export class EmbeddingIndexer {
     this.store.db
       .prepare(`DELETE FROM embeddings WHERE owner_type = 'fact' AND owner_id IN (${placeholders})`)
       .run(...factIds)
-    removeVectors(this.store.db, this.provider.dimensions, factIds)
+    removeVectors(this.store.db, this.key, factIds)
   }
 }
