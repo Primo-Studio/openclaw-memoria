@@ -60,7 +60,9 @@ describe('installOpenClawHooks', () => {
     expect(cfg.plugins.allow).toEqual(expect.arrayContaining(['déjà', 'memoria'])) // fusionné
   })
 
-  it('round-trip : unregister retire le plugin et l’entrée, garde le reste', () => {
+  // Copie récursive + lectures/écritures disque : > 5 s sur une machine chargée
+  // (observé 27/08 avec un build Rust en parallèle) — pas un défaut du code.
+  it('round-trip : unregister retire le plugin et l’entrée, garde le reste', { timeout: 20_000 }, () => {
     mkdirSync(oc, { recursive: true })
     writeFileSync(join(oc, 'openclaw.json'), JSON.stringify({ model: 'x', plugins: { allow: ['memoria'], entries: { memoria: { enabled: true } } } }))
     installOpenClawHooks({ instanceId: 'i', token: 't', openclawDir: oc, srcDir: src })
