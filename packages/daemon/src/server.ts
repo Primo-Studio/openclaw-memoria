@@ -12,10 +12,12 @@
  * thread Node → zéro contention inter-process par construction.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
-import { existsSync } from 'node:fs'
+import { existsSync, mkdirSync } from 'node:fs'
+import { join } from 'node:path'
 import { timingSafeEqual } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import {
+  AUTOSTART_LABEL,
   Memoria,
   autoRegister,
   autostartStatus,
@@ -27,9 +29,12 @@ import {
   enableAutostart,
   newToken,
   nowISO,
+  resolveStorageRoot,
   saveCredentials,
   serveInvocation,
   type AssistantType,
+  type AutostartSpec,
+  type AutostartStatus,
   type CaptureMode,
   type CaptureTurnInput,
   type ForgetFilter,
@@ -42,10 +47,9 @@ import {
 } from '@memoria/core'
 import { OllamaPullJob } from './ollama-pull.js'
 import { ImportJobRunner } from './import-job.js'
-import { daemonBinPath } from './client.js'
-import { currentVersion, pullAndBuild, scheduleRestart } from './update.js'
+import { currentVersion, lastBuiltSha, pullAndBuild, repoRoot, scheduleAutostartHandover, scheduleRestart } from './update.js'
 import { findUiDist, serveUi } from './static.js'
-import { acquireLock, clearDaemonState, writeDaemonState, type DaemonState } from './state.js'
+import { acquireLock, clearDaemonState, lockHolderPid, writeDaemonState, type DaemonState } from './state.js'
 
 export const DAEMON_VERSION = '0.1.0'
 
@@ -68,12 +72,48 @@ export interface DaemonOptions {
   credentialsDir?: string
   /** Override LLM transmis au moteur (tests : extraction mockée, zéro réseau). */
   llm?: MemoriaInitOptions['llm']
+  /** Lancement auto / superviseur (tests : launchd simulé — jamais de launchctl réel). */
+  control?: Partial<DaemonControlHooks>
+  /** Mise à jour (tests : ni git pull, ni npm, ni redémarrage réels). */
+  updater?: Partial<DaemonUpdaterHooks>
+}
+
+/** Mise à jour de l'installation — injectable pour tester les routes sans toucher au dépôt. */
+export interface DaemonUpdaterHooks {
+  currentVersion: typeof currentVersion
+  pullAndBuild: typeof pullAndBuild
+  scheduleRestart: typeof scheduleRestart
+}
+
+/**
+ * Ce que le daemon sait faire du lancement auto. Tout est injectable : la
+ * route admin ne doit jamais toucher le vrai launchctl dans un test.
+ */
+export interface DaemonControlHooks {
+  /** Ce process est-il celui du service launchd ? (XPC_SERVICE_NAME posé par launchd) */
+  isSupervised(): boolean
+  autostartStatus(): AutostartStatus
+  enableAutostart(spec: AutostartSpec): AutostartStatus
+  disableAutostart(): AutostartStatus
+  /** Passe la main à `memoria autostart on|off` (détaché) après la réponse ; lève si impossible. */
+  handoverAutostart(mode: 'on' | 'off', storageRoot: string, configPath: string): void
 }
 
 export interface RunningDaemon {
   state: DaemonState
   memoria: Memoria
   close: () => Promise<void>
+}
+
+/** Un autre daemon VIVANT tient daemon.lock pour ce stockage. Typée : le service launchd la reconnaît pour attendre au lieu de boucler. */
+export class DaemonLockHeldError extends Error {
+  constructor(
+    readonly storageRoot: string,
+    readonly holderPid: number | null,
+  ) {
+    super(`un daemon Memoria tourne déjà pour ${storageRoot} (daemon.lock${holderPid ? `, pid ${holderPid}` : ''})`)
+    this.name = 'DaemonLockHeldError'
+  }
 }
 
 class HttpError extends Error {
@@ -86,26 +126,46 @@ class HttpError extends Error {
 }
 
 export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaemon> {
-  const memoria = Memoria.init({ storageRoot: opts.storageRoot, configPath: opts.configPath, llm: opts.llm })
-  const storageRoot = memoria.paths.root
-  const importJobs = new ImportJobRunner(memoria)
-
+  // Le verrou AVANT l'ouverture des DB : un second daemon qui perd la course ne
+  // doit jamais avoir touché SQLite (ni rejoué le WAL) — Memoria.init ouvre les
+  // bases et le perdant les refermait après coup, fenêtre pendant laquelle deux
+  // processus écrivaient la même mémoire.
+  const { storageRoot, configPath } = resolveStorageRoot({ storageRoot: opts.storageRoot, configPath: opts.configPath })
+  mkdirSync(storageRoot, { recursive: true })
   const release = acquireLock(storageRoot)
-  if (!release) {
-    memoria.close()
-    throw new Error(`un daemon Memoria tourne déjà pour ${storageRoot} (daemon.lock)`)
+  if (!release) throw new DaemonLockHeldError(storageRoot, lockHolderPid(storageRoot))
+  let memoria: Memoria
+  try {
+    memoria = Memoria.init({ storageRoot, configPath: opts.configPath, llm: opts.llm })
+  } catch (err) {
+    release()
+    throw err
   }
+  const importJobs = new ImportJobRunner(memoria, join(storageRoot, 'import-status.json'))
 
   const adminToken = newToken()
   const daemonId = newToken().slice(0, 16)
+  const startedAt = nowISO()
+  const control: DaemonControlHooks = {
+    // launchd pose XPC_SERVICE_NAME sur ses agents (visible dans
+    // `launchctl print … environment`) : c'est ce qui dit « je SUIS le service ».
+    isSupervised: () => process.env['XPC_SERVICE_NAME'] === AUTOSTART_LABEL,
+    autostartStatus: () => autostartStatus(),
+    enableAutostart,
+    disableAutostart: () => disableAutostart(),
+    handoverAutostart: scheduleAutostartHandover,
+    ...opts.control,
+  }
+  const supervisor: 'launchd' | null = control.isSupervised() ? 'launchd' : null
+  const updater: DaemonUpdaterHooks = { currentVersion, pullAndBuild, scheduleRestart, ...opts.updater }
+  // Build réellement chargé : après une mise à jour, c'est le seul moyen de
+  // vérifier que le daemon n'exécute pas encore l'ancien dist.
+  const builtSha = lastBuiltSha(repoRoot())
   // Un seul téléchargement de modèle Ollama à la fois (progression en mémoire).
   const ollamaPull = new OllamaPullJob(opts.ollamaBaseUrl)
 
   const server = createServer((req, res) => {
-    void handle(req, res).catch((err: unknown) => {
-      const status = err instanceof HttpError ? err.status : 500
-      sendJson(res, status, { error: (err as Error).message ?? 'erreur interne' })
-    })
+    void handle(req, res).catch((err: unknown) => reportAndSend(req, res, err))
   })
 
   const uiDist = findUiDist(opts.uiDist)
@@ -122,7 +182,20 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     }
 
     if (route === 'GET /v1/health') {
-      sendJson(res, 200, { ok: true, version: DAEMON_VERSION, daemon_id: daemonId, ui: Boolean(uiDist) })
+      // pid / superviseur / build : ce qu'il faut pour distinguer « un daemon
+      // répond » de « LE daemon attendu répond » (launchd, dist à jour).
+      sendJson(res, 200, {
+        ok: true,
+        version: DAEMON_VERSION,
+        daemon_id: daemonId,
+        ui: Boolean(uiDist),
+        pid: process.pid,
+        started_at: startedAt,
+        supervisor,
+        built_sha: builtSha,
+        storage_root: storageRoot,
+        config_path: configPath,
+      })
       return
     }
 
@@ -162,14 +235,14 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         const facts = memoria.browseFacts({
           instance: url.searchParams.get('instance') ?? undefined,
           q: url.searchParams.get('q') ?? undefined,
-          limit: url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : undefined,
+          limit: intParam(url, 'limit', { def: undefined, min: 1, max: 200 }),
         })
         sendJson(res, 200, { facts })
         return
       }
       case 'GET /v1/admin/search': {
         const q = url.searchParams.get('q') ?? ''
-        const limit = url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : 80
+        const limit = intParam(url, 'limit', { def: 80, min: 1, max: 500 })
         sendJson(res, 200, { facts: memoria.globalSearch(q, limit) })
         return
       }
@@ -214,7 +287,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       case 'GET /v1/admin/topics': {
         const instance = url.searchParams.get('instance')
         if (!instance) throw new HttpError(400, 'instance requise')
-        const minFacts = url.searchParams.has('min_facts') ? Number(url.searchParams.get('min_facts')) : 1
+        const minFacts = intParam(url, 'min_facts', { def: 1, min: 1, max: 100_000 })
         sendJson(res, 200, { topics: memoria.listTopics(instance, minFacts) })
         return
       }
@@ -228,7 +301,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       case 'GET /v1/admin/topic_relations': {
         const instance = url.searchParams.get('instance')
         if (!instance) throw new HttpError(400, 'instance requise')
-        const minFacts = url.searchParams.has('min_facts') ? Number(url.searchParams.get('min_facts')) : 2
+        const minFacts = intParam(url, 'min_facts', { def: 2, min: 1, max: 100_000 })
         sendJson(res, 200, memoria.topicRelations(instance, minFacts))
         return
       }
@@ -319,8 +392,8 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       case 'GET /v1/admin/never_used': {
         const instance = url.searchParams.get('instance') ?? ''
         if (!instance) throw new HttpError(400, 'paramètre instance requis')
-        const limit = Number(url.searchParams.get('limit') ?? '100')
-        sendJson(res, 200, { facts: memoria.neverUsedFacts(instance, Number.isFinite(limit) ? limit : 100) })
+        const limit = intParam(url, 'limit', { def: 100, min: 1, max: 1000 })
+        sendJson(res, 200, { facts: memoria.neverUsedFacts(instance, limit) })
         return
       }
       case 'POST /v1/admin/propose_revisions': {
@@ -632,25 +705,44 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       case 'GET /v1/admin/control': {
         sendJson(res, 200, {
           enabled: memoria.isEnabled(),
-          autostart: autostartStatus(),
+          autostart: control.autostartStatus(),
+          supervisor,
           storage: memoria.storageInfo(),
         })
         return
       }
       case 'POST /v1/admin/enabled': {
+        // Booléen OBLIGATOIRE : `body.enabled === true` sinon false transformait un
+        // `{}` ou un `{enabled:'true'}` en mise en pause persistée dans config.toml.
         const body = await readJson(req)
-        const enabled = memoria.setEnabled(body['enabled'] === true)
+        const enabled = memoria.setEnabled(requireBoolean(body, 'enabled'))
         sendJson(res, 200, { enabled })
         return
       }
       case 'POST /v1/admin/autostart': {
+        // JAMAIS de launchctl bootout/bootstrap depuis le process supervisé :
+        // bootout = ordre à launchd de tuer CE daemon (bloqué dans execFileSync,
+        // SIGKILL après 5 s, daemon.json/lock périmés, réponse jamais envoyée) ;
+        // et depuis un daemon direct, bootstrap lance un second daemon qui
+        // bute sur notre verrou. Dans ces deux cas on répond `handover: true`
+        // puis la CLI détachée fait le travail proprement (arrêt, attente,
+        // relance) — voir scheduleAutostartHandover.
         const body = await readJson(req)
-        if (body['enabled'] === true) {
-          const args = [process.execPath, daemonBinPath(), '--storage-root', storageRoot]
-          sendJson(res, 200, { autostart: enableAutostart({ programArguments: args, workingDirectory: storageRoot }) })
-        } else {
-          sendJson(res, 200, { autostart: disableAutostart() })
+        const enabled = requireBoolean(body, 'enabled')
+        const supervised = control.isSupervised()
+        if (enabled && supervised) {
+          // Déjà sous launchd : idempotent, et recharger tuerait le daemon pour rien.
+          sendJson(res, 200, { autostart: control.autostartStatus(), handover: false })
+          return
         }
+        if (!enabled && !supervised) {
+          sendJson(res, 200, { autostart: control.disableAutostart(), handover: false })
+          return
+        }
+        const mode = enabled ? 'on' : 'off'
+        // Vérifié AVANT la réponse : une passation impossible doit se voir (500), pas se perdre.
+        control.handoverAutostart(mode, storageRoot, configPath)
+        sendJson(res, 200, { autostart: control.autostartStatus(), handover: true, mode })
         return
       }
       case 'POST /v1/admin/delete_agent': {
@@ -841,16 +933,29 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       }
       // ----------------------------------------------------------- mise à jour
       case 'GET /v1/admin/version': {
-        sendJson(res, 200, { ...(await currentVersion()), daemon: DAEMON_VERSION })
+        sendJson(res, 200, { ...(await updater.currentVersion()), daemon: DAEMON_VERSION })
         return
       }
       case 'POST /v1/admin/update': {
-        const result = await pullAndBuild()
+        // Une mise à jour redémarre le daemon : un import en cours serait coupé net.
+        if (importJobs.running) {
+          throw new HttpError(409, 'un import est en cours — attends sa fin (GET /v1/admin/import_status) avant de mettre à jour')
+        }
+        const result = await updater.pullAndBuild()
         sendJson(res, 200, result)
         // Redémarrage planifié APRÈS l'envoi de la réponse, dès qu'un build a eu
         // lieu — `rebuilt` et non `changed` : un rattrapage de build sans
         // nouveauté git remplace bien le code sur le disque, il faut recharger.
-        if (result.ok && result.rebuilt) scheduleRestart(storageRoot)
+        if (result.ok && result.rebuilt) {
+          try {
+            updater.scheduleRestart(storageRoot)
+          } catch (err) {
+            // La réponse est partie : une exception ici remonterait dans
+            // reportAndSend, qui ne peut plus répondre. On la journalise avec
+            // la consigne — le nouveau build est sur le disque mais pas chargé.
+            console.error(`[memoria-daemon] mise à jour installée mais redémarrage NON planifié : ${(err as Error)?.message ?? err} — relance « memoria stop » puis « memoria start »`)
+          }
+        }
         return
       }
       default:
@@ -863,19 +968,21 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     // joignable (l'agent ne casse pas) mais on ne lit ni n'écrit AUCUNE mémoire.
     // Réponse no-op ANNONCÉE (disabled: true) — jamais un échec silencieux.
     if (!memoria.isEnabled()) {
-      if (route === 'POST /v1/memory/recall') sendJson(res, 200, { items: [], disabled: true })
-      else if (route === 'POST /v1/memory/store_fact') sendJson(res, 200, { fact: null, disabled: true })
-      else if (route === 'POST /v1/memory/capture_turn') sendJson(res, 200, { captured: 0, facts: [], disabled: true })
-      else if (route === 'POST /v1/memory/feedback') sendJson(res, 200, { updated: [], domains: [], disabled: true })
-      else if (route === 'POST /v1/memory/capture_status')
-        sendJson(res, 200, { entries: [], pending: 0, retrying: 0, done: 0, failed: 0, disabled: true })
-      else throw new HttpError(404, `route mémoire inconnue : ${route}`)
+      // TOUTES les routes mémoire, pas seulement les cinq « courantes » : pin,
+      // correct, merge, expiry, identify_* tombaient en 404 « route mémoire
+      // inconnue » — un agent (memoria_pin…) croyait la route cassée alors que
+      // Memoria était simplement en pause.
+      const paused = PAUSED_MEMORY_RESPONSES[route]
+      if (!paused) throw new HttpError(404, `route mémoire inconnue : ${route}`)
+      sendJson(res, 200, { ...paused, disabled: true })
       return
     }
     switch (route) {
       case 'POST /v1/memory/store_fact': {
         const body = await readJson(req)
-        const fact = memoria.storeFact({ ...(body as Omit<StoreFactInput, 'instance'>), instance: instanceId })
+        // `scope` (partage cross-modèle : 'user', id de scope…) est relayé tel
+        // quel ; les refus du moteur deviennent des codes HTTP parlants.
+        const fact = mapScopeErrors(() => memoria.storeFact({ ...(body as Omit<StoreFactInput, 'instance'>), instance: instanceId }))
         sendJson(res, 200, { fact })
         return
       }
@@ -883,7 +990,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         const body = await readJson(req)
         // Hybride FTS+vectoriel quand un provider d'embeddings est disponible —
         // sinon strictement équivalent au recall FTS.
-        const result = await memoria.recallSemantic({ ...(body as Omit<RecallInput, 'instance'>), instance: instanceId })
+        const result = await memoria.recallSemantic({ ...recallInputFromBody(body), instance: instanceId })
         sendJson(res, 200, result)
         return
       }
@@ -1066,7 +1173,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     port,
     admin_token: adminToken,
     pid: process.pid,
-    started_at: nowISO(),
+    started_at: startedAt,
   }
   writeDaemonState(storageRoot, state)
 
@@ -1078,10 +1185,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   if (syncCfg?.enabled && syncCfg.role === 'hub' && syncCfg.listen_lan) {
     const [lanHost, lanPortStr] = parseHostPort(syncCfg.listen_lan)
     lanServer = createServer((req, res) => {
-      void handleSync(req, res).catch((err: unknown) => {
-        const status = err instanceof HttpError ? err.status : 500
-        sendJson(res, status, { error: (err as Error).message ?? 'erreur interne' })
-      })
+      void handleSync(req, res).catch((err: unknown) => reportAndSend(req, res, err))
     })
     lanServer.on('error', e => console.warn('[memoria-daemon] listener LAN sync en échec :', (e as Error).message))
     lanServer.listen(lanPortStr, lanHost, () => console.log(`[memoria-daemon] synchro HUB à l'écoute sur ${lanHost}:${lanPortStr} (/v1/sync/*)`))
@@ -1127,6 +1231,10 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     if (syncTimer) clearInterval(syncTimer)
     if (lanServer) await new Promise<void>(r => lanServer!.close(() => r()))
     await new Promise<void>((resolveClose) => server.close(() => resolveClose()))
+    // Un import en cours est ANNONCÉ interrompu (persisté) avant de fermer les
+    // DB — sinon il mourait en « Memoria est fermé » dans un état perdu avec le
+    // process. On lui laisse 2 s (launchd SIGKILL à 5 s) pour finir un fichier.
+    if (importJobs.interrupt('arrêt du daemon')) await importJobs.settle(2_000)
     clearDaemonState(storageRoot)
     release()
     memoria.close()
@@ -1202,11 +1310,118 @@ function bearerToken(req: IncomingMessage): string | null {
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
   const raw = await readRawBody(req)
   if (raw.length === 0) return {}
+  let parsed: unknown
   try {
-    return JSON.parse(raw) as Record<string, unknown>
+    parsed = JSON.parse(raw)
   } catch {
     throw new HttpError(400, 'JSON invalide')
   }
+  // `JSON.parse('null')` est valide : sans cette garde, `body['code']` levait un
+  // TypeError → 500 « Cannot read properties of null » au lieu d'un 400 net.
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new HttpError(400, 'objet JSON attendu dans le corps de la requête')
+  }
+  return parsed as Record<string, unknown>
+}
+
+/**
+ * Réponses no-op de CHAQUE route mémoire quand Memoria est en pause : même
+ * forme que la réponse normale (l'agent n'a rien à parser de spécial), plus
+ * `disabled: true` ajouté par l'appelant. Une route absente d'ici = 404.
+ */
+const PAUSED_MEMORY_RESPONSES: Record<string, Record<string, unknown>> = {
+  'POST /v1/memory/recall': { items: [] },
+  'POST /v1/memory/store_fact': { fact: null },
+  'POST /v1/memory/capture_turn': { captured: 0, facts: [] },
+  'POST /v1/memory/feedback': { updated: [], domains: [] },
+  'POST /v1/memory/capture_status': { entries: [], pending: 0, retrying: 0, done: 0, failed: 0 },
+  'POST /v1/memory/correct': { replacement: null },
+  'POST /v1/memory/merge': { merged: [] },
+  'POST /v1/memory/pin': { updated: false },
+  'POST /v1/memory/expiry': { updated: false },
+  'POST /v1/memory/identify_interlocutor': { match: null },
+  'POST /v1/memory/identify_or_create_interlocutor': { match: null },
+}
+
+/**
+ * Corps de recall → RecallInput, sur LISTE BLANCHE. `...body` relayait tout,
+ * dont `include_dormant` : un porteur de token d'instance lisait la quarantaine
+ * (faits importés jamais validés) promise « invisible au recall jusqu'à
+ * approbation ». Ces drapeaux internes restent réservés au moteur/admin.
+ */
+function recallInputFromBody(body: Record<string, unknown>): Omit<RecallInput, 'instance'> {
+  const input: Omit<RecallInput, 'instance'> = { query: String(body['query'] ?? '') }
+  if (typeof body['limit'] === 'number') input.limit = body['limit']
+  if (typeof body['token_budget'] === 'number') input.token_budget = body['token_budget']
+  if (typeof body['expand_graph'] === 'boolean') input.expand_graph = body['expand_graph']
+  if (body['active_context'] && typeof body['active_context'] === 'object') {
+    input.active_context = body['active_context'] as RecallInput['active_context']
+  }
+  return input
+}
+
+/**
+ * Refus du moteur sur le scope d'une écriture → HTTP parlant : 403 quand la
+ * policy interdit (`can_write`), 404 quand le scope n'existe pas. Sans ce
+ * mapping l'agent recevait un 500 indiscernable d'une panne — et le journal
+ * s'emplissait de stacks pour un refus attendu. Le moteur signale ces cas par
+ * message (pas de classe d'erreur dédiée côté core) : on reconnaît ses préfixes.
+ */
+function mapScopeErrors<T>(fn: () => T): T {
+  try {
+    return fn()
+  } catch (err) {
+    const message = (err as Error)?.message ?? ''
+    if (message.startsWith('écriture refusée')) throw new HttpError(403, message)
+    if (message.startsWith('scope inconnu')) throw new HttpError(404, message)
+    throw err
+  }
+}
+
+/** Champ booléen obligatoire du corps — `{}` ne vaut ni true ni false. */
+function requireBoolean(body: Record<string, unknown>, name: string): boolean {
+  const v = body[name]
+  if (typeof v !== 'boolean') throw new HttpError(400, `${name} requis (booléen true|false)`)
+  return v
+}
+
+/**
+ * Paramètre d'URL entier borné. `Number('abc')` = NaN, que better-sqlite3
+ * refuse en « datatype mismatch » (500) — l'utilisateur voyait « erreur »
+ * sans raison. Ici : 400 avec le nom du paramètre et les bornes.
+ */
+function intParam<D extends number | undefined>(url: URL, name: string, opts: { def: D; min: number; max: number }): number | D {
+  const raw = url.searchParams.get(name)
+  if (raw === null || raw === '') return opts.def
+  const n = Number(raw)
+  if (!Number.isInteger(n) || n < opts.min || n > opts.max) {
+    throw new HttpError(400, `${name} doit être un entier entre ${opts.min} et ${opts.max} (reçu : ${raw})`)
+  }
+  return n
+}
+
+/**
+ * Réponse d'erreur + JOURNAL des pannes internes. Un 500 sans trace était une
+ * mort silencieuse : le client voyait « erreur », daemon.log restait vide et
+ * `memoria doctor` n'avait rien à dire. Les HttpError (4xx attendus) ne sont
+ * pas des pannes : pas de bruit dans les logs.
+ */
+function reportAndSend(req: IncomingMessage, res: ServerResponse, err: unknown): void {
+  const status = err instanceof HttpError ? err.status : 500
+  const message = (err as Error)?.message ?? 'erreur interne'
+  if (status >= 500) {
+    const detail = (err as Error)?.stack ?? message
+    console.error(`[memoria-daemon] ${req.method ?? '?'} ${req.url ?? '?'} → ${status} : ${detail}`)
+  }
+  // Exception APRÈS l'envoi de la réponse (effet de bord post-réponse) :
+  // writeHead lèverait ERR_HTTP_HEADERS_SENT depuis le .catch du handler →
+  // rejet non géré → Node tue le daemon. On journalise et on coupe proprement.
+  if (res.headersSent) {
+    console.error(`[memoria-daemon] ${req.method ?? '?'} ${req.url ?? '?'} : erreur après la réponse (non transmise au client) : ${message}`)
+    if (!res.writableEnded) res.end()
+    return
+  }
+  sendJson(res, status, { error: message })
 }
 
 /** Corps BRUT (string) — nécessaire au HMAC de synchro (sha256 du corps exact). */

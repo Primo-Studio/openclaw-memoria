@@ -62,11 +62,11 @@ export class ImportCommand extends Command {
         await new Promise(r => setTimeout(r, pollMs))
         status = await daemon.client.importStatus()
         out.write(`\r  ${progressLine(status)}          `)
-        if (status.state === 'done' || status.state === 'error') break
+        if (status.state === 'done' || status.state === 'error' || status.state === 'interrupted') break
       }
       out.write('\n')
 
-      if (status.state === 'error') {
+      if (status.state === 'error' || status.state === 'interrupted') {
         return fail(this.context.stderr, `import : ${status.error ?? 'erreur inconnue (voir le journal du daemon)'}`)
       }
       out.write(`✓ ${status.progress.facts_imported} souvenir(s) importé(s) (${status.progress.files_done}/${status.progress.files_total} fichier(s)).\n`)

@@ -7,8 +7,9 @@ import { existsSync, mkdirSync, openSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
-import { autostartStorageRoot, kickstartService, resolveStorageRoot, type RecallResult } from '@memoria/core'
+import { DEFAULT_CONFIG_PATH, autostartStorageRoot, kickstartService, resolveStorageRoot, type RecallResult } from '@memoria/core'
 import type { ImportJobStatus } from './import-job.js'
+import { stripLaunchdEnv } from './spawn-env.js'
 import { daemonLooksAlive, readDaemonState, type DaemonState } from './state.js'
 
 export interface ClientOptions {
@@ -16,6 +17,21 @@ export interface ClientOptions {
   configPath?: string
   /** Token : admin (depuis daemon.json) ou token d'instance (agents). */
   token?: string
+}
+
+/** Réponse de GET /v1/health. Les champs pid/supervisor/built_sha sont absents d'un daemon antérieur. */
+export interface DaemonHealth {
+  ok: boolean
+  version: string
+  daemon_id: string
+  ui?: boolean
+  pid?: number
+  started_at?: string
+  /** 'launchd' quand le process EST celui du service `memoria autostart on`. */
+  supervisor?: 'launchd' | null
+  built_sha?: string | null
+  storage_root?: string
+  config_path?: string
 }
 
 export class DaemonClient {
@@ -35,11 +51,11 @@ export class DaemonClient {
     return new DaemonClient(state, opts.token ?? state.admin_token)
   }
 
-  async health(): Promise<{ ok: boolean; version: string; daemon_id: string } | null> {
+  async health(): Promise<DaemonHealth | null> {
     try {
       const res = await fetch(`${this.baseUrl}/v1/health`, { signal: AbortSignal.timeout(2000) })
       if (!res.ok) return null
-      return (await res.json()) as { ok: boolean; version: string; daemon_id: string }
+      return (await res.json()) as DaemonHealth
     } catch {
       return null
     }
@@ -176,6 +192,18 @@ export function daemonBinPath(): string {
 }
 
 /**
+ * Arguments du daemon pour le LaunchAgent : node + bin + stockage, et le
+ * `--config` quand il n'est pas celui par défaut. Sans lui, un daemon lancé
+ * pour `memoria … --config /autre.toml` retombait en silence sur
+ * ~/.memoria/config.toml (kill-switch, LLM, synchro d'une AUTRE config).
+ */
+export function daemonProgramArguments(storageRoot: string, configPath?: string): string[] {
+  const args = [process.execPath, daemonBinPath(), '--storage-root', storageRoot]
+  if (configPath && resolve(configPath) !== resolve(DEFAULT_CONFIG_PATH)) args.push('--config', configPath)
+  return args
+}
+
+/**
  * Garantit qu'un daemon tourne pour ce storage_root : réutilise le vivant,
  * sinon en démarre un détaché (`memoria-daemon`) et attend son health.
  */
@@ -189,6 +217,8 @@ export interface EnsureDaemonHooks {
     /** Délai d'attente du health après kickstart (défaut 15 s). */
     waitMs?: number
   }
+  /** Lancement détaché du daemon (tests : capture des arguments, daemon en process). */
+  spawnDaemon?: (args: string[], storageRoot: string) => void
 }
 
 /** launchd réel : le service `memoria autostart on` s'il cible ce storage_root. */
@@ -201,7 +231,7 @@ const REAL_LAUNCHD: NonNullable<EnsureDaemonHooks['launchd']> = {
 }
 
 /** Attend qu'un daemon réponde au health pour ce storage_root (null = délai dépassé). */
-async function waitForHealthy(storageRoot: string, ms: number): Promise<DaemonState | null> {
+export async function waitForDaemon(storageRoot: string, ms: number): Promise<DaemonState | null> {
   const deadline = Date.now() + ms
   while (Date.now() < deadline) {
     await new Promise(r => setTimeout(r, 150))
@@ -212,6 +242,20 @@ async function waitForHealthy(storageRoot: string, ms: number): Promise<DaemonSt
     }
   }
   return null
+}
+
+/** Attend la mort d'un process (kill 0) ; false si toujours vivant au bout de `ms`. */
+export async function waitForExit(pid: number, ms: number): Promise<boolean> {
+  const deadline = Date.now() + ms
+  for (;;) {
+    try {
+      process.kill(pid, 0)
+    } catch {
+      return true
+    }
+    if (Date.now() >= deadline) return false
+    await new Promise(r => setTimeout(r, 100))
+  }
 }
 
 export async function ensureDaemon(opts: ClientOptions = {}, hooks: EnsureDaemonHooks = {}): Promise<DaemonState> {
@@ -227,14 +271,26 @@ export async function ensureDaemon(opts: ClientOptions = {}, hooks: EnsureDaemon
   // et après un `memoria stop` (sortie propre) launchd ne relance pas seul.
   const launchd = hooks.launchd ?? REAL_LAUNCHD
   if (launchd.targets(storageRoot) && launchd.kickstart()) {
-    const viaLaunchd = await waitForHealthy(storageRoot, launchd.waitMs ?? 15_000)
+    const viaLaunchd = await waitForDaemon(storageRoot, launchd.waitMs ?? 15_000)
     if (viaLaunchd) return viaLaunchd
     console.warn('[memoria] launchd n’a pas relancé le daemon à temps — démarrage direct en repli (voir ~/Library/Logs/memoria.err.log)')
   }
 
-  const binPath = daemonBinPathForSpawn()
-  const args = [binPath]
+  const args = [daemonBinPathForSpawn()]
   if (opts.storageRoot) args.push('--storage-root', opts.storageRoot)
+  // Le daemon détaché recevait le storage_root mais PAS la config : il
+  // résolvait ~/.memoria/config.toml et tournait avec le mauvais kill-switch /
+  // LLM / synchro quand `--config` était fourni — sans le dire.
+  if (opts.configPath) args.push('--config', opts.configPath)
+  ;(hooks.spawnDaemon ?? spawnDetachedDaemon)(args, storageRoot)
+
+  const started = await waitForDaemon(storageRoot, 15_000)
+  if (started) return started
+  throw new Error('le daemon n’a pas démarré dans les 15 s (voir memoria doctor)')
+}
+
+/** Daemon détaché, journal en append dans le stockage. */
+function spawnDetachedDaemon(args: string[], storageRoot: string): void {
   // `stdio: 'ignore'` jetait TOUT : warnings, échecs d'extraction, stacktraces.
   // Une panne du daemon lancé par `memoria start` était donc indiagnosticable —
   // c'est exactement ce qui a laissé une extraction morte pendant dix jours sans
@@ -248,12 +304,10 @@ export async function ensureDaemon(opts: ClientOptions = {}, hooks: EnsureDaemon
   } catch {
     /* stockage non inscriptible : on démarre quand même, sans journal */
   }
-  const child = spawn(process.execPath, args, { detached: true, stdio })
+  // Sans XPC_SERVICE_NAME : un daemon lancé d'ici n'est JAMAIS le service
+  // launchd, même quand la commande vient d'une passation depuis lui (spawn-env.ts).
+  const child = spawn(process.execPath, args, { detached: true, stdio, env: stripLaunchdEnv() })
   child.unref()
-
-  const started = await waitForHealthy(storageRoot, 15_000)
-  if (started) return started
-  throw new Error('le daemon n’a pas démarré dans les 15 s (voir memoria doctor)')
 }
 
 /**

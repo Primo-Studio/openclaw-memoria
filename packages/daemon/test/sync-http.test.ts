@@ -24,8 +24,8 @@ beforeEach(async () => {
   writeFileSync(join(dir, 'hub.toml'), `[sync]\nenabled = true\nrole = "hub"\nlisten_lan = "127.0.0.1:${LAN_PORT}"\nscopes = ["org"]\n`)
   writeFileSync(join(dir, 'spoke.toml'), `[sync]\nenabled = true\nrole = "spoke"\nscopes = ["org"]\n`)
 
-  hub = await startDaemon({ storageRoot: hubRoot, configPath: join(dir, 'hub.toml') })
-  spoke = await startDaemon({ storageRoot: spokeRoot, configPath: join(dir, 'spoke.toml') })
+  hub = await startDaemon({ storageRoot: hubRoot, configPath: join(dir, 'hub.toml'), llm: { extraction: null } })
+  spoke = await startDaemon({ storageRoot: spokeRoot, configPath: join(dir, 'spoke.toml'), llm: { extraction: null } })
 
   // un fait partagé sur le hub (scope org)
   const a = hub.memoria.pairAssistant({ type: 'openclaw', display_name: 'Koda' })

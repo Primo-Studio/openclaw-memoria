@@ -19,7 +19,7 @@ async function admin(path: string): Promise<Response> {
 
 beforeEach(async () => {
   root = mkdtempSync(join(tmpdir(), 'memoria-llmusage-'))
-  daemon = await startDaemon({ storageRoot: root, configPath: join(root, 'config.toml') })
+  daemon = await startDaemon({ storageRoot: root, configPath: join(root, 'config.toml'), llm: { extraction: null } })
 })
 
 afterEach(async () => {

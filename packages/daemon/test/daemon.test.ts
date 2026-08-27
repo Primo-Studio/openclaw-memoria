@@ -13,7 +13,7 @@ let daemon: RunningDaemon
 
 beforeEach(async () => {
   root = mkdtempSync(join(tmpdir(), 'memoria-daemon-'))
-  daemon = await startDaemon({ storageRoot: root, configPath: join(root, 'config.toml') })
+  daemon = await startDaemon({ storageRoot: root, configPath: join(root, 'config.toml'), llm: { extraction: null } })
 })
 
 afterEach(async () => {
@@ -30,7 +30,7 @@ describe('daemon', () => {
   })
 
   it('singleton : un second daemon sur le même storage_root est refusé', async () => {
-    await expect(startDaemon({ storageRoot: root, configPath: join(root, 'config.toml') })).rejects.toThrow(/déjà/)
+    await expect(startDaemon({ storageRoot: root, configPath: join(root, 'config.toml'), llm: { extraction: null } })).rejects.toThrow(/déjà/)
   })
 
   it('admin sans token → 401 ; avec token → OK', async () => {
