@@ -18,7 +18,7 @@ export {
   registerOpenClaw,
 } from './register.js'
 export type { HostKind, RegisterResult } from './register.js'
-export { ActiveContextTracker } from './context.js'
+export { ActiveContextTracker, normalizeContextId } from './context.js'
 export type { DetectedRepo, SetContextInput } from './context.js'
 export {
   credentialsPath,
@@ -29,12 +29,26 @@ export {
   saveCredentials,
 } from './credentials.js'
 export type { InstanceCredentials } from './credentials.js'
-export { buildServer, serve, HttpDaemonGateway, MCP_SERVER_VERSION } from './serve.js'
+export {
+  buildServer,
+  serve,
+  HttpDaemonGateway,
+  DaemonHttpError,
+  DaemonTimeoutError,
+  DAEMON_TIMEOUT_MS,
+  CAPTURE_TIMEOUT_MS,
+  MCP_SERVER_VERSION,
+  SERVER_INSTRUCTIONS,
+  compactStoredFact,
+  compactRecall,
+  compactInterlocutor,
+} from './serve.js'
 export type {
   BuildServerOptions,
   BuiltServer,
   CaptureMessage,
   DaemonGateway,
   ServeOptions,
+  StoreScope,
   ToolHandlers,
 } from './serve.js'

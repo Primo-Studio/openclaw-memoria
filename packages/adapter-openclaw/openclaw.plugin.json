@@ -54,9 +54,10 @@
       },
       "recallTimeoutMs": {
         "type": "number",
-        "default": 800,
+        "default": 2000,
         "minimum": 100,
-        "maximum": 5000
+        "maximum": 5000,
+        "description": "Délai max du recall avant chaque tour. 2 s couvre des embeddings distants (≈0,5–1,9 s mesurés) ; au-delà du délai, aucun souvenir n'est injecté pour ce tour."
       },
       "tokenBudget": {
         "type": "number",

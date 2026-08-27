@@ -2,7 +2,8 @@
  * Install/désinstall des HOOKS OpenClaw (auto-recall + auto-capture).
  * Le point critique : poser `allowConversationAccess=true`, sans quoi
  * `agent_end`/`llm_output` sont bloqués silencieusement (DIAG-OPENCLAW §2.1).
- * Chemins ~/.openclaw injectés en tmpdir : on ne touche jamais la vraie config.
+ * Chemins ~/.openclaw injectés en tmpdir et CLI injectée : on ne touche jamais
+ * la vraie config ni le vrai binaire `openclaw` (voir register-cli.test.ts).
  */
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -60,15 +61,15 @@ describe('installOpenClawHooks', () => {
     expect(cfg.plugins.allow).toEqual(expect.arrayContaining(['déjà', 'memoria'])) // fusionné
   })
 
-  // Copie récursive + lectures/écritures disque : > 5 s sur une machine chargée
-  // (observé 27/08 avec un build Rust en parallèle) — pas un défaut du code.
-  it('round-trip : unregister retire le plugin et l’entrée, garde le reste', { timeout: 20_000 }, () => {
+  it('round-trip : unregister retire le plugin et l’entrée, garde le reste', () => {
     mkdirSync(oc, { recursive: true })
     writeFileSync(join(oc, 'openclaw.json'), JSON.stringify({ model: 'x', plugins: { allow: ['memoria'], entries: { memoria: { enabled: true } } } }))
     installOpenClawHooks({ instanceId: 'i', token: 't', openclawDir: oc, srcDir: src })
     expect(existsSync(join(oc, 'extensions', 'memoria'))).toBe(true)
 
-    const res = unregisterOpenClaw({ openclawDir: oc })
+    // Sans `hasCli` injecté, ce test lançait le VRAI `openclaw --version` puis
+    // `openclaw mcp unset memoria` de la machine (4,4 s, et un retrait réel).
+    const res = unregisterOpenClaw({ openclawDir: oc, hasCli: () => false })
     expect(res.detail).toMatch(/retir/i)
     expect(existsSync(join(oc, 'extensions', 'memoria'))).toBe(false)
     const cfg = JSON.parse(readFileSync(join(oc, 'openclaw.json'), 'utf8'))

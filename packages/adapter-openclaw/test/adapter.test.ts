@@ -26,16 +26,21 @@ import { createMemoriaCorpus, registerCorpusSupplement, sdkCandidates, toCorpusR
 function fakeApi(config: Record<string, unknown>): {
   api: OpenClawPluginApi
   handlers: Map<string, (event: unknown, ctx?: unknown) => unknown>
+  hookOpts: Map<string, { priority?: number; timeoutMs?: number } | undefined>
   warnings: string[]
 } {
   const handlers = new Map<string, (event: unknown, ctx?: unknown) => unknown>()
+  const hookOpts = new Map<string, { priority?: number; timeoutMs?: number } | undefined>()
   const warnings: string[] = []
   const api: OpenClawPluginApi = {
     pluginConfig: config,
     logger: { warn: m => warnings.push(m), info: () => {}, debug: () => {} },
-    on: (hook, handler) => handlers.set(hook, handler as (event: unknown, ctx?: unknown) => unknown),
+    on: (hook, handler, opts) => {
+      handlers.set(hook, handler as (event: unknown, ctx?: unknown) => unknown)
+      hookOpts.set(hook, opts)
+    },
   }
-  return { api, handlers, warnings }
+  return { api, handlers, hookOpts, warnings }
 }
 
 const item = (over: Partial<RecallItem>): RecallItem => ({
@@ -69,6 +74,23 @@ describe('helpers purs', () => {
       { role: 'user', content: 'salut' },
       { role: 'assistant', content: 'oui voilà' },
       { role: 'assistant', content: 'sans rôle' },
+    ])
+  })
+
+  it('toMemoriaMessages écarte les rôles hors user/assistant (toolResult, system) — CHECK SQL du WAL', () => {
+    // Le SDK OpenClaw livre `{ role: "toolResult" }` dans agent_end dès qu'un outil
+    // a été appelé ; le WAL du daemon n'accepte que user/assistant/tool → 500 et
+    // tour perdu. Le rôle doit être normalisé AVANT de quitter l'adaptateur.
+    const out = toMemoriaMessages([
+      { role: 'user', content: 'liste mes fichiers' },
+      { role: 'assistant', content: [{ type: 'toolCall', name: 'ls' }] },
+      { role: 'toolResult', content: [{ type: 'text', text: 'a.txt\nb.txt' }] },
+      { role: 'assistant', content: 'tu as a.txt et b.txt' },
+      { role: 'system', content: 'résumé de compaction' },
+    ])
+    expect(out).toEqual([
+      { role: 'user', content: 'liste mes fichiers' },
+      { role: 'assistant', content: 'tu as a.txt et b.txt' },
     ])
   })
 
@@ -199,6 +221,16 @@ describe('buildActiveContext', () => {
   it('undefined si rien à déclarer', () => {
     expect(buildActiveContext({}, undefined)).toBeUndefined()
   })
+
+  it('normalise projectId/clientOrgId/orgId comme le serveur MCP (même slug des deux côtés)', () => {
+    // Koda (config « Maroway ») et Claude (set_context « maroway ») doivent
+    // graver le MÊME client_org_id, sinon l'isolation client les sépare.
+    expect(buildActiveContext({ projectId: 'Site Primo', clientOrgId: 'Maroway', orgId: 'Primo Studio ' }, undefined)).toEqual({
+      project_id: 'site-primo',
+      client_org_id: 'maroway',
+      org_id: 'primo-studio',
+    })
+  })
 })
 
 describe('lruSet', () => {
@@ -262,6 +294,31 @@ describe('register → hooks → daemon', () => {
     expect(getStats().recallEmpty).toBe(1)
   })
 
+  it('recall : délai par défaut 2 s (embeddings distants : 425–929 ms mesurés, 1 845 ms à froid) — 800 ms perdait 1 tour sur 6', () => {
+    // Le hook before_prompt_build est enregistré avec timeoutMs = recallTimeoutMs + 200.
+    // Chaque dépassement = aucun souvenir injecté pour ce tour, sans que
+    // l'utilisateur le voie (warn 1×/min).
+    const { api, hookOpts } = fakeApi(baseConfig)
+    register(api)
+    expect(hookOpts.get('before_prompt_build')?.timeoutMs).toBe(2_200)
+  })
+
+  it('recall : un timeout est nommé comme tel dans le warn, avec le réglage à augmenter', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new DOMException('The operation was aborted due to timeout', 'TimeoutError')
+      }),
+    )
+    const { api, handlers, warnings } = fakeApi({ ...baseConfig, recallTimeoutMs: 300 })
+    register(api)
+    const result = await handlers.get('before_prompt_build')!({ prompt: 'x' })
+    expect(result).toBeUndefined()
+    expect(getStats().recallFail).toBe(1)
+    expect(warnings.join(' ')).toMatch(/300 ms/)
+    expect(warnings.join(' ')).toMatch(/recallTimeoutMs/)
+  })
+
   it('recall : daemon injoignable → pas de throw, pas d’injection, compté comme échec', async () => {
     const { api, handlers } = fakeApi({ token: 'tok', instance: 'koda', storageRoot: '/tmp/inexistant-memoria-xyz' })
     register(api)
@@ -296,6 +353,31 @@ describe('register → hooks → daemon', () => {
       { role: 'user', content: 'salut' },
       { role: 'assistant', content: 'bonjour Néto' },
     ])
+  })
+
+  it('agent_end avec un résultat d’outil ne poste que des rôles valides (user/assistant)', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ appended: 2 }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { api, handlers } = fakeApi(baseConfig)
+    register(api)
+
+    await handlers.get('agent_end')!(
+      {
+        success: true,
+        runId: 'run-tool',
+        messages: [
+          { role: 'user', content: 'quelle heure est-il ?' },
+          { role: 'assistant', content: [{ type: 'toolCall', name: 'clock' }] },
+          { role: 'toolResult', content: [{ type: 'text', text: '14:32' }] },
+          { role: 'assistant', content: 'il est 14 h 32' },
+        ],
+      },
+      { sessionId: 's1' },
+    )
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const body = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string) as { messages: Array<{ role: string }> }
+    expect(body.messages.map(m => m.role)).toEqual(['user', 'assistant'])
+    expect(body.messages.every(m => m.role === 'user' || m.role === 'assistant')).toBe(true)
   })
 
   it('agent_end rejoué pour le même tour → une seule capture', async () => {

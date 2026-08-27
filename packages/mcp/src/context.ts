@@ -19,15 +19,43 @@ export interface DetectedRepo {
   topic: string
 }
 
+/**
+ * Normalise un identifiant de projet/client/org déclaré en texte libre vers un
+ * slug stable : minuscules, sans accents, mots séparés par « - ».
+ *
+ * Le core compare ces identifiants par ÉGALITÉ STRICTE (passesClientIsolation,
+ * boost projet) : Koda configuré avec « Maroway » et Claude qui déclare
+ * « maroway » gravaient deux client_org_id différents, et chacun était aveugle
+ * aux souvenirs de l'autre. Tant que le daemon ne résout pas les noms contre
+ * son registre, ce slug commun est ce qui fait converger les agents.
+ * Un UUID (minuscules + tirets) traverse inchangé. Vide → null (= effacer).
+ *
+ * ⚠ Même fonction dans packages/adapter-openclaw/src/index.ts (le plugin
+ * n'a aucune dépendance par conception) — modifier les deux ensemble.
+ */
+export function normalizeContextId(raw: string): string | null {
+  const slug = raw
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+  return slug || null
+}
+
 export class ActiveContextTracker {
   private readonly explicit: ActiveContext = {}
   private readonly detected: ActiveContext = {}
 
-  /** Déclaration explicite par l'agent ; chaîne vide = effacer le champ. */
+  /**
+   * Déclaration explicite par l'agent ; chaîne vide = effacer le champ.
+   * Les identifiants sont normalisés (voir normalizeContextId) ; repo_path est
+   * un chemin, il reste tel quel.
+   */
   set(input: SetContextInput): ActiveContext {
-    if (input.project !== undefined) this.explicit.project_id = input.project || null
-    if (input.client !== undefined) this.explicit.client_org_id = input.client || null
-    if (input.org !== undefined) this.explicit.org_id = input.org || null
+    if (input.project !== undefined) this.explicit.project_id = normalizeContextId(input.project)
+    if (input.client !== undefined) this.explicit.client_org_id = normalizeContextId(input.client)
+    if (input.org !== undefined) this.explicit.org_id = normalizeContextId(input.org)
     if (input.repo_path !== undefined) this.explicit.repo_path = input.repo_path || null
     return this.current()
   }
