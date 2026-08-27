@@ -13,6 +13,7 @@
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { existsSync, mkdirSync } from 'node:fs'
+import { join } from 'node:path'
 import { timingSafeEqual } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import {
@@ -131,7 +132,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     release()
     throw err
   }
-  const importJobs = new ImportJobRunner(memoria)
+  const importJobs = new ImportJobRunner(memoria, join(storageRoot, 'import-status.json'))
 
   const adminToken = newToken()
   const daemonId = newToken().slice(0, 16)
@@ -926,6 +927,10 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         return
       }
       case 'POST /v1/admin/update': {
+        // Une mise à jour redémarre le daemon : un import en cours serait coupé net.
+        if (importJobs.running) {
+          throw new HttpError(409, 'un import est en cours — attends sa fin (GET /v1/admin/import_status) avant de mettre à jour')
+        }
         const result = await pullAndBuild()
         sendJson(res, 200, result)
         // Redémarrage planifié APRÈS l'envoi de la réponse, dès qu'un build a eu
@@ -1207,6 +1212,10 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     if (syncTimer) clearInterval(syncTimer)
     if (lanServer) await new Promise<void>(r => lanServer!.close(() => r()))
     await new Promise<void>((resolveClose) => server.close(() => resolveClose()))
+    // Un import en cours est ANNONCÉ interrompu (persisté) avant de fermer les
+    // DB — sinon il mourait en « Memoria est fermé » dans un état perdu avec le
+    // process. On lui laisse 2 s (launchd SIGKILL à 5 s) pour finir un fichier.
+    if (importJobs.interrupt('arrêt du daemon')) await importJobs.settle(2_000)
     clearDaemonState(storageRoot)
     release()
     memoria.close()
