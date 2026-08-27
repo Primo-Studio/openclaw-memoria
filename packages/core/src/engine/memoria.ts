@@ -960,21 +960,53 @@ export class Memoria {
     return this.patternFor(this.openContent(db.path)).listProposed()
   }
 
-  decidePattern(instanceId: string, patternId: string, decision: 'accept' | 'dismiss'): { ok: boolean } {
+  /**
+   * Tranche une récurrence. Accepter = CONSOLIDER (c'est ce que promet le
+   * bouton « Consolider ») : un seul membre reste actif — le canonique, le
+   * plus récent (celui dont le pattern a tiré `canonical_fact`) — et les
+   * autres membres encore actifs sont supersédés EN POINTANT SUR LUI
+   * (superseded_by), comme mergeFacts. Rien n'est effacé, la chaîne reste
+   * navigable et réversible. Avant : accept() ne changeait rien à la mémoire ;
+   * PatternEngine.consolidate (jamais câblé) aurait supersédé TOUS les
+   * membres sans remplaçant — perte nette de souvenirs.
+   */
+  decidePattern(instanceId: string, patternId: string, decision: 'accept' | 'dismiss'): { ok: boolean; superseded: number } {
     this.assertOpen()
     const db = this.registry.dbForInstance(instanceId)
-    if (!db || !existsSync(db.path)) return { ok: false }
-    const engine = this.patternFor(this.openContent(db.path))
+    if (!db || !existsSync(db.path)) return { ok: false, superseded: 0 }
+    const store = this.openContent(db.path)
+    const engine = this.patternFor(store)
+    let superseded = 0
     const result = decision === 'accept' ? engine.accept(patternId) : engine.dismiss(patternId)
+    if (decision === 'accept' && result) {
+      const ph = result.member_fact_ids.map(() => '?').join(',')
+      const members = result.member_fact_ids.length
+        ? (store.db
+            .prepare(`SELECT id, fact, created_at FROM facts WHERE id IN (${ph}) AND superseded = 0 ORDER BY created_at DESC`)
+            .all(...result.member_fact_ids) as Array<{ id: string; fact: string; created_at: string }>)
+        : []
+      const canonical = members.find(f => f.fact === result.canonical_fact) ?? members[0]
+      if (canonical && members.length > 1) {
+        const ts = nowISO()
+        const tx = store.db.transaction(() => {
+          const stmt = store.db.prepare('UPDATE facts SET superseded = 1, superseded_by = ?, updated_at = ? WHERE id = ? AND superseded = 0')
+          for (const f of members) {
+            if (f.id === canonical.id) continue
+            superseded += stmt.run(canonical.id, ts, f.id).changes
+          }
+        })
+        tx()
+      }
+    }
     this.registry.audit({
       actor_type: 'user',
       actor_id: 'local',
       action: `pattern_${decision}`,
       target_id_hash: sha256Hex(patternId),
       scope_id: null,
-      reason: null,
+      reason: decision === 'accept' ? `superseded=${superseded}` : null,
     })
-    return { ok: result !== null }
+    return { ok: result !== null, superseded }
   }
 
   /**
