@@ -24,5 +24,16 @@
   },
   "dependencies": {
     "@memoria/core": "*"
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Primo-Studio/openclaw-memoria.git",
+    "directory": "packages/daemon"
   }
 }
