@@ -339,28 +339,59 @@ fn spawn_daemon(node: &NodeInfo, bin: &Path) -> Result<PathBuf, String> {
     Ok(log_path)
 }
 
-/// Cœur de `start_daemon` : réutilise un daemon vivant, sinon spawn + attente
-/// de `daemon.json` + health (budget 15 s, mêmes constantes qu'`ensureDaemon`).
+/// Comment démarrer le daemon, décidé à partir de ce qu'on a observé.
+#[derive(Debug, PartialEq, Eq)]
+enum StartPlan {
+    /// Un daemon répond déjà sur ce port : rien à lancer.
+    Reuse(u16),
+    /// Un service launchd (`memoria autostart on`) chargé vise ce stockage :
+    /// c'est LUI qui doit lancer le daemon (label `gui/<uid>/…`).
+    Kickstart(String),
+    /// Ni daemon vivant ni launchd : `node bin.js` détaché, lancé par l'app.
+    Spawn,
+}
+
+/// Politique de démarrage, pure (testable sans daemon ni launchd) : daemon
+/// vivant > service launchd chargé > spawn direct. Spawner alors qu'un service
+/// launchd existe prendrait daemon.lock et ferait boucler launchd en échec ;
+/// et après un arrêt propre, launchd ne relance pas seul
+/// (KeepAlive.SuccessfulExit=false) → kickstart explicite.
+fn decide_start(running_port: Option<u16>, launchd_label: Option<String>) -> StartPlan {
+    match (running_port, launchd_label) {
+        (Some(port), _) => StartPlan::Reuse(port),
+        (None, Some(label)) => StartPlan::Kickstart(label),
+        (None, None) => StartPlan::Spawn,
+    }
+}
+
+/// Cœur de `start_daemon` : réutilise un daemon vivant, sinon launchd, sinon
+/// spawn + attente de `daemon.json` + health (budget 15 s, mêmes constantes
+/// qu'`ensureDaemon`).
 fn start_daemon_blocking() -> Result<DaemonInfo, String> {
     let storage_root = resolve_storage_root()?;
-    if let Some(state) = read_daemon_state(&storage_root) {
-        if http_health(state.port) {
-            return Ok(DaemonInfo { port: state.port, healthy: true });
-        }
-    }
-
-    // Service launchd (`memoria autostart on`) installé pour CE stockage :
-    // c'est LUI qui doit lancer le daemon. Spawner ici prendrait daemon.lock et
-    // ferait boucler launchd en échec ; et après un arrêt propre, launchd ne
-    // relance pas seul (KeepAlive.SuccessfulExit=false) → kickstart explicite.
+    let running_port = read_daemon_state(&storage_root)
+        .filter(|state| http_health(state.port))
+        .map(|state| state.port);
+    // launchctl n'est interrogé que si nécessaire (un process de plus, sinon).
     #[cfg(target_os = "macos")]
-    if let Some(label) = launchd_service_for(&storage_root) {
-        if launchd_kickstart(&label) {
-            if let Some(info) = wait_for_health(&storage_root, Duration::from_secs(15)) {
-                return Ok(info);
+    let launchd_label = running_port.is_none().then(|| launchd_service_for(&storage_root)).flatten();
+    #[cfg(not(target_os = "macos"))]
+    let launchd_label: Option<String> = None;
+
+    match decide_start(running_port, launchd_label) {
+        StartPlan::Reuse(port) => return Ok(DaemonInfo { port, healthy: true }),
+        StartPlan::Kickstart(label) => {
+            #[cfg(target_os = "macos")]
+            if launchd_kickstart(&label) {
+                if let Some(info) = wait_for_health(&storage_root, Duration::from_secs(15)) {
+                    return Ok(info);
+                }
+                eprintln!("[memoria-desktop] launchd n'a pas relancé le daemon à temps — démarrage direct en repli");
             }
-            eprintln!("[memoria-desktop] launchd n'a pas relancé le daemon à temps — démarrage direct en repli");
+            #[cfg(not(target_os = "macos"))]
+            let _ = label;
         }
+        StartPlan::Spawn => {}
     }
 
     let node = find_node()?;
@@ -1058,6 +1089,101 @@ mod tests {
         assert_eq!(tray_changes(Some(&active), &down), (true, true));
         // Même couleur, seule la cause change : info-bulle seule.
         assert_eq!(tray_changes(Some(&down), &down_with_cause), (false, true));
+    }
+
+    #[test]
+    fn icones_embarquees_se_decodent() {
+        // `include_bytes!` n'embarque que des octets : un PNG corrompu ou
+        // remplacé par erreur ne se verrait qu'au runtime, via `expect` =
+        // crash de l'app au démarrage. Ici on décode les 3 icônes et on
+        // vérifie qu'elles sont bien celles validées (44×44, M coloré).
+        for state in [TrayState::Active, TrayState::Down, TrayState::Starting, TrayState::Unknown] {
+            let icon = state.icon();
+            assert_eq!((icon.width(), icon.height()), (44, 44), "{state:?}");
+            let px = |x: u32, y: u32| -> [u8; 4] {
+                let i = ((y * icon.width() + x) * 4) as usize;
+                icon.rgba()[i..i + 4].try_into().unwrap()
+            };
+            assert_eq!(px(0, 0)[3], 0, "{state:?} : le coin doit être transparent");
+            let stroke = px(6, 22); // jambage gauche du M
+            assert_eq!(stroke[3], 255, "{state:?} : le M doit être opaque");
+            let expected = match state {
+                TrayState::Active => [56, 213, 95],
+                TrayState::Down => [255, 63, 51],
+                TrayState::Starting | TrayState::Unknown => [152, 152, 158],
+            };
+            assert_eq!(&stroke[..3], &expected, "{state:?} : couleur du M");
+        }
+    }
+
+    #[test]
+    fn le_plan_de_demarrage_prefere_le_daemon_vivant_puis_launchd() {
+        // Daemon qui répond : on le réutilise, même si launchd est installé.
+        assert_eq!(decide_start(Some(7437), Some("gui/501/x".into())), StartPlan::Reuse(7437));
+        assert_eq!(decide_start(Some(7437), None), StartPlan::Reuse(7437));
+        // Pas de daemon mais un service launchd chargé pour ce stockage :
+        // c'est lui qui lance (spawner ici prendrait daemon.lock).
+        assert_eq!(decide_start(None, Some("gui/501/x".into())), StartPlan::Kickstart("gui/501/x".into()));
+        // Ni l'un ni l'autre : l'app lance node bin.js elle-même.
+        assert_eq!(decide_start(None, None), StartPlan::Spawn);
+    }
+
+    /// Faux daemon : sert `GET /v1/health` en HTTP/1.1 brut sur un port
+    /// éphémère, avec le corps donné, puis ferme (comme `connection: close`).
+    fn fake_daemon(body: &'static str) -> u16 {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut stream = stream;
+                let mut req = [0u8; 1024];
+                let _ = stream.read(&mut req);
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(resp.as_bytes());
+            }
+        });
+        port
+    }
+
+    fn write_daemon_json(dir: &Path, port: u16) {
+        fs::write(
+            dir.join("daemon.json"),
+            format!("{{\"daemon_id\":\"abc\",\"port\":{port},\"admin_token\":\"tok\",\"pid\":1,\"started_at\":\"2026-06-10T00:00:00.000Z\"}}"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn attente_du_health_aboutit_des_que_le_daemon_repond() {
+        let tmp = TmpDir::new("wait-ok");
+        let port = fake_daemon("{\"ok\":true,\"version\":\"0.1.0\"}");
+        // daemon.json apparaît PENDANT l'attente (comme au vrai démarrage).
+        let dir = tmp.0.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            write_daemon_json(&dir, port);
+        });
+        let info = wait_for_health(&tmp.0, Duration::from_secs(5)).expect("daemon détecté");
+        assert_eq!(info.port, port);
+        assert!(info.healthy);
+    }
+
+    #[test]
+    fn attente_du_health_expire_si_le_daemon_ne_repond_pas_ok() {
+        let tmp = TmpDir::new("wait-ko");
+        // Un serveur qui répond mais pas `ok:true` (daemon en train de mourir,
+        // ou autre service sur le port recyclé) ne doit PAS passer pour sain.
+        let port = fake_daemon("{\"ok\":false}");
+        write_daemon_json(&tmp.0, port);
+        let started = Instant::now();
+        assert!(wait_for_health(&tmp.0, Duration::from_millis(600)).is_none());
+        assert!(started.elapsed() >= Duration::from_millis(600), "doit attendre tout le budget");
+        // Sans daemon.json du tout : même résultat, sans panique.
+        let empty = TmpDir::new("wait-vide");
+        assert!(wait_for_health(&empty.0, Duration::from_millis(250)).is_none());
     }
 
     #[test]
