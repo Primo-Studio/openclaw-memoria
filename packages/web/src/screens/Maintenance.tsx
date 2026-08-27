@@ -13,7 +13,7 @@
  *     l'écran dit toujours combien d'éléments sont sélectionnés et ce qui va
  *     leur arriver — jamais un bouton dont l'effet se devine.
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ApiError,
   correctFact,
@@ -27,6 +27,10 @@ import {
 } from '../api'
 import { useT } from '../i18n'
 import { EmptyState, ErrorBanner, Spinner, humanError, listPhase } from '../components/ui'
+import { createSequence } from '../lib/sequence'
+
+/** Délai avant de lancer la recherche après la dernière frappe. */
+const SEARCH_DEBOUNCE_MS = 300
 
 type Source = 'search' | 'never-used'
 
@@ -36,6 +40,11 @@ export function Maintenance() {
   const [instance, setInstance] = useState<string>('')
   const [source, setSource] = useState<Source>('search')
   const [query, setQuery] = useState('')
+  // Valeur réellement recherchée : `query` suit la frappe, `debouncedQuery`
+  // ne bouge qu'après SEARCH_DEBOUNCE_MS de silence — un GET par mot, pas
+  // un par caractère.
+  const [debouncedQuery, setDebouncedQuery] = useState('')
+  const seq = useRef(createSequence())
   const [facts, setFacts] = useState<AdminFact[] | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null)
@@ -62,17 +71,31 @@ export function Maintenance() {
       .catch(err => fail(err, t('maintenance.agents_failed')))
   }, [fail, t, tick])
 
+  useEffect(() => {
+    const id = window.setTimeout(() => setDebouncedQuery(query), SEARCH_DEBOUNCE_MS)
+    return () => window.clearTimeout(id)
+  }, [query])
+
+  // La sélection ne se vide qu'en changeant d'agent ou de source : affiner la
+  // recherche après avoir coché des doublons ne doit pas tout perdre.
+  useEffect(() => {
+    setSelected(new Set())
+  }, [instance, source])
+
   const load = useCallback(async () => {
     if (!instance) return
     setError(null)
-    setSelected(new Set())
+    const id = seq.current.next()
     try {
-      setFacts(source === 'never-used' ? await neverUsedFacts(instance) : await searchFacts(instance, query))
+      const list = source === 'never-used' ? await neverUsedFacts(instance) : await searchFacts(instance, debouncedQuery)
+      if (!seq.current.isCurrent(id)) return // réponse périmée : une requête plus récente est partie
+      setFacts(list)
     } catch (err) {
+      if (!seq.current.isCurrent(id)) return
       // facts reste tel quel : listPhase() affiche l'erreur, pas un faux « vide ».
       fail(err, t('maintenance.load_failed'))
     }
-  }, [instance, source, query, fail, t])
+  }, [instance, source, debouncedQuery, fail, t])
 
   useEffect(() => {
     void load()
@@ -101,6 +124,8 @@ export function Maintenance() {
       setNotice(null)
       try {
         setNotice(await fn())
+        // l'opération a consommé la sélection (fusionnés / oubliés) → on repart à zéro
+        setSelected(new Set())
         await load()
       } catch (err) {
         fail(err, fallback)
