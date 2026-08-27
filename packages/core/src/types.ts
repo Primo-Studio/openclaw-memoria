@@ -355,10 +355,13 @@ export interface RecallResult {
 export interface ForgetFilter {
   ids?: string[]
   scope_id?: string
+  /** Sémantique ET : seuls les faits contenant TOUS les mots de la requête partent. */
   query?: string
   category?: string
-  /** Si vrai, exige une correspondance exacte sinon refuse (garde anti-suppression massive). */
+  /** Requis dès qu'aucun `ids` n'est donné (requête comprise) : garde anti-suppression massive. */
   confirm_bulk?: boolean
+  /** Ne supprime rien : renvoie seulement combien de faits partiraient (`matched`). */
+  dry_run?: boolean
 }
 
 /**

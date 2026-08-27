@@ -20,7 +20,7 @@ import {
 } from '../config.js'
 import { RegistryStore } from '../storage/registry.js'
 import { isOnNetworkVolume } from '../storage/network-guard.js'
-import { ContentStore, rowToFact, type FactRow, type FtsHit, type FtsSearchOptions } from '../storage/content.js'
+import { ContentStore, normalizeText, queryTokens, rowToFact, type FactRow, type FtsHit, type FtsSearchOptions } from '../storage/content.js'
 import { EmbeddingIndexer, hybridSearchFacts } from '../vector/index.js'
 import {
   CognitionEngine,
@@ -2037,20 +2037,26 @@ export class Memoria {
     return this.sharedDbPath(scope)
   }
 
-  /** Hard-delete gouverné (spec §11). */
-  forget(filter: ForgetFilter): { deleted: number } {
+  /**
+   * Hard-delete gouverné (spec §11). `matched` = faits visés (utile en dry_run).
+   *
+   * Sans `ids`, la suppression est TOUJOURS « en masse » (confirm_bulk requis),
+   * requête comprise : la CLI l'exigeait déjà, le moteur laissait passer.
+   */
+  forget(filter: ForgetFilter): { deleted: number; matched: number } {
     this.assertOpen()
     const hasIds = (filter.ids?.length ?? 0) > 0
     if (!hasIds && !filter.query && !filter.category && !filter.scope_id) {
       throw new Error('forget : filtre vide refusé')
     }
-    if (!hasIds && !filter.query && filter.confirm_bulk !== true) {
+    if (!hasIds && filter.confirm_bulk !== true) {
       throw new Error('forget : suppression en masse — confirm_bulk requis')
     }
 
     let deleted = 0
+    let matched = 0
     for (const entry of this.registry.listDbs()) {
-      if (entry.kind === 'registry') continue
+      if (entry.kind === 'registry' || !existsSync(entry.path)) continue
       const store = this.openContent(entry.path)
       let ids = filter.ids ?? []
       if (!hasIds) {
@@ -2066,8 +2072,16 @@ export class Memoria {
         }
         let rows: Array<{ id: string }>
         if (filter.query) {
+          // La requête FTS est un OR (pensé pour le recall, qui note ensuite la
+          // couverture). Pour EFFACER, on exige tous les mots : « clé API
+          // Stripe » ne doit pas emporter « la clé du bureau est chez Badette ».
+          const tokens = queryTokens(filter.query)
           rows = store
             .searchFacts(filter.query, { limit: 500, includeDormant: true, maxSensitivity: 'critical', scopeIds: filter.scope_id ? [filter.scope_id] : undefined })
+            .filter(h => {
+              const text = normalizeText(h.row.fact)
+              return tokens.every(t => text.includes(t))
+            })
             .map(h => ({ id: h.row.id }))
           if (filter.category) rows = rows.filter(r => store.getFact(r.id)?.category === filter.category)
         } else {
@@ -2078,6 +2092,8 @@ export class Memoria {
         ids = rows.map(r => r.id)
       }
       if (ids.length === 0) continue
+      matched += ids.length
+      if (filter.dry_run) continue
       // Nettoyer thèmes + récurrences AVANT le hard-delete (lisent fact_topics).
       this.topicFor(store, null).onForget(ids)
       this.patternFor(store).onForget(ids)
@@ -2094,7 +2110,7 @@ export class Memoria {
         })
       }
     }
-    return { deleted }
+    return { deleted, matched }
   }
 
   // -------------------------------------------------------------------- admin

@@ -194,3 +194,35 @@ describe('forget (hard-delete)', () => {
     expect(() => m.forget({ scope_id: 'x' })).toThrow(/confirm_bulk/)
   })
 })
+
+/**
+ * forget par requête (audit 27/08) : la requête FTS du recall est un OR
+ * (scoring par couverture ensuite) — pour une SUPPRESSION irréversible il faut
+ * une sémantique ET, et la garde confirm_bulk dès qu'aucun id n'est donné.
+ */
+describe('forget par requête', () => {
+  it('exige confirm_bulk, ne supprime que les faits contenant TOUS les mots, et dry_run ne touche rien', () => {
+    const a = m.pairAssistant({ type: 'claude-code' })
+    const inst = a.assistant_instance_id
+    const stripe = m.storeFact({ instance: inst, content: 'La clé API Stripe de test a expiré en mars' })
+    const bureau = m.storeFact({ instance: inst, content: 'La clé du bureau est chez Badette' })
+    const courtes = m.storeFact({ instance: inst, content: 'Néto préfère les réponses courtes' })
+    const store = m['openContent'](m.paths.assistantDb(inst))
+
+    // sans confirm_bulk : refus (la CLI l'exigeait déjà, pas le moteur)
+    expect(() => m.forget({ query: 'clé API Stripe' })).toThrow(/confirm_bulk/)
+    expect(store.countFacts()).toBe(3)
+
+    // dry_run : on voit ce qui partirait, rien ne part
+    const dry = m.forget({ query: 'clé API Stripe', confirm_bulk: true, dry_run: true })
+    expect(dry).toEqual({ deleted: 0, matched: 1 })
+    expect(store.countFacts()).toBe(3)
+
+    // sémantique ET : « clé du bureau » ne contient pas « api » ni « stripe »
+    const { deleted } = m.forget({ query: 'clé API Stripe', confirm_bulk: true })
+    expect(deleted).toBe(1)
+    expect(store.getFact(stripe.id)).toBeNull()
+    expect(store.getFact(bureau.id)).not.toBeNull()
+    expect(store.getFact(courtes.id)).not.toBeNull()
+  })
+})
