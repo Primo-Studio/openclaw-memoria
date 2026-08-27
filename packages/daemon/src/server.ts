@@ -892,7 +892,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         const body = await readJson(req)
         // Hybride FTS+vectoriel quand un provider d'embeddings est disponible —
         // sinon strictement équivalent au recall FTS.
-        const result = await memoria.recallSemantic({ ...(body as Omit<RecallInput, 'instance'>), instance: instanceId })
+        const result = await memoria.recallSemantic({ ...recallInputFromBody(body), instance: instanceId })
         sendJson(res, 200, result)
         return
       }
@@ -1239,6 +1239,23 @@ const PAUSED_MEMORY_RESPONSES: Record<string, Record<string, unknown>> = {
   'POST /v1/memory/expiry': { updated: false },
   'POST /v1/memory/identify_interlocutor': { match: null },
   'POST /v1/memory/identify_or_create_interlocutor': { match: null },
+}
+
+/**
+ * Corps de recall → RecallInput, sur LISTE BLANCHE. `...body` relayait tout,
+ * dont `include_dormant` : un porteur de token d'instance lisait la quarantaine
+ * (faits importés jamais validés) promise « invisible au recall jusqu'à
+ * approbation ». Ces drapeaux internes restent réservés au moteur/admin.
+ */
+function recallInputFromBody(body: Record<string, unknown>): Omit<RecallInput, 'instance'> {
+  const input: Omit<RecallInput, 'instance'> = { query: String(body['query'] ?? '') }
+  if (typeof body['limit'] === 'number') input.limit = body['limit']
+  if (typeof body['token_budget'] === 'number') input.token_budget = body['token_budget']
+  if (typeof body['expand_graph'] === 'boolean') input.expand_graph = body['expand_graph']
+  if (body['active_context'] && typeof body['active_context'] === 'object') {
+    input.active_context = body['active_context'] as RecallInput['active_context']
+  }
+  return input
 }
 
 /** Champ booléen obligatoire du corps — `{}` ne vaut ni true ni false. */
