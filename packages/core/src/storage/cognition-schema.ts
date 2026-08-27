@@ -91,6 +91,31 @@ export const cognitionMigrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 11,
+    name: 'cognition-processed',
+    up(db) {
+      // MARQUEUR « fait traité par la cognition ». Avant : processCognition
+      // resélectionnait à CHAQUE capture tous les faits sans entité liée — un
+      // fait où le LLM ne trouve rien repartait au LLM cloud à chaque tour
+      // (jusqu'à 2 000 appels par passage, sans fin). `via` permet de
+      // re-tenter UNE fois avec le LLM ce qui n'a été vu qu'en heuristique.
+      // Backfill : les faits existants sont considérés traités (sinon le
+      // premier boot renverrait toute la base au cloud — coût surprise).
+      db.exec(`
+        CREATE TABLE fact_cognition (
+          fact_id      TEXT PRIMARY KEY REFERENCES facts(id) ON DELETE CASCADE,
+          processed_at TEXT NOT NULL,
+          via          TEXT NOT NULL CHECK (via IN ('llm','heuristic','backfill')),
+          entities     INTEGER NOT NULL DEFAULT 0
+        );
+        INSERT INTO fact_cognition (fact_id, processed_at, via, entities)
+          SELECT f.id, strftime('%Y-%m-%dT%H:%M:%fZ','now'), 'backfill',
+                 (SELECT COUNT(*) FROM fact_entities fe WHERE fe.fact_id = f.id)
+          FROM facts f;
+      `)
+    },
+  },
 ]
 
 /**
