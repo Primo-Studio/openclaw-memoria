@@ -14,7 +14,8 @@ import {
   type RevisionProposal,
 } from '../api'
 import { useT } from '../i18n'
-import { agentTypeLabel } from '../components/ui'
+import { EmptyState, ErrorBanner, Spinner, agentTypeLabel, humanError, listPhase } from '../components/ui'
+import { analyzableAgents } from '../lib/agents'
 
 type Translate = (key: string, vars?: Record<string, string | number>) => string
 
@@ -32,16 +33,20 @@ export function Revisions() {
   const [items, setItems] = useState<RevisionProposal[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // Aucun agent analysable (ex. seul « Autre agent (MCP) ») → état vide explicite.
+  const [noAgent, setNoAgent] = useState(false)
+  const [tick, setTick] = useState(0)
 
   useEffect(() => {
     getAgents()
       .then(a => {
-        const real = a.filter(x => x.assistant_type !== 'generic' && !x.instance.revoked_at)
+        const real = analyzableAgents(a)
         setAgents(real)
+        setNoAgent(real.length === 0)
         if (real[0]) setInstance(real[0].instance.id)
       })
-      .catch(() => setError(t('revisions.error_service')))
-  }, [t])
+      .catch(err => setError(err instanceof ApiError ? err.message : humanError(err)))
+  }, [tick])
 
   const load = useCallback(async (inst: string) => {
     setItems(null)
@@ -50,14 +55,22 @@ export function Revisions() {
       await proposeRevisions(inst).catch(() => 0)
       setItems(await getRevisions(inst))
     } catch (err) {
-      setItems([])
-      if (err instanceof ApiError && err.status !== 404) setError(err.message)
+      // 404 = vieux service sans la route : état vide, pas une panne.
+      if (err instanceof ApiError && err.status === 404) setItems([])
+      else setError(err instanceof ApiError ? err.message : humanError(err))
     }
   }, [])
 
   useEffect(() => {
     if (instance) void load(instance)
-  }, [instance, load])
+  }, [instance, load, tick])
+
+  const retry = useCallback(() => {
+    setError(null)
+    setTick(n => n + 1)
+  }, [])
+
+  const phase = listPhase(items, error)
 
   const decide = useCallback(
     async (id: string, decision: 'accept' | 'dismiss') => {
@@ -88,11 +101,13 @@ export function Revisions() {
         )}
       </header>
 
-      {error && <div className="error-banner">{error}</div>}
+      {error && <ErrorBanner message={error} onRetry={retry} />}
 
-      {items === null ? (
-        <div className="spinner-row"><span className="spinner" aria-hidden /> {t('revisions.analyzing')}</div>
-      ) : items.length === 0 ? (
+      {noAgent ? (
+        <EmptyState title={t('memory.no_agent_title')} body={t('memory.no_agent_body')} />
+      ) : phase === 'loading' ? (
+        <Spinner label={t('revisions.analyzing')} />
+      ) : phase === 'failed' || items === null ? null : items.length === 0 ? (
         <div className="empty-state">
           <p>{t('revisions.empty_title')}</p>
           <p className="muted">{t('revisions.empty_body')}</p>

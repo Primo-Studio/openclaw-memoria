@@ -33,6 +33,7 @@ import {
   Spinner,
   agentTypeLabel,
   formatDate,
+  formatNumber,
   humanError,
   useLoad,
 } from '../components/ui'
@@ -451,10 +452,10 @@ function describeData(t: Translate, agent: DetectedAgent): string | null {
   if (agent.data_found.transcript_files !== undefined) {
     const n = agent.data_found.transcript_files
     const key = n > 1 ? 'agents.data.conversations.plural' : 'agents.data.conversations.one'
-    return t(key, { n: n.toLocaleString('fr-FR') })
+    return t(key, { n: formatNumber(n) })
   }
   if (agent.data_found.legacy_db) {
-    return t('agents.data.legacy', { n: agent.data_found.legacy_db.fact_count.toLocaleString('fr-FR') })
+    return t('agents.data.legacy', { n: formatNumber(agent.data_found.legacy_db.fact_count) })
   }
   return null
 }
@@ -503,7 +504,7 @@ function ImportProgress({ status }: { status: ImportJobStatus | null }) {
         <div className="progress-fill" style={{ width: `${percent}%` }} />
       </div>
       <p className="muted">
-        {p ? t('agents.progress.detail', { done: p.files_done, total: p.files_total, facts: p.facts_imported.toLocaleString('fr-FR') }) : t('agents.progress.starting')}
+        {p ? t('agents.progress.detail', { done: p.files_done, total: p.files_total, facts: formatNumber(p.facts_imported) }) : t('agents.progress.starting')}
       </p>
     </div>
   )
@@ -527,11 +528,11 @@ function ImportDone({
     <div className="import-done">
       {isLegacy ? (
         <p>
-          ✓ <strong>{t('agents.done.legacyStrong', { n: n.toLocaleString('fr-FR') })}</strong>{t('agents.done.legacyAfter')}
+          ✓ <strong>{t('agents.done.legacyStrong', { n: formatNumber(n) })}</strong>{t('agents.done.legacyAfter')}
         </p>
       ) : (
         <p>
-          ✓ <strong>{t(n > 1 ? 'agents.done.transcriptsStrong.plural' : 'agents.done.transcriptsStrong.one', { n: n.toLocaleString('fr-FR') })}</strong>{t('agents.done.transcriptsAfter')}
+          ✓ <strong>{t(n > 1 ? 'agents.done.transcriptsStrong.plural' : 'agents.done.transcriptsStrong.one', { n: formatNumber(n) })}</strong>{t('agents.done.transcriptsAfter')}
         </p>
       )}
       {status.errors.length > 0 && (
@@ -607,16 +608,31 @@ function AgentExpertise({ instanceId }: { instanceId: string }) {
   const { t } = useT()
   const [domains, setDomains] = useState<ExpertiseDomain[]>([])
   const [self, setSelf] = useState<SelfObservation[]>([])
+  // Garde `cancelled` : la liste se remonte à chaque reload() (révocation,
+  // modale…) ; sans elle, la réponse d'un ancien instanceId pouvait écraser
+  // les badges d'un autre agent.
   useEffect(() => {
+    let cancelled = false
     getExpertise(instanceId)
-      .then(d => setDomains(d.slice(0, 4)))
-      .catch(() => setDomains([]))
+      .then(d => {
+        if (!cancelled) setDomains(d.slice(0, 4))
+      })
+      .catch(() => {
+        if (!cancelled) setDomains([])
+      })
     // analyse fraîche du comportement puis lecture
     deriveSelf(instanceId)
       .catch(() => 0)
       .then(() => getSelfObservations(instanceId))
-      .then(o => setSelf(o.slice(0, 3)))
-      .catch(() => setSelf([]))
+      .then(o => {
+        if (!cancelled) setSelf(o.slice(0, 3))
+      })
+      .catch(() => {
+        if (!cancelled) setSelf([])
+      })
+    return () => {
+      cancelled = true
+    }
   }, [instanceId])
   if (domains.length === 0 && self.length === 0) return null
   return (
@@ -683,11 +699,45 @@ function PairingCode({ result, onRegenerate }: { result: PairResult; onRegenerat
   )
 }
 
+/**
+ * Modale accessible : le focus entre dans la boîte à l'ouverture, Échap et le
+ * clic sur le fond ferment, le focus revient à l'élément déclencheur à la
+ * fermeture (sinon un utilisateur clavier « perdait » sa position).
+ */
 function Modal({ title, children, onClose }: { title: string; children: ReactNode; onClose: () => void }) {
   const { t } = useT()
+  const box = useRef<HTMLDivElement>(null)
+  const onCloseRef = useRef(onClose)
+  onCloseRef.current = onClose
+
+  useEffect(() => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const first = box.current?.querySelector<HTMLElement>('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')
+    first?.focus()
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        onCloseRef.current()
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      opener?.focus()
+    }
+  }, [])
+
   return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label={title}>
-      <div className="modal">
+    <div
+      className="modal-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+      onClick={e => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+    >
+      <div className="modal" ref={box}>
         <header className="modal-head">
           <h2>{title}</h2>
           <button type="button" className="btn btn-ghost" onClick={onClose} aria-label={t('agents.modal.close')}>

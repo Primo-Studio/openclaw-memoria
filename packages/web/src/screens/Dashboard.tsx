@@ -5,14 +5,8 @@
  * disponible, on le dit en rouge, on ne laisse pas la file gonfler en silence).
  */
 import { getDoctor, getLlmHealth, getOverview, getStats, type AgentOverview, type DoctorReport, type LlmHealth, type Stats } from '../api'
-import { ErrorBanner, Spinner, formatBytes, useLoad } from '../components/ui'
+import { ErrorBanner, Spinner, agentTypeLabel, formatBytes, formatNumber, useLoad } from '../components/ui'
 import { useT } from '../i18n'
-
-const AGENT_LABELS: Record<string, string> = {
-  'claude-code': 'Claude Code',
-  codex: 'Codex',
-  openclaw: 'OpenClaw',
-}
 
 // Types de base de données connus → clé i18n dashboard.dbKind.<kind> (repli : le kind brut).
 const KNOWN_DB_KINDS = new Set(['registry', 'assistant', 'shared'])
@@ -108,7 +102,7 @@ function DashboardBody({
             {overview.map(a => (
               <div key={a.instance} className="overview-card">
                 <div className="overview-head">
-                  <strong>{AGENT_LABELS[a.type] ?? a.type}</strong>
+                  <strong>{agentTypeLabel(a.type)}</strong>
                 </div>
                 <div className="overview-stats">
                   <span><b>{a.facts}</b> {t('dashboard.overview.facts')}</span>
@@ -174,7 +168,7 @@ function LlmBanner({ health, onConfigure }: { health: LlmHealth | null; onConfig
       <div>
         <strong>
           ⚠️ {pending > 0
-            ? t('dashboard.banner.pendingCritical', { count: pending.toLocaleString('fr-FR'), plural: pending > 1 ? 's' : '' })
+            ? t(pending > 1 ? 'dashboard.banner.pendingCritical.plural' : 'dashboard.banner.pendingCritical.one', { count: formatNumber(pending) })
             : t('dashboard.banner.noEngine')}
         </strong>
         {health.extraction.reason && <p className="muted">{health.extraction.reason}</p>}
@@ -219,7 +213,7 @@ function HealthCard({ doctor }: { doctor: DoctorReport }) {
 function StatCard({ value, label, hint, tone }: { value: number; label: string; hint: string; tone?: 'warn' }) {
   return (
     <div className={`stat-card${tone === 'warn' ? ' stat-warn' : ''}`}>
-      <div className="stat-value">{value.toLocaleString('fr-FR')}</div>
+      <div className="stat-value">{formatNumber(value)}</div>
       <div className="stat-label">{label}</div>
       <div className="stat-hint muted">{hint}</div>
     </div>

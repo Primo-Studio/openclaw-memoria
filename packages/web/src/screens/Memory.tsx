@@ -3,7 +3,7 @@
  * route câblée à l'intégration ; q vide = derniers souvenirs) et oubli
  * définitif fait par fait (POST /v1/admin/forget {ids}).
  */
-import { useState, type FormEvent } from 'react'
+import { useRef, useState, type FormEvent } from 'react'
 import { forgetFacts, getAgents, searchAll, searchFacts, type AdminFact, type AgentEntry } from '../api'
 import {
   ConfirmButton,
@@ -16,6 +16,7 @@ import {
   useLoad,
 } from '../components/ui'
 import { useT } from '../i18n'
+import { createSequence } from '../lib/sequence'
 
 type Translate = (key: string, vars?: Record<string, string | number>) => string
 
@@ -24,10 +25,12 @@ type ShownFact = AdminFact & { agent_type?: string }
 
 const ALL = '__all__'
 
+// `query` est gardée à chaque étape : « Réessayer » et le changement d'agent
+// relancent la MÊME recherche au lieu de jeter les résultats.
 type SearchState =
   | { status: 'idle' }
-  | { status: 'loading' }
-  | { status: 'error'; message: string }
+  | { status: 'loading'; query: string }
+  | { status: 'error'; message: string; query: string }
   | { status: 'ready'; facts: ShownFact[]; query: string }
 
 export function Memory() {
@@ -63,17 +66,30 @@ function MemoryBrowser({ agents }: { agents: AgentEntry[] }) {
   const [query, setQuery] = useState('')
   const [search, setSearch] = useState<SearchState>({ status: 'idle' })
   const [notice, setNotice] = useState<string | null>(null)
+  // anti-course : « Tout afficher » puis un badge thème → seule la dernière
+  // requête partie peut remplir la liste (globalSearch peut être lent).
+  const seq = useRef(createSequence())
 
-  const runSearch = (q: string) => {
-    setSearch({ status: 'loading' })
-    const p = instanceId === ALL ? searchAll(q) : searchFacts(instanceId, q)
+  const runSearch = (q: string, inst: string = instanceId) => {
+    const id = seq.current.next()
+    setSearch({ status: 'loading', query: q })
+    const p = inst === ALL ? searchAll(q) : searchFacts(inst, q)
     p.then(
-      facts => setSearch({ status: 'ready', facts, query: q }),
+      facts => {
+        if (seq.current.isCurrent(id)) setSearch({ status: 'ready', facts, query: q })
+      },
       (err: unknown) => {
+        if (!seq.current.isCurrent(id)) return
         console.warn('memoria-ui : recherche mémoire échouée', err)
-        setSearch({ status: 'error', message: humanError(err) })
+        setSearch({ status: 'error', message: humanError(err), query: q })
       },
     )
+  }
+
+  const changeAgent = (inst: string) => {
+    setInstanceId(inst)
+    // on garde la recherche en cours : mêmes mots, autre agent
+    if (search.status !== 'idle') runSearch(search.query, inst)
   }
 
   const submit = (e: FormEvent) => {
@@ -103,8 +119,11 @@ function MemoryBrowser({ agents }: { agents: AgentEntry[] }) {
         )
       },
       (err: unknown) => {
+        // L'échec d'un oubli ne doit PAS remplacer la liste par une bannière :
+        // l'utilisateur garderait l'impression que tout a été effacé et
+        // perdrait sa recherche. Le canal `notice` est fait pour ça.
         console.warn('memoria-ui : oubli échoué', err)
-        setSearch({ status: 'error', message: humanError(err) })
+        setNotice(humanError(err))
       },
     )
   }
@@ -114,13 +133,7 @@ function MemoryBrowser({ agents }: { agents: AgentEntry[] }) {
       <form className="memory-controls" onSubmit={submit}>
         <label className="field">
           <span className="field-label">{t('memory.field_agent')}</span>
-          <select
-            value={instanceId}
-            onChange={e => {
-              setInstanceId(e.target.value)
-              setSearch({ status: 'idle' })
-            }}
-          >
+          <select value={instanceId} onChange={e => changeAgent(e.target.value)}>
             <option value={ALL}>{t('memory.all_memories')}</option>
             {agents.map(({ instance, assistant_type }) => (
               <option key={instance.id} value={instance.id}>
@@ -160,7 +173,7 @@ function MemoryBrowser({ agents }: { agents: AgentEntry[] }) {
         <p className="muted">{t('memory.hint')}</p>
       )}
       {search.status === 'loading' && <Spinner label={t('memory.searching')} />}
-      {search.status === 'error' && <ErrorBanner message={search.message} />}
+      {search.status === 'error' && <ErrorBanner message={search.message} onRetry={() => runSearch(search.query)} />}
       {search.status === 'ready' &&
         (search.facts.length === 0 ? (
           <EmptyState

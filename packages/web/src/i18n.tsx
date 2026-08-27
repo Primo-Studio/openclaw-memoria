@@ -5,7 +5,7 @@
  * Repli en cascade : langue courante → français → la clé elle-même (jamais vide).
  *
  * Convention de clés : namespace par écran, ex. `nav.dashboard`, `audit.title`.
- * Interpolation : `t('x.y', { n: 3 })` remplace `{n}` dans la valeur.
+ * Interpolation : `t('common.page', { current: 1, total: 3 })` remplace `{current}`/`{total}`.
  */
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react'
 import { fr } from './messages/fr'
@@ -28,6 +28,14 @@ export const LANGS: Array<{ code: Lang; label: string; flag: string }> = [
 
 const CATALOGS: Record<Lang, Messages> = { fr, en, es, pt, de }
 const STORAGE_KEY = 'memoria.lang'
+
+/**
+ * Locale BCP 47 par langue, pour Intl (dates, nombres). Marchés cibles de
+ * Primo (règle « 5 langues dès la V1 ») : es-MX et pt-BR, pas es-ES/pt-PT.
+ * Avant, tout était figé sur 'fr-FR' : un utilisateur anglais voyait des
+ * dates JJ/MM et des « 1 234 » à espace fine.
+ */
+const LOCALES: Record<Lang, string> = { fr: 'fr-FR', en: 'en-US', es: 'es-MX', pt: 'pt-BR', de: 'de-DE' }
 
 function initialLang(): Lang {
   try {
@@ -63,6 +71,11 @@ export function translate(key: string, vars?: Record<string, string | number>): 
   return interpolate(val, vars)
 }
 
+/** Locale Intl de la langue active (helpers de formatage purs, cf. ui.tsx). */
+export function currentLocale(): string {
+  return LOCALES[activeLang]
+}
+
 export function I18nProvider({ children }: { children: ReactNode }) {
   const [lang, setLangState] = useState<Lang>(initialLang)
 
@@ -76,7 +89,13 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     activeLang = lang
   }, [lang])
 
-  const setLang = useCallback((l: Lang) => setLangState(l), [])
+  // `activeLang` est mis à jour ICI, de façon synchrone, et pas seulement dans
+  // l'effet ci-dessus : les enfants se re-rendent AVANT que l'effet ne tourne,
+  // et les helpers purs (formatDate…) liraient encore l'ancienne langue.
+  const setLang = useCallback((l: Lang) => {
+    activeLang = l
+    setLangState(l)
+  }, [])
 
   const t = useCallback(
     (key: string, vars?: Record<string, string | number>): string => {

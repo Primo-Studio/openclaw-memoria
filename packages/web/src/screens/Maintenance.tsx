@@ -13,7 +13,7 @@
  *     l'écran dit toujours combien d'éléments sont sélectionnés et ce qui va
  *     leur arriver — jamais un bouton dont l'effet se devine.
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ApiError,
   correctFact,
@@ -26,6 +26,11 @@ import {
   type AgentEntry,
 } from '../api'
 import { useT } from '../i18n'
+import { EmptyState, ErrorBanner, Spinner, humanError, listPhase } from '../components/ui'
+import { createSequence } from '../lib/sequence'
+
+/** Délai avant de lancer la recherche après la dernière frappe. */
+const SEARCH_DEBOUNCE_MS = 300
 
 type Source = 'search' | 'never-used'
 
@@ -35,15 +40,23 @@ export function Maintenance() {
   const [instance, setInstance] = useState<string>('')
   const [source, setSource] = useState<Source>('search')
   const [query, setQuery] = useState('')
+  // Valeur réellement recherchée : `query` suit la frappe, `debouncedQuery`
+  // ne bouge qu'après SEARCH_DEBOUNCE_MS de silence — un GET par mot, pas
+  // un par caractère.
+  const [debouncedQuery, setDebouncedQuery] = useState('')
+  const seq = useRef(createSequence())
   const [facts, setFacts] = useState<AdminFact[] | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // Aucun agent actif → état vide explicite au lieu d'un spinner sans fin.
+  const [noAgent, setNoAgent] = useState(false)
+  const [tick, setTick] = useState(0)
 
   const fail = useCallback(
-    (err: unknown, fallback: string) => setError(err instanceof ApiError ? err.message : fallback),
+    (err: unknown, fallback: string) => setError(err instanceof ApiError ? err.message : err instanceof TypeError ? humanError(err) : fallback),
     [],
   )
 
@@ -52,26 +65,48 @@ export function Maintenance() {
       .then(list => {
         const active = list.filter(a => a.instance.revoked_at === null)
         setAgents(active)
+        setNoAgent(active.length === 0)
         if (active[0]) setInstance(active[0].instance.id)
       })
       .catch(err => fail(err, t('maintenance.agents_failed')))
-  }, [fail, t])
+  }, [fail, t, tick])
+
+  useEffect(() => {
+    const id = window.setTimeout(() => setDebouncedQuery(query), SEARCH_DEBOUNCE_MS)
+    return () => window.clearTimeout(id)
+  }, [query])
+
+  // La sélection ne se vide qu'en changeant d'agent ou de source : affiner la
+  // recherche après avoir coché des doublons ne doit pas tout perdre.
+  useEffect(() => {
+    setSelected(new Set())
+  }, [instance, source])
 
   const load = useCallback(async () => {
     if (!instance) return
     setError(null)
-    setSelected(new Set())
+    const id = seq.current.next()
     try {
-      setFacts(source === 'never-used' ? await neverUsedFacts(instance) : await searchFacts(instance, query))
+      const list = source === 'never-used' ? await neverUsedFacts(instance) : await searchFacts(instance, debouncedQuery)
+      if (!seq.current.isCurrent(id)) return // réponse périmée : une requête plus récente est partie
+      setFacts(list)
     } catch (err) {
+      if (!seq.current.isCurrent(id)) return
+      // facts reste tel quel : listPhase() affiche l'erreur, pas un faux « vide ».
       fail(err, t('maintenance.load_failed'))
-      setFacts([])
     }
-  }, [instance, source, query, fail, t])
+  }, [instance, source, debouncedQuery, fail, t])
 
   useEffect(() => {
     void load()
-  }, [load])
+  }, [load, tick])
+
+  const retry = useCallback(() => {
+    setError(null)
+    setTick(n => n + 1)
+  }, [])
+
+  const phase = listPhase(facts, error)
 
   const toggle = (id: string): void =>
     setSelected(prev => {
@@ -89,6 +124,8 @@ export function Maintenance() {
       setNotice(null)
       try {
         setNotice(await fn())
+        // l'opération a consommé la sélection (fusionnés / oubliés) → on repart à zéro
+        setSelected(new Set())
         await load()
       } catch (err) {
         fail(err, fallback)
@@ -162,7 +199,7 @@ export function Maintenance() {
         )}
       </div>
 
-      {error && <div className="error-banner">{error}</div>}
+      {error && <ErrorBanner message={error} onRetry={retry} />}
       {notice && <div className="info-banner">{notice}</div>}
 
       {selected.size > 0 && (
@@ -180,12 +217,11 @@ export function Maintenance() {
       {/* La règle de fusion doit être lisible AVANT de cliquer, pas découverte après. */}
       {selected.size >= 2 && <p className="muted">{t('maintenance.merge_hint')}</p>}
 
-      {facts === null ? (
-        <div className="spinner-row">
-          <span className="spinner" aria-hidden />
-          {t('common.loading')}
-        </div>
-      ) : facts.length === 0 ? (
+      {noAgent ? (
+        <EmptyState title={t('memory.no_agent_title')} body={t('memory.no_agent_body')} />
+      ) : phase === 'loading' ? (
+        <Spinner />
+      ) : phase === 'failed' || facts === null ? null : facts.length === 0 ? (
         <div className="empty-state">
           <p>{t(source === 'never-used' ? 'maintenance.empty_never_used' : 'maintenance.empty_search')}</p>
         </div>

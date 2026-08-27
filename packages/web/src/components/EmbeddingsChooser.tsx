@@ -10,6 +10,7 @@ import {
   type MachineCaps,
   type OllamaPullStatus,
 } from '../api'
+import { formatNumber } from './ui'
 import { useT } from '../i18n'
 
 const LOCAL_EMBED_MODEL = 'nomic-embed-text'
@@ -41,10 +42,20 @@ export function EmbeddingsChooser({
   const [pulling, setPulling] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // Garde `cancelled` : navigation rapide Réglages → autre écran → Réglages,
+  // sinon la réponse tardive écrit dans un composant démonté (ou remonté).
   useEffect(() => {
+    let cancelled = false
     getMachineCaps()
-      .then(setCaps)
-      .catch(() => setCapsError(true))
+      .then(c => {
+        if (!cancelled) setCaps(c)
+      })
+      .catch(() => {
+        if (!cancelled) setCapsError(true)
+      })
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   // Polling du téléchargement du modèle local ; à la fin, on bascule dessus.
@@ -235,7 +246,7 @@ export function EmbeddingsChooser({
       </div>
 
       {typeof health.embeddings.pending === 'number' && health.embeddings.pending > 0 && (
-        <p className="warn">{t('settings.embed.reindexing', { count: health.embeddings.pending.toLocaleString('fr-FR') })}</p>
+        <p className="warn">{t('settings.embed.reindexing', { count: formatNumber(health.embeddings.pending) })}</p>
       )}
       {error && <p className="provider-missing">{error}</p>}
       <p className="muted">{t('settings.embed.reindexNote')}</p>
