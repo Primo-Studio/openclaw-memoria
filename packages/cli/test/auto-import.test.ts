@@ -1,8 +1,9 @@
 /**
  * scripts/auto-import.sh (lancé toutes les 6 h par launchd) : découvre les
- * instances claude-code / codex via l'API admin puis lance `memoria import`
- * pour chacune. Tout est simulé : daemon = petit serveur node:http, CLI = script
- * qui journalise ses arguments, chemins via l'environnement — aucun ~/.memoria.
+ * instances claude-code / codex via l'API admin, attend qu'aucun import ne
+ * tourne dans le daemon, puis lance `memoria import` pour chacune. Tout est
+ * simulé : daemon = petit serveur node:http, CLI = script qui journalise ses
+ * arguments, chemins via l'environnement — aucun ~/.memoria.
  */
 import { spawn, spawnSync } from 'node:child_process'
 import { createServer, type Server } from 'node:http'
@@ -43,7 +44,7 @@ afterEach(async () => {
  * spawnSync bloquerait la boucle d'événements et le script attendrait sa
  * réponse pour toujours.
  */
-async function run(arg?: string): Promise<{ status: number | null; log: string; calls: string[] }> {
+async function run(arg?: string, env: Record<string, string> = {}): Promise<{ status: number | null; log: string; calls: string[] }> {
   const child = spawn('bash', arg ? [SCRIPT, arg] : [SCRIPT], {
     env: {
       ...process.env,
@@ -52,6 +53,10 @@ async function run(arg?: string): Promise<{ status: number | null; log: string; 
       MEMORIA_CLI: join(home, 'fake-cli.js'),
       MEMORIA_HOME: data,
       MEMORIA_AUTO_IMPORT_LOG: log,
+      // Sondes « import en cours ? » rapides : 1 s au lieu de 10, plafond bas.
+      MEMORIA_AUTO_IMPORT_POLL_S: '1',
+      MEMORIA_AUTO_IMPORT_MAX_WAIT_S: '5',
+      ...env,
     },
     stdio: 'ignore',
   })
@@ -59,13 +64,23 @@ async function run(arg?: string): Promise<{ status: number | null; log: string; 
   return { status, log: existsSync(log) ? readFileSync(log, 'utf8') : '', calls: existsSync(calls) ? readFileSync(calls, 'utf8').trim().split('\n').filter(Boolean) : [] }
 }
 
-/** Faux daemon : /v1/admin/agents protégé par le token de daemon.json. */
-async function fakeDaemon(agents: unknown[]): Promise<void> {
-  const seen: string[] = []
+/**
+ * Faux daemon : /v1/admin/agents et /v1/admin/import_status protégés par le
+ * token de daemon.json. `states` = réponses successives de import_status (la
+ * dernière se répète) ; vide = route absente (401), comme un daemon antérieur.
+ */
+async function fakeDaemon(agents: unknown[], states: string[] = ['idle']): Promise<{ statusCalls: () => number }> {
+  let statusCalls = 0
   server = createServer((req, res) => {
-    seen.push(`${req.headers.authorization ?? ''} ${req.url ?? ''}`)
-    if (req.url === '/v1/admin/agents' && req.headers.authorization === 'Bearer tok-admin') {
+    const authed = req.headers.authorization === 'Bearer tok-admin'
+    if (req.url === '/v1/admin/agents' && authed) {
       res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ agents }))
+      return
+    }
+    if (req.url === '/v1/admin/import_status' && authed && states.length > 0) {
+      const state = states[Math.min(statusCalls, states.length - 1)]
+      statusCalls++
+      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ state, kind: 'transcripts', instance_id: 'inst-autre' }))
       return
     }
     res.writeHead(401).end('{}')
@@ -73,6 +88,7 @@ async function fakeDaemon(agents: unknown[]): Promise<void> {
   await new Promise<void>(r => server!.listen(0, '127.0.0.1', () => r()))
   const port = (server.address() as { port: number }).port
   writeFileSync(join(data, 'daemon.json'), JSON.stringify({ port, admin_token: 'tok-admin', pid: process.pid }))
+  return { statusCalls: () => statusCalls }
 }
 
 const AGENTS = [
@@ -108,6 +124,35 @@ describe('auto-import.sh', () => {
     await fakeDaemon(AGENTS)
     const r = await run('3')
     expect(r.calls).toEqual(['import --instance inst-claude --transcripts --max-windows 3'])
+  })
+
+  it('un import déjà en cours dans le daemon : on attend sa fin (sondes) PUIS on lance la CLI — pas de 409', async () => {
+    const daemon = await fakeDaemon(AGENTS, ['running', 'running', 'done'])
+    const r = await run()
+    expect(r.status).toBe(0)
+    expect(daemon.statusCalls()).toBe(3)
+    expect(r.calls).toEqual(['import --instance inst-claude --transcripts'])
+    expect(r.log).toContain('un import est déjà en cours dans le daemon — on attend sa fin')
+    expect(r.log).toContain('import précédent terminé (done)')
+    expect(r.log.indexOf('on attend sa fin')).toBeLessThan(r.log.indexOf('-- import inst-claude'))
+  })
+
+  it('toujours en cours au plafond → instance sautée et journalisée, CLI jamais appelée, exit 0', async () => {
+    await fakeDaemon(AGENTS, ['running'])
+    const r = await run(undefined, { MEMORIA_AUTO_IMPORT_MAX_WAIT_S: '0' })
+    expect(r.status).toBe(0)
+    expect(r.calls).toEqual([])
+    expect(r.log).toContain("toujours en cours après 0 s — on n'insiste pas")
+    expect(r.log).toContain('import inst-claude sauté (daemon occupé)')
+    expect(r.log).toContain('fin')
+  })
+
+  it('daemon antérieur sans route import_status (401) → statut inconnu, on n’attend pas, on importe', async () => {
+    await fakeDaemon(AGENTS, [])
+    const r = await run()
+    expect(r.status).toBe(0)
+    expect(r.calls).toEqual(['import --instance inst-claude --transcripts'])
+    expect(r.log).not.toContain('on attend sa fin')
   })
 
   it('aucune instance éligible → le dit, exit 0', async () => {
