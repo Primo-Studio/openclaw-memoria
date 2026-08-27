@@ -706,6 +706,16 @@ fn show_main_window(app: &tauri::AppHandle) {
     }
 }
 
+/// « Démarrer le daemon » n'a de sens que s'il ne tourne pas : actif, le clic
+/// ferait clignoter gris→vert sans effet ; en cours, il doublerait le démarrage.
+fn start_menu_enabled(state: TrayState) -> bool {
+    matches!(state, TrayState::Down | TrayState::Unknown)
+}
+
+/// L'item « Démarrer le daemon », gardé dans l'état Tauri pour être
+/// (dés)activé par `apply_tray_view` selon l'état affiché.
+struct StartMenuItem(MenuItem<tauri::Wry>);
+
 /// Dernière vue effectivement appliquée à la barre d'état.
 static LAST_TRAY_VIEW: Mutex<Option<TrayView>> = Mutex::new(None);
 
@@ -740,6 +750,11 @@ fn apply_tray_view(app: &tauri::AppHandle, view: &TrayView) {
     if tooltip {
         applied &= tray.set_tooltip(Some(view.tooltip.clone())).is_ok();
     }
+    if icon {
+        if let Some(start) = app.try_state::<StartMenuItem>() {
+            let _ = start.0.set_enabled(start_menu_enabled(view.state));
+        }
+    }
     if applied {
         let mut last = LAST_TRAY_VIEW.lock().unwrap_or_else(|e| e.into_inner());
         *last = Some(view.clone());
@@ -761,6 +776,7 @@ pub fn run() {
             let sep = PredefinedMenuItem::separator(app)?;
             let quit = MenuItem::with_id(app, "quit", "Quitter", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&open, &start, &sep, &quit])?;
+            app.manage(StartMenuItem(start));
 
             // État initial : gris « vérification… ». Le 1er sondage est fait
             // par le thread de fond (ci-dessous, sans délai) : sonder ici
@@ -780,6 +796,12 @@ pub fn run() {
                     "start" => {
                         let app = app.clone();
                         std::thread::spawn(move || {
+                            // L'item peut être en retard d'un sondage : si le daemon
+                            // tourne déjà, on rafraîchit la pastille sans clignoter.
+                            if daemon_probe() == Ok(true) {
+                                apply_tray_view(&app, &current_tray_view());
+                                return;
+                            }
                             // Gris pendant le démarrage : l'utilisateur voit que le clic a pris.
                             apply_tray_view(&app, &TrayView::starting());
                             match start_daemon_blocking() {
@@ -1036,5 +1058,13 @@ mod tests {
         assert_eq!(tray_changes(Some(&active), &down), (true, true));
         // Même couleur, seule la cause change : info-bulle seule.
         assert_eq!(tray_changes(Some(&down), &down_with_cause), (false, true));
+    }
+
+    #[test]
+    fn demarrer_n_est_proposable_que_si_le_daemon_ne_tourne_pas() {
+        assert!(!start_menu_enabled(TrayState::Active)); // sinon clignotement gris→vert sans effet
+        assert!(!start_menu_enabled(TrayState::Starting)); // un démarrage est déjà en cours
+        assert!(start_menu_enabled(TrayState::Down));
+        assert!(start_menu_enabled(TrayState::Unknown)); // tenter révèle la cause dans l'info-bulle
     }
 }
