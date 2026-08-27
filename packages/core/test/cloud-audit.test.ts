@@ -9,7 +9,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { auditEmbeddings, auditExtraction, formatCloudSend, isCloudProvider, Memoria, type CloudSend } from '../src/index.js'
+import { auditEmbeddings, auditExtraction, classifyLlmError, formatCloudSend, isCloudProvider, Memoria, type CloudSend } from '../src/index.js'
 
 const SECRET = 'Néto habite au 12 rue des Lilas et son mot de passe wifi est Hunter2Hunter2'
 
@@ -82,6 +82,26 @@ describe('enveloppe d’audit', () => {
     )
     await expect(p.complete({ prompt: 'x' })).rejects.toThrow('429')
     expect(sends[0]).toMatchObject({ ok: false, items: 1 })
+  })
+
+  it('un échec est journalisé AVEC sa classe (http_429, timeout, network…) — jamais le corps de l’erreur', async () => {
+    const failing = (err: Error) => auditExtraction({ ...fakeLlm('openai'), complete: async () => { throw err } }, s => sends.push(s))
+    const sends: CloudSend[] = []
+    await failing(new Error('openai /chat/completions HTTP 429 (modèle m-1) : {"error":"rate limited, key sk-abc"}')).complete({ prompt: 'x' }).catch(() => {})
+    await failing(new DOMException('The operation was aborted due to timeout', 'TimeoutError')).complete({ prompt: 'x' }).catch(() => {})
+    await failing(new TypeError('fetch failed')).complete({ prompt: 'x' }).catch(() => {})
+    expect(sends.map(s => s.error)).toEqual(['http_429', 'timeout', 'network'])
+    expect(JSON.stringify(sends)).not.toContain('sk-abc')
+    expect(formatCloudSend(sends[0]!)).toMatch(/ ok=false err=http_429$/)
+  })
+
+  it('classifyLlmError : classes courtes et stables', () => {
+    expect(classifyLlmError(new Error('anthropic /v1/messages HTTP 401 (modèle x) : unauthorized'))).toBe('http_401')
+    expect(classifyLlmError(new Error('ollama /api/chat HTTP 503 (modèle x)'))).toBe('http_503')
+    expect(classifyLlmError(new Error('réponse openai invalide : choices[0].message.content absent'))).toBe('invalid_response')
+    expect(classifyLlmError(new Error('openai : réponse tronquée — budget de tokens épuisé'))).toBe('truncated')
+    expect(classifyLlmError(new Error('quelque chose d’autre'))).toBe('other')
+    expect(classifyLlmError('pas une Error')).toBe('other')
   })
 
   it('formatCloudSend produit un `clé=valeur` reparsable, sans contenu', () => {
