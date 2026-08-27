@@ -41,6 +41,7 @@ export const fr: Messages = {
   'brand.sub': 'mémoire locale',
   'a11y.skip': 'Aller au contenu',
   'a11y.nav': 'Navigation principale',
+  'a11y.menu': 'Menu',
   'nav.advanced': 'Avancé',
   'theme.title': 'Thème',
   'theme.system': 'Système',

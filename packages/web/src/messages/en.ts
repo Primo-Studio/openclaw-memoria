@@ -39,6 +39,7 @@ export const en: Messages = {
   'brand.sub': 'local memory',
   'a11y.skip': 'Skip to content',
   'a11y.nav': 'Main navigation',
+  'a11y.menu': 'Menu',
   'nav.advanced': 'Advanced',
   'theme.title': 'Theme',
   'theme.system': 'System',

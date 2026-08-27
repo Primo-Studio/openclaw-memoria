@@ -89,7 +89,7 @@ export function Sharing() {
         ) : phase === 'failed' || scopes === null ? null : scopes.length === 0 ? (
           <p className="muted">{t('sharing.matrix_empty')}</p>
         ) : (
-          <table className="share-matrix">
+          <div className="table-wrap"><table className="share-matrix">
             <thead>
               <tr>
                 <th>{t('sharing.col_scope')}</th>
@@ -128,7 +128,7 @@ export function Sharing() {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </table></div>
         )}
         {exploring && <ScopeContent scopeId={exploring} onError={setError} />}
       </div>

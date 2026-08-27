@@ -84,6 +84,11 @@ export function App() {
   // pairing jamais collé ne compte pas, cf. lib/agents.ts).
   const [onboarding, setOnboarding] = useState<boolean | null>(null)
   const [reviewCount, setReviewCount] = useState(0)
+  // Menu mobile (hamburger). Sous 720 px la barre latérale devenait une bande
+  // horizontale à défilement où « Avancé » empilait 11 boutons et poussait le
+  // sélecteur de capture hors écran. Ouvert = overlay vertical ; fermé = barre
+  // compacte brand + capture + bouton. Sans effet sur bureau (CSS).
+  const [navOpen, setNavOpen] = useState(false)
 
   useEffect(() => {
     if (!authed) return
@@ -111,7 +116,18 @@ export function App() {
 
   const go = useCallback((id: ScreenId) => {
     window.location.hash = '#/' + id
+    setNavOpen(false)
   }, [])
+
+  // Échap referme le menu mobile (comportement attendu d'un overlay).
+  useEffect(() => {
+    if (!navOpen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setNavOpen(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [navOpen])
 
   if (!authed) return <Welcome />
   if (onboarding === null) return <div className="welcome"><div className="spinner" aria-hidden /></div>
@@ -136,7 +152,7 @@ export function App() {
     <>
       <a href="#main-content" className="skip-link">{t('a11y.skip')}</a>
       <div className="layout">
-        <aside className="sidebar">
+        <aside className={`sidebar${navOpen ? ' sidebar-open' : ''}`}>
           <div className="brand">
             <BrandMark />
             <div className="brand-text">
@@ -144,19 +160,32 @@ export function App() {
               <span className="brand-sub">{t('brand.sub')}</span>
             </div>
           </div>
-          <LangSwitch />
-          <ThemeSwitch />
-          <nav className="nav" aria-label={t('a11y.nav')}>
-            {ESSENTIAL_IDS.map(navButton)}
-            <details className="nav-advanced">
-              <summary>{t('nav.advanced')}</summary>
-              {ADVANCED_IDS.map(navButton)}
-            </details>
-          </nav>
+          <button
+            type="button"
+            className="nav-toggle"
+            aria-expanded={navOpen}
+            aria-controls="sidebar-menu"
+            aria-label={t('a11y.menu')}
+            onClick={() => setNavOpen(o => !o)}
+          >
+            <span aria-hidden="true">{navOpen ? '✕' : '☰'}</span>
+          </button>
+          {/* Le sélecteur de capture reste HORS du menu repliable : « toujours visible » (spec §13). */}
           <CaptureModeSwitch />
-          <div className="sidebar-foot muted">
-            {t('foot.local')}
-            <VersionFoot />
+          <div className="sidebar-menu" id="sidebar-menu">
+            <LangSwitch />
+            <ThemeSwitch />
+            <nav className="nav" aria-label={t('a11y.nav')}>
+              {ESSENTIAL_IDS.map(navButton)}
+              <details className="nav-advanced">
+                <summary>{t('nav.advanced')}</summary>
+                {ADVANCED_IDS.map(navButton)}
+              </details>
+            </nav>
+            <div className="sidebar-foot muted">
+              {t('foot.local')}
+              <VersionFoot />
+            </div>
           </div>
         </aside>
         <main className="content" id="main-content" tabIndex={-1}>
@@ -292,7 +321,7 @@ function CaptureModeSwitch() {
           </button>
         ))}
       </div>
-      {current && <p className="muted capture-hint">{t(`capture.hint.${current.key}`)}</p>}
+      {current && <p className="muted capture-hint capture-help">{t(`capture.hint.${current.key}`)}</p>}
       {notice && <p className="warn capture-hint" role="status">{notice}</p>}
     </div>
   )
