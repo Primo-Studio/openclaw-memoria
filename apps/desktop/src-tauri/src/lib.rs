@@ -706,11 +706,43 @@ fn show_main_window(app: &tauri::AppHandle) {
     }
 }
 
-/// Applique la vue (icône « M » + info-bulle) à la barre d'état.
+/// Dernière vue effectivement appliquée à la barre d'état.
+static LAST_TRAY_VIEW: Mutex<Option<TrayView>> = Mutex::new(None);
+
+/// Ce qu'il faut redessiner entre deux vues : `(icône, info-bulle)`. Chaque
+/// `set_icon` décode le PNG, le ré-encode, alloue un NSImage et réveille le
+/// thread principal — inutile 17 000 fois par jour pour un état qui change
+/// quelques fois par jour (et source de micro-scintillement).
+fn tray_changes(last: Option<&TrayView>, next: &TrayView) -> (bool, bool) {
+    match last {
+        None => (true, true),
+        Some(last) => (last.state != next.state, last.tooltip != next.tooltip),
+    }
+}
+
+/// Applique la vue (icône « M » + info-bulle) à la barre d'état, seulement
+/// si elle change. À appeler HORS du thread principal : `set_icon` y est
+/// dispatché et attend — et le verrou n'est jamais tenu pendant cet appel
+/// (sinon un appel concurrent depuis le thread principal bloquerait tout).
 fn apply_tray_view(app: &tauri::AppHandle, view: &TrayView) {
-    if let Some(tray) = app.tray_by_id(TRAY_ID) {
-        let _ = tray.set_icon(Some(view.state.icon()));
-        let _ = tray.set_tooltip(Some(view.tooltip.clone()));
+    let (icon, tooltip) = {
+        let last = LAST_TRAY_VIEW.lock().unwrap_or_else(|e| e.into_inner());
+        tray_changes(last.as_ref(), view)
+    };
+    if !icon && !tooltip {
+        return;
+    }
+    let Some(tray) = app.tray_by_id(TRAY_ID) else { return };
+    let mut applied = true;
+    if icon {
+        applied &= tray.set_icon(Some(view.state.icon())).is_ok();
+    }
+    if tooltip {
+        applied &= tray.set_tooltip(Some(view.tooltip.clone())).is_ok();
+    }
+    if applied {
+        let mut last = LAST_TRAY_VIEW.lock().unwrap_or_else(|e| e.into_inner());
+        *last = Some(view.clone());
     }
 }
 
@@ -747,9 +779,9 @@ pub fn run() {
                     }
                     "start" => {
                         let app = app.clone();
-                        // Gris pendant le démarrage : l'utilisateur voit que le clic a pris.
-                        apply_tray_view(&app, &TrayView::starting());
                         std::thread::spawn(move || {
+                            // Gris pendant le démarrage : l'utilisateur voit que le clic a pris.
+                            apply_tray_view(&app, &TrayView::starting());
                             match start_daemon_blocking() {
                                 Ok(_) => remember_start_failure(None),
                                 Err(e) => {
@@ -764,6 +796,7 @@ pub fn run() {
                     _ => {}
                 })
                 .build(app)?;
+            *LAST_TRAY_VIEW.lock().unwrap_or_else(|e| e.into_inner()) = Some(initial);
 
             // Sonde de fond : 1er sondage immédiat, puis toutes les 5 s.
             let handle = app.handle().clone();
@@ -988,5 +1021,20 @@ mod tests {
         assert!(view.tooltip.contains("Node.js ≥ 20 introuvable"), "{}", view.tooltip);
         assert_eq!(probe_view(&Ok(true), Some("vieille erreur")).state, TrayState::Active);
         assert_eq!(probe_view(&Ok(false), None), TrayView::from_probe(&Ok(false)));
+    }
+
+    #[test]
+    fn la_pastille_n_est_redessinee_que_si_elle_change() {
+        let active = TrayView::from_probe(&Ok(true));
+        let down = TrayView::from_probe(&Ok(false));
+        let down_with_cause = TrayView::down_after_failed_start("boum");
+        // Rien d'affiché encore : tout redessiner.
+        assert_eq!(tray_changes(None, &active), (true, true));
+        // Même vue (cas de 99 % des sondages) : ne rien toucher.
+        assert_eq!(tray_changes(Some(&active), &active), (false, false));
+        // Changement d'état : icône ET info-bulle.
+        assert_eq!(tray_changes(Some(&active), &down), (true, true));
+        // Même couleur, seule la cause change : info-bulle seule.
+        assert_eq!(tray_changes(Some(&down), &down_with_cause), (false, true));
     }
 }
