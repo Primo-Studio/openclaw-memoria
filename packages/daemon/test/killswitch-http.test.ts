@@ -60,10 +60,18 @@ const MEMORY_ROUTES: Array<[string, unknown]> = [
 
 describe('Memoria en pause', () => {
   it('chaque route mémoire → 200 + disabled:true, et rien n’est écrit', async () => {
+    // Témoin : capture_turn n'écrit pas dans `facts` mais dans le WAL — c'est
+    // walPendingTotal() qui le voit (doctor() n'a pas de wal_pending racine,
+    // l'ancienne assertion comparait 0 à 0). On prouve d'abord que la métrique
+    // bouge quand Memoria est active, sinon le « rien n'est écrit » ne vaut rien.
+    const walBeforeWitness = daemon.memoria.walPendingTotal()
+    await call('/v1/memory/capture_turn', { messages: [{ role: 'user', content: 'témoin : capturé pendant que Memoria est active' }] }, instanceToken)
+    expect(daemon.memoria.walPendingTotal()).toBeGreaterThan(walBeforeWitness)
+
     const off = await call('/v1/admin/enabled', { enabled: false }, daemon.state.admin_token)
     expect(off.status).toBe(200)
     const before = daemon.memoria.stats().facts
-    const doctorBefore = daemon.memoria.doctor() as { wal_pending?: number }
+    const walBefore = daemon.memoria.walPendingTotal()
 
     for (const [path, body] of MEMORY_ROUTES) {
       const r = await call(path, body, instanceToken)
@@ -74,7 +82,7 @@ describe('Memoria en pause', () => {
     const pinned = await call('/v1/memory/pin', { fact_id: factId, pinned: true }, instanceToken)
     expect(pinned.json['updated']).toBe(false)
     expect(daemon.memoria.stats().facts).toBe(before)
-    expect((daemon.memoria.doctor() as { wal_pending?: number }).wal_pending ?? 0).toBe(doctorBefore.wal_pending ?? 0)
+    expect(daemon.memoria.walPendingTotal()).toBe(walBefore)
 
     // une route VRAIMENT inconnue reste un 404
     expect((await call('/v1/memory/inexistante', {}, instanceToken)).status).toBe(404)
