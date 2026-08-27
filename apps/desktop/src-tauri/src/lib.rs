@@ -455,11 +455,43 @@ fn launchd_kickstart(label: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// URL finale de l'UI : token admin en fragment (#…), jamais en query — il
-/// n'apparaît ni dans les logs HTTP ni dans l'historique. `admin_token` est
-/// du base64url (cf. core/util.ts#newToken) : sûr tel quel dans un fragment.
+/// URL finale de l'UI : token admin en fragment (#…), jamais en query — le
+/// fragment n'est pas envoyé au serveur, donc jamais dans les logs HTTP. Seule
+/// la webview de l'app charge cette URL (jamais le navigateur externe, qui la
+/// conserverait dans son historique, fragment compris). `admin_token` est du
+/// base64url (cf. core/util.ts#newToken) : sûr tel quel dans un fragment.
 fn memoria_url(port: u16, admin_token: &str) -> String {
     format!("http://127.0.0.1:{port}/ui/#token={admin_token}")
+}
+
+/// Page de lancement embarquée (`frontendDist`) telle que Tauri la sert :
+/// `tauri://localhost` sur macOS/Linux, `http://tauri.localhost` sur Windows
+/// (cf. tauri `manager::tauri_protocol_url`, non public).
+fn launch_page_url() -> &'static str {
+    if cfg!(windows) {
+        "http://tauri.localhost/index.html"
+    } else {
+        "tauri://localhost/index.html"
+    }
+}
+
+/// Où envoyer la webview quand on clique « Ouvrir Memoria » (`None` = rester
+/// où elle est). Daemon sain (`Some((port, token))`) → son UI, sauf si elle y
+/// est déjà (on ne recharge pas : l'utilisateur garde son état). Daemon
+/// éteint → la page de lancement, qui montre la séquence Node → daemon → UI
+/// et relance le daemon : le clic a toujours un effet visible, jamais un no-op.
+fn open_target(current_url: &str, healthy: Option<(u16, &str)>) -> Option<String> {
+    match healthy {
+        Some((port, token)) => {
+            let ui_prefix = format!("http://127.0.0.1:{port}/ui");
+            (!current_url.starts_with(&ui_prefix)).then(|| memoria_url(port, token))
+        }
+        None => {
+            let launch = launch_page_url();
+            let launch_origin = &launch[..launch.rfind('/').unwrap_or(launch.len())];
+            (!current_url.starts_with(launch_origin)).then(|| launch.to_string())
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -568,14 +600,35 @@ fn daemon_is_healthy() -> bool {
     }
 }
 
-/// Ouvre une URL dans le navigateur par défaut (sans dépendance externe).
-fn open_url_in_browser(url: &str) {
-    #[cfg(target_os = "macos")]
-    let _ = Command::new("open").arg(url).spawn();
-    #[cfg(target_os = "windows")]
-    let _ = Command::new("cmd").args(["/C", "start", "", url]).spawn();
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let _ = Command::new("xdg-open").arg(url).spawn();
+/// « Ouvrir Memoria » : ramène la fenêtre de l'app (jamais le navigateur
+/// externe) et l'envoie au bon endroit selon `open_target`. Appelé hors du
+/// thread principal (health check bloquant).
+fn open_memoria_window(app: &tauri::AppHandle) {
+    let healthy = resolve_storage_root()
+        .ok()
+        .and_then(|root| read_daemon_state(&root))
+        .filter(|state| http_health(state.port));
+    match app.get_webview_window("main") {
+        Some(window) => {
+            let current = window.url().map(|u| u.to_string()).unwrap_or_default();
+            let target = open_target(
+                &current,
+                healthy.as_ref().map(|s| (s.port, s.admin_token.as_str())),
+            );
+            if let Some(target) = target {
+                match tauri::Url::parse(&target) {
+                    Ok(url) => {
+                        if let Err(e) = window.navigate(url) {
+                            eprintln!("memoria-desktop: navigation vers {target} impossible : {e}");
+                        }
+                    }
+                    Err(e) => eprintln!("memoria-desktop: URL cible invalide ({target}) : {e}"),
+                }
+            }
+        }
+        None => eprintln!("memoria-desktop: fenêtre principale introuvable — impossible d'ouvrir Memoria"),
+    }
+    show_main_window(app);
 }
 
 /// Fermer la dernière fenêtre ne doit PAS tuer l'app : la lettre M de la barre
@@ -631,15 +684,8 @@ pub fn run() {
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "open" => {
-                        std::thread::spawn(|| {
-                            if let Ok(root) = resolve_storage_root() {
-                                if let Some(state) = read_daemon_state(&root) {
-                                    if http_health(state.port) {
-                                        open_url_in_browser(&memoria_url(state.port, &state.admin_token));
-                                    }
-                                }
-                            }
-                        });
+                        let app = app.clone();
+                        std::thread::spawn(move || open_memoria_window(&app));
                     }
                     "start" => {
                         let app = app.clone();
@@ -837,5 +883,23 @@ mod tests {
         assert!(keep_running_without_window(None));
         assert!(!keep_running_without_window(Some(0)));
         assert!(!keep_running_without_window(Some(1)));
+    }
+
+    #[test]
+    fn ouvrir_memoria_cible_la_bonne_page() {
+        let launch = launch_page_url();
+        let ui = "http://127.0.0.1:7437/ui/#token=tok";
+        // daemon éteint : la page de lancement (qui le redémarre, visiblement)
+        assert_eq!(open_target(ui, None).as_deref(), Some(launch));
+        assert_eq!(open_target(launch, None), None); // déjà dessus : on n'interrompt pas
+        assert_eq!(open_target("", None).as_deref(), Some(launch)); // URL inconnue
+        // daemon actif : l'UI, sauf si la webview y est déjà (état conservé)
+        assert_eq!(open_target(launch, Some((7437, "tok"))).as_deref(), Some(ui));
+        assert_eq!(open_target(ui, Some((7437, "tok"))), None);
+        // daemon redémarré sur un autre port : on suit le nouveau port
+        assert_eq!(
+            open_target(ui, Some((7438, "tok2"))).as_deref(),
+            Some("http://127.0.0.1:7438/ui/#token=tok2")
+        );
     }
 }
