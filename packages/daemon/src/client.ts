@@ -3,10 +3,11 @@
  * `daemon.json`, peut le démarrer s'il n'existe pas (singleton).
  */
 import { spawn } from 'node:child_process'
-import { mkdirSync, openSync } from 'node:fs'
+import { existsSync, mkdirSync, openSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { resolveStorageRoot, type RecallResult } from '@memoria/core'
+import { resolve } from 'node:path'
+import { autostartStorageRoot, kickstartService, resolveStorageRoot, type RecallResult } from '@memoria/core'
 import type { ImportJobStatus } from './import-job.js'
 import { daemonLooksAlive, readDaemonState, type DaemonState } from './state.js'
 
@@ -178,7 +179,42 @@ export function daemonBinPath(): string {
  * Garantit qu'un daemon tourne pour ce storage_root : réutilise le vivant,
  * sinon en démarre un détaché (`memoria-daemon`) et attend son health.
  */
-export async function ensureDaemon(opts: ClientOptions = {}): Promise<DaemonState> {
+export interface EnsureDaemonHooks {
+  /** Injectable pour les tests : launchd simulé. */
+  launchd?: {
+    /** Le service installé vise-t-il CE storage_root ? (sinon on ne le touche pas) */
+    targets(storageRoot: string): boolean
+    /** Demande le lancement ; false = pas de service / refus. */
+    kickstart(): boolean
+    /** Délai d'attente du health après kickstart (défaut 15 s). */
+    waitMs?: number
+  }
+}
+
+/** launchd réel : le service `memoria autostart on` s'il cible ce storage_root. */
+const REAL_LAUNCHD: NonNullable<EnsureDaemonHooks['launchd']> = {
+  targets: root => {
+    const target = autostartStorageRoot()
+    return target !== null && resolve(target) === resolve(root)
+  },
+  kickstart: () => kickstartService(),
+}
+
+/** Attend qu'un daemon réponde au health pour ce storage_root (null = délai dépassé). */
+async function waitForHealthy(storageRoot: string, ms: number): Promise<DaemonState | null> {
+  const deadline = Date.now() + ms
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 150))
+    const state = daemonLooksAlive(storageRoot)
+    if (state) {
+      const client = new DaemonClient(state)
+      if (await client.health()) return state
+    }
+  }
+  return null
+}
+
+export async function ensureDaemon(opts: ClientOptions = {}, hooks: EnsureDaemonHooks = {}): Promise<DaemonState> {
   const { storageRoot } = resolveStorageRoot(opts)
   const alive = daemonLooksAlive(storageRoot)
   if (alive) {
@@ -186,7 +222,17 @@ export async function ensureDaemon(opts: ClientOptions = {}): Promise<DaemonStat
     if (await client.health()) return alive
   }
 
-  const binPath = fileURLToPath(new URL('./bin.js', import.meta.url))
+  // Service launchd installé pour CE stockage : c'est LUI qui doit posséder le
+  // daemon. Spawner ici prendrait le lock et ferait boucler launchd en échec ;
+  // et après un `memoria stop` (sortie propre) launchd ne relance pas seul.
+  const launchd = hooks.launchd ?? REAL_LAUNCHD
+  if (launchd.targets(storageRoot) && launchd.kickstart()) {
+    const viaLaunchd = await waitForHealthy(storageRoot, launchd.waitMs ?? 15_000)
+    if (viaLaunchd) return viaLaunchd
+    console.warn('[memoria] launchd n’a pas relancé le daemon à temps — démarrage direct en repli (voir ~/Library/Logs/memoria.err.log)')
+  }
+
+  const binPath = daemonBinPathForSpawn()
   const args = [binPath]
   if (opts.storageRoot) args.push('--storage-root', opts.storageRoot)
   // `stdio: 'ignore'` jetait TOUT : warnings, échecs d'extraction, stacktraces.
@@ -205,14 +251,20 @@ export async function ensureDaemon(opts: ClientOptions = {}): Promise<DaemonStat
   const child = spawn(process.execPath, args, { detached: true, stdio })
   child.unref()
 
-  const deadline = Date.now() + 15_000
-  while (Date.now() < deadline) {
-    await new Promise(r => setTimeout(r, 150))
-    const state = daemonLooksAlive(storageRoot)
-    if (state) {
-      const client = new DaemonClient(state)
-      if (await client.health()) return state
-    }
-  }
+  const started = await waitForHealthy(storageRoot, 15_000)
+  if (started) return started
   throw new Error('le daemon n’a pas démarré dans les 15 s (voir memoria doctor)')
+}
+
+/**
+ * `bin.js` du daemon à spawner. Depuis `dist/` c'est le voisin ; exécuté depuis
+ * les SOURCES (vitest, tsx), `./bin.js` n'existe pas → on vise `../dist/bin.js`.
+ * Sans ce repli, le spawn lançait node sur un fichier absent et « le daemon n'a
+ * pas démarré dans les 15 s » — sans dire pourquoi.
+ */
+function daemonBinPathForSpawn(): string {
+  const beside = fileURLToPath(new URL('./bin.js', import.meta.url))
+  if (existsSync(beside)) return beside
+  const dist = fileURLToPath(new URL('../dist/bin.js', import.meta.url))
+  return existsSync(dist) ? dist : beside
 }

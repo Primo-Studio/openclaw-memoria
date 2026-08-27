@@ -23,15 +23,7 @@ export {
   DEFAULT_CONFIG_PATH,
 } from './config.js'
 export type { MemoriaConfig, ResolvedConfig, ResolveOptions } from './config.js'
-export {
-  AUTOSTART_LABEL,
-  autostartStatus,
-  buildPlist,
-  reloadService,
-  enableAutostart,
-  disableAutostart,
-  servicePath,
-} from './control/autostart.js'
+export { AUTOSTART_LABEL, autostartStatus, buildPlist, reloadService, enableAutostart, disableAutostart, servicePath, autostartStorageRoot, kickstartService, storageRootFromPlist } from './control/autostart.js'
 export type { AutostartSpec, AutostartStatus, LaunchctlOps } from './control/autostart.js'
 export { RegistryStore } from './storage/registry.js'
 export { factOrigin, originLabel, needsCaution } from './engine/origin.js'

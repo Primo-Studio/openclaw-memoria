@@ -11,7 +11,7 @@
  * que d'écrire un plist inutile.
  */
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, platform } from 'node:os'
 import { dirname, join } from 'node:path'
 
@@ -112,6 +112,47 @@ ${wd}  <key>RunAtLoad</key>
 function isLoaded(label: string): boolean {
   try {
     execFileSync('launchctl', ['print', `gui/${process.getuid?.() ?? 501}/${label}`], { stdio: 'ignore' })
+    return true
+  } catch {
+    return false
+  }
+}
+
+function xmlUnescape(s: string): string {
+  return s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
+}
+
+/** Racine de stockage visée par un plist (argument `--storage-root`), null si absente. */
+export function storageRootFromPlist(xml: string): string | null {
+  const m = /<string>--storage-root<\/string>\s*<string>([^<]*)<\/string>/.exec(xml)
+  return m ? xmlUnescape(m[1]!) : null
+}
+
+/** Racine de stockage du service installé, null si pas de plist / illisible. */
+export function autostartStorageRoot(label: string = AUTOSTART_LABEL): string | null {
+  const path = plistPath(label)
+  if (!existsSync(path)) return null
+  try {
+    return storageRootFromPlist(readFileSync(path, 'utf8'))
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Demande à launchd de lancer le service MAINTENANT (no-op s'il tourne déjà).
+ * false si non supporté, non chargé, ou refusé par launchd.
+ *
+ * Pourquoi : quand le service est installé, c'est LUI qui doit posséder le
+ * daemon. Un `memoria start` qui spawne son propre process prend le lock, et
+ * launchd boucle alors en échec (« un daemon Memoria tourne déjà »). Et comme
+ * `KeepAlive.SuccessfulExit=false` ne relance pas après un `memoria stop`
+ * (sortie propre), seul un kickstart explicite ramène le daemon sous launchd.
+ */
+export function kickstartService(label: string = AUTOSTART_LABEL): boolean {
+  if (platform() !== 'darwin' || !isLoaded(label)) return false
+  try {
+    execFileSync('launchctl', ['kickstart', `gui/${process.getuid?.() ?? 501}/${label}`], { stdio: 'ignore' })
     return true
   } catch {
     return false
