@@ -158,7 +158,9 @@ function fmtInt(n: number): string {
   return n.toLocaleString('fr-FR')
 }
 
-/** Coût estimé en dollars : 4 décimales sous le cent, sinon 2. */
+/** Coût estimé en dollars : « < 0,0001 $ » plutôt qu'un faux « 0,0000 $ ». */
 function fmtUsd(v: number): string {
-  return `${v.toFixed(v > 0 && v < 0.01 ? 4 : 2)} $`
+  if (v === 0) return '0 $'
+  if (v < 0.0001) return '< 0,0001 $'
+  return `${v.toLocaleString('fr-FR', { maximumFractionDigits: v < 0.01 ? 4 : 2 })} $`
 }
