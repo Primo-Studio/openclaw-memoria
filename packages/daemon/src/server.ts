@@ -12,7 +12,7 @@
  * thread Node → zéro contention inter-process par construction.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
-import { existsSync } from 'node:fs'
+import { existsSync, mkdirSync } from 'node:fs'
 import { timingSafeEqual } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import {
@@ -27,6 +27,7 @@ import {
   enableAutostart,
   newToken,
   nowISO,
+  resolveStorageRoot,
   saveCredentials,
   serveInvocation,
   type AssistantType,
@@ -86,15 +87,24 @@ class HttpError extends Error {
 }
 
 export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaemon> {
-  const memoria = Memoria.init({ storageRoot: opts.storageRoot, configPath: opts.configPath, llm: opts.llm })
-  const storageRoot = memoria.paths.root
-  const importJobs = new ImportJobRunner(memoria)
-
+  // Le verrou AVANT l'ouverture des DB : un second daemon qui perd la course ne
+  // doit jamais avoir touché SQLite (ni rejoué le WAL) — Memoria.init ouvre les
+  // bases et le perdant les refermait après coup, fenêtre pendant laquelle deux
+  // processus écrivaient la même mémoire.
+  const { storageRoot } = resolveStorageRoot({ storageRoot: opts.storageRoot, configPath: opts.configPath })
+  mkdirSync(storageRoot, { recursive: true })
   const release = acquireLock(storageRoot)
   if (!release) {
-    memoria.close()
     throw new Error(`un daemon Memoria tourne déjà pour ${storageRoot} (daemon.lock)`)
   }
+  let memoria: Memoria
+  try {
+    memoria = Memoria.init({ storageRoot, configPath: opts.configPath, llm: opts.llm })
+  } catch (err) {
+    release()
+    throw err
+  }
+  const importJobs = new ImportJobRunner(memoria)
 
   const adminToken = newToken()
   const daemonId = newToken().slice(0, 16)
