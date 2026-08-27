@@ -48,7 +48,18 @@ import { estimateTokens, newId, nowISO, sha256Hex } from '../util.js'
 import { createSecretProvider, RegexRedactor } from '../secrets/index.js'
 import type { SecretProvider } from '../secrets/types.js'
 import { factOrigin } from './origin.js'
-import { resolveLlmProfile, auditExtraction, auditEmbeddings, formatCloudSend } from '../llm/index.js'
+import {
+  resolveLlmProfile,
+  auditExtraction,
+  auditEmbeddings,
+  formatCloudSend,
+  meterExtraction,
+  meterEmbeddings,
+  estimateCostUsd,
+  priceFor,
+  PRICING_AS_OF,
+  type UsageSink,
+} from '../llm/index.js'
 import type { CloudAuditSink } from '../llm/index.js'
 import type { LlmOptions } from '../llm/detect.js'
 import type { EmbeddingProvider, LlmProvider } from '../llm/provider.js'
@@ -63,6 +74,9 @@ import type {
   AssistantType,
   CaptureMode,
   DoctorReport,
+  LlmUsagePeriod,
+  LlmUsageReport,
+  LlmUsageRow,
   Fact,
   ForgetFilter,
   MemoryScope,
@@ -865,6 +879,10 @@ export class Memoria {
     if (!engine) {
       engine = new TopicEngine({ store, llm })
       this.topicEngines.set(store, engine)
+    } else if (llm && !engine.hasLlm) {
+      // Cache PAR STORE, pas par provider : un premier appel de lecture
+      // (llm=null) ne doit pas priver le store des libellés LLM pour toujours.
+      engine.setLlm(llm)
     }
     return engine
   }
@@ -1395,6 +1413,11 @@ export class Memoria {
     if (!engine) {
       engine = new CognitionEngine({ store, llm })
       this.cognitionEngines.set(store, engine)
+    } else if (llm && !engine.hasLlm) {
+      // Même règle que topicFor : le LLM devient collant dès qu'on le connaît.
+      // Avant : recall() avant la 1re capture → moteur figé en heuristique,
+      // extraction graphe LLM jamais utilisée, sans aucun signal.
+      engine.setLlm(llm)
     }
     return engine
   }
@@ -1461,8 +1484,14 @@ export class Memoria {
   /** Profil LLM résolu UNE fois (override tests/daemon > résolution auto). */
   private ensureProfile(): Promise<{ extraction: LlmProvider | null; embeddings: EmbeddingProvider | null }> {
     this.profilePromise ??= (async () => {
+      // Compteur de consommation : TOUS les providers (locaux compris, et
+      // ceux injectés par les tests/daemon) — c'est une mesure, pas un audit.
+      const usageSink: UsageSink = call => this.registry.recordLlmUsage(call)
       if (this.llmOverride !== undefined) {
-        return { extraction: this.llmOverride.extraction, embeddings: this.llmOverride.embeddings ?? null }
+        return {
+          extraction: this.llmOverride.extraction ? meterExtraction(this.llmOverride.extraction, usageSink) : null,
+          embeddings: this.llmOverride.embeddings ? meterEmbeddings(this.llmOverride.embeddings, usageSink) : null,
+        }
       }
       // Passe les modèles déjà en base pour que l'avertissement cross-modèle
       // ne crie au loup que s'il y a vraiment un mélange (pas à chaque boot).
@@ -1481,9 +1510,11 @@ export class Memoria {
           reason: formatCloudSend(send),
         })
       }
+      // Ordre : compteur à l'extérieur, audit cloud à l'intérieur — l'audit
+      // expose aussi la variante détaillée, le compteur voit donc les tokens.
       return {
-        extraction: profile.extraction ? auditExtraction(profile.extraction, sink) : null,
-        embeddings: profile.embeddings ? auditEmbeddings(profile.embeddings, sink) : null,
+        extraction: profile.extraction ? meterExtraction(auditExtraction(profile.extraction, sink), usageSink) : null,
+        embeddings: profile.embeddings ? meterEmbeddings(auditEmbeddings(profile.embeddings, sink), usageSink) : null,
       }
     })()
     return this.profilePromise
@@ -2655,6 +2686,7 @@ export class Memoria {
     const activity = this.doctorActivity()
     const memory = this.doctorMemory()
     const cloud = this.doctorCloud()
+    const usage = this.llmUsage('24h')
 
     // Les avertissements sont ce que l'utilisateur doit ACTION­NER — pas une
     // reformulation des compteurs. On ne signale que l'anormal.
@@ -2682,7 +2714,53 @@ export class Memoria {
       activity,
       memory,
       cloud,
+      usage,
       warnings,
+    }
+  }
+
+  /**
+   * Consommation des modèles sur une fenêtre : appels, tokens, coût estimé —
+   * tous fournisseurs, locaux compris. Réponse à « combien ça me coûte, et
+   * quel modèle travaille ? ».
+   */
+  llmUsage(period: LlmUsagePeriod = '24h'): LlmUsageReport {
+    this.assertOpen()
+    const windows: Record<LlmUsagePeriod, number | null> = {
+      '24h': 86_400_000,
+      '7d': 7 * 86_400_000,
+      '30d': 30 * 86_400_000,
+      all: null,
+    }
+    const win = windows[period]
+    const since = win === null ? null : new Date(Date.now() - win).toISOString()
+    const rows: LlmUsageRow[] = this.registry.llmUsageRows(since).map(r => ({
+      ...r,
+      estimated_cost_usd: estimateCostUsd(r.provider, r.model, r.input_tokens, r.output_tokens),
+      price_known: priceFor(r.provider, r.model) !== null,
+    }))
+
+    const sumOrNull = (vals: Array<number | null>): number | null => {
+      const known = vals.filter((v): v is number => v !== null)
+      return known.length === 0 ? null : known.reduce((a, b) => a + b, 0)
+    }
+    const costs = rows.map(r => r.estimated_cost_usd)
+    const cost = sumOrNull(costs)
+    return {
+      period,
+      since,
+      generated_at: new Date().toISOString(),
+      pricing_as_of: PRICING_AS_OF,
+      rows,
+      totals: {
+        calls: rows.reduce((n, r) => n + r.calls, 0),
+        failures: rows.reduce((n, r) => n + r.failures, 0),
+        input_tokens: sumOrNull(rows.map(r => r.input_tokens)),
+        output_tokens: sumOrNull(rows.map(r => r.output_tokens)),
+        estimated_cost_usd: rows.length === 0 ? 0 : cost === null ? null : Math.round(cost * 1_000_000) / 1_000_000,
+        unpriced_calls: rows.filter(r => r.estimated_cost_usd === null).reduce((n, r) => n + r.calls, 0),
+        unmetered_calls: rows.reduce((n, r) => n + (r.calls - r.calls_metered), 0),
+      },
     }
   }
 
@@ -2694,7 +2772,7 @@ export class Memoria {
       .prepare("SELECT ts, reason FROM audit_log WHERE action = 'cloud_send' AND ts >= ? ORDER BY id DESC")
       .all(since) as Array<{ ts: string; reason: string }>
 
-    const groups = new Map<string, { provider: string; model: string; purpose: string; calls: number; items: number; chars: number; failures: number }>()
+    const groups = new Map<string, DoctorCloud['sends_24h'][number]>()
     let chars = 0
     for (const r of rows) {
       const provider = field(r.reason, 'provider') ?? '?'
@@ -2708,6 +2786,12 @@ export class Memoria {
       g.chars += c
       chars += c
       if (field(r.reason, 'ok') === 'false') g.failures += 1
+      // Tokens : présents seulement depuis l'instrumentation — on additionne
+      // ce qui existe, sans jamais écrire un 0 à la place d'un « inconnu ».
+      const tin = metric(r.reason, 'tokens_in')
+      if (tin !== undefined) g.tokens_in = (g.tokens_in ?? 0) + tin
+      const tout = metric(r.reason, 'tokens_out')
+      if (tout !== undefined) g.tokens_out = (g.tokens_out ?? 0) + tout
       groups.set(key, g)
     }
     const out: DoctorCloud = { sends_24h: [...groups.values()].sort((a, b) => b.chars - a.chars), chars_24h: chars }

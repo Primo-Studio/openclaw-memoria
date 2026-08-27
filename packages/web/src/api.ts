@@ -939,3 +939,49 @@ export interface UpdateResult {
 export async function runUpdate(): Promise<UpdateResult> {
   return request<UpdateResult>('POST', '/v1/admin/update', {})
 }
+
+// ---------------------------------------------------------------- llm usage
+
+export type LlmUsagePeriod = '24h' | '7d' | '30d' | 'all'
+
+export interface LlmUsageRow {
+  provider: string
+  model: string
+  purpose: 'extraction' | 'embeddings'
+  local: boolean
+  calls: number
+  failures: number
+  items: number
+  chars: number
+  ms_total: number
+  input_tokens: number | null
+  output_tokens: number | null
+  reasoning_tokens: number | null
+  calls_metered: number
+  first_ts: string | null
+  last_ts: string | null
+  estimated_cost_usd: number | null
+  price_known: boolean
+}
+
+export interface LlmUsageReport {
+  period: LlmUsagePeriod
+  since: string | null
+  generated_at: string
+  pricing_as_of: string
+  rows: LlmUsageRow[]
+  totals: {
+    calls: number
+    failures: number
+    input_tokens: number | null
+    output_tokens: number | null
+    estimated_cost_usd: number | null
+    unpriced_calls: number
+    unmetered_calls: number
+  }
+}
+
+/** Consommation des modèles (appels, tokens, coût estimé) sur une fenêtre. */
+export async function getLlmUsage(period: LlmUsagePeriod = '24h'): Promise<LlmUsageReport> {
+  return request<LlmUsageReport>('GET', `/v1/admin/llm_usage?period=${period}`)
+}

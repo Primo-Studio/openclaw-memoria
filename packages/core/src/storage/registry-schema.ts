@@ -250,4 +250,32 @@ export const registryMigrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 5,
+    name: 'llm-usage',
+    up(db) {
+      // CONSOMMATION DES MODÈLES (tous fournisseurs, locaux compris) : appels,
+      // volume, tokens rapportés par le fournisseur. JAMAIS de contenu.
+      // NULL sur les tokens = non mesuré (≠ 0).
+      db.exec(`
+        CREATE TABLE llm_usage (
+          id               INTEGER PRIMARY KEY AUTOINCREMENT,
+          ts               TEXT NOT NULL,
+          provider         TEXT NOT NULL,
+          model            TEXT NOT NULL,
+          purpose          TEXT NOT NULL CHECK (purpose IN ('extraction','embeddings')),
+          local            INTEGER NOT NULL DEFAULT 0,
+          items            INTEGER NOT NULL DEFAULT 0,
+          chars            INTEGER NOT NULL DEFAULT 0,
+          ms               INTEGER NOT NULL DEFAULT 0,
+          ok               INTEGER NOT NULL DEFAULT 1,
+          input_tokens     INTEGER,
+          output_tokens    INTEGER,
+          reasoning_tokens INTEGER
+        );
+        CREATE INDEX idx_llm_usage_ts ON llm_usage(ts);
+        CREATE INDEX idx_llm_usage_model ON llm_usage(provider, model, purpose);
+      `)
+    },
+  },
 ]

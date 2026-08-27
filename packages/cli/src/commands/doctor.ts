@@ -106,6 +106,32 @@ function renderDoctor(out: Writable, report: DoctorReport, note: string | null):
     }
   }
 
+  const usage = report.usage
+  if (usage) {
+    out.write('\nConsommation des modèles (24 h)\n')
+    if (usage.rows.length === 0) {
+      out.write('  aucun appel à un modèle\n')
+    } else {
+      for (const r of usage.rows) {
+        const tokens =
+          r.input_tokens === null && r.output_tokens === null
+            ? 'tokens non mesurés'
+            : `${fmtInt(r.input_tokens ?? 0)} tokens entrés · ${fmtInt(r.output_tokens ?? 0)} sortis`
+        const cost = r.local
+          ? 'local, 0 $'
+          : r.estimated_cost_usd === null
+            ? 'tarif inconnu'
+            : `≈ ${fmtUsd(r.estimated_cost_usd)}`
+        const ko = r.failures > 0 ? `, ${r.failures} échec(s)` : ''
+        out.write(`  ${r.provider}/${r.model} · ${r.purpose} : ${r.calls} appel(s)${ko}, ${tokens} — ${cost}\n`)
+      }
+      const t = usage.totals
+      const total = t.estimated_cost_usd === null ? 'coût non estimable' : `≈ ${fmtUsd(t.estimated_cost_usd)}`
+      const unmetered = t.unmetered_calls > 0 ? ` — ${t.unmetered_calls} appel(s) sans mesure de tokens` : ''
+      out.write(`  total          : ${total} (estimation, tarifs ${usage.pricing_as_of})${unmetered}\n`)
+    }
+  }
+
   if (report.warnings.length > 0) {
     out.write('\nAvertissements :\n')
     for (const warning of report.warnings) out.write(`  ⚠ ${warning}\n`)
@@ -125,4 +151,14 @@ function shortTs(iso: string): string {
 function relativeOrAbsolute(root: string, path: string): string {
   const rel = relative(root, path)
   return rel === '' || rel.startsWith('..') ? path : rel
+}
+
+/** Entier lisible (séparateurs de milliers). */
+function fmtInt(n: number): string {
+  return n.toLocaleString('fr-FR')
+}
+
+/** Coût estimé en dollars : 4 décimales sous le cent, sinon 2. */
+function fmtUsd(v: number): string {
+  return `${v.toFixed(v > 0 && v < 0.01 ? 4 : 2)} $`
 }

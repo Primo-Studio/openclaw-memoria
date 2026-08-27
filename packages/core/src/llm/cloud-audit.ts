@@ -11,15 +11,25 @@
  *  1. On ne journalise QUE ce qui QUITTE la machine. Un provider local (Ollama,
  *     LM Studio) est renvoyé tel quel, non enveloppé : rien ne sort, il n'y a
  *     rien à déclarer, et une installation tout-local ne paie aucun surcoût.
+ *     (La CONSOMMATION, elle, est comptée pour tous — voir `usage-meter.ts`.)
  *  2. On ne journalise JAMAIS le contenu — seulement de quoi rendre des comptes :
  *     fournisseur, modèle, finalité, nombre d'éléments, VOLUME en caractères,
- *     durée, succès. Un journal de confidentialité qui recopierait les données
- *     serait une fuite de plus, pas une garantie.
+ *     tokens rapportés par le fournisseur, durée, succès. Un journal de
+ *     confidentialité qui recopierait les données serait une fuite de plus,
+ *     pas une garantie.
  *
  * Le gate secrets s'applique en amont (capture.ts étape 0) : ce qui part au
  * cloud est déjà expurgé de ses secrets connus.
  */
-import type { EmbeddingProvider, LlmProvider, CompleteOptions } from './provider.js'
+import {
+  completeDetailed,
+  embedDetailed,
+  type CompleteOptions,
+  type CompletionResult,
+  type EmbeddingProvider,
+  type EmbeddingResult,
+  type LlmProvider,
+} from './provider.js'
 
 /** Fournisseurs qui font sortir des données de la machine. */
 const CLOUD_PROVIDERS = new Set(['openai', 'openrouter', 'anthropic'])
@@ -38,6 +48,9 @@ export interface CloudSend {
   chars: number
   ms: number
   ok: boolean
+  /** Tokens rapportés par le fournisseur (absents s'il ne les donne pas ou si l'envoi a échoué). */
+  tokens_in?: number
+  tokens_out?: number
 }
 
 export type CloudAuditSink = (send: CloudSend) => void
@@ -48,51 +61,77 @@ export type CloudAuditSink = (send: CloudSend) => void
  */
 export function auditExtraction(provider: LlmProvider, sink: CloudAuditSink): LlmProvider {
   if (!isCloudProvider(provider.name)) return provider
+  const run = async (opts: CompleteOptions): Promise<CompletionResult> => {
+    const chars = (opts.system?.length ?? 0) + opts.prompt.length
+    const started = Date.now()
+    try {
+      const out = await completeDetailed(provider, opts)
+      sink({
+        provider: provider.name,
+        model: provider.model,
+        purpose: 'extraction',
+        items: 1,
+        chars,
+        ms: Date.now() - started,
+        ok: true,
+        ...(out.usage?.input_tokens !== undefined ? { tokens_in: out.usage.input_tokens } : {}),
+        ...(out.usage?.output_tokens !== undefined ? { tokens_out: out.usage.output_tokens } : {}),
+      })
+      return out
+    } catch (err) {
+      // Un envoi RATÉ reste un envoi : les données ont quitté la machine même
+      // si la réponse n'est jamais revenue. Le taire fausserait le journal.
+      sink({ provider: provider.name, model: provider.model, purpose: 'extraction', items: 1, chars, ms: Date.now() - started, ok: false })
+      throw err
+    }
+  }
   return {
     name: provider.name,
     model: provider.model,
     isAvailable: () => provider.isAvailable(),
-    async complete(opts: CompleteOptions): Promise<string> {
-      const chars = (opts.system?.length ?? 0) + opts.prompt.length
-      const started = Date.now()
-      try {
-        const out = await provider.complete(opts)
-        sink({ provider: provider.name, model: provider.model, purpose: 'extraction', items: 1, chars, ms: Date.now() - started, ok: true })
-        return out
-      } catch (err) {
-        // Un envoi RATÉ reste un envoi : les données ont quitté la machine même
-        // si la réponse n'est jamais revenue. Le taire fausserait le journal.
-        sink({ provider: provider.name, model: provider.model, purpose: 'extraction', items: 1, chars, ms: Date.now() - started, ok: false })
-        throw err
-      }
-    },
+    completeDetailed: run,
+    complete: async opts => (await run(opts)).text,
   }
 }
 
 /** Idem pour les embeddings — même règle, même discrétion. */
 export function auditEmbeddings(provider: EmbeddingProvider, sink: CloudAuditSink): EmbeddingProvider {
   if (!isCloudProvider(provider.name)) return provider
+  const run = async (texts: string[]): Promise<EmbeddingResult> => {
+    const chars = texts.reduce((n, t) => n + t.length, 0)
+    const started = Date.now()
+    try {
+      const out = await embedDetailed(provider, texts)
+      sink({
+        provider: provider.name,
+        model: provider.model,
+        purpose: 'embeddings',
+        items: texts.length,
+        chars,
+        ms: Date.now() - started,
+        ok: true,
+        ...(out.usage?.input_tokens !== undefined ? { tokens_in: out.usage.input_tokens } : {}),
+      })
+      return out
+    } catch (err) {
+      sink({ provider: provider.name, model: provider.model, purpose: 'embeddings', items: texts.length, chars, ms: Date.now() - started, ok: false })
+      throw err
+    }
+  }
   return {
     name: provider.name,
     model: provider.model,
     dimensions: provider.dimensions,
     isAvailable: () => provider.isAvailable(),
-    async embed(texts: string[]): Promise<Float32Array[]> {
-      const chars = texts.reduce((n, t) => n + t.length, 0)
-      const started = Date.now()
-      try {
-        const out = await provider.embed(texts)
-        sink({ provider: provider.name, model: provider.model, purpose: 'embeddings', items: texts.length, chars, ms: Date.now() - started, ok: true })
-        return out
-      } catch (err) {
-        sink({ provider: provider.name, model: provider.model, purpose: 'embeddings', items: texts.length, chars, ms: Date.now() - started, ok: false })
-        throw err
-      }
-    },
+    embedDetailed: run,
+    embed: async texts => (await run(texts)).vectors,
   }
 }
 
 /** Sérialise en `clé=valeur`, format déjà utilisé par l'audit (reparsable). */
 export function formatCloudSend(s: CloudSend): string {
-  return `provider=${s.provider} model=${s.model} purpose=${s.purpose} items=${s.items} chars=${s.chars} ms=${s.ms} ok=${s.ok}`
+  let out = `provider=${s.provider} model=${s.model} purpose=${s.purpose} items=${s.items} chars=${s.chars} ms=${s.ms} ok=${s.ok}`
+  if (s.tokens_in !== undefined) out += ` tokens_in=${s.tokens_in}`
+  if (s.tokens_out !== undefined) out += ` tokens_out=${s.tokens_out}`
+  return out
 }

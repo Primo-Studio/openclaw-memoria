@@ -15,12 +15,38 @@ export interface CompleteOptions {
   temperature?: number
 }
 
+/**
+ * Tokens consommés par UN appel, tels que rapportés par le fournisseur.
+ * Champ absent = non rapporté (≠ 0) : on ne fabrique jamais une mesure.
+ */
+export interface LlmUsage {
+  input_tokens?: number
+  output_tokens?: number
+  /** Sous-ensemble de `output_tokens` sur les modèles à raisonnement (gpt-5*, o*). */
+  reasoning_tokens?: number
+}
+
+export interface CompletionResult {
+  text: string
+  usage?: LlmUsage
+}
+
+export interface EmbeddingResult {
+  vectors: Float32Array[]
+  usage?: LlmUsage
+}
+
 export interface LlmProvider {
   readonly name: string
   /** Modèle effectif (ex. `qwen2.5:3b`, `claude-haiku-4-5-20251001`). */
   readonly model: string
   isAvailable(): Promise<boolean>
   complete(opts: CompleteOptions): Promise<string>
+  /**
+   * Variante détaillée : texte + consommation. Optionnelle pour rester
+   * compatible avec les providers tiers/tests qui n'implémentent que `complete`.
+   */
+  completeDetailed?(opts: CompleteOptions): Promise<CompletionResult>
 }
 
 export interface EmbeddingProvider {
@@ -30,6 +56,20 @@ export interface EmbeddingProvider {
   readonly dimensions: number
   isAvailable(): Promise<boolean>
   embed(texts: string[]): Promise<Float32Array[]>
+  /** Variante détaillée : vecteurs + consommation (optionnelle, cf. `completeDetailed`). */
+  embedDetailed?(texts: string[]): Promise<EmbeddingResult>
+}
+
+/** Appel détaillé si le provider le sait, sinon repli sur `complete` (usage absent). */
+export async function completeDetailed(provider: LlmProvider, opts: CompleteOptions): Promise<CompletionResult> {
+  if (provider.completeDetailed) return provider.completeDetailed(opts)
+  return { text: await provider.complete(opts) }
+}
+
+/** Idem pour les embeddings. */
+export async function embedDetailed(provider: EmbeddingProvider, texts: string[]): Promise<EmbeddingResult> {
+  if (provider.embedDetailed) return provider.embedDetailed(texts)
+  return { vectors: await provider.embed(texts) }
 }
 
 /** Profil de modèles par couche (spec §14) — résolu depuis config.toml. */

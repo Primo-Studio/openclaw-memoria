@@ -6,7 +6,7 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import { useCallback as useCb } from 'react'
-import { ConfirmButton, CopyButton } from '../components/ui'
+import { ConfirmButton, CopyButton, EmptyState, Spinner } from '../components/ui'
 import { EmbeddingsChooser } from '../components/EmbeddingsChooser'
 import { useT } from '../i18n'
 import {
@@ -15,6 +15,7 @@ import {
   getDoctor,
   getLlmHealth,
   getLlmProfile,
+  getLlmUsage,
   getOptions,
   getProviders,
   getSyncStatus,
@@ -36,6 +37,8 @@ import {
   type LlmConfig,
   type LlmHealth,
   type LlmProviderName,
+  type LlmUsagePeriod,
+  type LlmUsageReport,
   type ProvidersStatus,
   type SyncStatus,
   type VersionInfo,
@@ -250,6 +253,8 @@ export function Settings() {
           onChanged={refresh}
         />
       )}
+
+      <UsagePanel />
 
       <div className="settings-block">
         <h2>{t('settings.storage.title')}</h2>
@@ -625,6 +630,153 @@ function OptionsPanel({ onError }: { onError: (m: string) => void }) {
           </span>
         </label>
       ))}
+    </div>
+  )
+}
+
+const USAGE_PERIODS: LlmUsagePeriod[] = ['24h', '7d', '30d', 'all']
+
+function fmtTokens(n: number | null): string {
+  return n === null ? '—' : n.toLocaleString()
+}
+
+/** Coût estimé en dollars : 4 décimales sous le cent, sinon 2. */
+function fmtUsd(v: number): string {
+  return `${v.toFixed(v > 0 && v < 0.01 ? 4 : 2)} $`
+}
+
+/**
+ * Consommation par modèle : appels, tokens, coût estimé — l'utilisateur voit
+ * ce que sa mémoire lui coûte, modèle par modèle, locaux compris (0 $).
+ * Route « contrat » : absente (daemon plus ancien) → encart « non disponible ».
+ */
+function UsagePanel() {
+  const { t } = useT()
+  const [period, setPeriod] = useState<LlmUsagePeriod>('24h')
+  const [report, setReport] = useState<LlmUsageReport | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [unavailable, setUnavailable] = useState(false)
+
+  useEffect(() => {
+    let alive = true
+    setLoading(true)
+    getLlmUsage(period)
+      .then(r => {
+        if (!alive) return
+        setReport(r)
+        setUnavailable(false)
+      })
+      .catch(() => {
+        if (alive) setUnavailable(true)
+      })
+      .finally(() => {
+        if (alive) setLoading(false)
+      })
+    return () => {
+      alive = false
+    }
+  }, [period])
+
+  const totals = report?.totals
+  return (
+    <div className="settings-block">
+      <h2>{t('settings.usage.title')}</h2>
+      <p className="muted">{t('settings.usage.lead')}</p>
+      <div className="usage-periods" role="tablist" aria-label={t('settings.usage.title')}>
+        {USAGE_PERIODS.map(p => (
+          <button
+            key={p}
+            type="button"
+            role="tab"
+            aria-selected={p === period}
+            className={p === period ? 'btn btn-primary' : 'btn'}
+            onClick={() => setPeriod(p)}
+          >
+            {t(`settings.usage.period.${p}`)}
+          </button>
+        ))}
+      </div>
+      {loading && !report ? (
+        <Spinner />
+      ) : unavailable ? (
+        <p className="muted">{t('settings.usage.unavailable')}</p>
+      ) : !report || report.rows.length === 0 ? (
+        <EmptyState title={t('settings.usage.empty.title')} body={t('settings.usage.empty.body')} />
+      ) : (
+        <>
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>{t('settings.usage.col.model')}</th>
+                  <th>{t('settings.usage.col.purpose')}</th>
+                  <th>{t('settings.usage.col.calls')}</th>
+                  <th>{t('settings.usage.col.in')}</th>
+                  <th>{t('settings.usage.col.out')}</th>
+                  <th>{t('settings.usage.col.cost')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {report.rows.map(r => (
+                  <tr key={`${r.provider}|${r.model}|${r.purpose}`}>
+                    <td>
+                      <code>
+                        {r.provider}/{r.model}
+                      </code>
+                      {r.local && (
+                        <>
+                          {' '}
+                          <span className="badge badge-muted">{t('settings.usage.local')}</span>
+                        </>
+                      )}
+                    </td>
+                    <td>{t(`settings.usage.purpose.${r.purpose}`)}</td>
+                    <td>
+                      {r.calls.toLocaleString()}
+                      {r.failures > 0 && (
+                        <>
+                          {' '}
+                          <span className="badge badge-warn">{t('settings.usage.failures', { count: r.failures })}</span>
+                        </>
+                      )}
+                    </td>
+                    <td>{fmtTokens(r.input_tokens)}</td>
+                    <td>
+                      {fmtTokens(r.output_tokens)}
+                      {r.reasoning_tokens ? (
+                        <span className="muted"> ({t('settings.usage.reasoning', { count: r.reasoning_tokens.toLocaleString() })})</span>
+                      ) : null}
+                    </td>
+                    <td>
+                      {r.local
+                        ? t('settings.usage.free')
+                        : r.estimated_cost_usd === null
+                          ? t('settings.usage.unknownCost')
+                          : `≈ ${fmtUsd(r.estimated_cost_usd)}`}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              {totals && (
+                <tfoot>
+                  <tr>
+                    <th>{t('settings.usage.total')}</th>
+                    <td />
+                    <td>{totals.calls.toLocaleString()}</td>
+                    <td>{fmtTokens(totals.input_tokens)}</td>
+                    <td>{fmtTokens(totals.output_tokens)}</td>
+                    <td>{totals.estimated_cost_usd === null ? t('settings.usage.unknownCost') : `≈ ${fmtUsd(totals.estimated_cost_usd)}`}</td>
+                  </tr>
+                </tfoot>
+              )}
+            </table>
+          </div>
+          <p className="muted">
+            {t('settings.usage.note', { date: report.pricing_as_of })}
+            {totals && totals.unmetered_calls > 0 ? ` ${t('settings.usage.unmetered', { count: totals.unmetered_calls })}` : ''}
+          </p>
+        </>
+      )}
     </div>
   )
 }

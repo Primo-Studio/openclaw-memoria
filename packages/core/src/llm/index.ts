@@ -86,6 +86,8 @@ export {
 export type { OpenAiKeyOptions, OpenAiProviderOptions, OpenAiFlavor, OpenAiEmbeddingProviderOptions } from './openai.js'
 export { assertVectorDimensions, cosineSimilarity } from './embeddings-guard.js'
 export { auditExtraction, auditEmbeddings, isCloudProvider, formatCloudSend } from './cloud-audit.js'
+export * from './usage-meter.js'
+export * from './pricing.js'
 export type { CloudSend, CloudAuditSink } from './cloud-audit.js'
 
 export type LlmProfileName = '100-local' | 'local-plus-cloud' | 'cloud'

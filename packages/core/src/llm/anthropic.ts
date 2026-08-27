@@ -7,7 +7,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import type { CompleteOptions, LlmProvider } from './provider.js'
+import type { CompleteOptions, CompletionResult, LlmProvider, LlmUsage } from './provider.js'
 
 export const DEFAULT_ANTHROPIC_MODEL = 'claude-haiku-4-5-20251001'
 export const DEFAULT_ANTHROPIC_BASE_URL = 'https://api.anthropic.com'
@@ -54,6 +54,7 @@ export interface AnthropicProviderOptions extends AnthropicKeyOptions {
 
 interface AnthropicMessageResponse {
   content?: Array<{ type?: string; text?: string }>
+  usage?: { input_tokens?: number; output_tokens?: number }
 }
 
 export class AnthropicProvider implements LlmProvider {
@@ -75,6 +76,10 @@ export class AnthropicProvider implements LlmProvider {
   }
 
   async complete(opts: CompleteOptions): Promise<string> {
+    return (await this.completeDetailed(opts)).text
+  }
+
+  async completeDetailed(opts: CompleteOptions): Promise<CompletionResult> {
     if (this.apiKey === null) {
       throw new Error('AnthropicProvider : aucune clé API (param, $ANTHROPIC_API_KEY ou ~/.anthropic/api_key)')
     }
@@ -111,6 +116,9 @@ export class AnthropicProvider implements LlmProvider {
     if (!first || typeof first.text !== 'string') {
       throw new Error(`réponse anthropic invalide : content[0].text absent (modèle ${this.model})`)
     }
-    return first.text
+    const usage: LlmUsage = {}
+    if (typeof data.usage?.input_tokens === 'number') usage.input_tokens = data.usage.input_tokens
+    if (typeof data.usage?.output_tokens === 'number') usage.output_tokens = data.usage.output_tokens
+    return { text: first.text, usage: Object.keys(usage).length > 0 ? usage : undefined }
   }
 }
