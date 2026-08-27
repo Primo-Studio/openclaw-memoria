@@ -138,20 +138,42 @@ export function EmptyState({ title, body, action }: { title: string; body?: stri
   )
 }
 
-/** Copie dans le presse-papiers avec retour visuel ; l'échec est visible aussi. */
+/**
+ * Copie dans le presse-papiers avec retour visuel ; l'échec est visible aussi.
+ * Le retour à « idle » n'est armé qu'APRÈS la réponse du presse-papiers (sinon
+ * un « Échec » tardif pouvait ne jamais s'afficher) et le timer est nettoyé
+ * au démontage (pas de setState sur composant démonté).
+ */
 export function CopyButton({ text, label }: { text: string; label?: string }) {
   const { t } = useT()
   const [feedback, setFeedback] = useState<'idle' | 'done' | 'failed'>('idle')
+  const timer = useRef<number | null>(null)
+  const mounted = useRef(true)
+
+  useEffect(
+    () => () => {
+      mounted.current = false
+      if (timer.current !== null) window.clearTimeout(timer.current)
+    },
+    [],
+  )
 
   const copy = () => {
-    navigator.clipboard.writeText(text).then(
-      () => setFeedback('done'),
-      (err: unknown) => {
-        console.warn('memoria-ui : copie presse-papiers refusée', err)
-        setFeedback('failed')
-      },
-    )
-    window.setTimeout(() => setFeedback('idle'), 2000)
+    if (timer.current !== null) window.clearTimeout(timer.current)
+    navigator.clipboard
+      .writeText(text)
+      .then(
+        () => 'done' as const,
+        (err: unknown) => {
+          console.warn('memoria-ui : copie presse-papiers refusée', err)
+          return 'failed' as const
+        },
+      )
+      .then(result => {
+        if (!mounted.current) return
+        setFeedback(result)
+        timer.current = window.setTimeout(() => setFeedback('idle'), 2000)
+      })
   }
 
   return (
