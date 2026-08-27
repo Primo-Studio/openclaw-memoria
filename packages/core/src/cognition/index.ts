@@ -67,7 +67,7 @@ export interface ExpandResult {
 
 export class CognitionEngine {
   private readonly store: ContentStore
-  private readonly llm: LlmProvider | null
+  private llm: LlmProvider | null
 
   constructor(opts: CognitionEngineOptions) {
     this.store = opts.store
@@ -79,6 +79,20 @@ export class CognitionEngine {
 
   get db(): Database {
     return this.store.db
+  }
+
+  /** Un LLM d'extraction graphe est-il branché ? */
+  get hasLlm(): boolean {
+    return this.llm !== null
+  }
+
+  /**
+   * Branche (ou remplace) le LLM après coup. Le moteur est mis en cache PAR
+   * STORE côté Memoria : sans ceci, un premier appel de lecture (llm=null)
+   * condamnait le store à l'heuristique pour toute la vie du processus.
+   */
+  setLlm(llm: LlmProvider | null): void {
+    this.llm = llm
   }
 
   /**

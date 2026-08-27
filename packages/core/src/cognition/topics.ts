@@ -109,12 +109,22 @@ export interface TopicEngineOptions {
 
 export class TopicEngine {
   private readonly store: ContentStore
-  private readonly llm: LlmProvider | null
+  private llm: LlmProvider | null
 
   constructor(opts: TopicEngineOptions) {
     this.store = opts.store
     this.llm = opts.llm ?? null
     ensureTopicSchema(this.store.db)
+  }
+
+  /** Un LLM de libellé est-il branché ? */
+  get hasLlm(): boolean {
+    return this.llm !== null
+  }
+
+  /** Branche le LLM après coup (cache par store côté Memoria — voir CognitionEngine.setLlm). */
+  setLlm(llm: LlmProvider | null): void {
+    this.llm = llm
   }
 
   private get db(): Database {

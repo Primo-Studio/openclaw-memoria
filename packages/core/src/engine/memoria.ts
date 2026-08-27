@@ -865,6 +865,10 @@ export class Memoria {
     if (!engine) {
       engine = new TopicEngine({ store, llm })
       this.topicEngines.set(store, engine)
+    } else if (llm && !engine.hasLlm) {
+      // Cache PAR STORE, pas par provider : un premier appel de lecture
+      // (llm=null) ne doit pas priver le store des libellés LLM pour toujours.
+      engine.setLlm(llm)
     }
     return engine
   }
@@ -1395,6 +1399,11 @@ export class Memoria {
     if (!engine) {
       engine = new CognitionEngine({ store, llm })
       this.cognitionEngines.set(store, engine)
+    } else if (llm && !engine.hasLlm) {
+      // Même règle que topicFor : le LLM devient collant dès qu'on le connaît.
+      // Avant : recall() avant la 1re capture → moteur figé en heuristique,
+      // extraction graphe LLM jamais utilisée, sans aucun signal.
+      engine.setLlm(llm)
     }
     return engine
   }
