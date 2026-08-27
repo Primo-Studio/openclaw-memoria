@@ -6,6 +6,7 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import Database from 'better-sqlite3'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   ContentStore,
@@ -13,6 +14,8 @@ import {
   hybridSearchFacts,
   isVecAvailable,
   knn,
+  listVecTables,
+  purgeFactVectors,
   vecTableName,
   type EmbeddingProvider,
 } from '../src/index.js'
@@ -72,6 +75,8 @@ afterEach(() => {
 })
 
 const vecOk = (): boolean => isVecAvailable(store.db)
+/** Disponibilité connue AVANT les tests (pour `skipIf`) — même binaire que store.db. */
+const VEC_AVAILABLE = isVecAvailable(new Database(':memory:'))
 
 describe('extension sqlite-vec', () => {
   it('disponible sur cette machine (binaire npm) OU dégradation propre', () => {
@@ -117,6 +122,60 @@ describe('EmbeddingIndexer', () => {
     if (vecOk()) {
       expect(knn(store.db, { model: 'fake-8d', dimensions: 8 }, FakeEmbedding.vectorFor('voiture'), 5).map(h => h.fact_id)).not.toContain(f.id)
     }
+  })
+})
+
+/**
+ * Spec §11 « aucune trace » : un fait effacé (rejet de revue, oubli) ne doit
+ * plus être mesurable par similarité. Régression b0aefd6 : les tables sont
+ * nommées `vec_index_<dims>_<modèle>` et le hard-delete ne filtrait que
+ * `vec_index_<dims>` → le vecteur du fait effacé restait dans l'index.
+ */
+describe('hard-delete — purge de TOUS les index vectoriels', () => {
+  const key = { model: 'fake-8d', dimensions: 8 }
+
+  it('purgeFactVectors vide le fait de tous les index existants (nommage (dims, modèle) ET legacy), sans en créer', async () => {
+    const f = store.insertFact({ fact: 'la voiture rouge du garage', scope_id: 's1' })
+    const other = store.insertFact({ fact: 'une automobile bleue', scope_id: 's1' })
+    await indexer.runAll()
+    if (!vecOk()) return
+    // index legacy (nommé par dimension seule) hérité d'une version antérieure
+    store.db.exec('CREATE VIRTUAL TABLE vec_index_8 USING vec0(embedding float[8], fact_id TEXT)')
+    store.db.prepare('INSERT INTO vec_index_8 (embedding, fact_id) VALUES (?, ?)').run(Buffer.from(FakeEmbedding.vectorFor('voiture').buffer), f.id)
+    expect(listVecTables(store.db).sort()).toEqual(['vec_index_8', vecTableName(key)].sort())
+
+    purgeFactVectors(store.db, [f.id])
+
+    for (const table of listVecTables(store.db)) {
+      const left = store.db.prepare(`SELECT COUNT(*) AS c FROM "${table}" WHERE fact_id = ?`).get(f.id) as { c: number }
+      expect(left.c, table).toBe(0)
+    }
+    const ids = knn(store.db, key, FakeEmbedding.vectorFor('voiture'), 5).map(h => h.fact_id)
+    expect(ids).not.toContain(f.id)
+    expect(ids).toContain(other.id) // les autres faits restent indexés
+    expect(listVecTables(store.db)).toHaveLength(2) // aucune table créée au passage
+  })
+
+  it('purgeFactVectors sans aucun index → no-op (pas de table créée)', () => {
+    purgeFactVectors(store.db, ['inexistant'])
+    expect(listVecTables(store.db)).toHaveLength(0)
+  })
+
+  // ⚠️ `.fails` VOLONTAIRE : ContentStore.hardDeleteFacts (storage/content.ts,
+  // hors lane vector) filtre encore `/^vec_index_\d+$/` et rate les tables
+  // `vec_index_<dims>_<modèle>`. Dès que hardDeleteFacts appelle
+  // `purgeFactVectors`, ce test PASSE → vitest le signalera comme cassé :
+  // retirer alors le `.fails`. Le test est écrit tel qu'il doit passer.
+  it.skipIf(!VEC_AVAILABLE).fails('store.hardDeleteFacts retire le vecteur de l’index nommé (dims, modèle)', async () => {
+    const f = store.insertFact({ fact: 'la voiture rouge du garage', scope_id: 's1' })
+    await indexer.runAll()
+    expect(knn(store.db, key, FakeEmbedding.vectorFor('voiture'), 5).map(h => h.fact_id)).toContain(f.id)
+
+    expect(store.hardDeleteFacts([f.id])).toBe(1)
+    expect(store.getFact(f.id)).toBeNull()
+    expect(knn(store.db, key, FakeEmbedding.vectorFor('voiture'), 5).map(h => h.fact_id)).not.toContain(f.id)
+    const left = store.db.prepare(`SELECT COUNT(*) AS c FROM ${vecTableName(key)} WHERE fact_id = ?`).get(f.id) as { c: number }
+    expect(left.c).toBe(0)
   })
 })
 

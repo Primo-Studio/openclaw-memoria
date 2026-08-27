@@ -7,6 +7,7 @@ export {
   removeVectors,
   repairVecIndex,
   listVecTables,
+  purgeFactVectors,
   knn,
 } from './vec-table.js'
 export type { KnnHit, VecIndexKey } from './vec-table.js'

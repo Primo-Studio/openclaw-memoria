@@ -141,6 +141,28 @@ export function removeVectors(db: Database, key: VecIndexKey, factIds: string[])
 }
 
 /**
+ * Purge des faits de TOUS les index vectoriels de la base, quel que soit leur
+ * nommage (legacy `vec_index_768` ou `vec_index_768_<modèle>`) — sans en créer
+ * aucun. C'est la brique du hard-delete (spec §11 « aucune trace ») : un fait
+ * rejeté en revue ou oublié ne doit plus être mesurable par similarité, dans
+ * AUCUN index, y compris ceux d'un modèle qui n'est plus le modèle courant.
+ * `removeVectors` ne couvre qu'un index connu (celui de l'indexer actif) et le
+ * crée au besoin — ici on ne touche qu'à l'existant.
+ *
+ * Sans extension chargeable, les tables vec0 sont inaccessibles dans cette
+ * connexion : on n'y touche pas (elles ne servent alors à aucun recall).
+ */
+export function purgeFactVectors(db: Database, factIds: string[]): void {
+  if (factIds.length === 0) return
+  const tables = listVecTables(db)
+  if (tables.length === 0 || !loadVecExtension(db)) return
+  for (const table of tables) {
+    const stmt = db.prepare(`DELETE FROM "${table}" WHERE fact_id = ?`)
+    for (const id of factIds) stmt.run(id)
+  }
+}
+
+/**
  * Répare l'index depuis la vérité : tout embedding de ce modèle (fait existant)
  * absent de l'index y est réinséré. Couvre l'index créé APRÈS les embeddings
  * (migration du nommage par dimension vers (dimensions, modèle), table
