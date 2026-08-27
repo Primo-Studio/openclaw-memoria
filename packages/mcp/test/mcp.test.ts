@@ -60,6 +60,10 @@ function fakeGateway(): DaemonGateway & { calls: Array<{ method: string; input: 
       calls.push({ method: 'identifyInterlocutor', input })
       return { match: null }
     },
+    identifyOrCreateInterlocutor: async input => {
+      calls.push({ method: 'identifyOrCreateInterlocutor', input })
+      return { match: null }
+    },
     feedback: async input => {
       calls.push({ method: 'feedback', input })
       return { updated: ['f1'], domains: ['preference'] }
@@ -179,7 +183,108 @@ describe('buildServer handlers', () => {
       active_context: { project_id: 'memoria-v3', client_org_id: 'interne' },
     })
     const text = (result.content[0] as { type: 'text'; text: string }).text
-    expect(JSON.parse(text)).toEqual(RECALL_EMPTY)
+    expect(JSON.parse(text)).toEqual({ items: [], total_found: 0, tokens: 0 })
+  })
+
+  it('memoria_recall relaie token_budget au daemon (cap dur du bloc renvoyé)', async () => {
+    const gateway = fakeGateway()
+    const { handlers } = buildServer({ instanceId: 'i', tracker: new ActiveContextTracker(), connect: async () => gateway })
+    await handlers.recall({ query: 'x', token_budget: 800 })
+    expect(gateway.calls[0]?.input).toMatchObject({ query: 'x', token_budget: 800 })
+  })
+
+  it('memoria_recall renvoie une projection compacte : ni scope_id ni source_db, date YYYY-MM-DD, score à 3 décimales', async () => {
+    // Mesuré E2E : JSON = 2,44× le contenu utile (UUID de scope, chemin de DB,
+    // score à 16 décimales, timestamp à la ms) — du contexte LLM brûlé pour rien.
+    const gateway = fakeGateway()
+    gateway.recall = async () => ({
+      items: [
+        {
+          kind: 'fact',
+          id: 'f-1',
+          content: 'Néto préfère les réponses courtes.',
+          category: 'preference',
+          scope_id: '7f3c2a10-4b2e-4c1d-9c6a-2c9d3e8f1a2b',
+          source_db: 'assistants/claude-code-72615d82/content.sqlite',
+          score: 0.8123456789012345,
+          created_at: '2026-08-27T09:12:33.123Z',
+          origin: 'declared',
+        },
+        {
+          kind: 'procedure',
+          id: 'f-2',
+          content: 'Déployer avec git push en Nieto42.',
+          category: 'infra',
+          scope_id: 'scope-2',
+          source_db: 'shared/user.sqlite',
+          score: 0.5,
+          created_at: '2026-08-01T00:00:00.000Z',
+          revision: { kind: 'contradicted', replacement_fact_id: 'f-9' },
+        },
+      ],
+      totalFound: 2,
+      tokens: 40,
+      scopes_searched: ['private:i', 'user'],
+    })
+    const { handlers } = buildServer({ instanceId: 'i', tracker: new ActiveContextTracker(), connect: async () => gateway })
+    const res = await handlers.recall({ query: 'réponses' })
+    const payload = JSON.parse((res.content[0] as { type: 'text'; text: string }).text) as Record<string, unknown>
+    expect(payload).toEqual({
+      items: [
+        { id: 'f-1', kind: 'fact', content: 'Néto préfère les réponses courtes.', category: 'preference', date: '2026-08-27', score: 0.812, origin: 'declared' },
+        {
+          id: 'f-2',
+          kind: 'procedure',
+          content: 'Déployer avec git push en Nieto42.',
+          category: 'infra',
+          date: '2026-08-01',
+          score: 0.5,
+          revision: { kind: 'contradicted', replacement_fact_id: 'f-9' },
+        },
+      ],
+      total_found: 2,
+      tokens: 40,
+    })
+  })
+
+  it('memoria_recall quand Memoria est en pause → items vides + disabled:true conservé', async () => {
+    const gateway = fakeGateway()
+    gateway.recall = async () => ({ items: [], disabled: true } as unknown as RecallResult)
+    const { handlers } = buildServer({ instanceId: 'i', tracker: new ActiveContextTracker(), connect: async () => gateway })
+    const res = await handlers.recall({ query: 'x' })
+    expect(JSON.parse((res.content[0] as { type: 'text'; text: string }).text)).toEqual({ items: [], total_found: 0, tokens: 0, disabled: true })
+  })
+
+  it('memoria_identify_interlocutor / _or_create renvoient une personne compacte (id, nom, relation, notes, known, created)', async () => {
+    const full = {
+      id: 'p-1',
+      display_name: 'Marion Dol',
+      relation: 'client',
+      notes: 'GCSMS',
+      org_id: 'org-1',
+      user_id: null,
+      created_at: '2026-08-24T10:00:00.000Z',
+      updated_at: null,
+      identifiers: [{ id: 'pi-1', person_id: 'p-1', kind: 'email', value: 'm@x.fr', created_at: '2026-08-24T10:00:00.000Z' }],
+    }
+    const gateway = fakeGateway()
+    gateway.identifyInterlocutor = async () => ({ match: { person: full, known: ['Marion Dol pilote la plénière GCSMS.'] } })
+    gateway.identifyOrCreateInterlocutor = async () => ({ match: { person: full, known: [], created: true } })
+    const { handlers } = buildServer({ instanceId: 'i', tracker: new ActiveContextTracker(), connect: async () => gateway })
+
+    const a = JSON.parse(((await handlers.identifyInterlocutor({ email: 'm@x.fr' })).content[0] as { type: 'text'; text: string }).text)
+    expect(a).toEqual({
+      found: true,
+      person: { id: 'p-1', display_name: 'Marion Dol', relation: 'client', notes: 'GCSMS' },
+      known: ['Marion Dol pilote la plénière GCSMS.'],
+    })
+    const b = JSON.parse(((await handlers.identifyOrCreateInterlocutor({ email: 'm@x.fr' })).content[0] as { type: 'text'; text: string }).text)
+    expect(b).toMatchObject({ found: true, created: true })
+    expect(b.person).not.toHaveProperty('identifiers')
+
+    gateway.identifyInterlocutor = async () => ({ match: null })
+    const c = JSON.parse(((await handlers.identifyInterlocutor({ name: 'inconnu' })).content[0] as { type: 'text'; text: string }).text)
+    expect(c).toEqual({ found: false })
   })
 
   it('memoria_store_fact et memoria_capture_turn relaient au daemon', async () => {

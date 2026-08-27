@@ -40,6 +40,8 @@ export {
   MCP_SERVER_VERSION,
   SERVER_INSTRUCTIONS,
   compactStoredFact,
+  compactRecall,
+  compactInterlocutor,
 } from './serve.js'
 export type {
   BuildServerOptions,

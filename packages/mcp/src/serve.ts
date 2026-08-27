@@ -49,6 +49,61 @@ export function compactStoredFact(payload: unknown): Record<string, unknown> {
   }
 }
 
+/**
+ * Projection compacte d'un recall pour le LLM.
+ *
+ * Mesuré E2E (12 items) : le RecallResult brut pèse 2,44× le contenu utile —
+ * `scope_id` (UUID), `source_db` (chemin de DB ~60 car.), `score` à 16
+ * décimales, `created_at` à la milliseconde, `scopes_searched`. Aucun de ces
+ * champs ne sert au modèle ; ils diluent le contexte et le budget de tokens
+ * du core (qui ne compte que le contenu). On garde ce qui guide une décision :
+ * id (feedback/pin/correct), kind, contenu, catégorie, date, score arrondi,
+ * origine et révision en attente. `disabled` (Memoria en pause) est conservé :
+ * l'agent doit savoir que « rien » ne veut pas dire « aucun souvenir ».
+ */
+export function compactRecall(payload: RecallResult & { disabled?: boolean }): Record<string, unknown> {
+  const items = (payload.items ?? []).map(i => {
+    const out: Record<string, unknown> = { id: i.id, kind: i.kind, content: i.content, category: i.category }
+    if (typeof i.created_at === 'string' && i.created_at) out['date'] = i.created_at.slice(0, 10)
+    out['score'] = Math.round((i.score ?? 0) * 1000) / 1000
+    if (i.origin) out['origin'] = i.origin
+    if (i.revision) out['revision'] = i.revision
+    return out
+  })
+  return {
+    items,
+    total_found: payload.totalFound ?? items.length,
+    tokens: payload.tokens ?? 0,
+    ...(payload.disabled ? { disabled: true } : {}),
+  }
+}
+
+/**
+ * Projection d'identify_interlocutor / identify_or_create_interlocutor : le
+ * daemon renvoie le PersonProfile entier (org_id, user_id, timestamps, liste
+ * d'identifiants avec leurs ids internes). Le modèle n'a besoin que de qui
+ * c'est et de ce qu'on sait de la personne.
+ */
+export function compactInterlocutor(payload: unknown): Record<string, unknown> {
+  const p = (payload ?? {}) as {
+    match?: { person?: Record<string, unknown> | null; known?: string[]; created?: boolean } | null
+  }
+  const person = p.match?.person
+  if (!person) return { found: false }
+  const out: Record<string, unknown> = {
+    found: true,
+    person: {
+      id: person['id'],
+      display_name: person['display_name'],
+      relation: person['relation'] ?? null,
+      notes: person['notes'] ?? null,
+    },
+    known: p.match?.known ?? [],
+  }
+  if (typeof p.match?.created === 'boolean') out['created'] = p.match.created
+  return out
+}
+
 /** Sous-ensemble du daemon utilisé par les outils MCP (mockable en test). */
 export interface DaemonGateway {
   recall(input: Record<string, unknown>): Promise<RecallResult>
@@ -188,7 +243,7 @@ export interface BuildServerOptions {
 }
 
 export interface ToolHandlers {
-  recall(args: { query: string; limit?: number }): Promise<CallToolResult>
+  recall(args: { query: string; limit?: number; token_budget?: number }): Promise<CallToolResult>
   storeFact(args: {
     content: string
     category?: string
@@ -324,7 +379,8 @@ export function buildServer(opts: BuildServerOptions): BuiltServer {
           active_context: opts.tracker.current(),
         }
         if (args.limit !== undefined) input['limit'] = args.limit
-        return ok(await withDaemon(g => g.recall(input)))
+        if (args.token_budget !== undefined) input['token_budget'] = args.token_budget
+        return ok(compactRecall(await withDaemon(g => g.recall(input))))
       } catch (err) {
         return fail(err)
       }
@@ -425,7 +481,7 @@ export function buildServer(opts: BuildServerOptions): BuiltServer {
 
     async identifyInterlocutor(args) {
       try {
-        return ok(await withDaemon(g => g.identifyInterlocutor(args as Record<string, unknown>)))
+        return ok(compactInterlocutor(await withDaemon(g => g.identifyInterlocutor(args as Record<string, unknown>))))
       } catch (err) {
         return fail(err)
       }
@@ -433,7 +489,7 @@ export function buildServer(opts: BuildServerOptions): BuiltServer {
 
     async identifyOrCreateInterlocutor(args) {
       try {
-        return ok(await withDaemon(g => g.identifyOrCreateInterlocutor(args as Record<string, unknown>)))
+        return ok(compactInterlocutor(await withDaemon(g => g.identifyOrCreateInterlocutor(args as Record<string, unknown>))))
       } catch (err) {
         return fail(err)
       }
@@ -455,6 +511,13 @@ export function buildServer(opts: BuildServerOptions): BuiltServer {
       inputSchema: {
         query: z.string().min(1).describe('Natural-language search query, e.g. "deployment rules for project X".'),
         limit: z.number().int().min(1).max(50).optional().describe('Maximum number of items to return (default chosen by the daemon).'),
+        token_budget: z
+          .number()
+          .int()
+          .min(100)
+          .max(4000)
+          .optional()
+          .describe('Hard cap on the estimated tokens of memory content returned (default chosen by the daemon, ~1500). Lower it (e.g. 500) for a quick check, raise it for a briefing.'),
       },
     },
     async args => handlers.recall(args),
@@ -608,7 +671,7 @@ export function buildServer(opts: BuildServerOptions): BuiltServer {
     'memoria_identify_interlocutor',
     {
       description:
-        'Identify WHO you are talking to (the human on the other end) from an identifier — a phone number, email, Telegram/WhatsApp handle, or a name. Returns the matched person, their relation to the user (e.g. colleague, intern, client) and known facts about them. Call this at the start of a conversation when the speaker may not be the owner (the user whose memory this is), so you address the right person and apply the right context. Returns no match when unknown (assume it is the owner).',
+        'Identify WHO you are talking to (the human on the other end) from an identifier — a phone number, email, Telegram/WhatsApp handle, or a name. Returns the matched person, their relation to the user (e.g. colleague, intern, client) and known facts about them. Call this at the start of a conversation when the speaker may not be the owner (the user whose memory this is), so you address the right person and apply the right context. Returns found=false when unknown (assume it is the owner).',
       inputSchema: {
         phone: z.string().optional().describe('Phone number (any format).'),
         email: z.string().optional().describe('Email address.'),
@@ -625,7 +688,7 @@ export function buildServer(opts: BuildServerOptions): BuiltServer {
     'memoria_identify_or_create_interlocutor',
     {
       description:
-        'Like memoria_identify_interlocutor, but AUTO-REGISTERS the person on first contact: if no known person matches the given identifier (phone/email/Telegram/WhatsApp/handle), a new person is created with that identifier (and name/relation if provided). Use when a new contact reaches you on a channel and should be remembered for next time. Returns the person and created=true when a new one was made. With no identifier at all, creates nothing (assume the owner).',
+        'Like memoria_identify_interlocutor, but AUTO-REGISTERS the person on first contact: if no known person matches the given identifier (phone/email/Telegram/WhatsApp/handle), a new person is created with that identifier (and name/relation if provided). Use when a new contact reaches you on a channel and should be remembered for next time. Returns the person and created=true when a new one was made. With no identifier at all, creates nothing and returns found=false (assume the owner).',
       inputSchema: {
         phone: z.string().optional().describe('Phone number (any format).'),
         email: z.string().optional().describe('Email address.'),
