@@ -699,11 +699,45 @@ function PairingCode({ result, onRegenerate }: { result: PairResult; onRegenerat
   )
 }
 
+/**
+ * Modale accessible : le focus entre dans la boîte à l'ouverture, Échap et le
+ * clic sur le fond ferment, le focus revient à l'élément déclencheur à la
+ * fermeture (sinon un utilisateur clavier « perdait » sa position).
+ */
 function Modal({ title, children, onClose }: { title: string; children: ReactNode; onClose: () => void }) {
   const { t } = useT()
+  const box = useRef<HTMLDivElement>(null)
+  const onCloseRef = useRef(onClose)
+  onCloseRef.current = onClose
+
+  useEffect(() => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const first = box.current?.querySelector<HTMLElement>('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')
+    first?.focus()
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        onCloseRef.current()
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      opener?.focus()
+    }
+  }, [])
+
   return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label={title}>
-      <div className="modal">
+    <div
+      className="modal-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+      onClick={e => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+    >
+      <div className="modal" ref={box}>
         <header className="modal-head">
           <h2>{title}</h2>
           <button type="button" className="btn btn-ghost" onClick={onClose} aria-label={t('agents.modal.close')}>

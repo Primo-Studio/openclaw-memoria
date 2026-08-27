@@ -7,6 +7,7 @@ import { getAudit, type AuditEntry } from '../api'
 import { EmptyState, ErrorBanner, Spinner, formatDate, useLoad } from '../components/ui'
 import { useT } from '../i18n'
 import { humanReason } from '../lib/cloud'
+import { ariaSort, nextSort, type SortState } from '../lib/sort'
 
 const PAGE_SIZE = 25
 
@@ -48,7 +49,7 @@ export function Audit() {
 }
 
 type SortKey = 'ts' | 'actor' | 'action' | 'scope'
-type SortDir = 'asc' | 'desc'
+const DATE_KEYS: readonly SortKey[] = ['ts']
 
 type Translate = (key: string, vars?: Record<string, string | number>) => string
 
@@ -74,16 +75,11 @@ function sortValue(t: Translate, e: AuditEntry, key: SortKey): string {
 function AuditTable({ entries, page, setPage }: { entries: AuditEntry[]; page: number; setPage: (p: number) => void }) {
   const { t } = useT()
   // Tri par défaut : Date décroissante (le plus récent d'abord).
-  const [sortKey, setSortKey] = useState<SortKey>('ts')
-  const [sortDir, setSortDir] = useState<SortDir>('desc')
+  const [sort, setSort] = useState<SortState<SortKey>>({ key: 'ts', dir: 'desc' })
+  const { key: sortKey, dir: sortDir } = sort
 
   function toggleSort(key: SortKey) {
-    if (key === sortKey) {
-      setSortDir(d => (d === 'asc' ? 'desc' : 'asc'))
-    } else {
-      setSortKey(key)
-      setSortDir(key === 'ts' ? 'desc' : 'asc') // date : récent d'abord ; texte : A→Z
-    }
+    setSort(s => nextSort(s, key, DATE_KEYS))
     setPage(0)
   }
 
@@ -109,15 +105,14 @@ function AuditTable({ entries, page, setPage }: { entries: AuditEntry[]; page: n
       <div className="table-wrap"><table className="table">
         <thead>
           <tr>
+            {/* Un <button> dans le <th> : focusable et activable au clavier
+                (un <th onClick> ne l'était pas) ; aria-sort reste sur le <th>. */}
             {columns.map(col => (
-              <th
-                key={col.key}
-                className="sortable"
-                aria-sort={col.key === sortKey ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
-                onClick={() => toggleSort(col.key)}
-              >
-                {col.label}
-                <span className="sort-arrow muted">{arrow(col.key)}</span>
+              <th key={col.key} className="sortable" aria-sort={ariaSort(sort, col.key)}>
+                <button type="button" className="th-sort" onClick={() => toggleSort(col.key)}>
+                  {col.label}
+                  <span className="sort-arrow muted" aria-hidden="true">{arrow(col.key)}</span>
+                </button>
               </th>
             ))}
           </tr>
