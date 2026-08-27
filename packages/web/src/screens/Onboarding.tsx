@@ -101,7 +101,12 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     if (step === 2 && health === null && !healthUnavailable) void refreshHealth()
   }, [step, health, healthUnavailable, refreshHealth])
 
-  /** Persiste le moteur choisi via POST /v1/admin/llm_extraction. */
+  /**
+   * Persiste le moteur choisi via POST /v1/admin/llm_extraction, PUIS relit la
+   * santé : la porte « Continuer » dépend de health.extraction.available, qui
+   * reflète l'ancienne config tant qu'on ne rafraîchit pas — sans ça, « Moteur
+   * enregistré » s'affichait en vert avec un bouton Continuer toujours grisé.
+   */
   const persistChoice = useCallback(async (engine: LlmProviderName, h: LlmHealth | null): Promise<void> => {
     const model = engine === 'lmstudio' ? h?.options.lmstudio.models[0] : DEFAULT_MODELS[engine]
     try {
@@ -110,8 +115,10 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
       setEngineError(null)
     } catch (err) {
       setEngineError(err instanceof ApiError ? err.message : t('onboarding.engine.saveError'))
+      return
     }
-  }, [t])
+    await refreshHealth()
+  }, [t, refreshHealth])
 
   // polling du téléchargement Ollama (barres de progression)
   useEffect(() => {
