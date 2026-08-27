@@ -567,9 +567,25 @@ export class Memoria {
   // ------------------------------------------------------------------- mémoire
 
   storeFact(input: StoreFactInput): Fact {
+    return this.storeFactInternal(input).fact
+  }
+
+  /**
+   * Écriture gouvernée + HYGIÈNE (audit 27/08) : contenu vide refusé,
+   * catégorie normalisée (« Preference » ≠ « preference » donnait deux
+   * domaines d'expertise), et dédoublonnage PAR SCOPE (findDuplicate, le même
+   * mécanisme que la capture) — deux memoria_store_fact identiques (ou à un
+   * point près) créaient deux lignes actives. Un doublon DORMANT (revue en
+   * attente) redéclaré explicitement est validé : déclarer = confirmer.
+   * `created=false` = l'existant a été renvoyé.
+   */
+  private storeFactInternal(input: StoreFactInput, opts: { nearDup?: boolean } = {}): { fact: Fact; created: boolean } {
     this.assertOpen()
     const instance = this.mustInstance(input.instance)
     const scope = this.resolveTargetScope(instance, input.scope)
+    const trimmed = input.content.trim()
+    if (!trimmed) throw new Error('storeFact : contenu vide refusé')
+    const category = (input.category ?? 'general').trim().toLowerCase() || 'general'
 
     if (scope.type === 'private') {
       // Seul SON scope privé : un fait écrit sous le scope privé d'un autre
@@ -588,13 +604,28 @@ export class Memoria {
     // GATE SECRETS — défense en profondeur (audit QW1) : tout fait, même posé
     // en direct (store_fact MCP) ou issu d'un import, passe par la redaction
     // AVANT le stockage. La valeur détectée part au coffre, jamais dans facts.
-    const content = this.redactBeforeStore(input.content)
+    const content = this.redactBeforeStore(trimmed)
+
+    const store = this.storeForScope(scope, instance)
+    const dup = findDuplicate(store, scope.id, content, opts)
+    if (dup) {
+      if (dup.existing.lifecycle_state === 'dormant') this.activateFact(store, dup.existing.id)
+      this.registry.audit({
+        actor_type: 'assistant',
+        actor_id: instance.id,
+        action: 'store_fact_dedup',
+        target_id_hash: sha256Hex(dup.existing.id),
+        scope_id: scope.id,
+        reason: dup.kind,
+      })
+      const fact = store.getFact(dup.existing.id) ?? dup.existing
+      return { fact, created: false }
+    }
 
     // PROVENANCE (synchro) : les faits d'un scope PARTAGÉ portent l'origine
     // (machine + révision logique) + un hash de contenu, pour la convergence LWW
     // inter-machines. Les faits privés n'en ont pas besoin (jamais synchronisés).
     const shared = scope.type !== 'private'
-    const category = input.category ?? 'general'
     const provenance = shared
       ? {
           origin_machine_id: localMachineId(this.registry),
@@ -603,10 +634,9 @@ export class Memoria {
         }
       : {}
 
-    const store = this.storeForScope(scope, instance)
     const fact = store.insertFact({
       fact: content,
-      category: input.category,
+      category,
       fact_type: input.fact_type,
       confidence: input.confidence,
       source: input.source ?? 'manual',
@@ -628,7 +658,25 @@ export class Memoria {
       scope_id: scope.id,
       reason: null,
     })
-    return fact
+    return { fact, created: true }
+  }
+
+  /**
+   * Active un fait dormant et clôt ses items de revue `pending` (même règle
+   * que le partage : valider par un autre chemin = sortir de la revue, sans
+   * item orphelin qui répondrait « updated: 1 » pour rien).
+   */
+  private activateFact(store: ContentStore, factId: string): void {
+    const tx = store.db.transaction(() => {
+      store.db.prepare("UPDATE facts SET lifecycle_state = 'active', updated_at = ? WHERE id = ?").run(nowISO(), factId)
+      store.db
+        .prepare(
+          `UPDATE memory_import_items SET status = 'accepted', reviewed_by = 'local', reviewed_at = ?
+           WHERE status = 'pending' AND target_memory_id = ?`,
+        )
+        .run(nowISO(), factId)
+    })
+    tx()
   }
 
   /**
@@ -1377,12 +1425,14 @@ export class Memoria {
     // épinglage) : corriger une formulation ne doit pas dégrader le rangement.
     // Le remplaçant naît dans la MÊME DB que l'original (storeForScope) : la
     // chaîne superseded_by reste navigable dans une seule base.
-    const replacement = this.storeFact({
-      instance: instanceId,
-      content: text,
-      category: old.category,
-      scope: old.scope_id,
-    })
+    // Dédup EXACTE seulement : une correction est proche de l'original par
+    // construction, le near-dup la prendrait pour un doublon. Texte identique
+    // à l'existant = rien à corriger (sinon l'original pointerait sur lui-même).
+    const { fact: replacement } = this.storeFactInternal(
+      { instance: instanceId, content: text, category: old.category, scope: old.scope_id },
+      { nearDup: false },
+    )
+    if (replacement.id === factId) return { replacement: null }
     store.db
       .prepare("UPDATE facts SET superseded = 1, superseded_by = ?, updated_at = ? WHERE id = ? AND superseded = 0")
       .run(replacement.id, nowISO(), factId)
@@ -1866,8 +1916,10 @@ export class Memoria {
    * (invisible au recall) + entre en file de revue ; l'approbation l'active.
    */
   private storeCaptured(input: StoreFactInput): Fact {
-    const fact = this.storeFact({ ...input, source: input.source ?? 'capture' })
-    if (this.getCaptureMode() !== 'review-first') return fact
+    const { fact, created } = this.storeFactInternal({ ...input, source: input.source ?? 'capture' })
+    // Un fait DÉJÀ connu (dédup) n'a rien à faire en revue : le mettre dormant
+    // ferait disparaître du recall un souvenir validé.
+    if (!created || this.getCaptureMode() !== 'review-first') return fact
 
     const store = this.openContent(this.paths.assistantDb(input.instance))
     store.db.prepare("UPDATE facts SET lifecycle_state = 'dormant' WHERE id = ?").run(fact.id)

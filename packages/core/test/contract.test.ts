@@ -110,6 +110,36 @@ describe('storeFact & recall', () => {
   })
 })
 
+describe('storeFact — hygiène (audit 27/08)', () => {
+  it('deux storeFact quasi identiques → une seule ligne, le second renvoie l’existant', () => {
+    const a = m.pairAssistant({ type: 'claude-code' })
+    const first = m.storeFact({ instance: a.assistant_instance_id, content: 'Néto préfère les réponses courtes', category: 'Preference' })
+    const second = m.storeFact({ instance: a.assistant_instance_id, content: 'Néto préfère les réponses courtes.', category: 'preference' })
+    expect(second.id).toBe(first.id)
+    const store = m['openContent'](m.paths.assistantDb(a.assistant_instance_id))
+    expect(store.countFacts()).toBe(1)
+    // Catégorie normalisée : « Preference » et « preference » = un seul domaine.
+    expect(first.category).toBe('preference')
+  })
+
+  it('contenu vide ou blanc → refus explicite', () => {
+    const a = m.pairAssistant({ type: 'claude-code' })
+    expect(() => m.storeFact({ instance: a.assistant_instance_id, content: '   ' })).toThrow(/vide/)
+    expect(() => m.storeFact({ instance: a.assistant_instance_id, content: '' })).toThrow(/vide/)
+  })
+
+  it('redéclarer un fait encore en revue (dormant) le valide au lieu de le dupliquer', async () => {
+    const a = m.pairAssistant({ type: 'claude-code' })
+    const store = m['openContent'](m.paths.assistantDb(a.assistant_instance_id))
+    const scope = m.registry.getScopeByName(`private:${a.assistant_instance_id}`)!
+    const dormant = store.insertFact({ fact: 'Néto travaille sur Memoria', scope_id: scope.id, lifecycle_state: 'dormant' })
+    const declared = m.storeFact({ instance: a.assistant_instance_id, content: 'Néto travaille sur Memoria.' })
+    expect(declared.id).toBe(dormant.id)
+    expect(store.countFacts()).toBe(1)
+    expect(m.recall({ instance: a.assistant_instance_id, query: 'Memoria travaille' }).items).toHaveLength(1)
+  })
+})
+
 describe('isolation', () => {
   it('2 agents : mémoires privées isolées par défaut', () => {
     const a = m.pairAssistant({ type: 'claude-code' })

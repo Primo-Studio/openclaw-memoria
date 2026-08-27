@@ -97,7 +97,14 @@ describe('recallSemantic', () => {
     // type diffère. Sur une requête impérative, la procédure doit passer devant.
     const text = 'Sur Indy, fermer la modale avant toute action'
     const general = m.storeFact({ instance, content: text, category: 'general', confidence: 0.8 })
-    const procedure = m.storeFact({ instance, content: text, category: 'procedure', confidence: 0.8 })
+    // Même texte inséré DIRECTEMENT (storeFact dédoublonne désormais par scope).
+    const procedure = m['openContent'](m.paths.assistantDb(instance)).insertFact({
+      fact: text,
+      category: 'procedure',
+      confidence: 0.8,
+      scope_id: general.scope_id,
+      assistant_instance_id: instance,
+    })
     await m.indexEmbeddings(instance)
 
     const r = await m.recallSemantic({ instance, query: 'comment fermer la modale sur Indy' })
