@@ -202,20 +202,26 @@ export function EmptyState({ title, body, action }: { title: string; body?: stri
  * Le retour à « idle » n'est armé qu'APRÈS la réponse du presse-papiers (sinon
  * un « Échec » tardif pouvait ne jamais s'afficher) et le timer est nettoyé
  * au démontage (pas de setState sur composant démonté).
+ *
+ * `mounted` est remis à true dans le setup de l'effet, pas seulement initialisé
+ * par useRef : sous <StrictMode> (main.tsx), React 19 en dev joue
+ * setup → cleanup → setup au montage et la ref SURVIT à ce cycle. Avec un
+ * `false` posé uniquement au cleanup, la ref restait fausse et « Copié » /
+ * « Échec » ne s'affichaient plus jamais en `vite dev`.
  */
 export function CopyButton({ text, label }: { text: string; label?: string }) {
   const { t } = useT()
   const [feedback, setFeedback] = useState<'idle' | 'done' | 'failed'>('idle')
   const timer = useRef<number | null>(null)
-  const mounted = useRef(true)
+  const mounted = useRef(false)
 
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    mounted.current = true
+    return () => {
       mounted.current = false
       if (timer.current !== null) window.clearTimeout(timer.current)
-    },
-    [],
-  )
+    }
+  }, [])
 
   const copy = () => {
     if (timer.current !== null) window.clearTimeout(timer.current)
