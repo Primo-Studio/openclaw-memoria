@@ -21,12 +21,39 @@ import { fileURLToPath } from 'node:url'
 
 export type HostKind = 'claude-code' | 'codex' | 'openclaw' | 'generic'
 
+/**
+ * Accès aux CLI des hôtes (claude / openclaw), INJECTABLE.
+ *
+ * Sans injection, les tests lançaient le vrai binaire `openclaw` de la machine
+ * (`--version` puis `mcp unset memoria`) : 4 s par run, et un `unset` réel sur
+ * la config de l'utilisateur si un serveur « memoria » y était déclaré. Même
+ * principe que `checkCli` dans detect.ts : jamais les vrais binaires en test.
+ */
+export interface CliRunner {
+  /** Sonde de présence (défaut : `<bin> --version`). */
+  hasCli?: (bin: string) => boolean
+  /** Exécution d'une commande CLI ; doit lever en cas d'échec (défaut : execFileSync). */
+  exec?: (bin: string, args: string[]) => void
+}
+
 /** Options d'enregistrement (le token d'instance permet l'install des hooks OpenClaw). */
-export interface RegisterOptions {
+export interface RegisterOptions extends CliRunner {
   /** Token d'instance (pairing) — requis pour l'auto-capture OpenClaw via hooks. */
   token?: string
   /** Racine du stockage (pour que l'adaptateur découvre le port du daemon). */
   storageRoot?: string
+  /** Override de ~/.openclaw (tests). */
+  openclawDir?: string
+  /** Override du dossier source de l'adaptateur OpenClaw (tests). */
+  srcDir?: string
+}
+
+function execCli(bin: string, args: string[]): void {
+  execFileSync(bin, args, { stdio: 'ignore' })
+}
+
+function runner(opts: CliRunner): Required<CliRunner> {
+  return { hasCli: opts.hasCli ?? cliInstalled, exec: opts.exec ?? execCli }
 }
 
 export interface RegisterResult {
@@ -56,26 +83,19 @@ export function cliInstalled(bin: string): boolean {
   }
 }
 
-function hasClaudeCli(): boolean {
-  return cliInstalled('claude')
-}
-
-function hasOpenClawCli(): boolean {
-  return cliInstalled('openclaw')
-}
-
 // --------------------------------------------------------------- Claude Code
 
-export function registerClaudeCode(instanceId: string): RegisterResult {
+export function registerClaudeCode(instanceId: string, opts: CliRunner = {}): RegisterResult {
   const { command, args } = serveInvocation(instanceId)
-  if (hasClaudeCli()) {
+  const cli = runner(opts)
+  if (cli.hasCli('claude')) {
     try {
       // -- sépare les flags claude de la commande du serveur
-      execFileSync('claude', ['mcp', 'remove', '--scope', 'user', 'memoria'], { stdio: 'ignore' })
+      cli.exec('claude', ['mcp', 'remove', '--scope', 'user', 'memoria'])
     } catch {
       /* pas encore enregistré — normal */
     }
-    execFileSync('claude', ['mcp', 'add', '--scope', 'user', 'memoria', '--', command, ...args], { stdio: 'ignore' })
+    cli.exec('claude', ['mcp', 'add', '--scope', 'user', 'memoria', '--', command, ...args])
     return { host: 'claude-code', registered: true, detail: 'serveur MCP « memoria » ajouté à Claude Code (scope user).' }
   }
   // Repli : éditer ~/.claude.json (mcpServers global)
@@ -92,10 +112,11 @@ export function registerClaudeCode(instanceId: string): RegisterResult {
   }
 }
 
-export function unregisterClaudeCode(): RegisterResult {
-  if (hasClaudeCli()) {
+export function unregisterClaudeCode(opts: CliRunner = {}): RegisterResult {
+  const cli = runner(opts)
+  if (cli.hasCli('claude')) {
     try {
-      execFileSync('claude', ['mcp', 'remove', '--scope', 'user', 'memoria'], { stdio: 'ignore' })
+      cli.exec('claude', ['mcp', 'remove', '--scope', 'user', 'memoria'])
       return { host: 'claude-code', registered: false, detail: 'serveur MCP « memoria » retiré de Claude Code.' }
     } catch (err) {
       return { host: 'claude-code', registered: false, detail: `retrait CLI échoué (${(err as Error).message}).` }
@@ -259,12 +280,18 @@ function isSymlink(p: string): boolean {
 export function registerOpenClaw(instanceId: string, opts: RegisterOptions = {}): RegisterResult {
   const { command, args } = serveInvocation(instanceId)
   const details: string[] = []
+  const cli = runner(opts)
   let mcpOk = false
 
-  // (a) serveur MCP (pull + tools manuels)
-  if (hasOpenClawCli()) {
+  // (a) serveur MCP (pull + tools manuels) — `openclaw mcp set <name> <json>`.
+  //     Vérifié dans le dist d'OpenClaw 2026.6.5 (mcp-cli-*.js) : `set` = « Set
+  //     one configured MCP server from a JSON object », `unset` = « Remove one
+  //     configured MCP server ». `add` existe aussi mais SONDE le serveur avant
+  //     de sauvegarder — inutilisable ici : le serveur n'a rien à répondre tant
+  //     que le daemon n'est pas lancé.
+  if (cli.hasCli('openclaw')) {
     try {
-      execFileSync('openclaw', ['mcp', 'set', 'memoria', JSON.stringify({ command, args })], { stdio: 'ignore' })
+      cli.exec('openclaw', ['mcp', 'set', 'memoria', JSON.stringify({ command, args })])
       mcpOk = true
       details.push('serveur MCP « memoria » enregistré dans OpenClaw.')
     } catch (err) {
@@ -275,22 +302,31 @@ export function registerOpenClaw(instanceId: string, opts: RegisterOptions = {})
   }
 
   // (b) hooks (auto-recall + auto-capture) — le vrai cœur, indépendant du CLI
-  const hooks = installOpenClawHooks({ instanceId, token: opts.token, storageRoot: opts.storageRoot })
+  const hooks = installOpenClawHooks({
+    instanceId,
+    token: opts.token,
+    storageRoot: opts.storageRoot,
+    openclawDir: opts.openclawDir,
+    srcDir: opts.srcDir,
+  })
   details.push(hooks.ok ? hooks.detail : `⚠ ${hooks.detail}`)
 
   return { host: 'openclaw', registered: mcpOk || hooks.ok, detail: details.join(' ') }
 }
 
-export function unregisterOpenClaw(opts: { openclawDir?: string } = {}): RegisterResult {
+export function unregisterOpenClaw(opts: CliRunner & { openclawDir?: string } = {}): RegisterResult {
   const ocDir = opts.openclawDir ?? OPENCLAW_DIR
   const ocConfig = join(ocDir, 'openclaw.json')
   const ocExtDir = join(ocDir, 'extensions', 'memoria')
   const details: string[] = []
-  if (hasOpenClawCli()) {
+  const cli = runner(opts)
+  if (cli.hasCli('openclaw')) {
     try {
-      execFileSync('openclaw', ['mcp', 'unset', 'memoria'], { stdio: 'ignore' })
+      cli.exec('openclaw', ['mcp', 'unset', 'memoria'])
       details.push('serveur MCP « memoria » retiré d’OpenClaw.')
     } catch (err) {
+      // `unset` sort en erreur quand aucun serveur « memoria » n'est déclaré :
+      // ce n'est pas une panne, le nettoyage des hooks continue.
       details.push(`openclaw mcp unset échoué (${(err as Error).message}).`)
     }
   }
@@ -319,7 +355,7 @@ export function unregisterOpenClaw(opts: { openclawDir?: string } = {}): Registe
 export function autoRegister(host: string, instanceId: string, opts: RegisterOptions = {}): RegisterResult {
   switch (host) {
     case 'claude-code':
-      return registerClaudeCode(instanceId)
+      return registerClaudeCode(instanceId, opts)
     case 'codex':
       return registerCodex(instanceId)
     case 'openclaw':
@@ -329,14 +365,14 @@ export function autoRegister(host: string, instanceId: string, opts: RegisterOpt
   }
 }
 
-export function autoUnregister(host: string): RegisterResult {
+export function autoUnregister(host: string, opts: CliRunner & { openclawDir?: string } = {}): RegisterResult {
   switch (host) {
     case 'claude-code':
-      return unregisterClaudeCode()
+      return unregisterClaudeCode(opts)
     case 'codex':
       return unregisterCodex()
     case 'openclaw':
-      return unregisterOpenClaw()
+      return unregisterOpenClaw(opts)
     default:
       return { host: 'generic', registered: false, detail: 'Rien à nettoyer automatiquement pour ce type.' }
   }
