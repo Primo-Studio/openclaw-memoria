@@ -166,7 +166,7 @@ describe('hard-delete — purge de TOUS les index vectoriels', () => {
   // `vec_index_<dims>_<modèle>`. Dès que hardDeleteFacts appelle
   // `purgeFactVectors`, ce test PASSE → vitest le signalera comme cassé :
   // retirer alors le `.fails`. Le test est écrit tel qu'il doit passer.
-  it.skipIf(!VEC_AVAILABLE).fails('store.hardDeleteFacts retire le vecteur de l’index nommé (dims, modèle)', async () => {
+  it.skipIf(!VEC_AVAILABLE)('store.hardDeleteFacts retire le vecteur de l’index nommé (dims, modèle)', async () => {
     const f = store.insertFact({ fact: 'la voiture rouge du garage', scope_id: 's1' })
     await indexer.runAll()
     expect(knn(store.db, key, FakeEmbedding.vectorFor('voiture'), 5).map(h => h.fact_id)).toContain(f.id)
