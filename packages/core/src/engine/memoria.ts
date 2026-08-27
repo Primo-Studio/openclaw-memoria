@@ -1458,15 +1458,22 @@ export class Memoria {
     // Dédup EXACTE seulement : une correction est proche de l'original par
     // construction, le near-dup la prendrait pour un doublon. Texte identique
     // à l'existant = rien à corriger (sinon l'original pointerait sur lui-même).
-    const { fact: replacement } = this.storeFactInternal(
-      { instance: instanceId, content: text, category: old.category, scope: old.scope_id },
-      { nearDup: false },
-    )
-    if (replacement.id === factId) return { replacement: null }
-    store.db
-      .prepare("UPDATE facts SET superseded = 1, superseded_by = ?, updated_at = ? WHERE id = ? AND superseded = 0")
-      .run(replacement.id, nowISO(), factId)
-    if (old.pinned) store.db.prepare('UPDATE facts SET pinned = 1 WHERE id = ?').run(replacement.id)
+    // Le tout dans UNE transaction (même DB) : un échec entre l'insertion du
+    // remplaçant et la supersession laissait deux faits actifs.
+    const tx = store.db.transaction((): Fact | null => {
+      const { fact: replacement } = this.storeFactInternal(
+        { instance: instanceId, content: text, category: old.category, scope: old.scope_id },
+        { nearDup: false },
+      )
+      if (replacement.id === factId) return null
+      store.db
+        .prepare("UPDATE facts SET superseded = 1, superseded_by = ?, updated_at = ? WHERE id = ? AND superseded = 0")
+        .run(replacement.id, nowISO(), factId)
+      if (old.pinned) store.db.prepare('UPDATE facts SET pinned = 1 WHERE id = ?').run(replacement.id)
+      return replacement
+    })
+    const replacement = tx()
+    if (!replacement) return { replacement: null }
     this.registry.audit({
       actor_type: 'user', actor_id: 'local', action: 'fact_correct',
       target_id_hash: sha256Hex(factId), scope_id: null, reason: `replacement=${sha256Hex(replacement.id).slice(0, 12)}`,
@@ -1963,21 +1970,25 @@ export class Memoria {
    * (invisible au recall) + entre en file de revue ; l'approbation l'active.
    */
   private storeCaptured(input: StoreFactInput): Fact {
-    const { fact, created } = this.storeFactInternal({ ...input, source: input.source ?? 'capture' })
-    // Un fait DÉJÀ connu (dédup) n'a rien à faire en revue : le mettre dormant
-    // ferait disparaître du recall un souvenir validé.
-    if (!created || this.getCaptureMode() !== 'review-first') return fact
-
     const store = this.openContent(this.paths.assistantDb(input.instance))
-    store.db.prepare("UPDATE facts SET lifecycle_state = 'dormant' WHERE id = ?").run(fact.id)
-    const sourceId = this.ensureReviewSource(store, input.instance)
-    store.db
-      .prepare(
-        `INSERT INTO memory_import_items (id, source_id, target_memory_id, target_type, proposed_scope_id, status, confidence)
-         VALUES (?, ?, ?, 'fact', ?, 'pending', ?)`,
-      )
-      .run(newId(), sourceId, fact.id, fact.scope_id, fact.confidence)
-    return { ...fact, lifecycle_state: 'dormant' }
+    // Transaction : INSERT actif → dormant → item de revue. Un crash entre les
+    // deux publiait un fait jamais revu.
+    const tx = store.db.transaction((): Fact => {
+      const { fact, created } = this.storeFactInternal({ ...input, source: input.source ?? 'capture' })
+      // Un fait DÉJÀ connu (dédup) n'a rien à faire en revue : le mettre dormant
+      // ferait disparaître du recall un souvenir validé.
+      if (!created || this.getCaptureMode() !== 'review-first') return fact
+      store.db.prepare("UPDATE facts SET lifecycle_state = 'dormant' WHERE id = ?").run(fact.id)
+      const sourceId = this.ensureReviewSource(store, input.instance)
+      store.db
+        .prepare(
+          `INSERT INTO memory_import_items (id, source_id, target_memory_id, target_type, proposed_scope_id, status, confidence)
+           VALUES (?, ?, ?, 'fact', ?, 'pending', ?)`,
+        )
+        .run(newId(), sourceId, fact.id, fact.scope_id, fact.confidence)
+      return { ...fact, lifecycle_state: 'dormant' }
+    })
+    return tx()
   }
 
   /** Source unique « capture-review » par instance (provenance des items en revue). */
@@ -2452,6 +2463,13 @@ export class Memoria {
       // Nettoyer thèmes + récurrences AVANT le hard-delete (lisent fact_topics).
       this.topicFor(store, null).onForget(ids)
       this.patternFor(store).onForget(ids)
+      // Oublier un REMPLAÇANT (correction, fusion, consolidation) rend la
+      // parole à l'original : sinon il restait `superseded_by = <id disparu>`,
+      // invisible au recall à jamais — la chaîne cassée du legacy « split: ».
+      const ph = ids.map(() => '?').join(',')
+      const restored = store.db
+        .prepare(`UPDATE facts SET superseded = 0, superseded_by = NULL, updated_at = ? WHERE superseded_by IN (${ph})`)
+        .run(nowISO(), ...ids).changes
       const n = store.hardDeleteFacts(ids)
       deleted += n
       if (n > 0) {
@@ -2461,7 +2479,7 @@ export class Memoria {
           action: 'forget',
           target_id_hash: sha256Hex(ids.slice().sort().join(',')),
           scope_id: filter.scope_id ?? null,
-          reason: `deleted=${n}`,
+          reason: `deleted=${n} restored=${restored}`,
         })
       }
     }
