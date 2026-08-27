@@ -9,8 +9,8 @@
 import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { storagePaths } from '@memoria/core'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { AUTOSTART_LABEL, storagePaths } from '@memoria/core'
 import { DaemonClient, ensureDaemon, readDaemonState, waitForExit } from '../src/index.js'
 
 let root: string
@@ -63,5 +63,25 @@ describe('daemon détaché (spawn réel)', () => {
     const second = await ensureDaemon({ storageRoot: root, configPath: join(root, 'config.toml') }, noLaunchd)
     expect(second.pid).not.toBe(first.pid)
     expect(await new DaemonClient(second).health()).not.toBeNull()
+  }, 40_000)
+})
+
+describe('daemon détaché lancé DEPUIS le service launchd', () => {
+  it('n’hérite pas de XPC_SERVICE_NAME : health.supervisor reste null (sinon « autostart on » ne réinstalle rien)', async () => {
+    // Chaîne réelle : daemon launchd → passation `memoria autostart off` (sh
+    // détaché, env hérité) → CLI → ensureDaemon → daemon DIRECT. Si ce dernier
+    // hérite du marqueur posé par launchd, il se croit supervisé : `memoria
+    // autostart on` répond « déjà actif » sans rien installer, `memoria stop`
+    // annonce à tort le service launchd, bin.ts attend un verrou au lieu d'échouer.
+    vi.stubEnv('XPC_SERVICE_NAME', AUTOSTART_LABEL)
+    vi.stubEnv('XPC_FLAGS', '0x0')
+    try {
+      const state = await ensureDaemon({ storageRoot: root, configPath: join(root, 'config.toml') }, noLaunchd)
+      const health = await new DaemonClient(state).health()
+      expect(health?.pid).toBe(state.pid)
+      expect(health?.supervisor).toBeNull()
+    } finally {
+      vi.unstubAllEnvs()
+    }
   }, 40_000)
 })

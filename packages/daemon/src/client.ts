@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
 import { DEFAULT_CONFIG_PATH, autostartStorageRoot, kickstartService, resolveStorageRoot, type RecallResult } from '@memoria/core'
 import type { ImportJobStatus } from './import-job.js'
+import { stripLaunchdEnv } from './spawn-env.js'
 import { daemonLooksAlive, readDaemonState, type DaemonState } from './state.js'
 
 export interface ClientOptions {
@@ -303,7 +304,9 @@ function spawnDetachedDaemon(args: string[], storageRoot: string): void {
   } catch {
     /* stockage non inscriptible : on démarre quand même, sans journal */
   }
-  const child = spawn(process.execPath, args, { detached: true, stdio })
+  // Sans XPC_SERVICE_NAME : un daemon lancé d'ici n'est JAMAIS le service
+  // launchd, même quand la commande vient d'une passation depuis lui (spawn-env.ts).
+  const child = spawn(process.execPath, args, { detached: true, stdio, env: stripLaunchdEnv() })
   child.unref()
 }
 

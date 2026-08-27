@@ -20,6 +20,7 @@ import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
+import { stripLaunchdEnv } from './spawn-env.js'
 
 const run = promisify(execFile)
 
@@ -269,7 +270,9 @@ function cliBinPath(): string {
 }
 
 function spawnDetachedShell(script: string, cwd: string): void {
-  const child = spawn('/bin/sh', ['-c', script], { detached: true, stdio: 'ignore', cwd })
+  // env épuré : `sh` → CLI → daemon direct ne doivent pas hériter du marqueur
+  // launchd de CE process, sinon le daemon relancé se croit supervisé (spawn-env.ts).
+  const child = spawn('/bin/sh', ['-c', script], { detached: true, stdio: 'ignore', cwd, env: stripLaunchdEnv() })
   child.unref()
 }
 
