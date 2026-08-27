@@ -889,14 +889,35 @@ export async function identifyInterlocutor(input: { phone?: string; email?: stri
 export interface AutostartStatus {
   supported: boolean
   installed: boolean
+  /** Service connu de launchd — PAS « en marche » (voir core/control/autostart.ts). */
   loaded: boolean
+  /** Absents d'un daemon antérieur : `running` = process supervisé vivant. */
+  running?: boolean
+  pid?: number | null
   plistPath: string
 }
+
+/** Qui fait tourner le daemon qui répond : le service launchd, ou un lancement direct (`memoria start`). */
+export type DaemonSupervisor = 'launchd' | null
 
 export interface ControlState {
   enabled: boolean
   autostart: AutostartStatus
+  /** Absent d'un daemon antérieur → on n'affiche rien plutôt que d'inventer. */
+  supervisor?: DaemonSupervisor
   storage: { root: string; config_path: string; on_network_volume: boolean }
+}
+
+/**
+ * Réponse de POST /v1/admin/autostart. `handover: true` = le daemon va
+ * S'ARRÊTER et être relancé (sous launchd en mode `on`, en direct en mode
+ * `off`) : la connexion suivante échoue quelques secondes, et la clé d'accès
+ * (admin_token) est régénérée par le nouveau daemon.
+ */
+export interface AutostartChange {
+  autostart: AutostartStatus
+  handover: boolean
+  mode?: 'on' | 'off'
 }
 
 export async function getControl(): Promise<ControlState> {
@@ -908,9 +929,8 @@ export async function setEnabled(enabled: boolean): Promise<boolean> {
   return res.enabled
 }
 
-export async function setAutostart(enabled: boolean): Promise<AutostartStatus> {
-  const res = await request<{ autostart: AutostartStatus }>('POST', '/v1/admin/autostart', { enabled })
-  return res.autostart
+export async function setAutostart(enabled: boolean): Promise<AutostartChange> {
+  return request<AutostartChange>('POST', '/v1/admin/autostart', { enabled })
 }
 
 // ------------------------------------------------------------ synchro inter-machines

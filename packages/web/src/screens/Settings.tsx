@@ -4,11 +4,19 @@
  * Local pour qui veut du local ; cloud (OpenAI/Anthropic/OpenRouter) sinon.
  * + emplacement de stockage. Routes « contrat » : 404 → « non disponible ».
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useCallback as useCb } from 'react'
 import { ConfirmButton, CopyButton, EmptyState, Spinner, formatCompact, formatDate, formatNumber } from '../components/ui'
 import { EmbeddingsChooser } from '../components/EmbeddingsChooser'
 import { currentLocale, useT } from '../i18n'
+import {
+  HANDOVER_MAX_PROBES,
+  HANDOVER_RETRY_EVERY_MS,
+  HANDOVER_WAIT_MS,
+  afterHandoverProbeFailed,
+  planAutostartChange,
+  supervisorNoteKey,
+} from '../lib/autostart'
 import { summarizeCloudSends } from '../lib/cloud'
 import {
   ApiError,
@@ -509,6 +517,17 @@ function ControlPanel({ onError }: { onError: (m: string) => void }) {
   const [state, setState] = useState<ControlState | null>(null)
   const [unavailable, setUnavailable] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
+  const [note, setNote] = useState<string | null>(null)
+  // Une passation (redémarrage du daemon) sonde le service pendant ~20 s : si
+  // l'écran est quitté entre-temps, on n'écrit plus dans un composant démonté.
+  // Remis à false au (re)montage : StrictMode monte/démonte/remonte en dev.
+  const gone = useRef(false)
+  useEffect(() => {
+    gone.current = false
+    return () => {
+      gone.current = true
+    }
+  }, [])
 
   useEffect(() => {
     getControl().then(setState).catch(() => setUnavailable(true))
@@ -531,24 +550,58 @@ function ControlPanel({ onError }: { onError: (m: string) => void }) {
     [onError, t],
   )
 
+  /**
+   * Après `handover: true` : le daemon s'arrête et revient (launchd ou direct).
+   * On attend ~10 s bouton désactivé, puis on resonde GET /v1/admin/control
+   * quelques fois — la logique de décision est dans lib/autostart.ts.
+   */
+  const awaitHandover = useCb(async () => {
+    await sleep(HANDOVER_WAIT_MS)
+    for (let probe = 1; probe <= HANDOVER_MAX_PROBES; probe++) {
+      if (gone.current) return
+      try {
+        const fresh = await getControl()
+        if (gone.current) return
+        setState(fresh)
+        setNote(t('settings.control.handoverBack'))
+        return
+      } catch (err) {
+        const next = afterHandoverProbeFailed(err, probe)
+        if (next.kind !== 'retry') {
+          if (!gone.current) setNote(t(next.noteKey))
+          return
+        }
+        await sleep(HANDOVER_RETRY_EVERY_MS)
+      }
+    }
+  }, [t])
+
   const toggleAutostart = useCb(
     async (enabled: boolean) => {
       setBusy('autostart')
+      setNote(null)
       try {
-        const a = await setAutostart(enabled)
-        setState(prev => (prev ? { ...prev, autostart: a } : prev))
+        const plan = planAutostartChange(await setAutostart(enabled), enabled)
+        setState(prev => (prev ? { ...prev, autostart: plan.autostart } : prev))
+        if (plan.restarting) {
+          // Pas une erreur : le daemon redémarre, la page le dit calmement et attend.
+          setNote(t(plan.noteKey))
+          await awaitHandover()
+        }
       } catch (err) {
         onError(err instanceof ApiError ? err.message : t('settings.error.changeFailed'))
         getControl().then(setState).catch(() => {})
       } finally {
-        setBusy(null)
+        if (!gone.current) setBusy(null)
       }
     },
-    [onError, t],
+    [awaitHandover, onError, t],
   )
 
   if (unavailable) return null
   if (state === null) return <div className="settings-block"><div className="spinner-row"><span className="spinner" aria-hidden />{' '}{t('common.loading')}</div></div>
+
+  const supervisorKey = supervisorNoteKey(state)
 
   return (
     <div className="settings-block">
@@ -582,11 +635,17 @@ function ControlPanel({ onError }: { onError: (m: string) => void }) {
             {state.autostart.supported
               ? t('settings.control.autostartOn')
               : t('settings.control.autostartUnsupported')}
+            {supervisorKey && <> · {t(supervisorKey)}</>}
           </span>
         </span>
       </label>
+      {note && <p className="muted sync-note" role="status">{note}</p>}
     </div>
   )
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
 }
 
 function OptionsPanel({ onError }: { onError: (m: string) => void }) {
