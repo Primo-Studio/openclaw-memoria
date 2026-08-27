@@ -559,11 +559,11 @@ export function buildServer(opts: BuildServerOptions): BuiltServer {
     'memoria_set_context',
     {
       description:
-        'Declare the active working context (project, client, organization, repository path). Memoria uses it to scope recall and storage — call this whenever you switch project or client. Pass an empty string to clear a field. Returns the effective context.',
+        'Declare the active working context (project, client, organization, repository path). Memoria uses it to scope recall and storage — call this whenever you switch project or client. Names are normalized to a stable slug (lowercase, no accents, words joined by "-") so that every agent lands on the same identifier: use the SAME short name for the same project/client each time (e.g. "maroway", not "Maroway ferry project"). Pass an empty string to clear a field. Returns the effective (normalized) context.',
       inputSchema: {
-        project: z.string().optional().describe('Project identifier or name currently being worked on.'),
-        client: z.string().optional().describe('Client organization identifier (enforces client isolation).'),
-        org: z.string().optional().describe('Organization identifier.'),
+        project: z.string().optional().describe('Short stable project name, e.g. "site-primo". Normalized to a slug.'),
+        client: z.string().optional().describe('Short stable client organization name, e.g. "maroway" (enforces client isolation: facts stored under a client are hidden outside it). Normalized to a slug.'),
+        org: z.string().optional().describe('Short stable organization name. Normalized to a slug.'),
         repo_path: z.string().optional().describe('Absolute path of the current repository.'),
       },
     },

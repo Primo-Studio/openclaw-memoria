@@ -18,7 +18,7 @@ export {
   registerOpenClaw,
 } from './register.js'
 export type { HostKind, RegisterResult } from './register.js'
-export { ActiveContextTracker } from './context.js'
+export { ActiveContextTracker, normalizeContextId } from './context.js'
 export type { DetectedRepo, SetContextInput } from './context.js'
 export {
   credentialsPath,

@@ -185,6 +185,25 @@ export interface ActiveContextPayload {
   org_id?: string
 }
 
+/**
+ * Slug d'identifiant projet/client/org : minuscules, sans accents, « - » entre
+ * les mots. Le core compare ces identifiants par égalité stricte : « Maroway »
+ * ici et « maroway » déclaré par un autre agent via memoria_set_context
+ * donnaient deux clients différents, chacun aveugle aux souvenirs de l'autre.
+ *
+ * ⚠ Copie volontaire de normalizeContextId (packages/mcp/src/context.ts) : ce
+ * plugin n'a aucune dépendance par conception. Modifier les deux ensemble.
+ */
+export function normalizeContextId(raw: string): string | null {
+  const slug = raw
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+  return slug || null
+}
+
 export function buildActiveContext(
   cfg: Pick<AdapterConfig, 'projectId' | 'clientOrgId' | 'orgId'>,
   ctx: HookContext | undefined,
@@ -193,9 +212,12 @@ export function buildActiveContext(
   // Uniquement le cwd de session. process.cwd() du gateway OpenClaw n'est PAS
   // le dépôt de la conversation (corpus appelle sans ctx → pas de repo_path).
   if (ctx?.cwd) out.repo_path = ctx.cwd
-  if (cfg.projectId) out.project_id = cfg.projectId
-  if (cfg.clientOrgId) out.client_org_id = cfg.clientOrgId
-  if (cfg.orgId) out.org_id = cfg.orgId
+  const project = cfg.projectId ? normalizeContextId(cfg.projectId) : null
+  const client = cfg.clientOrgId ? normalizeContextId(cfg.clientOrgId) : null
+  const org = cfg.orgId ? normalizeContextId(cfg.orgId) : null
+  if (project) out.project_id = project
+  if (client) out.client_org_id = client
+  if (org) out.org_id = org
   return Object.keys(out).length > 0 ? out : undefined
 }
 

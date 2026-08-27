@@ -18,6 +18,7 @@ import {
   DaemonTimeoutError,
   HttpDaemonGateway,
   loadCredentials,
+  normalizeContextId,
   saveCredentials,
   type DaemonGateway,
   type InstanceCredentials,
@@ -126,6 +127,33 @@ describe('ActiveContextTracker', () => {
       repo_path: '/ailleurs', // explicite > détecté
       topic: 'repo-b',
     })
+  })
+})
+
+describe('normalisation des identifiants de contexte', () => {
+  it('« Maroway », « maroway » et « MAROWAY  » donnent le même client_org_id', () => {
+    // Deux agents n'écrivent jamais le même identifiant à la main ; l'isolation
+    // client (égalité stricte côté core) masquait alors les souvenirs de l'autre.
+    const a = new ActiveContextTracker().set({ client: 'Maroway' })
+    const b = new ActiveContextTracker().set({ client: 'maroway' })
+    const c = new ActiveContextTracker().set({ client: ' MAROWAY  ' })
+    expect(a.client_org_id).toBe('maroway')
+    expect(b.client_org_id).toBe('maroway')
+    expect(c.client_org_id).toBe('maroway')
+  })
+
+  it('accents, espaces et ponctuation → slug stable ; un UUID reste intact', () => {
+    expect(normalizeContextId('Mairie Saint-Laurent du Maroni')).toBe('mairie-saint-laurent-du-maroni')
+    expect(normalizeContextId('Terra Plena / refonte')).toBe('terra-plena-refonte')
+    expect(normalizeContextId('Néto & Cie')).toBe('neto-cie')
+    expect(normalizeContextId('7f3c2a10-4b2e-4c1d-9c6a-2c9d3e8f1a2b')).toBe('7f3c2a10-4b2e-4c1d-9c6a-2c9d3e8f1a2b')
+    expect(normalizeContextId('')).toBeNull()
+    expect(normalizeContextId('  ---  ')).toBeNull()
+  })
+
+  it('repo_path n’est PAS normalisé (c’est un chemin)', () => {
+    const ctx = new ActiveContextTracker().set({ repo_path: '/Users/Néto/Mon Projet' })
+    expect(ctx.repo_path).toBe('/Users/Néto/Mon Projet')
   })
 })
 
