@@ -556,7 +556,14 @@ export class Memoria {
     const instance = this.mustInstance(input.instance)
     const scope = this.resolveTargetScope(instance, input.scope)
 
-    if (scope.type !== 'private') {
+    if (scope.type === 'private') {
+      // Seul SON scope privé : un fait écrit sous le scope privé d'un autre
+      // agent atterrissait dans la DB de l'appelant avec un scope étranger →
+      // exclu du recall des deux (invisible pour tous, perdu sans bruit).
+      if (scope.name !== `private:${instance.id}`) {
+        throw new Error(`écriture refusée : le scope « ${scope.name} » est le privé d'un autre agent`)
+      }
+    } else {
       const policy = this.registry.getPolicy(instance.assistant_id, scope.id)
       if (!policy?.can_write) {
         throw new Error(`écriture refusée : l'assistant n'a pas can_write sur le scope « ${scope.name} »`)

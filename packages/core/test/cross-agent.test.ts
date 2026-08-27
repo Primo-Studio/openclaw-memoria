@@ -120,4 +120,12 @@ describe('écriture directe dans `user`', () => {
     expect(m.registry.getPolicy(codex.assistant_id, userScope.id)?.can_write).toBe(true)
     expect(m.registry.getPolicy(claude.assistant_id, userScope.id)?.can_write).toBe(false)
   })
+
+  it('écrire dans le scope privé d’un AUTRE agent est refusé (le fait serait invisible pour tous)', () => {
+    expect(() =>
+      m.storeFact({ instance: codex.assistant_instance_id, scope: `private:${claude.assistant_instance_id}`, content: 'intrusion' }),
+    ).toThrow(/écriture refusée/)
+    expect(privateDb(codex).countFacts()).toBe(0)
+    expect(privateDb(claude).countFacts()).toBe(0)
+  })
 })
