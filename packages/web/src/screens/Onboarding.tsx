@@ -602,7 +602,8 @@ function ApiKeyGuide({
   checking: boolean
 }) {
   const { t } = useT()
-  const command = `echo 'TA_CLÉ' > ~/.${provider}/api_key && chmod 600 ~/.${provider}/api_key`
+  // Le mot à remplacer suit la langue (TA_CLÉ / YOUR_KEY…), comme la phrase qui l'annonce.
+  const command = `echo '${t('onboarding.apikey.placeholder')}' > ~/.${provider}/api_key && chmod 600 ~/.${provider}/api_key`
   const providerName = provider === 'openai' ? 'OpenAI' : provider === 'openrouter' ? 'OpenRouter' : 'Anthropic'
   return (
     <div className="engine-guide">

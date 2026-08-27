@@ -6,9 +6,9 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import { useCallback as useCb } from 'react'
-import { ConfirmButton, CopyButton, EmptyState, Spinner } from '../components/ui'
+import { ConfirmButton, CopyButton, EmptyState, Spinner, formatDate, formatNumber } from '../components/ui'
 import { EmbeddingsChooser } from '../components/EmbeddingsChooser'
-import { useT } from '../i18n'
+import { currentLocale, useT } from '../i18n'
 import {
   ApiError,
   getControl,
@@ -307,7 +307,7 @@ export function Settings() {
  */
 function LlmHealthSummary({ health }: { health: LlmHealth }) {
   const { t } = useT()
-  const count = health.wal_pending.toLocaleString('fr-FR')
+  const count = formatNumber(health.wal_pending)
   return (
     <div className="llm-summary">
       <p className={health.extraction.available ? 'ok' : 'ko'}>
@@ -489,7 +489,7 @@ function SyncPanel({ onError }: { onError: (m: string) => void }) {
               {status.peers.map(p => (
                 <li key={p.machine_id} className="peer-row">
                   <span><strong>{p.display_name}</strong> <span className="badge badge-muted">{p.role}</span></span>
-                  <span className="muted">{p.revoked_at ? t('settings.sync.revoked') : p.last_seen_at ? t('settings.sync.seenAt', { date: new Date(p.last_seen_at).toLocaleString('fr-FR') }) : t('settings.sync.neverSeen')}</span>
+                  <span className="muted">{p.revoked_at ? t('settings.sync.revoked') : p.last_seen_at ? t('settings.sync.seenAt', { date: formatDate(p.last_seen_at) }) : t('settings.sync.neverSeen')}</span>
                   {!p.revoked_at && <ConfirmButton label={t('settings.sync.revoke')} confirmLabel={t('settings.sync.revokeConfirm')} onConfirm={() => void wrap(async () => { await syncRevoke(p.machine_id); refresh() })} />}
                 </li>
               ))}
@@ -637,14 +637,15 @@ function OptionsPanel({ onError }: { onError: (m: string) => void }) {
 const USAGE_PERIODS: LlmUsagePeriod[] = ['24h', '7d', '30d', 'all']
 
 function fmtTokens(n: number | null): string {
-  return n === null ? '—' : n.toLocaleString()
+  return n === null ? '—' : formatNumber(n)
 }
 
 /** Coût estimé en dollars : « < 0,0001 $ » plutôt qu'un faux « 0,0000 $ ». */
 function fmtUsd(v: number): string {
   if (v === 0) return '0 $'
-  if (v < 0.0001) return `< ${(0.0001).toLocaleString(undefined, { maximumFractionDigits: 4 })} $`
-  return `${v.toLocaleString(undefined, { maximumFractionDigits: v < 0.01 ? 4 : 2 })} $`
+  const fmt = (x: number, digits: number) => new Intl.NumberFormat(currentLocale(), { maximumFractionDigits: digits }).format(x)
+  if (v < 0.0001) return `< ${fmt(0.0001, 4)} $`
+  return `${fmt(v, v < 0.01 ? 4 : 2)} $`
 }
 
 /**
@@ -734,7 +735,7 @@ function UsagePanel() {
                     </td>
                     <td>{t(`settings.usage.purpose.${r.purpose}`)}</td>
                     <td>
-                      {r.calls.toLocaleString()}
+                      {formatNumber(r.calls)}
                       {r.failures > 0 && (
                         <>
                           {' '}
@@ -746,7 +747,7 @@ function UsagePanel() {
                     <td>
                       {fmtTokens(r.output_tokens)}
                       {r.reasoning_tokens ? (
-                        <span className="muted"> ({t('settings.usage.reasoning', { count: r.reasoning_tokens.toLocaleString() })})</span>
+                        <span className="muted"> ({t('settings.usage.reasoning', { count: formatNumber(r.reasoning_tokens) })})</span>
                       ) : null}
                     </td>
                     <td>
@@ -764,7 +765,7 @@ function UsagePanel() {
                   <tr>
                     <th>{t('settings.usage.total')}</th>
                     <td />
-                    <td>{totals.calls.toLocaleString()}</td>
+                    <td>{formatNumber(totals.calls)}</td>
                     <td>{fmtTokens(totals.input_tokens)}</td>
                     <td>{fmtTokens(totals.output_tokens)}</td>
                     <td>{totals.estimated_cost_usd === null ? t('settings.usage.unknownCost') : `≈ ${fmtUsd(totals.estimated_cost_usd)}`}</td>

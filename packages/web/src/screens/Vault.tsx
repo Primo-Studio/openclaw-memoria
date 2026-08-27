@@ -5,7 +5,7 @@
  * chiffré). Cet écran montre ce qui est protégé — jamais la valeur.
  */
 import { getSecrets } from '../api'
-import { ErrorBanner, Spinner, useLoad } from '../components/ui'
+import { ErrorBanner, Spinner, formatDay, useLoad } from '../components/ui'
 import { useT } from '../i18n'
 
 export function Vault() {
@@ -48,7 +48,7 @@ export function Vault() {
                   <td><code>{s.name}</code></td>
                   <td>{s.service ?? '—'}</td>
                   <td className="muted">{s.location.split(':')[0]}</td>
-                  <td className="muted">{new Date(s.created_at).toLocaleDateString('fr-FR')}</td>
+                  <td className="muted">{formatDay(s.created_at)}</td>
                 </tr>
               ))}
             </tbody>

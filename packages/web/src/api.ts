@@ -10,6 +10,8 @@
  * l'UI est bundlée à part (Vite) et ne dépend d'aucun package Node.
  */
 
+import { translate } from './i18n'
+
 export type AgentType = 'claude-code' | 'codex' | 'openclaw' | 'generic'
 
 export interface AssistantInstance {
@@ -145,7 +147,8 @@ export function hasToken(): boolean {
 async function request<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
   const token = adminToken()
   if (!token) {
-    throw new ApiError(401, 'Aucune clé d’accès — relancez `memoria` depuis votre terminal.')
+    // Message traduit : il remonte tel quel dans l'UI via humanError().
+    throw new ApiError(401, translate('error.no_token'))
   }
   const headers: Record<string, string> = { authorization: `Bearer ${token}` }
   if (body !== undefined) headers['content-type'] = 'application/json'
@@ -157,7 +160,7 @@ async function request<T>(method: 'GET' | 'POST', path: string, body?: unknown):
   })
 
   if (!res.ok) {
-    let message = `Le service a répondu HTTP ${res.status}.`
+    let message = translate('error.http_status', { status: res.status })
     try {
       const payload = (await res.json()) as { error?: string }
       if (typeof payload.error === 'string' && payload.error.length > 0) message = payload.error

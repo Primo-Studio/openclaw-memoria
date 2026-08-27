@@ -295,21 +295,20 @@ function VersionFoot() {
   return <div className="sidebar-version">{label}</div>
 }
 
+/**
+ * Premier écran vu quand le token manque — lui aussi passe par les 5 catalogues
+ * (il était 100 % français en dur, à rebours de la règle « 5 langues dès la V1 »).
+ */
 function Welcome() {
+  const { t } = useT()
   return (
     <div className="welcome">
       <div className="welcome-card">
         <div className="brand">Memoria</div>
-        <h1>Votre mémoire locale vous attend</h1>
-        <p>
-          Pour ouvrir ce tableau de bord en toute sécurité, lancez la commande suivante dans votre
-          terminal — elle ouvre cette page avec votre clé d’accès personnelle :
-        </p>
+        <h1>{t('welcome.title')}</h1>
+        <p>{t('welcome.body')}</p>
         <pre className="command">memoria</pre>
-        <p className="muted">
-          Tout reste sur votre machine : cette interface ne parle qu’au service Memoria qui tourne en
-          local.
-        </p>
+        <p className="muted">{t('welcome.local')}</p>
       </div>
     </div>
   )

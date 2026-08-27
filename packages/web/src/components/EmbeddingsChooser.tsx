@@ -10,6 +10,7 @@ import {
   type MachineCaps,
   type OllamaPullStatus,
 } from '../api'
+import { formatNumber } from './ui'
 import { useT } from '../i18n'
 
 const LOCAL_EMBED_MODEL = 'nomic-embed-text'
@@ -235,7 +236,7 @@ export function EmbeddingsChooser({
       </div>
 
       {typeof health.embeddings.pending === 'number' && health.embeddings.pending > 0 && (
-        <p className="warn">{t('settings.embed.reindexing', { count: health.embeddings.pending.toLocaleString('fr-FR') })}</p>
+        <p className="warn">{t('settings.embed.reindexing', { count: formatNumber(health.embeddings.pending) })}</p>
       )}
       {error && <p className="provider-missing">{error}</p>}
       <p className="muted">{t('settings.embed.reindexNote')}</p>
