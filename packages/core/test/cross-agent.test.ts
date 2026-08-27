@@ -190,3 +190,23 @@ describe('opérations sur un fait partagé', () => {
     expect(row.superseded_by).toBe(a)
   })
 })
+
+/**
+ * Cas courant : Claude et Codex apprennent la même préférence (2 copies
+ * privées), l'utilisateur partage l'une vers `user` → l'autre agent voyait le
+ * fait en double (budget tokens et `limit` consommés pour rien).
+ */
+describe('dédoublonnage inter-DB au recall', () => {
+  it('le même texte en privé et dans `user` ne remonte qu’une fois, copie partagée en tête', () => {
+    const mine = m.storeFact({ instance: claude.assistant_instance_id, content: 'Néto préfère les réponses en français' })
+    const theirs = m.storeFact({ instance: codex.assistant_instance_id, content: 'Néto préfère les réponses en français.' })
+    m.shareFacts([theirs.id], 'user')
+
+    const items = m.recall({ instance: claude.assistant_instance_id, query: 'réponses en français' }).items
+    expect(items).toHaveLength(1)
+    expect(items[0]!.id).toBe(theirs.id)
+    expect(items[0]!.source_db).toBe('shared/user.sqlite')
+    // La copie privée écartée n'est pas comptée comme rappelée.
+    expect((privateDb(claude).db.prepare('SELECT recall_count FROM facts WHERE id = ?').get(mine.id) as { recall_count: number }).recall_count).toBe(0)
+  })
+})

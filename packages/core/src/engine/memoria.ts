@@ -48,6 +48,7 @@ import { estimateTokens, newId, nowISO, sha256Hex } from '../util.js'
 import { createSecretProvider, RegexRedactor } from '../secrets/index.js'
 import type { SecretProvider } from '../secrets/types.js'
 import { factOrigin } from './origin.js'
+import { normalizeFact } from './selective.js'
 import {
   resolveLlmProfile,
   auditExtraction,
@@ -742,6 +743,36 @@ export class Memoria {
         }
       }
     }
+
+    // DÉDOUBLONNAGE inter-DB : le même énoncé en privé ET dans un scope
+    // partagé (cas courant : deux agents ont appris la même préférence, l'une
+    // des copies a été partagée) remontait deux fois, consommant budget et
+    // `limit`. On garde la copie du scope le plus large (partagé > privé) avec
+    // le meilleur score des deux ; l'autre n'est ni renvoyée ni comptée.
+    // Deux copies dans la MÊME DB ne sont pas touchées : c'est le travail de
+    // la révision (doublons proposés), pas du recall.
+    const privateDbPath = this.paths.assistantDb(instance.id)
+    const byText = new Map<string, number[]>()
+    const deduped: typeof candidates = []
+    for (const c of candidates) {
+      const key = normalizeFact(c.item.content)
+      const indices = byText.get(key) ?? []
+      const twinIdx = indices.find(i => deduped[i]!.store !== c.store)
+      if (twinIdx === undefined) {
+        indices.push(deduped.length)
+        byText.set(key, indices)
+        deduped.push(c)
+        continue
+      }
+      const kept = deduped[twinIdx]!
+      const keptShared = kept.store.path !== privateDbPath
+      const thisShared = c.store.path !== privateDbPath
+      const winner = thisShared && !keptShared ? c : kept
+      winner.item.score = Math.max(kept.item.score, c.item.score)
+      deduped[twinIdx] = winner
+    }
+    candidates.length = 0
+    candidates.push(...deduped)
 
     candidates.sort((a, b) => b.item.score - a.item.score)
 
