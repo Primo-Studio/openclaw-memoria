@@ -213,13 +213,37 @@ export interface BuiltServer {
   handlers: ToolHandlers
 }
 
-const SERVER_INSTRUCTIONS = [
-  'Memoria is the user\'s local long-term memory, shared across their AI agents.',
-  '- Call memoria_recall at the START of a task to load relevant context (preferences, decisions, project facts).',
-  '- Call memoria_store_fact whenever you learn a durable fact worth remembering (a decision, a preference, a stable project detail). Do not store transient chatter.',
-  '- Call memoria_set_context when you switch project, client or repository, so recall and storage are scoped correctly.',
-  '- Call memoria_identify_interlocutor when the person speaking might not be the owner (e.g. a phone number or name appears) to learn who they are and how they relate to the user.',
-  '- memoria_capture_turn lets you hand over full conversation turns for background extraction.',
+/**
+ * Instructions serveur (MCP `instructions`) : le SEUL levier de ce canal.
+ *
+ * Le canal MCP est en PULL — rien n'est injecté automatiquement, à la
+ * différence de l'adaptateur OpenClaw (hooks). Mesuré sur 2,5 mois et 5
+ * sessions Claude Code simultanées : 12 recalls, 0 capture_turn, 0 feedback.
+ * Un simple « call memoria_recall at the start » ne suffit pas : il faut dire
+ * à quel MOMENT concret chaque outil sert (déclencheurs, exemples de requêtes,
+ * exemples de faits), et que rien n'est mémorisé sans appel explicite. On ne
+ * peut pas forcer le client ; on peut rendre les consignes impossibles à
+ * mal lire. Exporté pour être testé.
+ */
+export const SERVER_INSTRUCTIONS = [
+  "Memoria is the user's local long-term memory, shared across all their AI agents (Claude Code, Codex, OpenClaw…). Nothing is automatic on this channel: memories only help if you READ them before acting, and only exist if you WRITE them when you learn something.",
+  '',
+  'READ — memoria_recall',
+  '- At the START of every task, before your first substantive answer: one query on the subject of the task (e.g. "deployment rules site-primo", "how the user wants commit messages", "pricing grid for quotes"). A few words are enough — it is a semantic search.',
+  '- Whenever the user refers to something you do not have in context: "as usual", "like last time", "the client\'s preference", a project, tool or person name you do not know.',
+  '- Before choosing something the user may already have decided (stack, style, process, pricing).',
+  '- Afterwards, memoria_feedback with the ids you actually used ("useful") and those that were off-topic ("noise"): that is what makes recall rank better over time.',
+  '',
+  'WRITE — memoria_store_fact / memoria_capture_turn',
+  '- memoria_store_fact IMMEDIATELY when you learn something durable: a decision (e.g. "The site is deployed on Vercel; commits must be authored by Nieto42"), a preference (e.g. "The user wants short answers with absolute file paths"), a stable project or business detail, a correction of something you believed. One self-contained sentence, third person, in the user\'s language. Do not wait for the end of the session. Never store secrets, transient state or chatter.',
+  '- memoria_capture_turn after an exchange dense in such facts (a briefing, a planning discussion, a review with several decisions): hand over the user and assistant messages and Memoria extracts and deduplicates them.',
+  '- memoria_correct when a recalled memory is wrong or outdated; memoria_pin when the user says something must always be kept in mind; memoria_set_expiry for something true only for a while.',
+  '',
+  'CONTEXT',
+  '- memoria_set_context when you start working on a project or for a client, and whenever you switch (short stable slug, the same every time). Only the project/client/org declared here scope recall and storage — the auto-detected repository is informational.',
+  '- memoria_identify_interlocutor when the person speaking may not be the owner (a phone number, handle or unfamiliar name appears).',
+  '',
+  'If a Memoria tool returns an error, continue the task without memory and tell the user in one line; never invent a memory.',
 ].join('\n')
 
 /**
@@ -425,7 +449,7 @@ export function buildServer(opts: BuildServerOptions): BuiltServer {
     'memoria_recall',
     {
       description:
-        'Search the user\'s long-term memory (facts, preferences, decisions, procedures) and return the most relevant items for a query. Call this at the start of a task to load context. The current active context (project/client/repo) is applied automatically. '
+        'Search the user\'s long-term memory (facts, preferences, decisions, procedures) and return the most relevant items for a query. Call it at the start of a task, before your first substantive answer (e.g. "deployment rules site-primo", "how the user wants commit messages"), and whenever the user refers to something you do not have in context ("as usual", "like last time", an unfamiliar project/tool/person name). A few words are enough: it is a semantic search. The context declared with memoria_set_context (project/client/org) is applied automatically. After answering, report which ids helped with memoria_feedback. '
         + 'An item carrying a `revision` field is CONTESTED: a more recent memory contradicts or duplicates it, pending the user\'s decision. Treat it as doubtful, prefer the memory named by `replacement_fact_id`, and say so rather than acting on it silently. '
         + 'The `origin` field says how much to trust an item: "declared" was stated explicitly, "extracted" comes from a conversation, "confirmed" proved useful in past answers, and "inferred" was deduced by an agent and never actually stated by anyone — treat inferred items as hypotheses, not rules.',
       inputSchema: {
@@ -440,7 +464,7 @@ export function buildServer(opts: BuildServerOptions): BuiltServer {
     'memoria_store_fact',
     {
       description:
-        'Store one durable fact in the user\'s long-term memory (a decision, preference, or stable project detail). Keep it short, self-contained and written in third person. Do not store secrets or transient information.',
+        'Store one durable fact in the user\'s long-term memory. Call it AS SOON AS you learn something worth keeping — do not wait for the end of the session: a decision (e.g. "The site is deployed on Vercel; commits must be authored by Nieto42"), a preference (e.g. "The user wants short answers with absolute file paths"), a stable project or business detail, a correction of something you believed. One short, self-contained sentence in third person, in the user\'s language. Do not store secrets, transient state or chatter.',
       inputSchema: {
         content: z.string().min(1).describe('The fact to remember, as one self-contained sentence or short paragraph.'),
         category: z.string().optional().describe('Free-form category, e.g. "preference", "decision", "infra".'),
@@ -559,12 +583,12 @@ export function buildServer(opts: BuildServerOptions): BuiltServer {
     'memoria_set_context',
     {
       description:
-        'Declare the active working context (project, client, organization, repository path). Memoria uses it to scope recall and storage — call this whenever you switch project or client. Names are normalized to a stable slug (lowercase, no accents, words joined by "-") so that every agent lands on the same identifier: use the SAME short name for the same project/client each time (e.g. "maroway", not "Maroway ferry project"). Pass an empty string to clear a field. Returns the effective (normalized) context.',
+        'Declare the active working context (project, client, organization). Memoria uses it to scope recall and storage — call this when you start working on a project or for a client, and whenever you switch. Only project/client/org scope memory; repo_path is informational. Names are normalized to a stable slug (lowercase, no accents, words joined by "-") so that every agent lands on the same identifier: use the SAME short name for the same project/client each time (e.g. "maroway", not "Maroway ferry project"). Pass an empty string to clear a field. Returns the effective (normalized) context.',
       inputSchema: {
         project: z.string().optional().describe('Short stable project name, e.g. "site-primo". Normalized to a slug.'),
         client: z.string().optional().describe('Short stable client organization name, e.g. "maroway" (enforces client isolation: facts stored under a client are hidden outside it). Normalized to a slug.'),
         org: z.string().optional().describe('Short stable organization name. Normalized to a slug.'),
-        repo_path: z.string().optional().describe('Absolute path of the current repository.'),
+        repo_path: z.string().optional().describe('Absolute path of the current repository (informational: not used for scoping).'),
       },
     },
     async args => handlers.setContext(args),
@@ -574,7 +598,7 @@ export function buildServer(opts: BuildServerOptions): BuiltServer {
     'memoria_get_context',
     {
       description:
-        'Return the current active context (project, client, organization, repository) plus what was auto-detected from the working directory (.git lookup). Useful to verify scoping before storing facts.',
+        'Return the current active context (project, client, organization) plus the repository auto-detected from the working directory (.git lookup). Only project/client/org scope recall and storage; the detected repository is informational (it reflects where the MCP server was started, not necessarily the file you are editing). If project/client are empty, declare them with memoria_set_context before storing facts.',
       inputSchema: {},
     },
     async () => handlers.getContext(),

@@ -16,6 +16,7 @@ import {
   credentialsPath,
   DaemonHttpError,
   DaemonTimeoutError,
+  SERVER_INSTRUCTIONS,
   HttpDaemonGateway,
   loadCredentials,
   normalizeContextId,
@@ -575,5 +576,49 @@ describe('boucle de feedback', () => {
 
     const res = await handlers.feedback({ fact_ids: ['f1'], verdict: 'useful' })
     expect(res.isError).toBe(true)
+  })
+})
+
+describe('instructions serveur et descriptions d’outils — QUAND lire, QUAND écrire', () => {
+  // Constat terrain : 12 recalls en 2,5 mois, 0 capture_turn, 0 feedback sur
+  // 5 sessions Claude Code. Le canal MCP est en PULL : la seule chose que le
+  // serveur contrôle, c'est la clarté des consignes. Elles doivent dire à quel
+  // MOMENT appeler chaque outil, avec des exemples concrets — pas juste « call
+  // memoria_recall at the start ».
+  const descriptions = (): Record<string, string> => {
+    const { server } = buildServer({ instanceId: 'i', tracker: new ActiveContextTracker(), connect: async () => fakeGateway() })
+    const tools = (server as unknown as { _registeredTools: Record<string, { description?: string }> })._registeredTools
+    return Object.fromEntries(Object.entries(tools).map(([k, v]) => [k, v.description ?? '']))
+  }
+
+  it('les instructions serveur donnent des déclencheurs concrets pour recall, store_fact, capture_turn et feedback', () => {
+    expect(SERVER_INSTRUCTIONS).toMatch(/memoria_recall/)
+    expect(SERVER_INSTRUCTIONS).toMatch(/START of every task/i)
+    expect(SERVER_INSTRUCTIONS).toMatch(/"as usual"|"like last time"/) // rappel déclenché par une référence implicite
+    expect(SERVER_INSTRUCTIONS).toMatch(/memoria_store_fact IMMEDIATELY/)
+    expect(SERVER_INSTRUCTIONS).toMatch(/memoria_capture_turn/)
+    expect(SERVER_INSTRUCTIONS).toMatch(/memoria_feedback/)
+    expect(SERVER_INSTRUCTIONS).toMatch(/e\.g\. "/) // au moins un exemple de requête
+    expect(SERVER_INSTRUCTIONS).toMatch(/never invent a memory/)
+  })
+
+  it('memoria_recall et memoria_store_fact disent QUAND les appeler, avec des exemples', () => {
+    const d = descriptions()
+    expect(d['memoria_recall']).toMatch(/start of a task/i)
+    expect(d['memoria_recall']).toMatch(/e\.g\. "/)
+    expect(d['memoria_store_fact']).toMatch(/as soon as/i)
+    expect(d['memoria_store_fact']).toMatch(/e\.g\. "/)
+  })
+
+  it('aucune description ne promet un scoping par repo : seuls project/client/org déclarés comptent', () => {
+    // Le core ne regarde que project_id/client_org_id/org_id (scoring.ts) ;
+    // repo_path/topic auto-détectés sont envoyés mais inertes. Dire au LLM que
+    // le repo « est appliqué automatiquement » lui faisait croire qu'un
+    // contexte existait alors qu'aucune isolation ni boost n'était actif.
+    const d = descriptions()
+    expect(d['memoria_recall']).not.toMatch(/repo\) is applied automatically/)
+    expect(d['memoria_recall']).toMatch(/memoria_set_context/)
+    expect(d['memoria_get_context']).toMatch(/informational/)
+    expect(d['memoria_set_context']).toMatch(/informational/)
   })
 })

@@ -38,6 +38,7 @@ export {
   DAEMON_TIMEOUT_MS,
   CAPTURE_TIMEOUT_MS,
   MCP_SERVER_VERSION,
+  SERVER_INSTRUCTIONS,
   compactStoredFact,
 } from './serve.js'
 export type {
