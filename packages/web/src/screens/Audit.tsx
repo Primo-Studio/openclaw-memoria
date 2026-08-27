@@ -100,7 +100,7 @@ function AuditTable({ entries, page, setPage }: { entries: AuditEntry[]; page: n
 
   return (
     <>
-      <table className="table">
+      <div className="table-wrap"><table className="table">
         <thead>
           <tr>
             {columns.map(col => (
@@ -134,7 +134,7 @@ function AuditTable({ entries, page, setPage }: { entries: AuditEntry[]; page: n
             </tr>
           ))}
         </tbody>
-      </table>
+      </table></div>
       <footer className="pager">
         <button type="button" className="btn btn-ghost" disabled={current === 0} onClick={() => setPage(current - 1)}>
           {t('common.prev')}

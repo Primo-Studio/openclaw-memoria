@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useCallback as useCb } from 'react'
 import { ConfirmButton, CopyButton } from '../components/ui'
+import { EmbeddingsChooser } from '../components/EmbeddingsChooser'
 import { useT } from '../i18n'
 import {
   ApiError,
@@ -240,6 +241,15 @@ export function Settings() {
           </p>
         )}
       </div>
+
+      {health && config && !unavailable && (
+        <EmbeddingsChooser
+          health={health}
+          current={config.embeddings?.provider}
+          currentModel={config.embeddings?.model}
+          onChanged={refresh}
+        />
+      )}
 
       <div className="settings-block">
         <h2>{t('settings.storage.title')}</h2>

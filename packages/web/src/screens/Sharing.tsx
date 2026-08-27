@@ -114,7 +114,10 @@ export function Sharing() {
                           checked={allowed}
                           disabled={busy}
                           aria-label={t('sharing.reader_aria', { agent: a.display_name, scope: scopeLabel(t, scope) })}
-                          onChange={e => void toggle(a.id, scope, e.target.checked)}
+                          onChange={e => {
+                            if (e.target.checked && !window.confirm(t('sharing.grant_confirm', { agent: a.display_name, scope: scopeLabel(t, scope) }))) return
+                            void toggle(a.id, scope, e.target.checked)
+                          }}
                         />
                       </td>
                     )

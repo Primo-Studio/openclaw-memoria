@@ -14,6 +14,7 @@ import {
   type RevisionProposal,
 } from '../api'
 import { useT } from '../i18n'
+import { agentTypeLabel } from '../components/ui'
 
 type Translate = (key: string, vars?: Record<string, string | number>) => string
 
@@ -82,7 +83,7 @@ export function Revisions() {
         </div>
         {agents.length > 0 && (
           <select className="agent-select" value={instance} onChange={e => setInstance(e.target.value)}>
-            {agents.map(a => <option key={a.instance.id} value={a.instance.id}>{a.assistant_type}</option>)}
+            {agents.map(a => <option key={a.instance.id} value={a.instance.id}>{agentTypeLabel(a.assistant_type)}</option>)}
           </select>
         )}
       </header>

@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { ApiError, getAgents, getProcedures, type AgentEntry, type Procedure } from '../api'
 import { useT } from '../i18n'
+import { agentTypeLabel } from '../components/ui'
 
 export function Procedures() {
   const { t } = useT()
@@ -47,7 +48,7 @@ export function Procedures() {
         </div>
         {agents.length > 0 && (
           <select className="agent-select" value={instance} onChange={e => setInstance(e.target.value)}>
-            {agents.map(a => <option key={a.instance.id} value={a.instance.id}>{a.assistant_type}</option>)}
+            {agents.map(a => <option key={a.instance.id} value={a.instance.id}>{agentTypeLabel(a.assistant_type)}</option>)}
           </select>
         )}
       </header>

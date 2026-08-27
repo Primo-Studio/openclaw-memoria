@@ -381,6 +381,33 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         sendJson(res, 200, { provider, model: body['model'] ?? null })
         return
       }
+      case 'POST /v1/admin/llm_embeddings': {
+        // Choix explicite du moteur de recherche sémantique. Deux fournisseurs
+        // réels seulement : openai (clé API, le plus simple) ou ollama (local).
+        const body = await readJson(req)
+        const provider = String(body['provider'] ?? '')
+        if (!['ollama', 'openai'].includes(provider)) {
+          throw new HttpError(400, `provider d'embeddings inconnu : ${provider} (attendu : ollama|openai)`)
+        }
+        memoria.setEmbeddingsProvider(
+          provider,
+          body['model'] as string | undefined,
+          body['dimensions'] as number | undefined,
+          body['base_url'] as string | undefined,
+        )
+        // Réindexation incrémentale en tâche de fond (ne bloque pas la réponse) :
+        // seuls les faits sans vecteur pour le nouveau modèle sont ré-embqués.
+        void memoria
+          .indexEmbeddings()
+          .catch((err: unknown) => console.warn(`[daemon] réindexation embeddings : ${(err as Error).message}`))
+        sendJson(res, 200, { provider, model: body['model'] ?? null, pending: await memoria.embeddingsPending() })
+        return
+      }
+      case 'GET /v1/admin/machine_caps': {
+        // Scan matériel : l'UI s'en sert pour proposer/déconseiller le local.
+        sendJson(res, 200, memoria.machineCaps())
+        return
+      }
       case 'GET /v1/admin/llm_health': {
         // LA source de vérité anti-mort-silencieuse : moteurs effectifs +
         // raisons d'indisponibilité + WAL en attente + options détectées.

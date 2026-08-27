@@ -54,6 +54,15 @@ function interpolate(tpl: string, vars?: Record<string, string | number>): strin
   return tpl.replace(/\{(\w+)\}/g, (_, k) => (k in vars ? String(vars[k]) : `{${k}}`))
 }
 
+// Langue active au niveau module, tenue à jour par le provider. Sert aux
+// fonctions PURES (hors React) qui ne peuvent pas utiliser le hook useT() —
+// ex. `humanError()`. Repli sur le français comme le t() du contexte.
+let activeLang: Lang = initialLang()
+export function translate(key: string, vars?: Record<string, string | number>): string {
+  const val = CATALOGS[activeLang][key] ?? CATALOGS.fr[key] ?? key
+  return interpolate(val, vars)
+}
+
 export function I18nProvider({ children }: { children: ReactNode }) {
   const [lang, setLangState] = useState<Lang>(initialLang)
 
@@ -64,6 +73,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
       /* ignore */
     }
     document.documentElement.lang = lang
+    activeLang = lang
   }, [lang])
 
   const setLang = useCallback((l: Lang) => setLangState(l), [])

@@ -5,7 +5,7 @@
  * `memoria`, qui passe le token dans l'URL).
  */
 import { useCallback, useEffect, useState } from 'react'
-import { getAgents, getCaptureMode, getVersion, hasToken, setCaptureMode, type CaptureMode } from './api'
+import { getAgents, getCaptureMode, getReview, getVersion, hasToken, setCaptureMode, type CaptureMode } from './api'
 import { useT, LANGS, type Lang } from './i18n'
 import { Dashboard } from './screens/Dashboard'
 import { Agents } from './screens/Agents'
@@ -34,6 +34,17 @@ const NAV_IDS: ScreenId[] = [
   'dashboard', 'agents', 'memory', 'themes', 'patterns', 'procedures',
   'review', 'revisions', 'maintenance', 'sharing', 'persons', 'vault', 'system', 'audit', 'settings', 'docs',
 ]
+
+// P1 : deux groupes au lieu de 16 onglets à plat. « Essentiel » toujours
+// visible ; « Avancé » replié par défaut (outils pour power-users).
+const ESSENTIAL_IDS: ScreenId[] = ['dashboard', 'agents', 'memory', 'themes', 'review']
+const ADVANCED_IDS: ScreenId[] = NAV_IDS.filter(id => !ESSENTIAL_IDS.includes(id))
+
+/** Écran courant depuis le hash d'URL (#/memory) → bouton Précédent + rafraîchissement stables. */
+function screenFromHash(): ScreenId {
+  const h = window.location.hash.replace(/^#\/?/, '')
+  return (NAV_IDS as string[]).includes(h) ? (h as ScreenId) : 'dashboard'
+}
 
 // Symbole de marque : « M » formé de nœuds reliés (cf. brand/ + public/favicon.svg).
 // Hérite de la couleur d'accent via currentColor.
@@ -65,9 +76,10 @@ export function App() {
   const { t } = useT()
   // Le token est adopté avant le rendu (main.tsx) ; sa présence ne change plus ensuite.
   const [authed] = useState(hasToken)
-  const [screen, setScreen] = useState<ScreenId>('dashboard')
+  const [screen, setScreen] = useState<ScreenId>(screenFromHash)
   // null = on ne sait pas encore (chargement) ; true = 0 agent → onboarding.
   const [onboarding, setOnboarding] = useState<boolean | null>(null)
+  const [reviewCount, setReviewCount] = useState(0)
 
   useEffect(() => {
     if (!authed) return
@@ -76,42 +88,76 @@ export function App() {
       .catch(() => setOnboarding(false))
   }, [authed])
 
+  // Routeur par hash : le bouton Précédent/Suivant du navigateur fonctionne,
+  // le rafraîchissement garde l'écran, les liens sont partageables.
+  useEffect(() => {
+    const onHash = () => setScreen(screenFromHash())
+    window.addEventListener('hashchange', onHash)
+    return () => window.removeEventListener('hashchange', onHash)
+  }, [])
+
+  // Badge « en attente » sur Revue (nombre de souvenirs à valider).
+  useEffect(() => {
+    if (!authed) return
+    const load = () => getReview().then(items => setReviewCount(items.length)).catch(() => {})
+    load()
+    const id = window.setInterval(load, 20000)
+    return () => window.clearInterval(id)
+  }, [authed])
+
+  const go = useCallback((id: ScreenId) => {
+    window.location.hash = '#/' + id
+  }, [])
+
   if (!authed) return <Welcome />
   if (onboarding === null) return <div className="welcome"><div className="spinner" aria-hidden /></div>
   if (onboarding) return <Onboarding onDone={() => setOnboarding(false)} />
 
+  const navButton = (id: ScreenId) => (
+    <button
+      key={id}
+      type="button"
+      className={`nav-item${screen === id ? ' nav-active' : ''}`}
+      aria-current={screen === id ? 'page' : undefined}
+      onClick={() => go(id)}
+    >
+      {t(`nav.${id}`)}
+      {id === 'review' && reviewCount > 0 && (
+        <span className="nav-badge">{reviewCount > 500 ? '500+' : reviewCount}</span>
+      )}
+    </button>
+  )
+
   return (
-    <div className="layout">
-      <aside className="sidebar">
-        <div className="brand">
-          <BrandMark />
-          <div className="brand-text">
-            Memoria
-            <span className="brand-sub">{t('brand.sub')}</span>
+    <>
+      <a href="#main-content" className="skip-link">{t('a11y.skip')}</a>
+      <div className="layout">
+        <aside className="sidebar">
+          <div className="brand">
+            <BrandMark />
+            <div className="brand-text">
+              Memoria
+              <span className="brand-sub">{t('brand.sub')}</span>
+            </div>
           </div>
-        </div>
-        <LangSwitch />
-        <nav className="nav" aria-label="Navigation principale">
-          {NAV_IDS.map(id => (
-            <button
-              key={id}
-              type="button"
-              className={`nav-item${screen === id ? ' nav-active' : ''}`}
-              onClick={() => setScreen(id)}
-            >
-              {t(`nav.${id}`)}
-            </button>
-          ))}
-        </nav>
-        <CaptureModeSwitch />
-        <div className="sidebar-foot muted">
-          {t('foot.local')}
-          <VersionFoot />
-        </div>
-      </aside>
-      <main className="content">
-        {screen === 'dashboard' && <Dashboard onConnect={() => setScreen('agents')} onConfigure={() => setScreen('settings')} />}
-        {screen === 'agents' && <Agents onOpenReview={() => setScreen('review')} />}
+          <LangSwitch />
+          <ThemeSwitch />
+          <nav className="nav" aria-label={t('a11y.nav')}>
+            {ESSENTIAL_IDS.map(navButton)}
+            <details className="nav-advanced">
+              <summary>{t('nav.advanced')}</summary>
+              {ADVANCED_IDS.map(navButton)}
+            </details>
+          </nav>
+          <CaptureModeSwitch />
+          <div className="sidebar-foot muted">
+            {t('foot.local')}
+            <VersionFoot />
+          </div>
+        </aside>
+        <main className="content" id="main-content" tabIndex={-1}>
+        {screen === 'dashboard' && <Dashboard onConnect={() => go('agents')} onConfigure={() => go('settings')} />}
+        {screen === 'agents' && <Agents onOpenReview={() => go('review')} />}
         {screen === 'memory' && <Memory />}
         {screen === 'themes' && <Themes />}
         {screen === 'patterns' && <Patterns />}
@@ -126,7 +172,42 @@ export function App() {
         {screen === 'audit' && <Audit />}
         {screen === 'settings' && <Settings />}
         {screen === 'docs' && <Docs />}
-      </main>
+        </main>
+      </div>
+    </>
+  )
+}
+
+/** Sélecteur de thème (clair / sombre / système) — barre latérale. */
+function ThemeSwitch() {
+  const { t } = useT()
+  const [theme, setTheme] = useState<string>(() => {
+    try {
+      return localStorage.getItem('memoria-theme') ?? 'system'
+    } catch {
+      return 'system'
+    }
+  })
+  const change = (v: string) => {
+    setTheme(v)
+    try {
+      if (v === 'system') localStorage.removeItem('memoria-theme')
+      else localStorage.setItem('memoria-theme', v)
+    } catch {
+      /* localStorage indisponible */
+    }
+    const root = document.documentElement
+    if (v === 'light' || v === 'dark') root.setAttribute('data-theme', v)
+    else root.removeAttribute('data-theme')
+  }
+  return (
+    <div className="lang-switch">
+      <label className="field-label" htmlFor="theme-select">{t('theme.title')}</label>
+      <select id="theme-select" className="lang-select" value={theme} onChange={e => change(e.target.value)}>
+        <option value="system">{t('theme.system')}</option>
+        <option value="light">{t('theme.light')}</option>
+        <option value="dark">{t('theme.dark')}</option>
+      </select>
     </div>
   )
 }

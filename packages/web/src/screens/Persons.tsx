@@ -204,6 +204,7 @@ function PersonCard({ person, onChange, onError }: { person: PersonProfile; onCh
           <span key={id.id} className="ident-chip">
             <span className="ident-kind">{kindLabel(t, id.kind)}</span> {id.value}
             <button type="button" className="ident-x" aria-label={t('persons.card.removeIdent')} onClick={async () => {
+              if (!window.confirm(t('persons.card.removeIdentConfirm', { value: id.value }))) return
               try { await removePersonIdentifier(id.id); onChange() } catch (err) { onError(humanError(err)) }
             }}>✕</button>
           </span>

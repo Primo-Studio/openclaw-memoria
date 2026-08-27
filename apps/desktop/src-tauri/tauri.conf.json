@@ -35,7 +35,8 @@
       "icons/icon.png"
     ],
     "macOS": {
-      "minimumSystemVersion": "11.0"
+      "minimumSystemVersion": "11.0",
+      "signingIdentity": "Developer ID Application: Primo Studio (4QB44XVHNL)"
     }
   }
 }

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>fr.primo-studio.memoria.autoimport</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/primostudio/openclaw-memoria/scripts/auto-import.sh</string>
+  </array>
+  <!-- Toutes les 6 heures. Change cette valeur (en secondes) pour un autre rythme. -->
+  <key>StartInterval</key>
+  <integer>21600</integer>
+  <!-- Ne PAS lancer un import (coûteux) au chargement du service : on attend le 1er intervalle. -->
+  <key>RunAtLoad</key>
+  <false/>
+  <key>StandardOutPath</key>
+  <string>/Users/primostudio/.memoria/auto-import.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/primostudio/.memoria/auto-import.err.log</string>
+</dict>
+</plist>

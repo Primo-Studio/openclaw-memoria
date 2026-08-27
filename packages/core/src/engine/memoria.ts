@@ -5,7 +5,7 @@
  * MCP/UI en P3 — voir docs/v3/STATUS.md.
  */
 import { existsSync, readdirSync, rmSync, statSync } from 'node:fs'
-import { hostname } from 'node:os'
+import { cpus, hostname, totalmem } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import DatabaseCtor from 'better-sqlite3'
 import { importLegacyCognition } from '../migration/import-cognition.js'
@@ -87,6 +87,8 @@ export interface LlmEngineHealth {
   available: boolean
   /** Pourquoi le moteur est indisponible — TOUJOURS présent quand available=false. */
   reason?: string
+  /** Embeddings seulement : faits actifs sans vecteur pour le modèle courant (à (ré)indexer). */
+  pending?: number
 }
 
 /** Bilan de santé LLM (GET /v1/admin/llm_health) — anti-mort-silencieuse. */
@@ -141,7 +143,7 @@ export class Memoria {
   private readonly llmOverride: MemoriaInitOptions['llm']
   private pipelinePromise: Promise<CapturePipeline> | null = null
   private profilePromise: Promise<{ extraction: LlmProvider | null; embeddings: EmbeddingProvider | null }> | null = null
-  private readonly indexers = new WeakMap<ContentStore, EmbeddingIndexer>()
+  private indexers = new WeakMap<ContentStore, EmbeddingIndexer>()
   private readonly cognitionEngines = new WeakMap<ContentStore, CognitionEngine>()
   private readonly topicEngines = new WeakMap<ContentStore, TopicEngine>()
   private readonly patternEngines = new WeakMap<ContentStore, PatternEngine>()
@@ -2136,6 +2138,7 @@ export class Memoria {
       DEFAULT_ANTHROPIC_MODEL,
       DEFAULT_LOCAL_EXTRACTION_MODEL,
       DEFAULT_OLLAMA_EMBEDDING_MODEL,
+      DEFAULT_OPENAI_EMBEDDING_MODEL,
       DEFAULT_OPENAI_MODEL,
       DEFAULT_OPENROUTER_MODEL,
       detectLlmOptions,
@@ -2196,18 +2199,37 @@ export class Memoria {
       extraction = { provider, model, available: false, reason }
     }
 
-    // ---- embeddings : Ollama nomic-embed-text UNIQUEMENT en V1 — on le DIT
+    // ---- embeddings (recherche sémantique) : deux moteurs réels — OpenAI
+    // (clé API, le plus simple) ou Ollama local. Quand rien n'est résolu, on
+    // recommande selon ce qui est détecté au lieu d'imposer Ollama.
     let embeddings: LlmEngineHealth
     if (profile.embeddings) {
-      embeddings = { provider: profile.embeddings.name, model: profile.embeddings.model, available: true }
-    } else {
+      embeddings = {
+        provider: profile.embeddings.name,
+        model: profile.embeddings.model,
+        available: true,
+        pending: await this.embeddingsPending(),
+      }
+    } else if (options.openai.available) {
+      embeddings = {
+        provider: 'openai',
+        model: DEFAULT_OPENAI_EMBEDDING_MODEL,
+        available: false,
+        reason: `Recherche sémantique inactive — choisis un moteur d'embeddings (recommandé : OpenAI, clé déjà présente)`,
+      }
+    } else if (options.ollama.serverUp) {
       embeddings = {
         provider: 'ollama',
         model: DEFAULT_OLLAMA_EMBEDDING_MODEL,
         available: false,
-        reason: options.ollama.serverUp
-          ? `Recherche sémantique : nécessite Ollama (${DEFAULT_OLLAMA_EMBEDDING_MODEL}) — « ollama pull ${DEFAULT_OLLAMA_EMBEDDING_MODEL} »`
-          : `Recherche sémantique : nécessite Ollama (${DEFAULT_OLLAMA_EMBEDDING_MODEL}) — serveur Ollama injoignable`,
+        reason: `Recherche sémantique inactive — Ollama détecté : « ollama pull ${DEFAULT_OLLAMA_EMBEDDING_MODEL} », ou choisis une clé OpenAI`,
+      }
+    } else {
+      embeddings = {
+        provider: 'openai',
+        model: DEFAULT_OPENAI_EMBEDDING_MODEL,
+        available: false,
+        reason: `Recherche sémantique inactive — choisis un moteur : clé OpenAI (le plus simple) ou Ollama local`,
       }
     }
 
@@ -2215,11 +2237,50 @@ export class Memoria {
   }
 
   /** Profil LLM courant (config) + choix explicite d'extraction s'il existe. */
-  getLlmProfile(): { profile: string; extraction?: { provider?: string; model?: string; base_url?: string } } {
+  getLlmProfile(): {
+    profile: string
+    extraction?: { provider?: string; model?: string; base_url?: string }
+    embeddings?: { provider?: string; model?: string; dimensions?: number; base_url?: string }
+  } {
     this.assertOpen()
     return {
       profile: this.resolved.config.llm?.profile ?? '100-local',
       extraction: this.resolved.config.llm?.extraction,
+      embeddings: this.resolved.config.llm?.embeddings,
+    }
+  }
+
+  /**
+   * Scan matériel léger : sert à l'UI pour proposer (ou déconseiller) un modèle
+   * LOCAL selon la puissance de la machine. La RAM est le facteur déterminant ;
+   * le silicium Apple (mémoire unifiée) fait tourner les modèles bien mieux à
+   * RAM égale, d'où deux barèmes. Aucune donnée sensible.
+   */
+  machineCaps(): {
+    platform: string
+    arch: string
+    ram_gb: number
+    cpu_cores: number
+    apple_silicon: boolean
+    verdict: 'great' | 'ok' | 'weak'
+    recommend_local: boolean
+  } {
+    const ramGb = Math.round((totalmem() / 1024 ** 3) * 10) / 10
+    const cores = cpus().length
+    const arch = process.arch
+    const platform = process.platform
+    const appleSilicon = platform === 'darwin' && arch === 'arm64'
+    let verdict: 'great' | 'ok' | 'weak'
+    if (appleSilicon) verdict = ramGb >= 16 ? 'great' : ramGb >= 8 ? 'ok' : 'weak'
+    else verdict = ramGb >= 32 ? 'great' : ramGb >= 16 ? 'ok' : 'weak'
+    return {
+      platform,
+      arch,
+      ram_gb: ramGb,
+      cpu_cores: cores,
+      apple_silicon: appleSilicon,
+      verdict,
+      recommend_local: verdict !== 'weak',
     }
   }
 
@@ -2246,11 +2307,69 @@ export class Memoria {
     this.persistLlmConfig(`set_extraction:${provider}${model ? `:${model}` : ''}`)
   }
 
+  /**
+   * Choix EXPLICITE du provider/modèle d'embeddings (recherche sémantique).
+   * provider ∈ ollama|openai (les seuls fournisseurs d'embeddings supportés ;
+   * pas de LM Studio ni Anthropic, pas de login/OAuth). Ce choix explicite
+   * prime sur la détection auto et sur la garde cloud (resolveLlmProfile).
+   * `dimensions` : à préciser seulement pour un modèle hors table connue —
+   * elles sont gravées avec chaque vecteur, une valeur fausse corrompt la base.
+   * Après l'écriture, relancer `indexEmbeddings()` : l'indexation est
+   * incrémentale, seuls les faits sans vecteur pour le nouveau modèle sont ré-embqués.
+   */
+  setEmbeddingsProvider(provider: string, model?: string, dimensions?: number, baseUrl?: string): void {
+    this.assertOpen()
+    if (provider !== 'ollama' && provider !== 'openai') {
+      throw new Error(`provider d'embeddings non supporté : ${provider} (attendu : ollama|openai)`)
+    }
+    this.resolved.config.llm = {
+      ...this.resolved.config.llm,
+      embeddings: {
+        provider,
+        ...(model ? { model } : {}),
+        ...(dimensions ? { dimensions } : {}),
+        ...(baseUrl ? { base_url: baseUrl } : {}),
+      },
+    }
+    this.persistLlmConfig(`set_embeddings:${provider}${model ? `:${model}` : ''}`)
+  }
+
+  /**
+   * Faits actifs (superseded=0) sans vecteur pour le modèle d'embeddings
+   * courant, toutes bases confondues = ce qu'une (ré)indexation aurait à faire.
+   * 0 si aucun moteur d'embeddings n'est résolu.
+   */
+  async embeddingsPending(): Promise<number> {
+    this.assertOpen()
+    const { embeddings } = await this.ensureProfile()
+    if (!embeddings) return 0
+    let pending = 0
+    for (const entry of this.registry.listDbs()) {
+      if (entry.kind === 'registry' || !existsSync(entry.path)) continue
+      const store = this.openContent(entry.path)
+      const row = store.db
+        .prepare(
+          `SELECT COUNT(*) AS c FROM facts f
+           WHERE f.superseded = 0
+             AND NOT EXISTS (
+               SELECT 1 FROM embeddings e
+               WHERE e.owner_type = 'fact' AND e.owner_id = f.id AND e.model = ?
+             )`,
+        )
+        .get(embeddings.model) as { c: number }
+      pending += row.c
+    }
+    return pending
+  }
+
   private persistLlmConfig(action: string): void {
     saveConfigFile(this.resolved.config, this.resolved.configPath)
     // invalide la résolution mémoïsée → re-résolue au prochain usage
     this.profilePromise = null
     this.pipelinePromise = null
+    // Les indexeurs mémoïsent le provider d'embeddings résolu : après un
+    // changement de moteur, on les jette pour repartir du nouveau provider.
+    this.indexers = new WeakMap<ContentStore, EmbeddingIndexer>()
     this.registry.audit({ actor_type: 'user', actor_id: 'local', action, target_id_hash: null, scope_id: null, reason: null })
   }
 

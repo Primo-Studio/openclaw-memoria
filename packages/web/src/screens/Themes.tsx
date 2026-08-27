@@ -19,6 +19,7 @@ import {
   type TopicGraph,
 } from '../api'
 import { useT } from '../i18n'
+import { agentTypeLabel } from '../components/ui'
 
 export function Themes() {
   const { t: tr } = useT()
@@ -28,12 +29,14 @@ export function Themes() {
   const [active, setActive] = useState<Topic | null>(null)
   const [facts, setFacts] = useState<AdminFact[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [note, setNote] = useState<string | null>(null)
   const [refining, setRefining] = useState(false)
   const [view, setView] = useState<'tiles' | 'graph'>('tiles')
 
   useEffect(() => {
     getAgents()
       .then(a => {
+        setError(null)
         const real = a.filter(x => x.assistant_type !== 'generic' && !x.instance.revoked_at)
         setAgents(real)
         if (real.length > 0 && real[0]) setInstance(real[0].instance.id)
@@ -43,6 +46,8 @@ export function Themes() {
 
   useEffect(() => {
     if (!instance) return
+    setError(null)
+    setNote(null)
     setTopics(null)
     setActive(null)
     setFacts(null)
@@ -60,6 +65,7 @@ export function Themes() {
     async (t: Topic) => {
       setActive(t)
       setFacts(null)
+      setError(null)
       try {
         setFacts(await getTopicFacts(instance, t.id))
       } catch (err) {
@@ -94,10 +100,12 @@ export function Themes() {
             title={tr('themes.refine_title')}
             onClick={async () => {
               setRefining(true)
+              setError(null)
+              setNote(null)
               try {
                 const n = await refineTopics(instance)
                 if (n > 0) setTopics(await getTopics(instance, 2))
-                else setError(tr('themes.error_no_ai'))
+                else setNote(tr('themes.error_no_ai'))
               } catch (err) {
                 setError(err instanceof ApiError ? err.message : tr('themes.error_refine'))
               } finally {
@@ -111,7 +119,7 @@ export function Themes() {
             <select className="agent-select" value={instance} onChange={e => setInstance(e.target.value)}>
               {agents.map(a => (
                 <option key={a.instance.id} value={a.instance.id}>
-                  {a.assistant_type}
+                  {agentTypeLabel(a.assistant_type)}
                 </option>
               ))}
             </select>
@@ -120,6 +128,7 @@ export function Themes() {
       </header>
 
       {error && <div className="error-banner">{error}</div>}
+      {note && <p className="muted" style={{ marginTop: '0.4rem' }}>{note}</p>}
 
       {topics === null ? (
         <div className="spinner-row"><span className="spinner" aria-hidden /> {tr('common.loading')}</div>
