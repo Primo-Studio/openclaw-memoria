@@ -74,7 +74,7 @@ describe('ensureDaemon + launchd', () => {
   it('kickstart qui lance VRAIMENT le daemon → réutilisé, aucun second daemon', async () => {
     const kickstart = vi.fn(() => {
       // launchd simulé : démarre le daemon dans ce process, de façon asynchrone.
-      void startDaemon({ storageRoot: root, configPath }).then(d => {
+      void startDaemon({ storageRoot: root, configPath, llm: { extraction: null } }).then(d => {
         inProcess = d
       })
       return true
@@ -92,7 +92,7 @@ describe('ensureDaemon + launchd', () => {
     const spawnDaemon = vi.fn((args: string[]) => {
       spawned.push(args)
       // launchd absent : on simule le process détaché par un daemon en process.
-      void startDaemon({ storageRoot: root, configPath }).then(d => {
+      void startDaemon({ storageRoot: root, configPath, llm: { extraction: null } }).then(d => {
         inProcess = d
       })
     })
@@ -106,7 +106,7 @@ describe('ensureDaemon + launchd', () => {
   }, 30_000)
 
   it('daemon déjà vivant → ni kickstart ni spawn', async () => {
-    inProcess = await startDaemon({ storageRoot: root, configPath })
+    inProcess = await startDaemon({ storageRoot: root, configPath, llm: { extraction: null } })
     const kickstart = vi.fn(() => true)
     const state = await ensureDaemon({ storageRoot: root, configPath }, { launchd: { targets: () => true, kickstart } })
     expect(kickstart).not.toHaveBeenCalled()
