@@ -6,9 +6,10 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import { useCallback as useCb } from 'react'
-import { ConfirmButton, CopyButton, EmptyState, Spinner, formatDate, formatNumber } from '../components/ui'
+import { ConfirmButton, CopyButton, EmptyState, Spinner, formatCompact, formatDate, formatNumber } from '../components/ui'
 import { EmbeddingsChooser } from '../components/EmbeddingsChooser'
 import { currentLocale, useT } from '../i18n'
+import { summarizeCloudSends } from '../lib/cloud'
 import {
   ApiError,
   getControl,
@@ -649,6 +650,48 @@ function fmtUsd(v: number): string {
 }
 
 /**
+ * « Données envoyées au cloud » — la réponse directe au retour bêta « l'interface
+ * devrait indiquer clairement ce qui a été envoyé ». Jusqu'ici seul
+ * `memoria doctor` le montrait. Même fenêtre que le panneau Consommation.
+ * L'absence d'envoi EST l'information : on l'affiche en vert, pas en creux.
+ */
+function CloudSends({ rows }: { rows: LlmUsageReport['rows'] }) {
+  const { t } = useT()
+  const cloud = summarizeCloudSends(rows)
+  if (cloud.rows.length === 0) {
+    return (
+      <div className="cloud-summary cloud-none" role="status">
+        <strong>🔒 {t('settings.cloud.title')}</strong>
+        <p>{t('settings.cloud.none')}</p>
+      </div>
+    )
+  }
+  const vars = { calls: formatNumber(cloud.calls), providers: cloud.providers.join(', '), chars: formatCompact(cloud.chars) }
+  return (
+    <div className="cloud-summary cloud-some" role="status">
+      <strong>☁️ {t('settings.cloud.title')}</strong>
+      <p>
+        {t(cloud.calls > 1 ? 'settings.cloud.summary.plural' : 'settings.cloud.summary.one', vars)}
+        {cloud.last_ts ? ` ${t('settings.cloud.last', { date: formatDate(cloud.last_ts) })}` : ''}
+      </p>
+      <ul className="cloud-rows">
+        {cloud.rows.map(r => (
+          <li key={`${r.provider}|${r.model}|${r.purpose}`}>
+            <code>
+              {r.provider}/{r.model}
+            </code>{' '}
+            · {t(`settings.usage.purpose.${r.purpose}`)} —{' '}
+            {t('settings.cloud.row', { calls: formatNumber(r.calls), items: formatNumber(r.items), chars: formatCompact(r.chars) })}
+            {r.failures > 0 && <span className="badge badge-warn"> {t('settings.cloud.failures', { count: r.failures })}</span>}
+          </li>
+        ))}
+      </ul>
+      <p className="muted">{t('settings.cloud.note')}</p>
+    </div>
+  )
+}
+
+/**
  * Consommation par modèle : appels, tokens, coût estimé — l'utilisateur voit
  * ce que sa mémoire lui coûte, modèle par modèle, locaux compris (0 $).
  * Route « contrat » : absente (daemon plus ancien) → encart « non disponible ».
@@ -704,9 +747,13 @@ function UsagePanel() {
       ) : unavailable ? (
         <p className="muted">{t('settings.usage.unavailable')}</p>
       ) : !report || report.rows.length === 0 ? (
-        <EmptyState title={t('settings.usage.empty.title')} body={t('settings.usage.empty.body')} />
+        <>
+          <CloudSends rows={[]} />
+          <EmptyState title={t('settings.usage.empty.title')} body={t('settings.usage.empty.body')} />
+        </>
       ) : (
         <>
+          <CloudSends rows={report.rows} />
           <div className="table-wrap">
             <table className="table">
               <thead>

@@ -6,12 +6,18 @@ import { useState } from 'react'
 import { getAudit, type AuditEntry } from '../api'
 import { EmptyState, ErrorBanner, Spinner, formatDate, useLoad } from '../components/ui'
 import { useT } from '../i18n'
+import { humanReason } from '../lib/cloud'
 
 const PAGE_SIZE = 25
 
 // Actions techniques → clé i18n audit.action.<action> (repli : l'action brute).
+// Liste = toutes les actions émises par core (grep `action: '` dans packages/core/src).
 const KNOWN_ACTIONS = new Set([
-  'pair_assistant', 'complete_pairing', 'revoke_instance', 'store_fact', 'recall', 'forget', 'person_autocreate',
+  'pair_assistant', 'complete_pairing', 'revoke_instance', 'delete_instance', 'store_fact', 'recall', 'forget',
+  'person_autocreate', 'person_create', 'person_delete',
+  'cloud_send', 'capture_turn', 'wal_entry_abandoned',
+  'adopt_legacy', 'import_legacy', 'import_legacy_rollback', 'import_transcripts', 'import_cognition',
+  'fact_correct', 'fact_expiry', 'fact_merge', 'set_scope_access', 'share_facts', 'sync_peer_paired',
 ])
 
 export function Audit() {
@@ -128,7 +134,7 @@ function AuditTable({ entries, page, setPage }: { entries: AuditEntry[]; page: n
               </td>
               <td>
                 {actionLabel(t, entry.action)}
-                {entry.reason && <span className="muted"> · {entry.reason}</span>}
+                {entry.reason && <span className="muted"> · {humanReason(entry.action, entry.reason)}</span>}
               </td>
               <td>{entry.scope_id ? <code className="path">{entry.scope_id.slice(0, 8)}</code> : '—'}</td>
             </tr>

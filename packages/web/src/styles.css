@@ -1309,3 +1309,22 @@ input[type='search']:focus {
   gap: 0.5rem;
   margin: 0.5rem 0 1rem;
 }
+
+/* Réglages — « Données envoyées au cloud » (retour bêta : dire ce qui est parti) */
+.cloud-summary {
+  margin: 0.8rem 0 1rem;
+  padding: 0.75rem 1rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  border-left-width: 4px;
+  background: var(--bg-raised);
+}
+.cloud-summary p { margin: 0.3rem 0 0; }
+.cloud-summary.cloud-none { border-left-color: var(--ok, #3fb96a); }
+.cloud-summary.cloud-some { border-left-color: var(--warn, #d8a01f); }
+.cloud-rows {
+  margin: 0.5rem 0 0;
+  padding-left: 1.2rem;
+  font-size: 0.9rem;
+}
+.cloud-rows li { margin: 0.2rem 0; }

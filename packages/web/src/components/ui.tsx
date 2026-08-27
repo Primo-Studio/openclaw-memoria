@@ -14,13 +14,15 @@ const dateFmts = new Map<string, Intl.DateTimeFormat>()
 const dayFmts = new Map<string, Intl.DateTimeFormat>()
 const numFmts = new Map<string, Intl.NumberFormat>()
 const compactFmts = new Map<string, Intl.NumberFormat>()
+const decimalFmts = new Map<string, Intl.NumberFormat>()
 
-function cached<T>(cache: Map<string, T>, make: (locale: string) => T): T {
+function cached<T>(cache: Map<string, T>, make: (locale: string) => T, variant = 0): T {
   const locale = currentLocale()
-  let fmt = cache.get(locale)
+  const key = variant === 0 ? locale : `${locale}#${variant}`
+  let fmt = cache.get(key)
   if (!fmt) {
     fmt = make(locale)
-    cache.set(locale, fmt)
+    cache.set(key, fmt)
   }
   return fmt
 }
@@ -46,6 +48,11 @@ export function formatNumber(n: number): string {
   return cached(numFmts, l => new Intl.NumberFormat(l, { maximumFractionDigits: 0 })).format(n)
 }
 
+/** Décimal à `digits` chiffres fixes dans la langue active (« 1,2 » / « 1.2 »). */
+export function formatDecimal(n: number, digits: number): string {
+  return cached(decimalFmts, l => new Intl.NumberFormat(l, { minimumFractionDigits: digits, maximumFractionDigits: digits }), digits).format(n)
+}
+
 /** Nombre compact (« 1,6 k » / « 1.6K ») — pour des volumes, pas des comptes exacts. */
 export function formatCompact(n: number): string {
   return cached(compactFmts, l => new Intl.NumberFormat(l, { notation: 'compact', maximumFractionDigits: 1 })).format(n)
@@ -54,10 +61,7 @@ export function formatCompact(n: number): string {
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return translate('units.bytes', { n: formatNumber(bytes) })
   if (bytes < 1024 * 1024) return translate('units.kb', { n: formatNumber(Math.round(bytes / 1024)) })
-  const mb = bytes / (1024 * 1024)
-  return translate('units.mb', {
-    n: new Intl.NumberFormat(currentLocale(), { maximumFractionDigits: 1, minimumFractionDigits: 1 }).format(mb),
-  })
+  return translate('units.mb', { n: formatDecimal(bytes / (1024 * 1024), 1) })
 }
 
 // Libellés de marque (invariants) ; les types « génériques » passent par l'i18n.

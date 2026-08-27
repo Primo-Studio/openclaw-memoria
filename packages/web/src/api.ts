@@ -58,6 +58,47 @@ export interface DoctorDatabase {
   wal_pending?: number
 }
 
+export interface DoctorActivity {
+  last_recall_at?: string
+  last_capture_at?: string
+  recalls_24h: number
+  captures_24h: number
+  recall_ms_avg?: number
+  recall_ms_p95?: number
+  recall_tokens_avg?: number
+  capture_ms_avg?: number
+}
+
+export interface DoctorMemory {
+  facts_total: number
+  facts_superseded: number
+  facts_never_used: number
+  contradictions_pending: number
+  duplicates_pending: number
+  wal_pending: number
+  wal_stuck: number
+}
+
+/** Ce qui a QUITTÉ la machine sur 24 h (miroir de core DoctorCloud). Vide = rien n'est parti. */
+export interface DoctorCloud {
+  sends_24h: Array<{
+    provider: string
+    model: string
+    purpose: string
+    calls: number
+    items: number
+    chars: number
+    failures: number
+    tokens_in?: number
+    tokens_out?: number
+  }>
+  last_send_at?: string
+  chars_24h: number
+}
+
+// Miroir de core/types.ts DoctorReport. Les sections `activity`/`memory`/
+// `cloud`/`usage` sont optionnelles ici : un service plus ancien ne les
+// renvoie pas et l'UI doit rester lisible sans elles.
 export interface DoctorReport {
   ok: boolean
   storage_root: string
@@ -65,6 +106,10 @@ export interface DoctorReport {
   registry_path: string
   databases: DoctorDatabase[]
   network_guard: { on_network_volume: boolean; journal_mode: string }
+  activity?: DoctorActivity
+  memory?: DoctorMemory
+  cloud?: DoctorCloud
+  usage?: LlmUsageReport
   warnings: string[]
 }
 
