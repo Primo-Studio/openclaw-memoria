@@ -1013,7 +1013,8 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         const factId = String(body['fact_id'] ?? '')
         const content = String(body['content'] ?? '')
         if (!factId || !content.trim()) throw new HttpError(400, 'fact_id et content requis')
-        sendJson(res, 200, memoria.correctFact(instanceId, factId, content))
+        // Refus de policy sur un fait PARTAGÉ → 403 (pas un 500 avec stack).
+        sendJson(res, 200, mapScopeErrors(() => memoria.correctFact(instanceId, factId, content)))
         return
       }
       case 'POST /v1/memory/merge': {
@@ -1021,7 +1022,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         const keep = String(body['keep_fact_id'] ?? '')
         const ids = body['merge_fact_ids']
         if (!keep || !Array.isArray(ids)) throw new HttpError(400, 'keep_fact_id et merge_fact_ids requis')
-        sendJson(res, 200, memoria.mergeFacts(instanceId, keep, ids.filter((v): v is string => typeof v === 'string')))
+        sendJson(res, 200, mapScopeErrors(() => memoria.mergeFacts(instanceId, keep, ids.filter((v): v is string => typeof v === 'string'))))
         return
       }
       case 'POST /v1/memory/pin': {
@@ -1029,7 +1030,8 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         const factId = String(body['fact_id'] ?? '')
         if (!factId) throw new HttpError(400, 'fact_id requis')
         if (typeof body['pinned'] !== 'boolean') throw new HttpError(400, 'pinned requis (booléen)')
-        sendJson(res, 200, { updated: memoria.setPinned(instanceId, factId, body['pinned']) })
+        const pinned = body['pinned']
+        sendJson(res, 200, { updated: mapScopeErrors(() => memoria.setPinned(instanceId, factId, pinned)) })
         return
       }
       case 'POST /v1/memory/expiry': {
@@ -1038,7 +1040,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         if (!factId) throw new HttpError(400, 'fact_id requis')
         const raw = body['expires_at']
         const expires = raw === null || raw === undefined || raw === '' ? null : String(raw)
-        sendJson(res, 200, { updated: memoria.setExpiry(instanceId, factId, expires) })
+        sendJson(res, 200, { updated: mapScopeErrors(() => memoria.setExpiry(instanceId, factId, expires)) })
         return
       }
       case 'POST /v1/memory/capture_status': {

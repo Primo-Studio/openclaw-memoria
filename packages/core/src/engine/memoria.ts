@@ -213,6 +213,11 @@ export class Memoria {
       "SELECT 1 FROM audit_log WHERE action = 'set_scope_access' AND target_id_hash = ? LIMIT 1",
     )
     for (const assistant of this.registry.listAssistants()) {
+      // Un agent de canal (OpenClaw : WhatsApp/Telegram, exposé à des tiers)
+      // reste en LECTURE seule sur `user` : sinon un interlocuteur externe peut
+      // lui faire écrire un « fait sur l'utilisateur » lu par tous les autres
+      // modèles (surface d'injection, revue 27/08). Son partage passe par la revue.
+      if (assistant.type === 'openclaw') continue
       const policy = this.registry.getPolicy(assistant.id, userScope.id)
       if (!policy || policy.can_write) continue
       if (touched.get(sha256Hex(`${assistant.id}:${userScope.id}`))) continue
@@ -267,7 +272,8 @@ export class Memoria {
         assistant_id: assistant.id,
         scope_id: userScope.id,
         can_read: true,
-        can_write: true,
+        // Pas d'écriture par défaut pour un agent de canal (cf. grantDefaultUserWrite).
+        can_write: assistant.type !== 'openclaw',
         can_share: false,
         secret_access: 'none',
       })
@@ -623,13 +629,30 @@ export class Memoria {
     const content = this.redactBeforeStore(trimmed)
 
     const store = this.storeForScope(scope, instance)
-    const dup = findDuplicate(store, scope.id, content, opts)
+    const rawDup = findDuplicate(store, scope.id, content, opts)
+    // Un doublon EXACT n'en est un que si l'existant est RAPPELABLE dans le même
+    // contexte. Sinon (revue 27/08) la déclaration était jetée en silence et
+    // l'agent recevait l'id d'un fait invisible : « fait perdu, vérités
+    // divergentes entre agents ».
+    //  - même contexte client/projet, fait expiré → on le RÉVEILLE (expires_at NULL) ;
+    //  - autre contexte client/projet → ce n'est pas une redite, c'est un fait
+    //    distinct (l'isolation client le cache justement à l'autre contexte).
+    const sameContext = (existing: Fact): boolean =>
+      (existing.client_org_id ?? null) === (input.client_org_id ?? null) &&
+      (existing.project_id ?? null) === (input.project_id ?? null)
+    const dup = rawDup && rawDup.kind === 'exact' && !sameContext(rawDup.existing) ? null : rawDup
     if (dup) {
+      const now = nowISO()
       if (dup.kind === 'exact' && dup.existing.lifecycle_state === 'dormant') this.activateFact(store, dup.existing.id)
+      const expiresAt = dup.existing.expires_at ?? null
+      const expired = dup.kind === 'exact' && expiresAt !== null && expiresAt <= now
+      if (expired) {
+        store.db.prepare('UPDATE facts SET expires_at = NULL, updated_at = ? WHERE id = ?').run(now, dup.existing.id)
+      }
       this.registry.audit({
         actor_type: 'assistant',
         actor_id: instance.id,
-        action: 'store_fact_dedup',
+        action: expired ? 'store_fact_revive' : 'store_fact_dedup',
         target_id_hash: sha256Hex(dup.existing.id),
         scope_id: scope.id,
         reason: dup.kind,
@@ -2479,7 +2502,14 @@ export class Memoria {
         ids = rows.map(r => r.id)
       }
       if (ids.length === 0) continue
-      matched += ids.length
+      // Ne compter que les ids réellement présents dans CETTE base — sinon
+      // dry_run additionnait ids × nombre de bases (« matched: 3 » pour 1 fait).
+      if (ids.length > 0) {
+        const present = store.db
+          .prepare(`SELECT COUNT(*) AS n FROM facts WHERE id IN (${ids.map(() => '?').join(',')})`)
+          .get(...ids) as { n: number }
+        matched += present.n
+      }
       if (filter.dry_run) continue
       // Nettoyer thèmes + récurrences AVANT le hard-delete (lisent fact_topics).
       this.topicFor(store, null).onForget(ids)

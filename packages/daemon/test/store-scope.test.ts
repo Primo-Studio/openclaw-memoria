@@ -64,6 +64,20 @@ describe('POST /v1/memory/store_fact avec scope', () => {
     expect(shared.some(f => f.fact.includes('réponses courtes'))).toBe(true)
   })
 
+  it('épingler / corriger un fait PARTAGÉ sans can_write → 403 net (pas un 500 avec stack)', async () => {
+    const stored = await post('/v1/memory/store_fact', { content: 'Néto travaille depuis Saint-Laurent-du-Maroni', scope: 'user' }, agentToken)
+    expect(stored.status).toBe(200)
+    const factId = (stored.json['fact'] as { id: string }).id
+    const userScope = daemon.memoria.registry.getScopeByName('user')!
+    await post('/v1/admin/policy', { assistant_id: assistantId, scope_id: userScope.id, can_write: false }, daemon.state.admin_token)
+
+    const pin = await post('/v1/memory/pin', { fact_id: factId, pinned: true }, agentToken)
+    expect(pin.status).toBe(403)
+    expect(String(pin.json['error'])).toContain('écriture refusée')
+    const correct = await post('/v1/memory/correct', { fact_id: factId, content: 'Néto travaille depuis Cayenne' }, agentToken)
+    expect(correct.status).toBe(403)
+  })
+
   it('scope inconnu → 404 net', async () => {
     const r = await post('/v1/memory/store_fact', { content: 'x', scope: 'scope-fantome' }, agentToken)
     expect(r.status).toBe(404)

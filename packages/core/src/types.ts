@@ -216,6 +216,8 @@ export interface Fact {
   origin_rev?: number
   content_hash?: string | null
   deleted_at?: string | null
+  /** Date d'expiration ISO (setExpiry) ; null/absent = n'expire pas. */
+  expires_at?: string | null
 }
 
 export interface Procedure {
