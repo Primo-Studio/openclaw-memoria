@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
+use tauri::{Manager, RunEvent, WindowEvent};
 use std::env;
 use std::fs;
 use std::io::{Read, Write};
@@ -577,6 +578,26 @@ fn open_url_in_browser(url: &str) {
     let _ = Command::new("xdg-open").arg(url).spawn();
 }
 
+/// Fermer la dernière fenêtre ne doit PAS tuer l'app : la lettre M de la barre
+/// d'état doit survivre à la croix rouge (sinon « Ouvrir Memoria » et l'état
+/// « éteint (clic → Démarrer) » n'existent que fenêtre ouverte). wry envoie
+/// `ExitRequested { code: None }` quand plus aucune fenêtre n'existe ;
+/// `Some(_)` = sortie explicite (`app.exit`, menu Quitter). Cmd+Q passe par
+/// `NSApp terminate:` (LoopDestroyed) et n'est donc jamais bloqué ici.
+fn keep_running_without_window(exit_code: Option<i32>) -> bool {
+    exit_code.is_none()
+}
+
+/// Ramène la fenêtre principale au premier plan (cachée par la croix rouge,
+/// réduite dans le Dock, ou derrière une autre app).
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
+}
+
 /// Applique l'état (icône « M » + info-bulle) à la barre d'état.
 fn apply_tray_state(app: &tauri::AppHandle, state: TrayState) {
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
@@ -643,8 +664,25 @@ pub fn run() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("erreur au lancement de l'app bureau Memoria");
+        // Croix rouge = cacher la fenêtre, pas la détruire : l'app reste dans
+        // la barre d'état et « Ouvrir Memoria » la ré-affiche telle quelle.
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
+        .build(tauri::generate_context!())
+        .expect("erreur au lancement de l'app bureau Memoria")
+        .run(|app, event| match event {
+            RunEvent::ExitRequested { code, api, .. } if keep_running_without_window(code) => {
+                api.prevent_exit();
+            }
+            // Clic sur l'icône du Dock alors que la fenêtre est cachée.
+            #[cfg(target_os = "macos")]
+            RunEvent::Reopen { has_visible_windows: false, .. } => show_main_window(app),
+            _ => {}
+        });
 }
 
 // ---------------------------------------------------------------------------
@@ -790,5 +828,14 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         drop(listener);
         assert!(!http_health(port));
+    }
+
+    #[test]
+    fn fermer_la_derniere_fenetre_ne_quitte_pas_l_app() {
+        // wry envoie `code: None` quand la dernière fenêtre est détruite : on
+        // reste dans la barre d'état. `Some(_)` = Quitter explicite → on sort.
+        assert!(keep_running_without_window(None));
+        assert!(!keep_running_without_window(Some(0)));
+        assert!(!keep_running_without_window(Some(1)));
     }
 }
