@@ -98,6 +98,38 @@ describe('LmStudioProvider', () => {
     expect(bodies[0]?.['temperature']).toBe(0.1)
   })
 
+  it('mode auto : `model` reflète le modèle EFFECTIF une fois résolu (santé/audit n’affichent plus « auto »)', async () => {
+    fetchMock.mockImplementation(modelsResponse(['qwen2.5-7b-instruct']))
+    const p = new LmStudioProvider()
+    expect(p.model).toBe(LMSTUDIO_AUTO_MODEL)
+    await p.isAvailable() // ce que resolveLlmProfile fait avant de retenir le provider
+    expect(p.model).toBe('qwen2.5-7b-instruct')
+  })
+
+  it('mode auto : le modèle chargé a changé → sur un 404, re-résout via /models et retente UNE fois', async () => {
+    let loaded = 'old-model'
+    const asked: string[] = []
+    fetchMock.mockImplementation(async (url: unknown, init?: RequestInit) => {
+      if (String(url).endsWith('/models')) return jsonResponse({ data: [{ id: loaded }] })
+      const body = JSON.parse(String(init?.body)) as { model: string }
+      asked.push(body.model)
+      if (body.model !== loaded) return new Response('{"error":"model not found"}', { status: 404 })
+      return jsonResponse({ choices: [{ message: { content: 'ok' } }] })
+    })
+    const p = new LmStudioProvider()
+    await p.complete({ prompt: 'x' })
+    loaded = 'new-model' // l'utilisateur a changé de modèle dans LM Studio
+    await expect(p.complete({ prompt: 'y' })).resolves.toBe('ok')
+    expect(asked).toEqual(['old-model', 'old-model', 'new-model'])
+    expect(p.model).toBe('new-model')
+    // et si le nouveau modèle échoue aussi, on ne boucle pas : une seule reprise
+    loaded = 'third'
+    fetchMock.mockImplementation(async (url: unknown) =>
+      String(url).endsWith('/models') ? jsonResponse({ data: [{ id: 'third' }] }) : new Response('nope', { status: 404 }),
+    )
+    await expect(p.complete({ prompt: 'z' })).rejects.toThrow(/HTTP 404/)
+  })
+
   it('complete : en-tête Authorization de convention + directive JSON dans le system', async () => {
     let headers: Record<string, string> = {}
     let body: Record<string, unknown> = {}

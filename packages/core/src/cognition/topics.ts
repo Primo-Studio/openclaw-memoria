@@ -70,7 +70,42 @@ export const topicMigrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 21,
+    name: 'topics-anchor-entity',
+    up(db) {
+      // L'entité « ancre » = celle qui NOMME le thème. Un fait qui la porte
+      // rejoint le thème même s'il ne partage rien d'autre — sans ça, chaque
+      // fait « devis GCSMS » créait son propre thème « GCSMS » (89 % de thèmes
+      // à 1 fait sur la mémoire réelle). Rétro-remplissage des thèmes existants :
+      // le libellé heuristique commence toujours par le nom de l'entité dominante.
+      const cols = (db.pragma('table_info(topics)') as Array<{ name: string }>).map(c => c.name)
+      if (!cols.includes('anchor_entity_id')) db.exec("ALTER TABLE topics ADD COLUMN anchor_entity_id TEXT DEFAULT ''")
+      const hasEntities = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'entities'").get()
+      if (hasEntities) {
+        db.exec(`
+          UPDATE topics SET anchor_entity_id = COALESCE((
+            SELECT te.entity_id FROM topic_entities te JOIN entities e ON e.id = te.entity_id
+            WHERE te.topic_id = topics.id AND instr(lower(topics.name), lower(e.name)) = 1
+            ORDER BY length(e.name) DESC LIMIT 1
+          ), '') WHERE anchor_entity_id = ''
+        `)
+      }
+    },
+  },
 ]
+
+/**
+ * Sigles-unités et bruit d'ALLCAPS qui ne nomment rien (« Environ GB »,
+ * « Token OK », « Memoria AM » sur la mémoire réelle) : jamais un libellé, jamais
+ * une ancre de thème. Comparaison en majuscules.
+ */
+const LABEL_NOISE = new Set([
+  'GB', 'MB', 'KB', 'TB', 'GO', 'MO', 'KO', 'TO', 'RAM', 'CPU', 'GPU', 'SSD', 'HDD',
+  'API', 'URL', 'URI', 'HTTP', 'HTTPS', 'ID', 'UI', 'UX', 'OK', 'KO', 'AM', 'PM',
+  'JSON', 'CSV', 'PDF', 'PNG', 'JPG', 'JPEG', 'MP4', 'MP3', 'HTML', 'CSS', 'SQL',
+  'USD', 'EUR', 'BRL', 'TTC', 'HT', 'TVA', 'KM', 'CM', 'MM', 'MS', 'FPS', 'MHZ', 'GHZ',
+])
 
 /** Mots vides FR/EN à exclure des keywords de thème. */
 const STOPWORDS = new Set([
@@ -92,14 +127,50 @@ export function topicKeywords(text: string): string[] {
     .filter(w => w.length > 3 && !STOPWORDS.has(w) && isContentWord(w))
 }
 
+/**
+ * Capitalise la 1re lettre de chaque mot — frontières Unicode. `\b` de JS est
+ * ASCII : « Néto » devenait « NÉTo » (é traité comme un séparateur). Réservé aux
+ * libellés issus de MOTS-CLÉS (déjà en minuscules) ; les noms d'entités gardent
+ * leur casse d'origine (JamBoard, GCSMS, macOS).
+ */
 function titleCase(s: string): string {
-  return s.replace(/\b\p{L}/gu, c => c.toUpperCase())
+  return s.replace(/(^|\s)(\p{L})/gu, (_m, sep: string, c: string) => sep + c.toUpperCase())
 }
 
 interface EntityInfo {
   id: string
   name: string
   type: string
+  mention_count: number
+}
+
+/** Entité qui ne peut ni nommer un thème ni servir d'ancre (sigle-unité, bruit). */
+function isLabelNoise(name: string): boolean {
+  const upper = name.toUpperCase()
+  if (LABEL_NOISE.has(upper)) return true
+  return name === upper && name.length <= 2 // « OK », « AM », « X »
+}
+
+/**
+ * Vrai si le nom n'apparaît dans le fait QU'EN TÊTE DE PHRASE : un mot courant
+ * capitalisé par la ponctuation (« Environ 12 GB… », « Token expiré… ») que
+ * l'heuristique d'entités prend pour un nom propre. On ne le retire pas — on le
+ * DÉCLASSE : il ne nomme le thème que faute de mieux, ou s'il est déjà connu
+ * ailleurs (mention_count ≥ 2 → c'est un vrai nom, « Néto prend son café… »).
+ */
+function isSentenceInitialOnly(name: string, text: string): boolean {
+  if (name.includes(' ')) return false
+  if (name === name.toUpperCase()) return false // sigle
+  if (/\p{Ll}\p{Lu}/u.test(name)) return false // CamelCase (JamBoard)
+  let idx = text.indexOf(name)
+  if (idx === -1) return false
+  while (idx !== -1) {
+    const before = text.slice(0, idx).trimEnd()
+    const atStart = before === '' || /[.!?:;]$/.test(before)
+    if (!atStart) return false
+    idx = text.indexOf(name, idx + name.length)
+  }
+  return true
 }
 
 export interface TopicEngineOptions {
@@ -135,11 +206,31 @@ export class TopicEngine {
   private entitiesOf(factId: string): EntityInfo[] {
     const rows = this.db
       .prepare(
-        `SELECT e.id, e.name, e.type FROM fact_entities fe
-         JOIN entities e ON e.id = fe.entity_id WHERE fe.fact_id = ?`,
+        `SELECT e.id, e.name, e.type, e.mention_count FROM fact_entities fe
+         JOIN entities e ON e.id = fe.entity_id WHERE fe.fact_id = ? ORDER BY e.rowid`,
       )
       .all(factId) as EntityInfo[]
     return rows.filter(e => !isFileLike(e.name))
+  }
+
+  /**
+   * Entités candidates à NOMMER le thème (et donc à l'ancrer), les meilleures
+   * d'abord : bruit exclu, puis rang de type, puis récurrence (une entité vue
+   * souvent consolide mieux qu'une entité d'un jour), les mots de tête de phrase
+   * en dernier. Retourne [] si tout est bruit.
+   */
+  private labelCandidates(entities: EntityInfo[], text: string): EntityInfo[] {
+    const demoted = (e: EntityInfo): number => (e.mention_count < 2 && isSentenceInitialOnly(e.name, text) ? 1 : 0)
+    return entities
+      .filter(e => !isLabelNoise(e.name))
+      .map((e, i) => ({ e, i }))
+      .sort((a, b) =>
+        demoted(a.e) - demoted(b.e) ||
+        (TYPE_RANK[b.e.type] ?? 0) - (TYPE_RANK[a.e.type] ?? 0) ||
+        b.e.mention_count - a.e.mention_count ||
+        a.i - b.i,
+      )
+      .map(x => x.e)
   }
 
   /** Rang de typage d'une entité (pour préférer person/company/project au matching). */
@@ -149,7 +240,8 @@ export class TopicEngine {
 
   /**
    * Range UN fait dans un (ou plusieurs) topic(s). Idempotent, 0 LLM par défaut.
-   * Match si ≥2 entités partagées avec un topic, OU Jaccard de keywords > 0.5.
+   * Match si le fait porte l'entité ANCRE d'un thème (celle qui le nomme), OU
+   * ≥2 entités partagées, OU 1 entité forte, OU Jaccard de keywords > 0.4.
    */
   async assignFact(factId: string): Promise<AssignResult> {
     const fact = this.store.getFact(factId)
@@ -158,20 +250,27 @@ export class TopicEngine {
     const entities = this.entitiesOf(factId)
     const keywords = topicKeywords(fact.fact).slice(0, 12)
 
-    // 1) Candidat par entités partagées : ≥2 entités OU ≥1 entité forte
-    //    (person/company/project) → bonne consolidation.
+    // 1) Candidat par entités partagées. Le bruit (GB, API, OK…) ne compte pas :
+    //    deux faits qui ne partagent qu'une unité ne parlent pas du même sujet.
+    //    Ancre partagée d'abord (c'est LE signal de consolidation), puis le
+    //    nombre d'entités communes.
     let topicId: string | null = null
-    if (entities.length > 0) {
-      const placeholders = entities.map(() => '?').join(',')
+    const matchable = entities.filter(e => !isLabelNoise(e.name))
+    if (matchable.length > 0) {
+      const placeholders = matchable.map(() => '?').join(',')
       const rows = this.db
         .prepare(
-          `SELECT te.topic_id, COUNT(*) AS shared, MAX(CASE WHEN e.type IN ('person','company','project','client') THEN 1 ELSE 0 END) AS strong
-           FROM topic_entities te JOIN entities e ON e.id = te.entity_id
+          `SELECT te.topic_id, COUNT(*) AS shared,
+                  MAX(CASE WHEN e.type IN ('person','company','project','client') THEN 1 ELSE 0 END) AS strong,
+                  MAX(CASE WHEN t.anchor_entity_id = te.entity_id THEN 1 ELSE 0 END) AS anchor
+           FROM topic_entities te
+           JOIN entities e ON e.id = te.entity_id
+           JOIN topics t ON t.id = te.topic_id
            WHERE te.entity_id IN (${placeholders})
-           GROUP BY te.topic_id ORDER BY shared DESC`,
+           GROUP BY te.topic_id ORDER BY anchor DESC, shared DESC`,
         )
-        .all(...entities.map(e => e.id)) as Array<{ topic_id: string; shared: number; strong: number }>
-      const hit = rows.find(r => r.shared >= 2 || r.strong === 1)
+        .all(...matchable.map(e => e.id)) as Array<{ topic_id: string; shared: number; strong: number; anchor: number }>
+      const hit = rows.find(r => r.anchor === 1 || r.shared >= 2 || r.strong === 1)
       if (hit) topicId = hit.topic_id
     }
 
@@ -208,7 +307,8 @@ export class TopicEngine {
   }
 
   private async createTopic(fact: { id: string; fact: string; scope_id: string }, entities: EntityInfo[], keywords: string[]): Promise<string> {
-    let label = this.heuristicLabel(entities, keywords)
+    const candidates = this.labelCandidates(entities, fact.fact)
+    let label = this.heuristicLabel(candidates, keywords)
     // LLM SEULEMENT si le label heuristique est faible (1 mot générique) et provider fourni.
     if (this.llm && label.split(' ').length < 2) {
       try {
@@ -227,23 +327,32 @@ export class TopicEngine {
         console.warn(`[memoria:topics] libellé LLM en échec (fait ${fact.id}) — heuristique :`, (err as Error).message)
       }
     }
+    // Jamais deux thèmes du même nom : un libellé déjà pris désigne le thème
+    // existant (c'est le filet de sécurité de la consolidation par ancre).
+    const slug = slugify(label)
+    const same = this.db.prepare('SELECT id FROM topics WHERE slug = ?').get(slug) as { id: string } | undefined
+    if (same) return same.id
+
     const id = newId()
     const ts = nowISO()
     this.db
       .prepare(
-        `INSERT INTO topics (id, name, scope_id, sensitivity, importance_score, keywords, slug, fact_count, created_at, updated_at)
-         VALUES (?, ?, ?, 'normal', 0, ?, ?, 0, ?, ?)`,
+        `INSERT INTO topics (id, name, scope_id, sensitivity, importance_score, keywords, slug, fact_count, created_at, updated_at, anchor_entity_id)
+         VALUES (?, ?, ?, 'normal', 0, ?, ?, 0, ?, ?, ?)`,
       )
-      .run(id, label, fact.scope_id, toJson(keywords.slice(0, 8)), slugify(label), ts, ts)
+      .run(id, label, fact.scope_id, toJson(keywords.slice(0, 8)), slug, ts, ts, candidates[0]?.id ?? '')
     return id
   }
 
-  /** Label lisible sans LLM : entité dominante + qualificatif, ou keywords saillants. */
-  private heuristicLabel(entities: EntityInfo[], keywords: string[]): string {
-    if (entities.length > 0) {
-      const dominant = [...entities].sort((a, b) => (TYPE_RANK[b.type] ?? 0) - (TYPE_RANK[a.type] ?? 0))[0]!
-      const second = entities.find(e => e.id !== dominant.id)
-      return titleCase(second ? `${dominant.name} ${second.name}` : dominant.name)
+  /**
+   * Label lisible sans LLM : entité dominante (déjà triée par labelCandidates)
+   * + qualificatif, ou keywords saillants. Les noms d'entités gardent leur casse.
+   */
+  private heuristicLabel(candidates: EntityInfo[], keywords: string[]): string {
+    const dominant = candidates[0]
+    if (dominant) {
+      const second = candidates[1]
+      return second ? `${dominant.name} ${second.name}` : dominant.name
     }
     if (keywords.length > 0) return titleCase(keywords.slice(0, 3).join(' '))
     return 'Divers'

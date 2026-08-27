@@ -298,6 +298,27 @@ describe('AutoSkillEngine.propose / accept (bucket D)', () => {
     expect(after).toBe(before)
   })
 
+  it('sans defaultScopeId, une skill issue d’un pattern hérite du scope RÉEL de ses faits (jamais un « s » inventé)', () => {
+    // Les faits membres vivent dans le scope privé de l'instance ; c'est là
+    // que la skill doit être retrouvable au recall (matchProcedures filtre
+    // par scope) — un scope fictif la rendrait invisible pour toujours.
+    seedAcceptedPattern()
+    const ae = new AutoSkillEngine({ store })
+    const proposal = ae.propose().find(p => p.source === 'pattern')!
+    expect(proposal.scope_id).toBe('s2')
+    const acc = ae.accept(proposal)
+    expect(acc.applied).toBe(true)
+    const matches = new ProceduralEngine({ store }).matchProcedures(proposal.label, { scopeIds: ['s2'] })
+    expect(matches.some(m => m.procedure.id === acc.procedure!.id)).toBe(true)
+  })
+
+  it('accept() sans scope → no-op annoncé (une skill hors de tout scope serait introuvable)', () => {
+    const ae = new AutoSkillEngine({ store })
+    const acc = ae.accept({ label: 'Skill orpheline', steps: ['étape'], source: 'pattern', source_id: 'x', scope_id: '' })
+    expect(acc.applied).toBe(false)
+    expect((store.db.prepare('SELECT COUNT(*) AS c FROM procedures').get() as { c: number }).c).toBe(0)
+  })
+
   it('propose() ne re-propose pas une skill déjà matérialisée (idempotence pratique)', () => {
     seedAcceptedPattern()
     const ae = new AutoSkillEngine({ store })

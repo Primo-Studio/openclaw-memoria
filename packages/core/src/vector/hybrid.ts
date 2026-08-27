@@ -13,6 +13,8 @@ import { isVecAvailable, knn } from './vec-table.js'
 export interface HybridSearchOptions extends FtsSearchOptions {
   /** Vecteur de la requête (même modèle que l'index !) ; absent = FTS seul. */
   queryVector?: Float32Array
+  /** Modèle qui a produit `queryVector` — OBLIGATOIRE avec lui : l'index est par (modèle, dimensions). */
+  model?: string
   dimensions?: number
 }
 
@@ -22,11 +24,15 @@ export function hybridSearchFacts(store: ContentStore, query: string, opts: Hybr
   const ftsHits = store.searchFacts(query, opts)
 
   const vector = opts.queryVector
-  if (!vector || !isVecAvailable(store.db)) return ftsHits
+  if (!vector) return ftsHits
+  // Un KNN sans modèle nommé irait chercher dans un index anonyme — c'est
+  // exactement le mélange d'espaces que le nommage par modèle interdit.
+  if (!opts.model) throw new Error('hybridSearchFacts : queryVector fourni sans modèle — index vectoriel par (modèle, dimensions)')
+  if (!isVecAvailable(store.db)) return ftsHits
   const dimensions = opts.dimensions ?? vector.length
 
   const limit = opts.limit ?? 50
-  const knnHits = knn(store.db, dimensions, vector, limit * 2)
+  const knnHits = knn(store.db, { model: opts.model, dimensions }, vector, limit * 2)
   if (knnHits.length === 0) return ftsHits
 
   // Re-filtrage permissions des candidats vectoriels (mêmes clauses que searchFacts)
