@@ -337,6 +337,9 @@ export function buildServer(opts: BuildServerOptions): BuiltServer {
     content: [{ type: 'text', text: JSON.stringify(payload) }],
   })
 
+  /** Message du core (memoria.ts storeFact) : « écriture refusée : … can_write … ». */
+  const isWriteRefusal = (daemonMessage: string): boolean => /écriture refusée|can_write/.test(daemonMessage)
+
   /**
    * Message d'erreur POUR LE LLM, différencié par cause. Avant, tout finissait
    * en « daemon unreachable… run memoria doctor » — y compris une date
@@ -346,6 +349,15 @@ export function buildServer(opts: BuildServerOptions): BuiltServer {
   const explain = (err: unknown): string => {
     if (err instanceof DaemonHttpError) {
       const m = err.daemonMessage
+      // Refus de policy sur un scope partagé (store_fact scope:"user") : c'est
+      // le chemin NOMINAL de la feature — un nouvel agent n'a pas can_write par
+      // défaut. Le core lève une Error plate que le daemon mappe en 500 : tombé
+      // dans la branche 5xx, le LLM abandonnait le fait et envoyait vers
+      // `memoria doctor` (qui dit que tout va bien). On reconnaît le refus au
+      // message tant que le daemon n'émet pas 403 ; 403 est couvert d'avance.
+      if ((err.status === 403 || err.status === 500) && isWriteRefusal(m)) {
+        return `Memoria refused to write to the shared "user" scope: the user has not granted this agent write access. Store the fact privately (omit scope) and tell the user they can grant it from the Memoria app.`
+      }
       if (err.status === 400 || err.status === 422) {
         return `Memoria rejected this request: ${m}. The memory layer itself is fine — fix the arguments and retry.`
       }

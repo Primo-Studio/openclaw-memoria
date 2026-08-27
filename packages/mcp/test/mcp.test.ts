@@ -490,6 +490,40 @@ describe('buildServer handlers', () => {
     expect(text).not.toMatch(/unreachable/)
   })
 
+  it('store_fact scope:"user" refusé par la policy → message « store it privately », pas de « memoria doctor »', async () => {
+    // Chemin NOMINAL de la feature : par défaut un nouvel agent n'a pas
+    // can_write sur le scope user, le core lève une Error plate et le daemon
+    // la mappe en 500. La branche 5xx annonçait une panne (« daemon failed…
+    // memoria doctor ») alors que la description promet « store it privately
+    // and tell the user » : le LLM abandonnait le fait. Tant que le daemon
+    // n'envoie pas 403, on reconnaît le refus au message ; 403 reste couvert.
+    for (const status of [500, 403]) {
+      const gateway = fakeGateway()
+      gateway.storeFact = async () => {
+        throw new DaemonHttpError('/v1/memory/store_fact', status, "écriture refusée : l'assistant n'a pas can_write sur le scope « user »")
+      }
+      const { handlers } = buildServer({ instanceId: 'i', tracker: new ActiveContextTracker(), connect: async () => gateway })
+      const res = await handlers.storeFact({ content: 'Le propriétaire préfère les réponses courtes.', scope: 'user' })
+      expect(res.isError, `HTTP ${status}`).toBe(true)
+      const text = (res.content[0] as { type: 'text'; text: string }).text
+      expect(text, `HTTP ${status}`).toMatch(/store the fact privately/i)
+      expect(text, `HTTP ${status}`).toMatch(/omit scope/)
+      expect(text, `HTTP ${status}`).toMatch(/Memoria app/)
+      expect(text, `HTTP ${status}`).not.toMatch(/memoria doctor|daemon failed|unreachable|revoked/)
+    }
+  })
+
+  it('403 dont le message ne parle pas de can_write → reste un refus de token (re-connexion)', async () => {
+    const gateway = fakeGateway()
+    gateway.recall = async () => {
+      throw new DaemonHttpError('/v1/memory/recall', 403, 'token d’instance invalide ou révoqué')
+    }
+    const { handlers } = buildServer({ instanceId: 'i', tracker: new ActiveContextTracker(), connect: async () => gateway })
+    const text = ((await handlers.recall({ query: 'x' })).content[0] as { type: 'text'; text: string }).text
+    expect(text).toMatch(/reconnect|memoria-mcp connect/)
+    expect(text).not.toMatch(/store the fact privately/i)
+  })
+
   it('timeout sur capture_turn → UN SEUL appel (jamais de rejeu d’un POST non idempotent) + renvoi vers capture_status', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     let calls = 0
