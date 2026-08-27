@@ -6,7 +6,7 @@
  * sans toucher au vrai $HOME ni au réseau : la garde sort AVANT npm install.
  */
 import { spawnSync } from 'node:child_process'
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -45,6 +45,66 @@ beforeEach(() => {
 
 afterEach(() => {
   rmSync(home, { recursive: true, force: true })
+})
+
+/**
+ * Parcours COMPLET (étapes 3-8) avec tous les outils simulés dans un PATH
+ * jetable : git (clone = init), npm (no-op), node (version + exécution du
+ * CLI journalisée), uname (OS choisi), xcode-select, open. Aucun réseau, aucun
+ * vrai daemon, aucun launchctl. Ce que l'on vérifie : QUELLES commandes
+ * `memoria` le script enchaîne — le bug était là.
+ */
+function fakeTools(os: 'Darwin' | 'Linux'): { bin: string; calls: string; data: string } {
+  const bin = join(home, 'fake-bin')
+  const data = join(home, 'data')
+  const calls = join(home, 'memoria-calls.log')
+  mkdirSync(bin, { recursive: true })
+  const tool = (name: string, body: string) => {
+    writeFileSync(join(bin, name), `#!/bin/sh\n${body}\n`, 'utf8')
+    chmodSync(join(bin, name), 0o755)
+  }
+  tool('uname', `echo ${os}`)
+  tool('xcode-select', 'exit 0')
+  tool('open', 'exit 0')
+  tool('xdg-open', 'exit 0')
+  tool('npm', 'exit 0')
+  // `git clone … DEST` → dossier avec .git ; les autres sous-commandes n'arrivent pas (dépôt neuf).
+  tool('git', 'if [ "$1" = clone ]; then for a in "$@"; do d="$a"; done; mkdir -p "$d/.git"; exit 0; fi; exit 0')
+  // node : -v / -p pour les vérifications ; sinon c'est le CLI (bin.js <cmd…>) → journal + daemon.json simulé.
+  tool(
+    'node',
+    [
+      'case "$1" in',
+      '  -v) echo v22.22.2; exit 0 ;;',
+      '  -p) case "$2" in *split*) echo 22 ;; *port*) echo 4242 ;; *admin_token*) echo tok ;; *) echo undefined ;; esac; exit 0 ;;',
+      'esac',
+      `shift; echo "$*" >> "${calls}"`,
+      `case "$1 $2" in "autostart on"|"start "*) mkdir -p "${data}"; echo '{"port":4242,"admin_token":"tok","pid":1}' > "${data}/daemon.json" ;; esac`,
+      'exit 0',
+    ].join('\n'),
+  )
+  return { bin, calls, data }
+}
+
+describe('install-memoria.sh — parcours complet (outils simulés)', () => {
+  it('macOS : init puis « autostart on » (qui démarre le daemon sous launchd) — JAMAIS « start » avant', () => {
+    const { bin, calls, data } = fakeTools('Darwin')
+    const { status, stdout, stderr } = runScript({ MEMORIA_REPO_DIR: join(home, 'repo'), MEMORIA_HOME: data, MEMORIA_BIN_DIR: join(home, 'lbin'), MEMORIA_ZSHRC: join(home, '.zshrc') }, bin)
+    expect(stderr).toBe('')
+    expect(status).toBe(0)
+    const seq = readFileSync(calls, 'utf8').trim().split('\n')
+    expect(seq).toEqual(['init', 'autostart on'])
+    expect(stdout).toContain('Memoria est installé et lancé')
+    expect(stdout).toContain('démarre tout seul au prochain allumage')
+  })
+
+  it('Linux : init puis « start », pas de launchd', () => {
+    const { bin, calls, data } = fakeTools('Linux')
+    const { status, stdout } = runScript({ MEMORIA_REPO_DIR: join(home, 'repo'), MEMORIA_HOME: data, MEMORIA_BIN_DIR: join(home, 'lbin'), MEMORIA_ZSHRC: join(home, '.zshrc') }, bin)
+    expect(status).toBe(0)
+    expect(readFileSync(calls, 'utf8').trim().split('\n')).toEqual(['init', 'start'])
+    expect(stdout).toContain('macOS uniquement')
+  })
 })
 
 describe('install-memoria.sh', () => {

@@ -131,6 +131,11 @@ export function acquireLock(storageRoot: string): (() => void) | null {
   return null
 }
 
+/** PID inscrit dans daemon.lock (null si absent/illisible) — pour un message qui nomme le détenteur. */
+export function lockHolderPid(storageRoot: string): number | null {
+  return readLockPid(storagePaths(storageRoot).daemonLock)
+}
+
 /** Le daemon décrit par daemon.json est-il vivant (PID) ? */
 export function daemonLooksAlive(storageRoot: string): DaemonState | null {
   const state = readDaemonState(storageRoot)

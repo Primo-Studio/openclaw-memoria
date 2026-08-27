@@ -2,7 +2,9 @@
  * @memoria/daemon — daemon local unique, gardien des DB (spec §2.2).
  * HTTP 127.0.0.1 + tokens (admin / instance), singleton lock-file.
  */
-export { startDaemon, DAEMON_VERSION } from './server.js'
+export { startDaemon, DAEMON_VERSION, DaemonLockHeldError } from './server.js'
+export { startWithStandby } from './standby.js'
+export type { StandbyOptions } from './standby.js'
 export type { DaemonControlHooks, DaemonOptions, RunningDaemon } from './server.js'
 export { ImportJobRunner } from './import-job.js'
 export type { ImportJobKind, ImportJobProgress, ImportJobState, ImportJobStatus } from './import-job.js'
@@ -17,5 +19,6 @@ export {
   clearDaemonState,
   acquireLock,
   daemonLooksAlive,
+  lockHolderPid,
 } from './state.js'
 export type { DaemonState } from './state.js'

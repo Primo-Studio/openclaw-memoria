@@ -4,7 +4,8 @@
  * Processus de premier plan ; lancé détaché par ensureDaemon()/npx/app bureau.
  */
 import { parseArgs } from 'node:util'
-import { startDaemon } from './server.js'
+import { AUTOSTART_LABEL } from '@memoria/core'
+import { startWithStandby } from './standby.js'
 
 const { values } = parseArgs({
   options: {
@@ -16,11 +17,16 @@ const { values } = parseArgs({
   },
 })
 
-const running = await startDaemon({
-  storageRoot: values['storage-root'],
-  configPath: values.config,
-  port: values.port ? Number.parseInt(values.port, 10) : 0,
-})
+// Sous launchd (XPC_SERVICE_NAME posé par lui), un verrou tenu par un daemon
+// direct fait ATTENDRE le service au lieu de le faire boucler en exit 1.
+const running = await startWithStandby(
+  {
+    storageRoot: values['storage-root'],
+    configPath: values.config,
+    port: values.port ? Number.parseInt(values.port, 10) : 0,
+  },
+  { supervised: process.env['XPC_SERVICE_NAME'] === AUTOSTART_LABEL },
+)
 
 // eslint-disable-next-line no-console
 console.log(`memoria-daemon prêt sur 127.0.0.1:${running.state.port} (storage: ${running.memoria.paths.root})`)

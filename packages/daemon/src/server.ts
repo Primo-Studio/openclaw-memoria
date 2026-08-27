@@ -48,7 +48,7 @@ import { OllamaPullJob } from './ollama-pull.js'
 import { ImportJobRunner } from './import-job.js'
 import { currentVersion, lastBuiltSha, pullAndBuild, repoRoot, scheduleAutostartHandover, scheduleRestart } from './update.js'
 import { findUiDist, serveUi } from './static.js'
-import { acquireLock, clearDaemonState, writeDaemonState, type DaemonState } from './state.js'
+import { acquireLock, clearDaemonState, lockHolderPid, writeDaemonState, type DaemonState } from './state.js'
 
 export const DAEMON_VERSION = '0.1.0'
 
@@ -95,6 +95,17 @@ export interface RunningDaemon {
   close: () => Promise<void>
 }
 
+/** Un autre daemon VIVANT tient daemon.lock pour ce stockage. Typée : le service launchd la reconnaît pour attendre au lieu de boucler. */
+export class DaemonLockHeldError extends Error {
+  constructor(
+    readonly storageRoot: string,
+    readonly holderPid: number | null,
+  ) {
+    super(`un daemon Memoria tourne déjà pour ${storageRoot} (daemon.lock${holderPid ? `, pid ${holderPid}` : ''})`)
+    this.name = 'DaemonLockHeldError'
+  }
+}
+
 class HttpError extends Error {
   constructor(
     readonly status: number,
@@ -112,9 +123,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const { storageRoot, configPath } = resolveStorageRoot({ storageRoot: opts.storageRoot, configPath: opts.configPath })
   mkdirSync(storageRoot, { recursive: true })
   const release = acquireLock(storageRoot)
-  if (!release) {
-    throw new Error(`un daemon Memoria tourne déjà pour ${storageRoot} (daemon.lock)`)
-  }
+  if (!release) throw new DaemonLockHeldError(storageRoot, lockHolderPid(storageRoot))
   let memoria: Memoria
   try {
     memoria = Memoria.init({ storageRoot, configPath: opts.configPath, llm: opts.llm })

@@ -92,10 +92,20 @@ chmod +x "$BIN_DIR/memoria"
 # 5) init + démarrage du daemon. `memoria init` est idempotent (config déjà en
 #    place = « ✓ config existante », code 0) : toute VRAIE erreur s'affiche et
 #    arrête le script — on n'avale plus sa sortie.
+#    Sur macOS c'est `autostart on` qui DÉMARRE le daemon (sous launchd, et il
+#    attend qu'il réponde) : enchaîner « start » puis « autostart on » lançait
+#    DEUX daemons — le direct gardait daemon.lock et le service launchd
+#    bouclait en exit 1 toutes les ~10 s, sur chaque installation neuve.
 say "Initialisation du stockage…"
 "$BIN_DIR/memoria" init
-say "Démarrage du service…"
-"$BIN_DIR/memoria" start
+if [ "$OS" = "Darwin" ]; then
+  say "Démarrage du service (lancement automatique au login)…"
+  "$BIN_DIR/memoria" autostart on
+else
+  say "Démarrage du service…"
+  "$BIN_DIR/memoria" start
+  warn "Lancement auto au login : macOS uniquement pour l’instant. Après un redémarrage, lance « memoria start »."
+fi
 
 # 6) PATH dans le profil shell — bloc marqué, ajouté UNE seule fois.
 if [ ! -f "$ZSHRC" ] || ! grep -q '# >>> memoria >>>' "$ZSHRC"; then
@@ -113,15 +123,7 @@ case ":$PATH:" in
   *) PATH="$BIN_DIR:$PATH" ;; # pour la suite de CE script
 esac
 
-# 7) lancement automatique au login (launchd — macOS uniquement pour l'instant)
-if [ "$OS" = "Darwin" ]; then
-  say "Activation du lancement automatique au démarrage…"
-  "$BIN_DIR/memoria" autostart on
-else
-  warn "Lancement auto au login : macOS uniquement pour l’instant. Après un redémarrage, lance « memoria start »."
-fi
-
-# 8) URL de l'interface (token d'accès dans daemon.json) + ouverture auto
+# 7) URL de l'interface (token d'accès dans daemon.json) + ouverture auto
 if [ -f "$DATA/daemon.json" ]; then
   PORT="$(node -p "require('$DATA/daemon.json').port")"
   TOKEN="$(node -p "require('$DATA/daemon.json').admin_token")"
