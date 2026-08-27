@@ -872,13 +872,13 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     // joignable (l'agent ne casse pas) mais on ne lit ni n'écrit AUCUNE mémoire.
     // Réponse no-op ANNONCÉE (disabled: true) — jamais un échec silencieux.
     if (!memoria.isEnabled()) {
-      if (route === 'POST /v1/memory/recall') sendJson(res, 200, { items: [], disabled: true })
-      else if (route === 'POST /v1/memory/store_fact') sendJson(res, 200, { fact: null, disabled: true })
-      else if (route === 'POST /v1/memory/capture_turn') sendJson(res, 200, { captured: 0, facts: [], disabled: true })
-      else if (route === 'POST /v1/memory/feedback') sendJson(res, 200, { updated: [], domains: [], disabled: true })
-      else if (route === 'POST /v1/memory/capture_status')
-        sendJson(res, 200, { entries: [], pending: 0, retrying: 0, done: 0, failed: 0, disabled: true })
-      else throw new HttpError(404, `route mémoire inconnue : ${route}`)
+      // TOUTES les routes mémoire, pas seulement les cinq « courantes » : pin,
+      // correct, merge, expiry, identify_* tombaient en 404 « route mémoire
+      // inconnue » — un agent (memoria_pin…) croyait la route cassée alors que
+      // Memoria était simplement en pause.
+      const paused = PAUSED_MEMORY_RESPONSES[route]
+      if (!paused) throw new HttpError(404, `route mémoire inconnue : ${route}`)
+      sendJson(res, 200, { ...paused, disabled: true })
       return
     }
     switch (route) {
@@ -1220,6 +1220,25 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
     throw new HttpError(400, 'objet JSON attendu dans le corps de la requête')
   }
   return parsed as Record<string, unknown>
+}
+
+/**
+ * Réponses no-op de CHAQUE route mémoire quand Memoria est en pause : même
+ * forme que la réponse normale (l'agent n'a rien à parser de spécial), plus
+ * `disabled: true` ajouté par l'appelant. Une route absente d'ici = 404.
+ */
+const PAUSED_MEMORY_RESPONSES: Record<string, Record<string, unknown>> = {
+  'POST /v1/memory/recall': { items: [] },
+  'POST /v1/memory/store_fact': { fact: null },
+  'POST /v1/memory/capture_turn': { captured: 0, facts: [] },
+  'POST /v1/memory/feedback': { updated: [], domains: [] },
+  'POST /v1/memory/capture_status': { entries: [], pending: 0, retrying: 0, done: 0, failed: 0 },
+  'POST /v1/memory/correct': { replacement: null },
+  'POST /v1/memory/merge': { merged: [] },
+  'POST /v1/memory/pin': { updated: false },
+  'POST /v1/memory/expiry': { updated: false },
+  'POST /v1/memory/identify_interlocutor': { match: null },
+  'POST /v1/memory/identify_or_create_interlocutor': { match: null },
 }
 
 /** Champ booléen obligatoire du corps — `{}` ne vaut ni true ni false. */
