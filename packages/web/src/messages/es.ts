@@ -74,6 +74,8 @@ export const es: Messages = {
   'capture.hint.auto': 'Los agentes memorizan en privado de forma automática.',
   'capture.hint.review': 'Los recuerdos esperan tu validación antes de guardarse.',
   'capture.hint.pause': 'Memoria en pausa: no se guarda nada.',
+  'capture.unavailable': 'Modo de captura ilegible — el servicio no responde.',
+  'capture.change_failed': 'Cambio no aplicado: {message}',
 
   // — Selector de idioma —
   'lang.title': 'Idioma',

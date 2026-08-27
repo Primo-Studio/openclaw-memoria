@@ -74,6 +74,8 @@ export const de: Messages = {
   'capture.hint.auto': 'Agenten merken sich Dinge automatisch und privat.',
   'capture.hint.review': 'Erinnerungen warten auf deine Bestätigung, bevor sie behalten werden.',
   'capture.hint.pause': 'Gedächtnis pausiert: Es wird nichts gespeichert.',
+  'capture.unavailable': 'Erfassungsmodus nicht lesbar — der Dienst antwortet nicht.',
+  'capture.change_failed': 'Änderung nicht übernommen: {message}',
 
   // — Sprachauswahl —
   'lang.title': 'Sprache',

@@ -74,6 +74,8 @@ export const en: Messages = {
   'capture.hint.auto': 'Agents remember privately, automatically.',
   'capture.hint.review': 'Memories wait for your approval before being kept.',
   'capture.hint.pause': 'Memory paused: nothing is recorded.',
+  'capture.unavailable': 'Capture mode unreadable — the service is not responding.',
+  'capture.change_failed': 'Change not applied: {message}',
 
   // — Language selector —
   'lang.title': 'Language',

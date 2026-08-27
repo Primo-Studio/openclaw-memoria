@@ -76,6 +76,8 @@ export const fr: Messages = {
   'capture.hint.auto': 'Les agents mémorisent en privé automatiquement.',
   'capture.hint.review': 'Les souvenirs attendent ta validation avant d’être gardés.',
   'capture.hint.pause': 'Mémoire en pause : rien n’est enregistré.',
+  'capture.unavailable': 'Mode de capture illisible — le service ne répond pas.',
+  'capture.change_failed': 'Changement non appliqué : {message}',
 
   // — Sélecteur de langue —
   'lang.title': 'Langue',

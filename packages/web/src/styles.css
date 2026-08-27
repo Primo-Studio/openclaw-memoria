@@ -898,6 +898,11 @@ input[type='search']:focus {
   line-height: 1.35;
 }
 
+/* Avertissement inline (notice role=status) — Mémoire, sélecteur de capture… */
+p.warn {
+  color: var(--warn, #d8a01f);
+}
+
 .review-bulk {
   display: flex;
   gap: 0.5rem;

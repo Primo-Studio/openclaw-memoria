@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { getAgents, getCaptureMode, getReview, getVersion, hasToken, setCaptureMode, type CaptureMode } from './api'
 import { useT, LANGS, type Lang } from './i18n'
+import { humanError } from './components/ui'
 import { hasLiveAgent } from './lib/agents'
 import { Dashboard } from './screens/Dashboard'
 import { Agents } from './screens/Agents'
@@ -215,27 +216,62 @@ function ThemeSwitch() {
   )
 }
 
-/** Pause/capture toujours accessible, quel que soit l'écran (spec §13). */
+/**
+ * Pause/capture toujours accessible, quel que soit l'écran (spec §13).
+ * « Toujours » vaut aussi en cas de panne : avant, un échec de lecture du mode
+ * rendait `null` — le contrôle de pause disparaissait sans un mot, et un échec
+ * de changement remettait l'ancien état sans feedback (clic « ignoré »).
+ */
 function CaptureModeSwitch() {
   const { t } = useT()
   const [mode, setMode] = useState<CaptureMode | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  // Message éphémère après un changement refusé (role=status, pas d'alerte bloquante).
+  const [notice, setNotice] = useState<string | null>(null)
+  const [tick, setTick] = useState(0)
 
   useEffect(() => {
+    let cancelled = false
     getCaptureMode()
-      .then(setMode)
-      .catch(() => setMode(null))
-  }, [])
+      .then(m => {
+        if (cancelled) return
+        setMode(m)
+        setError(null)
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return
+        console.warn('memoria-ui : mode de capture illisible', err)
+        setError(humanError(err))
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [tick])
 
   const change = useCallback((next: CaptureMode) => {
-    setMode(next) // optimiste — l'échec remet l'état réel
-    setCaptureMode(next).catch(() => {
+    setNotice(null)
+    setMode(next) // optimiste — l'échec remet l'état réel ET le dit
+    setCaptureMode(next).catch((err: unknown) => {
+      console.warn('memoria-ui : changement de mode de capture refusé', err)
+      setNotice(t('capture.change_failed', { message: humanError(err) }))
       getCaptureMode()
         .then(setMode)
-        .catch(() => setMode(null))
+        .catch(() => setTick(x => x + 1))
     })
-  }, [])
+  }, [t])
 
-  if (mode === null) return null
+  if (mode === null) {
+    if (error === null) return null // premier chargement en cours
+    return (
+      <div className="capture-switch">
+        <span className="field-label">{t('capture.title')}</span>
+        <p className="muted capture-hint" role="alert">{t('capture.unavailable')}</p>
+        <button type="button" className="btn btn-ghost" onClick={() => setTick(x => x + 1)}>
+          {t('common.retry')}
+        </button>
+      </div>
+    )
+  }
 
   const current = MODES.find(m => m.id === mode)
   return (
@@ -257,6 +293,7 @@ function CaptureModeSwitch() {
         ))}
       </div>
       {current && <p className="muted capture-hint">{t(`capture.hint.${current.key}`)}</p>}
+      {notice && <p className="warn capture-hint" role="status">{notice}</p>}
     </div>
   )
 }
