@@ -284,13 +284,13 @@ export const SERVER_INSTRUCTIONS = [
   "Memoria is the user's local long-term memory, shared across all their AI agents (Claude Code, Codex, OpenClaw…). Nothing is automatic on this channel: memories only help if you READ them before acting, and only exist if you WRITE them when you learn something.",
   '',
   'READ — memoria_recall',
-  '- At the START of every task, before your first substantive answer: one query on the subject of the task (e.g. "deployment rules site-primo", "how the user wants commit messages", "pricing grid for quotes"). A few words are enough — it is a semantic search.',
+  '- At the START of every task, before your first substantive answer: one query on the subject of the task (e.g. "deployment rules project-x", "how the user wants commit messages", "pricing grid for quotes"). A few words are enough — it is a semantic search.',
   '- Whenever the user refers to something you do not have in context: "as usual", "like last time", "the client\'s preference", a project, tool or person name you do not know.',
   '- Before choosing something the user may already have decided (stack, style, process, pricing).',
   '- Afterwards, memoria_feedback with the ids you actually used ("useful") and those that were off-topic ("noise"): that is what makes recall rank better over time.',
   '',
   'WRITE — memoria_store_fact / memoria_capture_turn',
-  '- memoria_store_fact IMMEDIATELY when you learn something durable: a decision (e.g. "The site is deployed on Vercel; commits must be authored by Nieto42"), a preference (e.g. "The user wants short answers with absolute file paths"), a stable project or business detail, a correction of something you believed. One self-contained sentence, third person, in the user\'s language. Do not wait for the end of the session. Never store secrets, transient state or chatter.',
+  '- memoria_store_fact IMMEDIATELY when you learn something durable: a decision (e.g. "The site is deployed on Vercel; commits must be authored by the deploy account"), a preference (e.g. "The user wants short answers with absolute file paths"), a stable project or business detail, a correction of something you believed. One self-contained sentence, third person, in the user\'s language. Do not wait for the end of the session. Never store secrets, transient state or chatter.',
   '- memoria_capture_turn after an exchange dense in such facts (a briefing, a planning discussion, a review with several decisions): hand over the user and assistant messages and Memoria extracts and deduplicates them.',
   '- memoria_correct when a recalled memory is wrong or outdated; memoria_pin when the user says something must always be kept in mind; memoria_set_expiry for something true only for a while.',
   '',
@@ -505,7 +505,7 @@ export function buildServer(opts: BuildServerOptions): BuiltServer {
     'memoria_recall',
     {
       description:
-        'Search the user\'s long-term memory (facts, preferences, decisions, procedures) and return the most relevant items for a query. Call it at the start of a task, before your first substantive answer (e.g. "deployment rules site-primo", "how the user wants commit messages"), and whenever the user refers to something you do not have in context ("as usual", "like last time", an unfamiliar project/tool/person name). A few words are enough: it is a semantic search. The context declared with memoria_set_context (project/client/org) is applied automatically. After answering, report which ids helped with memoria_feedback. '
+        'Search the user\'s long-term memory (facts, preferences, decisions, procedures) and return the most relevant items for a query. Call it at the start of a task, before your first substantive answer (e.g. "deployment rules project-x", "how the user wants commit messages"), and whenever the user refers to something you do not have in context ("as usual", "like last time", an unfamiliar project/tool/person name). A few words are enough: it is a semantic search. The context declared with memoria_set_context (project/client/org) is applied automatically. After answering, report which ids helped with memoria_feedback. '
         + 'An item carrying a `revision` field is CONTESTED: a more recent memory contradicts or duplicates it, pending the user\'s decision. Treat it as doubtful, prefer the memory named by `replacement_fact_id`, and say so rather than acting on it silently. '
         + 'The `origin` field says how much to trust an item: "declared" was stated explicitly, "extracted" comes from a conversation, "confirmed" proved useful in past answers, and "inferred" was deduced by an agent and never actually stated by anyone — treat inferred items as hypotheses, not rules.',
       inputSchema: {
@@ -527,7 +527,7 @@ export function buildServer(opts: BuildServerOptions): BuiltServer {
     'memoria_store_fact',
     {
       description:
-        'Store one durable fact in the user\'s long-term memory. Call it AS SOON AS you learn something worth keeping — do not wait for the end of the session: a decision (e.g. "The site is deployed on Vercel; commits must be authored by Nieto42"), a preference (e.g. "The user wants short answers with absolute file paths"), a stable project or business detail, a correction of something you believed. One short, self-contained sentence in third person, in the user\'s language. Do not store secrets, transient state or chatter.',
+        'Store one durable fact in the user\'s long-term memory. Call it AS SOON AS you learn something worth keeping — do not wait for the end of the session: a decision (e.g. "The site is deployed on Vercel; commits must be authored by the deploy account"), a preference (e.g. "The user wants short answers with absolute file paths"), a stable project or business detail, a correction of something you believed. One short, self-contained sentence in third person, in the user\'s language. Do not store secrets, transient state or chatter.',
       inputSchema: {
         content: z.string().min(1).describe('The fact to remember, as one self-contained sentence or short paragraph.'),
         category: z.string().optional().describe('Free-form category, e.g. "preference", "decision", "infra".'),
@@ -646,10 +646,10 @@ export function buildServer(opts: BuildServerOptions): BuiltServer {
     'memoria_set_context',
     {
       description:
-        'Declare the active working context (project, client, organization). Memoria uses it to scope recall and storage — call this when you start working on a project or for a client, and whenever you switch. Only project/client/org scope memory; repo_path is informational. Names are normalized to a stable slug (lowercase, no accents, words joined by "-") so that every agent lands on the same identifier: use the SAME short name for the same project/client each time (e.g. "maroway", not "Maroway ferry project"). Pass an empty string to clear a field. Returns the effective (normalized) context.',
+        'Declare the active working context (project, client, organization). Memoria uses it to scope recall and storage — call this when you start working on a project or for a client, and whenever you switch. Only project/client/org scope memory; repo_path is informational. Names are normalized to a stable slug (lowercase, no accents, words joined by "-") so that every agent lands on the same identifier: use the SAME short name for the same project/client each time (e.g. "client-y", not "Client Y ferry project"). Pass an empty string to clear a field. Returns the effective (normalized) context.',
       inputSchema: {
-        project: z.string().optional().describe('Short stable project name, e.g. "site-primo". Normalized to a slug.'),
-        client: z.string().optional().describe('Short stable client organization name, e.g. "maroway" (enforces client isolation: facts stored under a client are hidden outside it). Normalized to a slug.'),
+        project: z.string().optional().describe('Short stable project name, e.g. "project-x". Normalized to a slug.'),
+        client: z.string().optional().describe('Short stable client organization name, e.g. "client-y" (enforces client isolation: facts stored under a client are hidden outside it). Normalized to a slug.'),
         org: z.string().optional().describe('Short stable organization name. Normalized to a slug.'),
         repo_path: z.string().optional().describe('Absolute path of the current repository (informational: not used for scoping).'),
       },

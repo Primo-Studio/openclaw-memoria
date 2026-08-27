@@ -696,6 +696,22 @@ describe('instructions serveur et descriptions d’outils — QUAND lire, QUAND 
     return Object.fromEntries(Object.entries(tools).map(([k, v]) => [k, v.description ?? '']))
   }
 
+  // Les `.describe()` des schémas d'arguments : concaténés par outil, sérialisés
+  // en JSON Schema par le SDK — le LLM les lit autant que la description.
+  const argDescriptions = (): Record<string, string> => {
+    const { server } = buildServer({ instanceId: 'i', tracker: new ActiveContextTracker(), connect: async () => fakeGateway() })
+    const tools = (server as unknown as { _registeredTools: Record<string, { inputSchema?: { shape?: Record<string, { description?: string }> } }> })
+      ._registeredTools
+    return Object.fromEntries(
+      Object.entries(tools).map(([k, v]) => [
+        k,
+        Object.values(v.inputSchema?.shape ?? {})
+          .map(f => f.description ?? '')
+          .join('\n'),
+      ]),
+    )
+  }
+
   it('les instructions serveur donnent des déclencheurs concrets pour recall, store_fact, capture_turn et feedback', () => {
     expect(SERVER_INSTRUCTIONS).toMatch(/memoria_recall/)
     expect(SERVER_INSTRUCTIONS).toMatch(/START of every task/i)
@@ -718,10 +734,19 @@ describe('instructions serveur et descriptions d’outils — QUAND lire, QUAND 
   it('aucun nom de propriétaire codé en dur : le produit sert d’autres utilisateurs que Néto', () => {
     // « the owner (Néto) » dans memoria_identify_interlocutor partait chez
     // TOUTES les installations : chaque LLM apprenait que l'owner s'appelle Néto.
+    // Puis les EXEMPLES (« commits must be authored by Nieto42 », « site-primo »,
+    // « maroway ») embarquaient le handle GitHub et les clients du propriétaire
+    // dans le contexte de chaque LLM — même fuite, autre porte. On vérifie donc
+    // une liste de jetons propriétaire sur les descriptions ET les schémas
+    // d'arguments (les `.describe()` partent aussi chez le client MCP).
+    const ownerTokens = /Néto|Neto|Nieto|primo|maroway/i
     for (const [name, text] of Object.entries(descriptions())) {
-      expect(text, name).not.toMatch(/Néto|Neto/)
+      expect(text, name).not.toMatch(ownerTokens)
     }
-    expect(SERVER_INSTRUCTIONS).not.toMatch(/Néto|Neto/)
+    for (const [name, text] of Object.entries(argDescriptions())) {
+      expect(text, name).not.toMatch(ownerTokens)
+    }
+    expect(SERVER_INSTRUCTIONS).not.toMatch(ownerTokens)
     expect(descriptions()['memoria_identify_interlocutor']).toMatch(/the owner/)
   })
 
