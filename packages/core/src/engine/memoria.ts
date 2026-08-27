@@ -158,6 +158,17 @@ export class Memoria {
   private readonly llmOverride: MemoriaInitOptions['llm']
   private pipelinePromise: Promise<CapturePipeline> | null = null
   private profilePromise: Promise<{ extraction: LlmProvider | null; embeddings: EmbeddingProvider | null }> | null = null
+  /** Empreinte (provider/modèle) du dernier profil résolu — pour détecter un changement réel. */
+  private profileSnapshot: { extraction: string | null; embeddings: string | null } | null = null
+  private profileResolvedAt = 0
+  /**
+   * Délai avant de RE-résoudre un profil INCOMPLET (extraction ou embeddings
+   * à null). Le daemon est lancé par launchd avant l'app Ollama : sans cela,
+   * un Ollama éteint au boot laissait la capture en « defer no-llm » pour
+   * toute la vie du processus, pendant que llmHealth affichait « prêt ».
+   * Public pour les tests (0 = relance immédiate).
+   */
+  profileRetryMs = 60_000
   private indexers = new WeakMap<ContentStore, EmbeddingIndexer>()
   private readonly cognitionEngines = new WeakMap<ContentStore, CognitionEngine>()
   private readonly topicEngines = new WeakMap<ContentStore, TopicEngine>()
@@ -1695,8 +1706,21 @@ export class Memoria {
     }
   }
 
-  /** Profil LLM résolu UNE fois (override tests/daemon > résolution auto). */
+  /**
+   * Profil LLM résolu une fois (override tests/daemon > résolution auto) —
+   * mais un profil INCOMPLET est retenté après `profileRetryMs` : ce que le
+   * pipeline utilise doit finir par refléter ce qui tourne sur la machine.
+   */
   private ensureProfile(): Promise<{ extraction: LlmProvider | null; embeddings: EmbeddingProvider | null }> {
+    if (
+      this.profilePromise &&
+      this.llmOverride === undefined &&
+      this.profileSnapshot &&
+      (this.profileSnapshot.extraction === null || this.profileSnapshot.embeddings === null) &&
+      Date.now() - this.profileResolvedAt >= this.profileRetryMs
+    ) {
+      this.profilePromise = null
+    }
     this.profilePromise ??= (async () => {
       // Compteur de consommation : TOUS les providers (locaux compris, et
       // ceux injectés par les tests/daemon) — c'est une mesure, pas un audit.
@@ -1724,6 +1748,7 @@ export class Memoria {
           reason: formatCloudSend(send),
         })
       }
+      this.adoptProfileSnapshot(profile)
       // Ordre : compteur à l'extérieur, audit cloud à l'intérieur — l'audit
       // expose aussi la variante détaillée, le compteur voit donc les tokens.
       return {
@@ -1732,6 +1757,33 @@ export class Memoria {
       }
     })()
     return this.profilePromise
+  }
+
+  /**
+   * Enregistre l'empreinte du profil résolu et jette ce qui a mémoïsé
+   * l'ANCIEN provider : le pipeline de capture (extraction figée dans
+   * CapturePipeline) si l'extraction change, les indexeurs si les embeddings
+   * changent. Rien n'est jeté quand rien ne change (les groupes de tours en
+   * mémoire du pipeline survivent à une simple re-vérification).
+   */
+  private adoptProfileSnapshot(profile: { extraction: LlmProvider | null; embeddings: EmbeddingProvider | null }): void {
+    const next = {
+      extraction: profile.extraction ? `${profile.extraction.name}/${profile.extraction.model}` : null,
+      embeddings: profile.embeddings ? `${profile.embeddings.name}/${profile.embeddings.model}` : null,
+    }
+    const prev = this.profileSnapshot
+    if (prev && prev.extraction !== next.extraction) this.pipelinePromise = null
+    if (prev && prev.embeddings !== next.embeddings) this.indexers = new WeakMap<ContentStore, EmbeddingIndexer>()
+    this.profileSnapshot = next
+    this.profileResolvedAt = Date.now()
+  }
+
+  /** Oublie le profil mémoïsé (et tout ce qui en dépend) : re-résolu au prochain usage. */
+  private invalidateProfile(): void {
+    this.profilePromise = null
+    this.pipelinePromise = null
+    this.profileSnapshot = null
+    this.indexers = new WeakMap<ContentStore, EmbeddingIndexer>()
   }
 
   /**
@@ -2436,6 +2488,19 @@ export class Memoria {
       ollamaBaseUrl: opts.ollamaBaseUrl,
       lmstudioBaseUrl: opts.lmstudioBaseUrl,
     })
+    // Ce que l'UI affiche DOIT être ce que le pipeline utilise : si cette
+    // résolution fraîche diffère du profil mémoïsé (Ollama démarré après le
+    // daemon, modèle tiré entre-temps), on jette le mémo — le prochain
+    // captureTurn repart sur les moteurs réellement disponibles.
+    if (this.llmOverride === undefined && this.profileSnapshot) {
+      const fresh = {
+        extraction: profile.extraction ? `${profile.extraction.name}/${profile.extraction.model}` : null,
+        embeddings: profile.embeddings ? `${profile.embeddings.name}/${profile.embeddings.model}` : null,
+      }
+      if (fresh.extraction !== this.profileSnapshot.extraction || fresh.embeddings !== this.profileSnapshot.embeddings) {
+        this.invalidateProfile()
+      }
+    }
 
     // ---- extraction : disponible (provider résolu) ou indisponible AVEC raison
     let extraction: LlmEngineHealth
@@ -2649,12 +2714,9 @@ export class Memoria {
 
   private persistLlmConfig(action: string): void {
     saveConfigFile(this.resolved.config, this.resolved.configPath)
-    // invalide la résolution mémoïsée → re-résolue au prochain usage
-    this.profilePromise = null
-    this.pipelinePromise = null
-    // Les indexeurs mémoïsent le provider d'embeddings résolu : après un
-    // changement de moteur, on les jette pour repartir du nouveau provider.
-    this.indexers = new WeakMap<ContentStore, EmbeddingIndexer>()
+    // invalide la résolution mémoïsée (pipeline et indexeurs compris) →
+    // re-résolue au prochain usage
+    this.invalidateProfile()
     this.registry.audit({ actor_type: 'user', actor_id: 'local', action, target_id_hash: null, scope_id: null, reason: null })
   }
 
