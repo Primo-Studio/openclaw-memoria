@@ -302,6 +302,11 @@ export interface RecallInput {
   instance: string
   query: string
   active_context?: ActiveContext
+  /**
+   * @deprecated Ignoré : un fait dormant attend une validation (review-first,
+   * quarantaine d'import) et ne sort JAMAIS au recall. Gardé pour la
+   * compatibilité des clients qui l'envoient encore.
+   */
   include_dormant?: boolean
   include_secret_refs?: boolean
   limit?: number

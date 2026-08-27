@@ -785,7 +785,10 @@ export class Memoria {
       const store = this.openContent(target.dbPath)
       const hits = search(store, input.query, {
         limit: 50,
-        includeDormant: input.include_dormant ?? false,
+        // JAMAIS de dormant au recall : un fait dormant attend une validation
+        // (review-first, quarantaine d'import). `include_dormant` arrivait tel
+        // quel du body HTTP → tout client pouvait lire l'inapprouvé.
+        includeDormant: false,
         maxSensitivity: 'sensitive',
         scopeIds: target.scopeIds,
       })

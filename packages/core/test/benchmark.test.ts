@@ -142,11 +142,13 @@ describe('benchmark recall — ANTI-FUITE (cible : 0)', () => {
 })
 
 describe('benchmark recall — dormant, bruit, partage', () => {
-  it('dormant : exclu par défaut, retrouvé avec include_dormant', () => {
+  it('dormant : exclu, même avec include_dormant (jamais validé = jamais rappelé)', () => {
     const sans = m.recall({ instance: claude.assistant_instance_id, query: 'Sublime Text préférence ancienne' })
     expect(sans.items.every(i => !i.content.includes('Sublime'))).toBe(true)
+    // Le body HTTP du recall arrive tel quel au moteur : ce drapeau permettait à
+    // n'importe quel client de lire les faits en attente de revue.
     const avec = m.recall({ instance: claude.assistant_instance_id, query: 'Sublime Text préférence ancienne', include_dormant: true })
-    expect(avec.items.some(i => i.content.includes('Sublime'))).toBe(true)
+    expect(avec.items.some(i => i.content.includes('Sublime'))).toBe(false)
   })
 
   it('bruit : 40 distracteurs, le budget tient et le top reste pertinent', () => {
