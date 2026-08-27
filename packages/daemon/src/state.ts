@@ -6,7 +6,7 @@
  * - `daemon.lock` : PID — un seul daemon par storage_root. Lock périmé (process
  *   mort) → reprise automatique.
  */
-import { chmodSync, existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, closeSync, existsSync, openSync, readFileSync, renameSync, rmSync, writeFileSync, writeSync } from 'node:fs'
 import { storagePaths } from '@memoria/core'
 
 export interface DaemonState {
@@ -51,25 +51,89 @@ function isPidAlive(pid: number): boolean {
   }
 }
 
+/** PID inscrit dans un fichier de verrou, null si illisible. */
+function readLockPid(lockPath: string): number | null {
+  try {
+    const pid = Number.parseInt(readFileSync(lockPath, 'utf8').trim(), 10)
+    return Number.isFinite(pid) && pid > 0 ? pid : null
+  } catch {
+    return null
+  }
+}
+
+/** Notre pid est-il celui inscrit dans le verrou ? (le fichier a pu être repris) */
+function lockIsOurs(lockPath: string): boolean {
+  return readLockPid(lockPath) === process.pid
+}
+
 /**
  * Prend le lock singleton. Retourne `null` si un autre daemon VIVANT le tient,
  * sinon une fonction de libération.
+ *
+ * ATOMIQUE : `existsSync` puis `writeFileSync` laissaient passer DEUX processus
+ * lancés au même instant (Claude Code et Codex qui démarrent leurs serveurs MCP
+ * pendant que le daemon est tombé) — 55 doubles acquisitions sur 60 essais.
+ * Résultat : deux daemons sur les mêmes DB, WAL rejoué deux fois (faits en
+ * double), daemon.json écrit par le dernier, l'autre invisible mais actif.
+ * La création en `wx` (O_EXCL) est tranchée par le noyau : un seul gagne.
+ *
+ * Verrou PÉRIMÉ (pid mort après un crash) : on ne l'efface pas — un `rm` suivi
+ * d'un `wx` laisse un concurrent effacer le verrou tout neuf du gagnant. On le
+ * RÉCLAME par renommage (atomique, un seul des deux y arrive) puis on vérifie
+ * ce qu'on a réellement attrapé avant de repartir en `wx`.
  */
 export function acquireLock(storageRoot: string): (() => void) | null {
   const lockPath = storagePaths(storageRoot).daemonLock
-  if (existsSync(lockPath)) {
-    const raw = readFileSync(lockPath, 'utf8').trim()
-    const pid = Number.parseInt(raw, 10)
+  const release = (): void => {
+    // Ne jamais supprimer le verrou d'un autre : après un crash + reprise, le
+    // fichier peut appartenir au daemon survivant.
+    if (lockIsOurs(lockPath)) rmSync(lockPath, { force: true })
+  }
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const fd = openSync(lockPath, 'wx')
+      try {
+        writeSync(fd, String(process.pid))
+      } finally {
+        closeSync(fd)
+      }
+      return release
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
+    }
+
     // Un lock tenu par un process VIVANT (y compris le nôtre) refuse : un seul
     // daemon par storage_root, même intra-process.
-    if (Number.isFinite(pid) && pid > 0 && isPidAlive(pid)) {
+    const holder = readLockPid(lockPath)
+    if (holder !== null && isPidAlive(holder)) return null
+
+    // Périmé (ou illisible) : réclamation par renommage.
+    const claimed = `${lockPath}.claim-${process.pid}`
+    try {
+      renameSync(lockPath, claimed)
+    } catch {
+      continue // un concurrent l'a réclamé avant nous → on retente le wx
+    }
+    const claimedPid = readLockPid(claimed)
+    if (claimedPid !== null && claimedPid !== process.pid && isPidAlive(claimedPid)) {
+      // On a attrapé le verrou TOUT NEUF d'un gagnant : on le lui rend.
+      try {
+        renameSync(claimed, lockPath)
+      } catch {
+        /* le gagnant a déjà recréé son verrou : le nôtre est de trop */
+        rmSync(claimed, { force: true })
+      }
       return null
     }
-    // lock périmé → reprise
-    rmSync(lockPath, { force: true })
+    rmSync(claimed, { force: true })
   }
-  writeFileSync(lockPath, String(process.pid), 'utf8')
-  return () => rmSync(lockPath, { force: true })
+  return null
+}
+
+/** PID inscrit dans daemon.lock (null si absent/illisible) — pour un message qui nomme le détenteur. */
+export function lockHolderPid(storageRoot: string): number | null {
+  return readLockPid(storagePaths(storageRoot).daemonLock)
 }
 
 /** Le daemon décrit par daemon.json est-il vivant (PID) ? */

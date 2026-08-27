@@ -4,7 +4,7 @@
  * `memoria stop`   — SIGTERM au PID de daemon.json + vérification de la mort.
  */
 import { Command, Option } from 'clipanion/lib/advanced/index.js'
-import { ensureDaemon, readDaemonState, startDaemon } from '@memoria/daemon'
+import { DaemonClient, clearDaemonState, ensureDaemon, readDaemonState, startDaemon } from '@memoria/daemon'
 import { fail, resolveCommon } from '../index.js'
 
 /** `kill(pid, 0)` : l'échec EST l'information (process mort) — pas un cas d'erreur. */
@@ -106,9 +106,17 @@ export class StopCommand extends Command {
       return 0
     }
     if (!pidAlive(state.pid)) {
-      out.write(`Le daemon (pid ${state.pid}) est déjà arrêté — daemon.json était périmé.\n`)
+      // Un daemon.json périmé (crash, SIGKILL) faisait croire à un daemon vivant
+      // à tous les clients jusqu'au prochain start : on le nettoie ici, et on le dit.
+      clearDaemonState(storageRoot)
+      out.write(`Le daemon (pid ${state.pid}) est déjà arrêté — daemon.json était périmé, nettoyé.\n`)
       return 0
     }
+
+    // Avant de tuer : est-ce le daemon du service launchd ? Après un arrêt propre,
+    // KeepAlive (SuccessfulExit=false) ne le relance PAS — l'utilisateur doit le savoir.
+    const health = await new DaemonClient(state, state.admin_token).health()
+    const supervised = health?.supervisor === 'launchd'
 
     try {
       process.kill(state.pid, 'SIGTERM')
@@ -122,6 +130,9 @@ export class StopCommand extends Command {
       await new Promise(resolve => setTimeout(resolve, 100))
       if (!pidAlive(state.pid)) {
         out.write(`✓ Daemon arrêté (pid ${state.pid}).\n`)
+        if (supervised) {
+          out.write('ℹ C’était le service launchd : il ne redémarrera pas seul avant le prochain login. « memoria start » le relance ; « memoria autostart off » retire le service.\n')
+        }
         return 0
       }
     }

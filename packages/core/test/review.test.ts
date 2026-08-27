@@ -6,8 +6,8 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { Memoria, type CompleteOptions, type LlmProvider } from '../src/index.js'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { Memoria, type CompleteOptions, type EmbeddingProvider, type LlmProvider } from '../src/index.js'
 
 class FakeExtraction implements LlmProvider {
   readonly name = 'fake'
@@ -20,16 +20,32 @@ class FakeExtraction implements LlmProvider {
   }
 }
 
+/** Embeddings factices : compte les textes envoyés (ce qui partirait au cloud). */
+class FakeEmbeddings implements EmbeddingProvider {
+  readonly name = 'fake'
+  readonly model = 'fake-4d'
+  readonly dimensions = 4
+  sent: string[] = []
+  isAvailable(): Promise<boolean> {
+    return Promise.resolve(true)
+  }
+  embed(texts: string[]): Promise<Float32Array[]> {
+    this.sent.push(...texts)
+    return Promise.resolve(texts.map(() => Float32Array.from([1, 0, 0, 0])))
+  }
+}
+
 let root: string
 let m: Memoria
 let instance: string
+let embeddings: FakeEmbeddings
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'memoria-review-'))
   m = Memoria.init({
     storageRoot: root,
     configPath: join(root, 'config.toml'),
-    llm: { extraction: new FakeExtraction() },
+    llm: { extraction: new FakeExtraction(), embeddings: (embeddings = new FakeEmbeddings()) },
     secretsVault: 'aes-vault',
   })
   instance = m.pairAssistant({ type: 'claude-code' }).assistant_instance_id
@@ -42,6 +58,14 @@ afterEach(() => {
 })
 
 describe('review-first', () => {
+  it('include_dormant côté client n’expose pas un fait en attente de revue', async () => {
+    await m.captureTurn({ instance, messages: [{ role: 'assistant', content: 'Le staging est chez Scaleway.' }] })
+    expect(m.listReview()).toHaveLength(1)
+    // La route /v1/memory/recall relaie le body brut : un agent (ou tout client
+    // HTTP) pouvait lire les faits non approuvés en passant include_dormant.
+    expect(m.recall({ instance, query: 'serveur staging scaleway', include_dormant: true }).items).toHaveLength(0)
+  })
+
   it('capture → fait dormant + pending ; invisible au recall ; approbation → visible', async () => {
     const cap = await m.captureTurn({
       instance,
@@ -63,6 +87,17 @@ describe('review-first', () => {
 
     expect(m.recall({ instance, query: 'serveur staging scaleway' }).items).toHaveLength(1)
     expect(m.listReview()).toHaveLength(0)
+  })
+
+  it('un fait dormant n’est PAS embeddé avant revue ; l’approbation déclenche son indexation', async () => {
+    await m.captureTurn({ instance, messages: [{ role: 'assistant', content: 'Le staging est chez Scaleway.' }] })
+    await m.indexEmbeddings() // ce que le post-capture fait en arrière-plan
+    expect(embeddings.sent).toHaveLength(0) // rien n'est parti : le fait attend sa revue
+    expect(await m.embeddingsPending()).toBe(0) // et la santé ne le compte pas comme « à faire »
+
+    const pending = m.listReview()
+    m.reviewDecision([pending[0]!.id], 'accepted')
+    await vi.waitFor(() => expect(embeddings.sent).toHaveLength(1))
   })
 
   it('rejet → hard-delete (aucune trace, même en dormant)', async () => {

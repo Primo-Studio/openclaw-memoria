@@ -19,11 +19,17 @@ import {
   type TopicGraph,
 } from '../api'
 import { useT } from '../i18n'
-import { agentTypeLabel } from '../components/ui'
+import { EmptyState, ErrorBanner, Spinner, agentTypeLabel, humanError, listPhase } from '../components/ui'
+import { analyzableAgents } from '../lib/agents'
 
 export function Themes() {
   const { t: tr } = useT()
   const [agents, setAgents] = useState<AgentEntry[]>([])
+  // true = liste d'agents reçue mais aucun agent analysable (ex. seul « Autre
+  // agent (MCP) ») → état vide explicite au lieu d'un spinner sans fin.
+  const [noAgent, setNoAgent] = useState(false)
+  // incrémenté par « Réessayer » : relance agents + thèmes.
+  const [tick, setTick] = useState(0)
   const [instance, setInstance] = useState<string>('')
   const [topics, setTopics] = useState<Topic[] | null>(null)
   const [active, setActive] = useState<Topic | null>(null)
@@ -37,12 +43,13 @@ export function Themes() {
     getAgents()
       .then(a => {
         setError(null)
-        const real = a.filter(x => x.assistant_type !== 'generic' && !x.instance.revoked_at)
+        const real = analyzableAgents(a)
         setAgents(real)
-        if (real.length > 0 && real[0]) setInstance(real[0].instance.id)
+        setNoAgent(real.length === 0)
+        if (real[0]) setInstance(real[0].instance.id)
       })
-      .catch(() => setError(tr('themes.error_service')))
-  }, [tr])
+      .catch(err => setError(err instanceof ApiError ? err.message : humanError(err)))
+  }, [tick])
 
   useEffect(() => {
     if (!instance) return
@@ -56,10 +63,18 @@ export function Themes() {
     getTopics(instance, 2)
       .then(setTopics)
       .catch(err => {
-        setTopics([])
-        if (err instanceof ApiError && err.status !== 404) setError(err.message)
+        // 404 = vieux service sans la route : état vide, pas une panne.
+        if (err instanceof ApiError && err.status === 404) setTopics([])
+        else setError(err instanceof ApiError ? err.message : humanError(err))
       })
-  }, [instance])
+  }, [instance, tick])
+
+  const retry = useCallback(() => {
+    setError(null)
+    setTick(n => n + 1)
+  }, [])
+
+  const phase = listPhase(topics, error)
 
   const openTopic = useCallback(
     async (t: Topic) => {
@@ -127,18 +142,29 @@ export function Themes() {
         </div>
       </header>
 
-      {error && <div className="error-banner">{error}</div>}
+      {error && <ErrorBanner message={error} onRetry={retry} />}
       {note && <p className="muted" style={{ marginTop: '0.4rem' }}>{note}</p>}
 
-      {topics === null ? (
-        <div className="spinner-row"><span className="spinner" aria-hidden /> {tr('common.loading')}</div>
-      ) : topics.length === 0 ? (
+      {noAgent ? (
+        <EmptyState title={tr('memory.no_agent_title')} body={tr('memory.no_agent_body')} />
+      ) : phase === 'loading' ? (
+        <Spinner />
+      ) : phase === 'failed' || topics === null ? null : topics.length === 0 ? (
         <div className="empty-state">
           <p>{tr('themes.empty_title')}</p>
           <p className="muted">{tr('themes.empty_body')}</p>
         </div>
       ) : view === 'graph' ? (
-        <ThemeRelations instance={instance} onOpen={t => void openTopic(t)} onError={setError} />
+        <ThemeRelations
+          instance={instance}
+          // Le détail n'est rendu qu'en vue Tuiles : on y bascule, sinon le clic
+          // lançait un GET sans rien changer à l'écran.
+          onOpen={t => {
+            setView('tiles')
+            void openTopic(t)
+          }}
+          onError={setError}
+        />
       ) : (
         <div className="theme-cloud">
           {topics.map(t => {
@@ -269,9 +295,21 @@ function ThemeRelations({ instance, onOpen, onError }: { instance: string; onOpe
               key={t.id}
               className="theme-node"
               opacity={dim ? 0.25 : 1}
+              role="button"
+              tabIndex={0}
+              aria-label={tr('themes.node_open_aria', { name: t.name })}
               onMouseEnter={() => setHover(t.id)}
               onMouseLeave={() => setHover(null)}
+              onFocus={() => setHover(t.id)}
+              onBlur={() => setHover(null)}
               onClick={() => onOpen(t)}
+              onKeyDown={e => {
+                // accès clavier : Entrée / Espace = clic
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  onOpen(t)
+                }
+              }}
               style={{ cursor: 'pointer' }}
             >
               <circle cx={x} cy={y} r={r} fill="var(--accent)" fillOpacity={0.85} />

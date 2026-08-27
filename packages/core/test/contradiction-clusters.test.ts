@@ -85,6 +85,16 @@ describe('contradiction — heuristiques pures', () => {
     expect(hasNegation('Néto préfère les commits signés')).toBe(false)
   })
 
+  it('hasNegation : « plus de » (= davantage), « sans » et un nombre ne sont PAS des négations', () => {
+    expect(hasNegation('Le devis GCSMS fait plus de 1 900 €')).toBe(false)
+    expect(hasNegation('Néto prend son café sans sucre')).toBe(false)
+    expect(hasNegation('Le tarif est de plus de 94 €/h le week-end')).toBe(false)
+    // …mais « pas de », « il n'y a plus de » et « impossible » en restent.
+    expect(hasNegation("Il n'y a plus de sucre dans la cuisine")).toBe(true)
+    expect(hasNegation('Néto ne veut pas de sucre')).toBe(true)
+    expect(hasNegation("L'exécution en temps réel est impossible")).toBe(true)
+  })
+
   it('subjectTokens normalise et retire les stopwords', () => {
     const t = subjectTokens('Le PORT du serveur est 8080 pour Vercel')
     expect(t.has('port')).toBe(true)
@@ -122,6 +132,32 @@ describe('detectContradiction (propose, ne modifie rien)', () => {
     fact('Le port du serveur de staging est 8080')
     const res = await detectContradiction(store, 'Le port du serveur de staging reste 8080', 's1')
     expect(res).toHaveLength(0)
+  })
+
+  it('PAS de contradiction sur « plus de X » (davantage) vs « X » : même valeur, pas de négation', async () => {
+    fact('Le tarif audiovisuel est de 94 €/h')
+    const res = await detectContradiction(store, 'Le tarif audiovisuel est de plus de 94 €/h le week-end', 's1')
+    expect(res).toHaveLength(0)
+  })
+
+  it('PAS de clash numérique entre des nombres qui ne portent pas sur le même attribut (dates, versions)', async () => {
+    fact('Memoria a été mise à jour le 27/03 à 15:47')
+    expect(await detectContradiction(store, 'Memoria mise à jour passée en 2026.4.9', 's1')).toHaveLength(0)
+    fact('Build 17 est bloqué en WAITING_FOR_REVIEW depuis 3 jours')
+    expect(await detectContradiction(store, "Le build 17 est bloqué en 'WAITING_FOR_REVIEW' chez Apple depuis le 12 mai", 's1')).toHaveLength(0)
+  })
+
+  it('deux faits qui disent la MÊME chose (« impossible » vs « ne peut pas ») ne sont pas contradictoires', async () => {
+    fact("L'exécution en temps réel du Heartbeat est impossible sur le daemon")
+    const res = await detectContradiction(store, 'Le Heartbeat ne peut pas s’exécuter en temps réel sur le daemon', 's1')
+    expect(res).toHaveLength(0)
+  })
+
+  it('clash numérique sans verbe : « port 8080 » vs « port 9090 » (même attribut) reste détecté', async () => {
+    fact('Serveur de staging, port 8080, derrière Cloudflare')
+    const res = await detectContradiction(store, 'Serveur de staging, port 9090, derrière Cloudflare', 's1')
+    expect(res.length).toBe(1)
+    expect(res[0]!.kind).toBe('value')
   })
 
   it('ignore le doublon exact (dedup, pas contradiction)', async () => {

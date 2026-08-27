@@ -9,7 +9,9 @@ import { useCallback, useEffect, useState } from 'react'
 import { Wizard, type WizardStep } from '../components/Wizard'
 import { EmbeddingsChooser } from '../components/EmbeddingsChooser'
 import { MachineAgents } from './Agents'
+import { CopyButton, ErrorBanner, humanError } from '../components/ui'
 import { useT } from '../i18n'
+import { hasLiveAgent } from '../lib/agents'
 import {
   getAgents,
   ApiError,
@@ -60,7 +62,8 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   const [doctor, setDoctor] = useState<DoctorReport | null>(null)
   const [type, setType] = useState<AgentType>('claude-code')
   const [pair, setPair] = useState<PairResult | null>(null)
-  const [copied, setCopied] = useState(false)
+  // échec de POST /v1/admin/pair : affiché, jamais seulement console.warn
+  const [pairError, setPairError] = useState<string | null>(null)
   const [agentConnected, setAgentConnected] = useState(false)
 
   // --- état de l'étape moteur
@@ -77,7 +80,17 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   const [pullStatus, setPullStatus] = useState<OllamaPullStatus | null>(null)
 
   useEffect(() => {
-    getDoctor().then(setDoctor).catch(() => setDoctor(null))
+    let cancelled = false
+    getDoctor()
+      .then(d => {
+        if (!cancelled) setDoctor(d)
+      })
+      .catch(() => {
+        if (!cancelled) setDoctor(null)
+      })
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   const refreshHealth = useCallback(async (): Promise<LlmHealth | null> => {
@@ -100,7 +113,12 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     if (step === 2 && health === null && !healthUnavailable) void refreshHealth()
   }, [step, health, healthUnavailable, refreshHealth])
 
-  /** Persiste le moteur choisi via POST /v1/admin/llm_extraction. */
+  /**
+   * Persiste le moteur choisi via POST /v1/admin/llm_extraction, PUIS relit la
+   * santé : la porte « Continuer » dépend de health.extraction.available, qui
+   * reflète l'ancienne config tant qu'on ne rafraîchit pas — sans ça, « Moteur
+   * enregistré » s'affichait en vert avec un bouton Continuer toujours grisé.
+   */
   const persistChoice = useCallback(async (engine: LlmProviderName, h: LlmHealth | null): Promise<void> => {
     const model = engine === 'lmstudio' ? h?.options.lmstudio.models[0] : DEFAULT_MODELS[engine]
     try {
@@ -109,8 +127,10 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
       setEngineError(null)
     } catch (err) {
       setEngineError(err instanceof ApiError ? err.message : t('onboarding.engine.saveError'))
+      return
     }
-  }, [t])
+    await refreshHealth()
+  }, [t, refreshHealth])
 
   // polling du téléchargement Ollama (barres de progression)
   useEffect(() => {
@@ -193,20 +213,24 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   }, [refreshHealth])
 
   const startPairing = async () => {
+    setPairError(null)
     try {
       setPair(await pairAgent(type))
     } catch (err) {
       setPair(null)
       console.warn('pairing onboarding échoué', err instanceof ApiError ? err.message : err)
+      setPairError(humanError(err))
     }
   }
 
   const engineOk = health?.extraction.available === true
   const engineGateOpen = engineOk || degraded || healthUnavailable
 
-  // P0 : vérifie si au moins un agent est connecté (chemin facile OU pairing).
+  // P0 : vérifie si au moins un agent est RÉELLEMENT connecté (vu au moins une
+  // fois). Générer un code de pairing crée déjà une instance côté service :
+  // compter les instances dirait « connecté » avant que l'agent n'ait parlé.
   const refreshAgentConnected = useCallback(() => {
-    getAgents().then(a => setAgentConnected(a.length > 0)).catch(() => {})
+    getAgents().then(a => setAgentConnected(hasLiveAgent(a))).catch(() => {})
   }, [])
 
   // Sur l'étape « connecter un agent » (index 3), sonde la connexion en continu
@@ -287,6 +311,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
           {/* Repli : connexion manuelle par commande (autre machine / cas avancé). */}
           <details className="ob-manual">
             <summary>{t('onboarding.agent.manualToggle')}</summary>
+            {pairError && <ErrorBanner message={pairError} onRetry={() => void startPairing()} />}
             {!pair ? (
               <>
                 <p>{t('onboarding.agent.question')}</p>
@@ -303,13 +328,8 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
               <>
                 <p>{t('onboarding.agent.pasteCommand')}</p>
                 <pre className="command">{pair.command}</pre>
-                <button
-                  type="button"
-                  className="btn btn-ghost"
-                  onClick={() => { void navigator.clipboard.writeText(pair.command); setCopied(true) }}
-                >
-                  {copied ? t('onboarding.agent.copied') : t('onboarding.agent.copy')}
-                </button>
+                {/* CopyButton : « Copié » seulement si la copie a réussi, « Échec » sinon, reset 2 s. */}
+                <CopyButton text={pair.command} label={t('onboarding.agent.copy')} />
                 <p className="muted">{t('onboarding.agent.codeLabel')}<strong>{pair.pairing_code}</strong>{t('onboarding.agent.codeValidity')}</p>
               </>
             )}
@@ -592,7 +612,8 @@ function ApiKeyGuide({
   checking: boolean
 }) {
   const { t } = useT()
-  const command = `echo 'TA_CLÉ' > ~/.${provider}/api_key && chmod 600 ~/.${provider}/api_key`
+  // Le mot à remplacer suit la langue (TA_CLÉ / YOUR_KEY…), comme la phrase qui l'annonce.
+  const command = `echo '${t('onboarding.apikey.placeholder')}' > ~/.${provider}/api_key && chmod 600 ~/.${provider}/api_key`
   const providerName = provider === 'openai' ? 'OpenAI' : provider === 'openrouter' ? 'OpenRouter' : 'Anthropic'
   return (
     <div className="engine-guide">

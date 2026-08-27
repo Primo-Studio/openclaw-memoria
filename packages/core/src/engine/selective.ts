@@ -39,7 +39,12 @@ export function jaccardSimilarity(a: ReadonlySet<string>, b: ReadonlySet<string>
  *  (b) near-dup : top-3 FTS du scope puis similarité Jaccard sur tokens > 0.85.
  * Retourne null si aucun doublon. Aucun appel LLM.
  */
-export function findDuplicate(store: ContentStore, scopeId: string, factText: string): DuplicateMatch | null {
+export function findDuplicate(
+  store: ContentStore,
+  scopeId: string,
+  factText: string,
+  opts: { nearDup?: boolean } = {},
+): DuplicateMatch | null {
   const normalized = normalizeFact(factText)
   if (!normalized) return null
 
@@ -57,6 +62,11 @@ export function findDuplicate(store: ContentStore, scopeId: string, factText: st
 
   // (b) near-dup — FTS borné au scope, dormants inclus, sensibilité non filtrée
   // (le dedup est interne : il n'expose pas de contenu au lecteur).
+  // Désactivable : une CORRECTION est par nature proche de l'original — la
+  // prendre pour un doublon la ferait disparaître (correctFact). Idem pour une
+  // DÉCLARATION explicite (storeFact) : « 13 octobre » → « 14 octobre » n'est
+  // pas une redite, c'est une autre information. Seule la capture le garde.
+  if (opts.nearDup === false) return null
   const tokens = new Set(normalized.split(' '))
   const hits = store.searchFacts(factText, {
     limit: NEAR_DUP_CANDIDATES,

@@ -110,6 +110,88 @@ describe('storeFact & recall', () => {
   })
 })
 
+describe('storeFact — hygiène (audit 27/08)', () => {
+  it('deux storeFact quasi identiques → une seule ligne, le second renvoie l’existant', () => {
+    const a = m.pairAssistant({ type: 'claude-code' })
+    const first = m.storeFact({ instance: a.assistant_instance_id, content: 'Néto préfère les réponses courtes', category: 'Preference' })
+    const second = m.storeFact({ instance: a.assistant_instance_id, content: 'Néto préfère les réponses courtes.', category: 'preference' })
+    expect(second.id).toBe(first.id)
+    const store = m['openContent'](m.paths.assistantDb(a.assistant_instance_id))
+    expect(store.countFacts()).toBe(1)
+    // Catégorie normalisée : « Preference » et « preference » = un seul domaine.
+    expect(first.category).toBe('preference')
+  })
+
+  it('une variante à un mot près (date, négation) n’est PAS avalée par le dédoublonnage', () => {
+    // Relecture audit 27/08 : le near-dup (Jaccard > 0,85) appliqué aux
+    // déclarations EXPLICITES jetait le fait corrigé/contradictoire sans bruit
+    // et renvoyait l'ancien à l'agent comme si c'était le sien. Sur une phrase
+    // ≥ 13 tokens, tout changement d'UN mot (date, montant, négation) était perdu.
+    const a = m.pairAssistant({ type: 'claude-code' })
+    const inst = a.assistant_instance_id
+    const base = 'La plénière annuelle du GCSMS est fixée au 13 octobre 2026 à Cayenne avec option vidéo pour Marion Dol'
+    const first = m.storeFact({ instance: inst, content: base })
+    const date = m.storeFact({ instance: inst, content: base.replace('13 octobre', '14 octobre') })
+    const negation = m.storeFact({ instance: inst, content: base.replace('avec option', 'sans option') })
+    expect(date.id).not.toBe(first.id)
+    expect(negation.id).not.toBe(first.id)
+    expect(negation.id).not.toBe(date.id)
+    const store = m['openContent'](m.paths.assistantDb(inst))
+    expect(store.countFacts()).toBe(3)
+    // Le dédoublonnage EXACT reste : même phrase à la ponctuation près → 3 lignes toujours.
+    expect(m.storeFact({ instance: inst, content: `${base}.` }).id).toBe(first.id)
+    expect(store.countFacts()).toBe(3)
+  })
+
+  it('un dormant proche (un mot près) n’est pas activé par une déclaration différente', () => {
+    const a = m.pairAssistant({ type: 'claude-code' })
+    const inst = a.assistant_instance_id
+    const store = m['openContent'](m.paths.assistantDb(inst))
+    const scope = m.registry.getScopeByName(`private:${inst}`)!
+    const base = 'Le devis salon du livre jeunesse de la mairie est envoyé à Joëlle Mimba le 24 août 2026 sans acompte'
+    const dormant = store.insertFact({ fact: base, scope_id: scope.id, lifecycle_state: 'dormant' })
+    const declared = m.storeFact({ instance: inst, content: base.replace('sans acompte', 'avec acompte') })
+    expect(declared.id).not.toBe(dormant.id)
+    expect(declared.lifecycle_state).toBe('active')
+    expect(store.getFact(dormant.id)?.lifecycle_state).toBe('dormant')
+    expect(store.countFacts()).toBe(2)
+  })
+
+  it('la capture garde le near-dup : une redite à un point près ne crée pas de doublon en revue', () => {
+    m.setCaptureMode('review-first')
+    const a = m.pairAssistant({ type: 'claude-code' })
+    const inst = a.assistant_instance_id
+    const store = m['openContent'](m.paths.assistantDb(inst))
+    const scope = m.registry.getScopeByName(`private:${inst}`)!
+    const base = 'Néto préfère les messages courts avec le détail dans un fichier du dépôt pour chaque projet'
+    const dormant = store.insertFact({ fact: base, scope_id: scope.id, lifecycle_state: 'dormant' })
+    // Redite quasi identique (un token de plus) : near-dup → l'existant, PAS activé
+    // (une capture ne valide pas une revue en attente : seul l'humain ou une
+    // déclaration explicite EXACTE le fait).
+    const captured = m['storeCaptured']({ instance: inst, content: `${base} ok` })
+    expect(captured.id).toBe(dormant.id)
+    expect(store.getFact(dormant.id)?.lifecycle_state).toBe('dormant')
+    expect(store.countFacts()).toBe(1)
+  })
+
+  it('contenu vide ou blanc → refus explicite', () => {
+    const a = m.pairAssistant({ type: 'claude-code' })
+    expect(() => m.storeFact({ instance: a.assistant_instance_id, content: '   ' })).toThrow(/vide/)
+    expect(() => m.storeFact({ instance: a.assistant_instance_id, content: '' })).toThrow(/vide/)
+  })
+
+  it('redéclarer un fait encore en revue (dormant) le valide au lieu de le dupliquer', async () => {
+    const a = m.pairAssistant({ type: 'claude-code' })
+    const store = m['openContent'](m.paths.assistantDb(a.assistant_instance_id))
+    const scope = m.registry.getScopeByName(`private:${a.assistant_instance_id}`)!
+    const dormant = store.insertFact({ fact: 'Néto travaille sur Memoria', scope_id: scope.id, lifecycle_state: 'dormant' })
+    const declared = m.storeFact({ instance: a.assistant_instance_id, content: 'Néto travaille sur Memoria.' })
+    expect(declared.id).toBe(dormant.id)
+    expect(store.countFacts()).toBe(1)
+    expect(m.recall({ instance: a.assistant_instance_id, query: 'Memoria travaille' }).items).toHaveLength(1)
+  })
+})
+
 describe('isolation', () => {
   it('2 agents : mémoires privées isolées par défaut', () => {
     const a = m.pairAssistant({ type: 'claude-code' })
@@ -192,5 +274,37 @@ describe('forget (hard-delete)', () => {
   it('refuse un filtre vide et exige confirm_bulk pour le massif', () => {
     expect(() => m.forget({})).toThrow(/filtre vide/)
     expect(() => m.forget({ scope_id: 'x' })).toThrow(/confirm_bulk/)
+  })
+})
+
+/**
+ * forget par requête (audit 27/08) : la requête FTS du recall est un OR
+ * (scoring par couverture ensuite) — pour une SUPPRESSION irréversible il faut
+ * une sémantique ET, et la garde confirm_bulk dès qu'aucun id n'est donné.
+ */
+describe('forget par requête', () => {
+  it('exige confirm_bulk, ne supprime que les faits contenant TOUS les mots, et dry_run ne touche rien', () => {
+    const a = m.pairAssistant({ type: 'claude-code' })
+    const inst = a.assistant_instance_id
+    const stripe = m.storeFact({ instance: inst, content: 'La clé API Stripe de test a expiré en mars' })
+    const bureau = m.storeFact({ instance: inst, content: 'La clé du bureau est chez Badette' })
+    const courtes = m.storeFact({ instance: inst, content: 'Néto préfère les réponses courtes' })
+    const store = m['openContent'](m.paths.assistantDb(inst))
+
+    // sans confirm_bulk : refus (la CLI l'exigeait déjà, pas le moteur)
+    expect(() => m.forget({ query: 'clé API Stripe' })).toThrow(/confirm_bulk/)
+    expect(store.countFacts()).toBe(3)
+
+    // dry_run : on voit ce qui partirait, rien ne part
+    const dry = m.forget({ query: 'clé API Stripe', confirm_bulk: true, dry_run: true })
+    expect(dry).toEqual({ deleted: 0, matched: 1 })
+    expect(store.countFacts()).toBe(3)
+
+    // sémantique ET : « clé du bureau » ne contient pas « api » ni « stripe »
+    const { deleted } = m.forget({ query: 'clé API Stripe', confirm_bulk: true })
+    expect(deleted).toBe(1)
+    expect(store.getFact(stripe.id)).toBeNull()
+    expect(store.getFact(bureau.id)).not.toBeNull()
+    expect(store.getFact(courtes.id)).not.toBeNull()
   })
 })

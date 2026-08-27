@@ -4,7 +4,7 @@
  * on voit la machine tourner. C'est « le cerveau » de Memoria.
  */
 import { getCognitiveStats } from '../api'
-import { ErrorBanner, Spinner, useLoad } from '../components/ui'
+import { ErrorBanner, Spinner, formatNumber, useLoad } from '../components/ui'
 import { useT } from '../i18n'
 
 interface Layer {
@@ -98,7 +98,7 @@ export function System() {
                       <div className="layer-top">
                         <span className="layer-num">{l.n}</span>
                         <strong>{t(l.nameKey)}</strong>
-                        {value !== undefined && value > 0 && <span className="layer-stat">{value.toLocaleString('fr-FR')}</span>}
+                        {value !== undefined && value > 0 && <span className="layer-stat">{formatNumber(value)}</span>}
                       </div>
                       <p className="muted layer-desc">{t(l.descKey)}</p>
                     </div>

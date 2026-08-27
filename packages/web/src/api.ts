@@ -10,6 +10,8 @@
  * l'UI est bundlée à part (Vite) et ne dépend d'aucun package Node.
  */
 
+import { translate } from './i18n'
+
 export type AgentType = 'claude-code' | 'codex' | 'openclaw' | 'generic'
 
 export interface AssistantInstance {
@@ -56,6 +58,47 @@ export interface DoctorDatabase {
   wal_pending?: number
 }
 
+export interface DoctorActivity {
+  last_recall_at?: string
+  last_capture_at?: string
+  recalls_24h: number
+  captures_24h: number
+  recall_ms_avg?: number
+  recall_ms_p95?: number
+  recall_tokens_avg?: number
+  capture_ms_avg?: number
+}
+
+export interface DoctorMemory {
+  facts_total: number
+  facts_superseded: number
+  facts_never_used: number
+  contradictions_pending: number
+  duplicates_pending: number
+  wal_pending: number
+  wal_stuck: number
+}
+
+/** Ce qui a QUITTÉ la machine sur 24 h (miroir de core DoctorCloud). Vide = rien n'est parti. */
+export interface DoctorCloud {
+  sends_24h: Array<{
+    provider: string
+    model: string
+    purpose: string
+    calls: number
+    items: number
+    chars: number
+    failures: number
+    tokens_in?: number
+    tokens_out?: number
+  }>
+  last_send_at?: string
+  chars_24h: number
+}
+
+// Miroir de core/types.ts DoctorReport. Les sections `activity`/`memory`/
+// `cloud`/`usage` sont optionnelles ici : un service plus ancien ne les
+// renvoie pas et l'UI doit rester lisible sans elles.
 export interface DoctorReport {
   ok: boolean
   storage_root: string
@@ -63,6 +106,10 @@ export interface DoctorReport {
   registry_path: string
   databases: DoctorDatabase[]
   network_guard: { on_network_volume: boolean; journal_mode: string }
+  activity?: DoctorActivity
+  memory?: DoctorMemory
+  cloud?: DoctorCloud
+  usage?: LlmUsageReport
   warnings: string[]
 }
 
@@ -145,7 +192,8 @@ export function hasToken(): boolean {
 async function request<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
   const token = adminToken()
   if (!token) {
-    throw new ApiError(401, 'Aucune clé d’accès — relancez `memoria` depuis votre terminal.')
+    // Message traduit : il remonte tel quel dans l'UI via humanError().
+    throw new ApiError(401, translate('error.no_token'))
   }
   const headers: Record<string, string> = { authorization: `Bearer ${token}` }
   if (body !== undefined) headers['content-type'] = 'application/json'
@@ -157,7 +205,7 @@ async function request<T>(method: 'GET' | 'POST', path: string, body?: unknown):
   })
 
   if (!res.ok) {
-    let message = `Le service a répondu HTTP ${res.status}.`
+    let message = translate('error.http_status', { status: res.status })
     try {
       const payload = (await res.json()) as { error?: string }
       if (typeof payload.error === 'string' && payload.error.length > 0) message = payload.error
@@ -243,7 +291,8 @@ export async function connectAgent(kind: DetectedAgentKind, name?: string): Prom
 }
 
 export interface ImportJobStatus {
-  state: 'idle' | 'running' | 'done' | 'error'
+  /** `interrupted` : le daemon s'est arrêté (stop, mise à jour, crash) pendant le job — message dans `error`. */
+  state: 'idle' | 'running' | 'done' | 'error' | 'interrupted'
   kind: 'transcripts' | 'legacy' | null
   instance_id: string | null
   progress: { files_done: number; files_total: number; facts_imported: number }
@@ -841,14 +890,35 @@ export async function identifyInterlocutor(input: { phone?: string; email?: stri
 export interface AutostartStatus {
   supported: boolean
   installed: boolean
+  /** Service connu de launchd — PAS « en marche » (voir core/control/autostart.ts). */
   loaded: boolean
+  /** Absents d'un daemon antérieur : `running` = process supervisé vivant. */
+  running?: boolean
+  pid?: number | null
   plistPath: string
 }
+
+/** Qui fait tourner le daemon qui répond : le service launchd, ou un lancement direct (`memoria start`). */
+export type DaemonSupervisor = 'launchd' | null
 
 export interface ControlState {
   enabled: boolean
   autostart: AutostartStatus
+  /** Absent d'un daemon antérieur → on n'affiche rien plutôt que d'inventer. */
+  supervisor?: DaemonSupervisor
   storage: { root: string; config_path: string; on_network_volume: boolean }
+}
+
+/**
+ * Réponse de POST /v1/admin/autostart. `handover: true` = le daemon va
+ * S'ARRÊTER et être relancé (sous launchd en mode `on`, en direct en mode
+ * `off`) : la connexion suivante échoue quelques secondes, et la clé d'accès
+ * (admin_token) est régénérée par le nouveau daemon.
+ */
+export interface AutostartChange {
+  autostart: AutostartStatus
+  handover: boolean
+  mode?: 'on' | 'off'
 }
 
 export async function getControl(): Promise<ControlState> {
@@ -860,9 +930,8 @@ export async function setEnabled(enabled: boolean): Promise<boolean> {
   return res.enabled
 }
 
-export async function setAutostart(enabled: boolean): Promise<AutostartStatus> {
-  const res = await request<{ autostart: AutostartStatus }>('POST', '/v1/admin/autostart', { enabled })
-  return res.autostart
+export async function setAutostart(enabled: boolean): Promise<AutostartChange> {
+  return request<AutostartChange>('POST', '/v1/admin/autostart', { enabled })
 }
 
 // ------------------------------------------------------------ synchro inter-machines

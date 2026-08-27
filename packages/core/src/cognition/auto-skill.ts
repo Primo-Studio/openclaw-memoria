@@ -43,7 +43,7 @@ export interface SkillProposal {
   source: SkillSource
   /** Id de l'élément source (pattern accepté ou procédure pivot) — traçabilité. */
   source_id: string
-  /** Scope de la skill à créer (hérité de la source ; défaut fourni à propose()). */
+  /** Scope de la skill à créer : celui de ses faits sources (ou `defaultScopeId` de propose()). */
   scope_id: string
   /** Description optionnelle (déclencheurs, contexte). */
   description?: string
@@ -52,7 +52,12 @@ export interface SkillProposal {
 }
 
 export interface ProposeSkillOptions {
-  /** Scope par défaut des skills issues de patterns (les patterns n'ont pas de scope propre). Défaut 's'. */
+  /**
+   * Scope imposé aux skills issues de patterns. Sans lui, la skill hérite du
+   * scope RÉEL de ses faits membres (le plus fréquent) — jamais d'un scope
+   * inventé : matchProcedures filtre par scope, une skill hors de tout scope
+   * connu serait introuvable pour toujours.
+   */
   defaultScopeId?: string
   /**
    * quality_score minimal d'une procédure pour entrer dans un regroupement (source
@@ -74,7 +79,6 @@ export interface AutoSkillEngineOptions {
   store: ContentStore
 }
 
-const DEFAULT_SCOPE = 's'
 const DEFAULT_MIN_QUALITY = 0.5
 const DEFAULT_MIN_GROUP = 2
 
@@ -112,7 +116,6 @@ export class AutoSkillEngine {
    * créée par un `accept` précédent.
    */
   propose(opts: ProposeSkillOptions = {}): SkillProposal[] {
-    const defaultScope = opts.defaultScopeId ?? DEFAULT_SCOPE
     const minQuality = opts.minProcedureQuality ?? DEFAULT_MIN_QUALITY
     const minGroup = Math.max(2, opts.minProcedureGroup ?? DEFAULT_MIN_GROUP)
 
@@ -136,12 +139,19 @@ export class AutoSkillEngine {
       if (existingNames.has(label.toLowerCase())) continue
       const steps = this.stepsFromPattern(p)
       if (steps.length === 0) continue
+      const scopeId = opts.defaultScopeId ?? this.dominantScope(parseJsonArray(p.member_fact_ids))
+      if (!scopeId) {
+        // Pas de scope connu (membres supprimés ?) : on ne propose pas une skill
+        // que personne ne pourrait retrouver — et on le dit.
+        console.warn(`[memoria:auto-skill] pattern ${p.id} (« ${label} ») sans scope connu — proposition ignorée`)
+        continue
+      }
       proposals.push({
         label,
         steps,
         source: 'pattern',
         source_id: p.id,
-        scope_id: defaultScope,
+        scope_id: scopeId,
         description: `Skill consolidée depuis un motif récurrent validé : ${p.label}`,
         trigger_patterns: dedupeNonEmpty([p.label, label]),
       })
@@ -207,7 +217,9 @@ export class AutoSkillEngine {
   accept(proposal: SkillProposal): AcceptSkillResult {
     const label = (proposal.label ?? '').trim()
     const steps = (proposal.steps ?? []).map(s => s.trim()).filter(s => s.length > 0)
-    if (!label || steps.length === 0) {
+    const scopeId = (proposal.scope_id ?? '').trim()
+    // Sans scope, la procédure serait filtrée par matchProcedures à jamais.
+    if (!label || steps.length === 0 || !scopeId) {
       return { applied: false, procedure: null }
     }
     const procedure = this.procedural.storeProcedure({
@@ -215,13 +227,23 @@ export class AutoSkillEngine {
       description: proposal.description ?? '',
       steps,
       trigger_patterns: proposal.trigger_patterns ?? [label],
-      scope_id: proposal.scope_id || DEFAULT_SCOPE,
+      scope_id: scopeId,
       lifecycle_state: 'active',
     })
     return { applied: true, procedure }
   }
 
   // --- interne -------------------------------------------------------------
+
+  /** Scope le plus fréquent parmi des faits (par id), ou '' si aucun n'existe. */
+  private dominantScope(factIds: string[]): string {
+    if (factIds.length === 0) return ''
+    const placeholders = factIds.map(() => '?').join(',')
+    const row = this.db
+      .prepare(`SELECT scope_id, COUNT(*) AS n FROM facts WHERE id IN (${placeholders}) GROUP BY scope_id ORDER BY n DESC, scope_id LIMIT 1`)
+      .get(...factIds) as { scope_id: string } | undefined
+    return row?.scope_id ?? ''
+  }
 
   /**
    * Étapes d'une skill issues d'un pattern : les formulations DISTINCTES de ses

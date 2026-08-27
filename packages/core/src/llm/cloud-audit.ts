@@ -51,6 +51,25 @@ export interface CloudSend {
   /** Tokens rapportés par le fournisseur (absents s'il ne les donne pas ou si l'envoi a échoué). */
   tokens_in?: number
   tokens_out?: number
+  /** Classe courte de l'échec (`http_401`, `timeout`, `network`…) — jamais le message brut. */
+  error?: string
+}
+
+/**
+ * Classe COURTE et stable d'une erreur de provider, pour les journaux et le
+ * doctor : « 26 échecs » ne dit rien, « 20 http_429, 6 timeout » dit quoi
+ * faire. Jamais le message brut (il peut contenir un extrait de réponse).
+ */
+export function classifyLlmError(err: unknown): string {
+  if (!(err instanceof Error)) return 'other'
+  const msg = err.message
+  if (err.name === 'TimeoutError' || err.name === 'LlmTimeoutError' || /délai dépassé/.test(msg)) return 'timeout'
+  if (err.name === 'LlmTruncatedError' || /tronquée|budget de tokens/.test(msg)) return 'truncated'
+  const http = /HTTP (\d{3})/.exec(msg)
+  if (http) return `http_${http[1]}`
+  if (err.name === 'TypeError' || /fetch failed|ECONNREFUSED|ENOTFOUND|injoignable/i.test(msg)) return 'network'
+  if (/invalide|absent/.test(msg)) return 'invalid_response'
+  return 'other'
 }
 
 export type CloudAuditSink = (send: CloudSend) => void
@@ -81,7 +100,7 @@ export function auditExtraction(provider: LlmProvider, sink: CloudAuditSink): Ll
     } catch (err) {
       // Un envoi RATÉ reste un envoi : les données ont quitté la machine même
       // si la réponse n'est jamais revenue. Le taire fausserait le journal.
-      sink({ provider: provider.name, model: provider.model, purpose: 'extraction', items: 1, chars, ms: Date.now() - started, ok: false })
+      sink({ provider: provider.name, model: provider.model, purpose: 'extraction', items: 1, chars, ms: Date.now() - started, ok: false, error: classifyLlmError(err) })
       throw err
     }
   }
@@ -114,7 +133,7 @@ export function auditEmbeddings(provider: EmbeddingProvider, sink: CloudAuditSin
       })
       return out
     } catch (err) {
-      sink({ provider: provider.name, model: provider.model, purpose: 'embeddings', items: texts.length, chars, ms: Date.now() - started, ok: false })
+      sink({ provider: provider.name, model: provider.model, purpose: 'embeddings', items: texts.length, chars, ms: Date.now() - started, ok: false, error: classifyLlmError(err) })
       throw err
     }
   }
@@ -133,5 +152,6 @@ export function formatCloudSend(s: CloudSend): string {
   let out = `provider=${s.provider} model=${s.model} purpose=${s.purpose} items=${s.items} chars=${s.chars} ms=${s.ms} ok=${s.ok}`
   if (s.tokens_in !== undefined) out += ` tokens_in=${s.tokens_in}`
   if (s.tokens_out !== undefined) out += ` tokens_out=${s.tokens_out}`
+  if (s.error !== undefined) out += ` err=${s.error}`
   return out
 }

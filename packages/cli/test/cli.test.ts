@@ -175,7 +175,7 @@ describe('forget — gardes', () => {
   })
 
   it('par --id en local (daemon arrêté) : supprime vraiment, code 0', async () => {
-    const memoria = Memoria.init({ storageRoot: root, configPath: cfg })
+    const memoria = Memoria.init({ storageRoot: root, configPath: cfg, llm: { extraction: null } })
     const paired = memoria.pairAssistant({ type: 'claude-code' })
     const fact = memoria.storeFact({ instance: paired.assistant_instance_id, content: 'souvenir à oublier' })
     memoria.close()
@@ -185,7 +185,7 @@ describe('forget — gardes', () => {
     expect(code).toBe(0)
     expect(io.out()).toContain('1 souvenir(s) supprimé(s)')
 
-    const reopened = Memoria.init({ storageRoot: root, configPath: cfg })
+    const reopened = Memoria.init({ storageRoot: root, configPath: cfg, llm: { extraction: null } })
     expect(reopened.stats().facts).toBe(0)
     reopened.close()
   })
@@ -209,7 +209,7 @@ describe('commandes locales (daemon arrêté)', () => {
   })
 
   it('audit : trace les actions (pairing visible), code 0', async () => {
-    const memoria = Memoria.init({ storageRoot: root, configPath: cfg })
+    const memoria = Memoria.init({ storageRoot: root, configPath: cfg, llm: { extraction: null } })
     memoria.pairAssistant({ type: 'codex' })
     memoria.close()
 

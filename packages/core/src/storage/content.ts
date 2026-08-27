@@ -14,7 +14,7 @@ import { feedbackMigrations } from '../cognition/feedback.js'
 import { clusterMigrations } from '../cognition/clusters.js'
 import { selfObservationMigrations } from '../cognition/self-observation.js'
 import { revisionMigrations } from '../cognition/revision.js'
-import { loadVecExtension } from '../vector/vec-table.js'
+import { loadVecExtension, purgeFactVectors } from '../vector/vec-table.js'
 import { fromJsonArray, newId, nowISO, toJson } from '../util.js'
 import type { Fact, LifecycleState, Sensitivity, Visibility, WalEntry } from '../types.js'
 
@@ -392,19 +392,13 @@ export class ContentStore {
       this.db.prepare(`DELETE FROM embeddings WHERE owner_type = 'fact' AND owner_id IN (${placeholders})`).run(...all)
       this.db.prepare(`DELETE FROM fact_topics WHERE fact_id IN (${placeholders})`).run(...all)
       this.db.prepare(`DELETE FROM memory_projection WHERE fact_id IN (${placeholders})`).run(...all)
-      // index vectoriels — UNIQUEMENT les tables virtuelles vec_index_<dims>
-      // (PAS leurs shadow tables vec_index_N_chunks/_rowids/…)
-      const vecTables = (
-        this.db
-          .prepare("SELECT name FROM sqlite_master WHERE name LIKE 'vec\\_index\\_%' ESCAPE '\\'")
-          .all() as Array<{ name: string }>
-      ).filter(t => /^vec_index_\d+$/.test(t.name))
-      // L'accès aux tables vec0 exige l'extension chargée dans CETTE connexion.
-      if (vecTables.length > 0 && loadVecExtension(this.db)) {
-        for (const t of vecTables) {
-          this.db.prepare(`DELETE FROM "${t.name}" WHERE fact_id IN (${placeholders})`).run(...all)
-        }
-      }
+      // Index vectoriels : legacy `vec_index_<dims>` ET nommés `vec_index_<dims>_<modèle>`
+      // (depuis 27/08). Le filtre `/^vec_index_\d+$/` d'avant ignorait les index
+      // nommés → le vecteur d'un fait effacé (oubli, rejet de revue, partage)
+      // restait dans le KNN : « aucune trace » (spec §11) n'était plus tenu.
+      // purgeFactVectors énumère les vraies tables vec0 (pas leurs shadow tables)
+      // et charge l'extension dans CETTE connexion si besoin.
+      if (loadVecExtension(this.db)) purgeFactVectors(this.db, all)
       const r = this.db.prepare(`DELETE FROM facts WHERE id IN (${placeholders})`).run(...all)
       n = r.changes
       return n

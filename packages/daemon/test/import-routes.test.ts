@@ -12,7 +12,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createSyntheticLegacyDb, importLegacyDb, type CompleteOptions, type LlmProvider } from '@memoria/core'
 import { startDaemon, type ImportJobStatus, type RunningDaemon } from '../src/index.js'
 
@@ -252,4 +252,90 @@ describe('import_start — legacy', () => {
     expect(done.state).toBe('error')
     expect(done.error).toBeTruthy()
   })
+})
+
+/**
+ * Arrêt du daemon PENDANT un import (stop, mise à jour, crash) : l'état ne
+ * vivait qu'en mémoire → au redémarrage import_status disait « idle », et
+ * l'utilisateur qui avait lancé 1 355 fichiers ne savait ni que c'était
+ * coupé, ni où. Désormais : persisté sur disque, `interrupted` annoncé.
+ */
+describe('import interrompu par l’arrêt du daemon', () => {
+  it('close() pendant le job → au redémarrage, state interrupted + progression atteinte + message', async () => {
+    await boot(new FakeExtraction(300))
+    const instance = await connect('claude-code')
+    writeClaudeTranscript('a.jsonl', 'scaleway')
+    writeClaudeTranscript('b.jsonl', 'convex')
+    writeClaudeTranscript('c.jsonl', 'vitest')
+    const started = await post('/v1/admin/import_start', { instance_id: instance, kind: 'transcripts' })
+    expect(started.status).toBe(200)
+    await new Promise(r => setTimeout(r, 100))
+    expect((await get('/v1/admin/import_status')).json['state']).toBe('running')
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await daemon!.close()
+    warn.mockRestore()
+    daemon = null
+
+    // Le daemon suivant relit le statut : interrompu, pas « idle ».
+    await boot(new FakeExtraction())
+    const after = (await get('/v1/admin/import_status')).json as unknown as ImportJobStatus
+    expect(after.state).toBe('interrupted')
+    expect(after.kind).toBe('transcripts')
+    expect(after.instance_id).toBe(instance)
+    expect(after.progress.files_total).toBe(3)
+    expect(after.error).toContain('interrompu')
+    expect(after.error).toContain('relance')
+    expect(after.finished_at).toBeTruthy()
+    // et un nouvel import repart (l'état interrompu ne bloque pas)
+    expect((await post('/v1/admin/import_start', { instance_id: instance, kind: 'transcripts' })).status).toBe(200)
+    expect((await waitJob()).state).toBe('done')
+  }, 30_000)
+
+  it('crash (statut « running » laissé sur disque) → interrupted au boot', async () => {
+    await boot(new FakeExtraction())
+    const root0 = join(root, 'storage')
+    await daemon!.close()
+    daemon = null
+    const { writeFileSync: write } = await import('node:fs')
+    write(
+      join(root0, 'import-status.json'),
+      JSON.stringify({ state: 'running', kind: 'transcripts', instance_id: 'i1', progress: { files_done: 508, files_total: 1355, facts_imported: 12 }, error: null, errors: [], started_at: '2026-08-26T19:00:00.000Z', finished_at: null }),
+    )
+    await boot(new FakeExtraction())
+    const s = (await get('/v1/admin/import_status')).json as unknown as ImportJobStatus
+    expect(s.state).toBe('interrupted')
+    expect(s.progress).toEqual({ files_done: 508, files_total: 1355, facts_imported: 12 })
+    expect(s.error).toContain('508/1355')
+  })
+
+  it('le résultat d’un import terminé survit au redémarrage (l’utilisateur revoit le bilan)', async () => {
+    await boot(new FakeExtraction())
+    const instance = await connect('claude-code')
+    writeClaudeTranscript('a.jsonl', 'postgres')
+    await post('/v1/admin/import_start', { instance_id: instance, kind: 'transcripts' })
+    const done = await waitJob()
+    expect(done.state).toBe('done')
+    await daemon!.close()
+    daemon = null
+    await boot(new FakeExtraction())
+    const s = (await get('/v1/admin/import_status')).json as unknown as ImportJobStatus
+    expect(s.state).toBe('done')
+    expect(s.progress.facts_imported).toBe(done.progress.facts_imported)
+  })
+
+  it('POST /v1/admin/update pendant un import → 409 (une mise à jour redémarre le daemon)', async () => {
+    await boot(new FakeExtraction(300))
+    const instance = await connect('claude-code')
+    writeClaudeTranscript('a.jsonl', 'scaleway')
+    writeClaudeTranscript('b.jsonl', 'convex')
+    await post('/v1/admin/import_start', { instance_id: instance, kind: 'transcripts' })
+    const r = await post('/v1/admin/update', {})
+    expect(r.status).toBe(409)
+    expect(String(r.json['error'])).toContain('import')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await daemon!.close() // interrompt proprement, le job ne pollue pas le test suivant
+    warn.mockRestore()
+    daemon = null
+  }, 30_000)
 })

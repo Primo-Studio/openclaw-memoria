@@ -11,8 +11,9 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import type { CompleteOptions, CompletionResult, EmbeddingProvider, EmbeddingResult, LlmProvider, LlmUsage } from './provider.js'
+import { LlmTruncatedError, type CompleteOptions, type CompletionResult, type EmbeddingProvider, type EmbeddingResult, type LlmProvider, type LlmUsage } from './provider.js'
 import { assertVectorDimensions } from './embeddings-guard.js'
+import { fetchWithTimeout } from './http.js'
 
 export const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini'
 export const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1'
@@ -108,7 +109,9 @@ export class OpenAiProvider implements LlmProvider {
     this.model = opts.model ?? (this.flavor === 'openrouter' ? DEFAULT_OPENROUTER_MODEL : DEFAULT_OPENAI_MODEL)
     this.apiKey = resolveOpenAiApiKey(opts)
     this.baseUrl = (opts.baseUrl ?? (this.flavor === 'openrouter' ? DEFAULT_OPENROUTER_BASE_URL : DEFAULT_OPENAI_BASE_URL)).replace(/\/$/, '')
-    this.timeoutMs = opts.timeoutMs ?? 30_000
+    // Les modèles à raisonnement paient leur réflexion AVANT de répondre : sur
+    // un long tour, 30 s ne suffisent pas (abandons WAL vus en production).
+    this.timeoutMs = opts.timeoutMs ?? (usesCompletionTokens(this.model) ? 60_000 : 30_000)
   }
 
   isAvailable(): Promise<boolean> {
@@ -181,12 +184,12 @@ export class OpenAiProvider implements LlmProvider {
       headers['X-Title'] = 'Memoria'
     }
 
-    const res = await fetch(`${this.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(this.timeoutMs),
-    })
+    const res = await fetchWithTimeout(
+      `${this.baseUrl}/chat/completions`,
+      { method: 'POST', headers, body: JSON.stringify(body) },
+      this.timeoutMs,
+      { provider: this.flavor, model: this.model, what: '/chat/completions' },
+    )
     if (!res.ok) {
       const detail = await res.text().catch(() => '')
       throw new Error(`${this.flavor} /chat/completions HTTP ${res.status} (modèle ${this.model}) : ${detail.slice(0, 200)}`)
@@ -197,24 +200,26 @@ export class OpenAiProvider implements LlmProvider {
     if (typeof content !== 'string') {
       throw new Error(`réponse ${this.flavor} invalide : choices[0].message.content absent (modèle ${this.model})`)
     }
-    // Une réponse VIDE n'est pas une réponse. Remonter `""` laissait l'appelant
-    // échouer plus loin sur « sans JSON : «  » », sans jamais dire POURQUOI.
-    // On expose ici les seuls éléments qui permettent de trancher : la raison
-    // d'arrêt et le détail des tokens (dont ceux de raisonnement).
+    // Budget épuisé (`finish_reason: length`) : contenu VIDE (tout parti en
+    // raisonnement, cas gpt-5) ou COUPÉ en route (JSON incomplet). Dans les deux
+    // cas, rendre le texte laissait l'appelant échouer plus loin sur « sans
+    // JSON » / « JSON invalide » sans jamais dire POURQUOI. On expose ce qui
+    // permet de trancher : la raison d'arrêt et le détail des tokens.
+    const finish = choice?.finish_reason
+    if (finish === 'length') {
+      throw new LlmTruncatedError({
+        provider: this.flavor,
+        model: this.model,
+        budget: usesCompletionTokens(this.model) ? Math.max(opts.maxTokens ?? 1024, REASONING_TOKEN_FLOOR) : (opts.maxTokens ?? 1024),
+        empty: content.trim() === '',
+        outputTokens: data.usage?.completion_tokens,
+        reasoningTokens: data.usage?.completion_tokens_details?.reasoning_tokens,
+        finishField: 'finish_reason=length',
+      })
+    }
+    // Une réponse VIDE n'est pas une réponse, même hors troncature.
     if (content.trim() === '') {
-      const finish = choice?.finish_reason ?? 'inconnu'
-      const usage = data.usage
-      const reasoning = usage?.completion_tokens_details?.reasoning_tokens
-      const budget = usesCompletionTokens(this.model)
-        ? Math.max(opts.maxTokens ?? 1024, REASONING_TOKEN_FLOOR)
-        : (opts.maxTokens ?? 1024)
-      const hint =
-        finish === 'length'
-          ? ` — budget épuisé avant la réponse (max=${budget}${reasoning !== undefined ? `, raisonnement=${reasoning}` : ''}) : augmenter maxTokens ou baisser reasoning_effort`
-          : ''
-      throw new Error(
-        `${this.flavor} a renvoyé une réponse VIDE (modèle ${this.model}, finish_reason=${finish})${hint}`,
-      )
+      throw new Error(`${this.flavor} a renvoyé une réponse VIDE (modèle ${this.model}, finish_reason=${finish ?? 'inconnu'})`)
     }
     return { text: content, usage: usageOf(data.usage) }
   }
@@ -291,12 +296,12 @@ export class OpenAiEmbeddingProvider implements EmbeddingProvider {
     // l'appelant s'écarte du défaut du modèle.
     if (this.dimensions !== DEFAULT_OPENAI_EMBEDDING_DIMENSIONS) body['dimensions'] = this.dimensions
 
-    const res = await fetch(`${this.baseUrl}/embeddings`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.apiKey}` },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(this.timeoutMs),
-    })
+    const res = await fetchWithTimeout(
+      `${this.baseUrl}/embeddings`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.apiKey}` }, body: JSON.stringify(body) },
+      this.timeoutMs,
+      { provider: 'openai', model: this.model, what: '/embeddings' },
+    )
     if (!res.ok) {
       const detail = await res.text().catch(() => '')
       throw new Error(`openai /embeddings HTTP ${res.status} (modèle ${this.model}) : ${detail.slice(0, 200)}`)

@@ -98,6 +98,54 @@ describe('TopicEngine', () => {
   })
 })
 
+describe('TopicEngine — consolidation (anti-fragmentation)', () => {
+  const sample = [
+    'Le devis GCSMS pour la plénière annuelle est à 1 209 € avec remise de 5 %',
+    'Le devis GCSMS inclut une option vidéo à 752 € avec assistant caméra',
+    'Marion Dol est le contact pour le devis GCSMS de la plénière',
+    'Le build 17 de JamBoard est bloqué en WAITING_FOR_REVIEW chez Apple',
+    'Le build 18 de JamBoard corrige le rejet Apple sur Sign in with Apple',
+    'JamBoard utilise Firebase eur3 et un compte démo appreview@primo-studio.fr',
+    'Néto prend son café sans sucre le matin',
+    'Le NAS QNAP héberge environ 12 GB de sauvegardes vidéo',
+    'La télécommande Clim-Haier passe par le cloud hOn, pas d’API locale',
+    'Le Mac Studio de Néto tourne sous macOS 26 avec 64 GB de RAM',
+  ]
+
+  it('un fait qui partage l’entité PRINCIPALE d’un thème le rejoint (pas un thème homonyme de plus)', async () => {
+    for (const f of sample) await add(f)
+    const list = topics.listTopics()
+    const names = list.map(t => t.name.toLowerCase())
+    expect(new Set(names).size).toBe(names.length) // jamais deux thèmes du même nom
+    expect(list.find(t => /gcsms/i.test(t.name))?.fact_count).toBe(3)
+    expect(list.find(t => /jamboard/i.test(t.name))?.fact_count).toBe(3)
+    expect(list.length).toBeLessThanOrEqual(6)
+  })
+
+  it('libellés : pas de sigle-unité (GB, API), casse préservée (« Néto », pas « NÉTo »)', async () => {
+    for (const f of sample) await add(f)
+    for (const t of topics.listTopics()) {
+      expect(t.name).not.toMatch(/\b(GB|API|RAM)\b/)
+      expect(t.name).not.toMatch(/NÉTo/)
+    }
+    expect(topics.listTopics().some(t => t.name === 'Néto')).toBe(true)
+  })
+
+  it('une unité partagée (GB) ne suffit pas à réunir deux faits sans rapport', async () => {
+    const nas = await add('Le NAS QNAP héberge environ 12 GB de sauvegardes vidéo')
+    const mac = await add('Le Mac Studio tourne sous macOS 26 avec 64 GB de RAM')
+    expect(topics.topicsForFact(nas)[0]!.id).not.toBe(topics.topicsForFact(mac)[0]!.id)
+  })
+
+  it('un libellé déjà pris désigne le thème existant — jamais deux thèmes homonymes', async () => {
+    await add('Le devis GCSMS est parti hier')
+    await add('GCSMS a confirmé la date de la plénière')
+    const gcsms = topics.listTopics().filter(t => /^gcsms$/i.test(t.name))
+    expect(gcsms).toHaveLength(1)
+    expect(gcsms[0]!.fact_count).toBe(2)
+  })
+})
+
 /** Insère un topic « nu » (sans passer par assignFact) pour tester relations(). */
 function seedTopic(store: ContentStore, id: string, name: string, factCount: number): void {
   const ts = new Date().toISOString()

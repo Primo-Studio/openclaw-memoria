@@ -2,7 +2,8 @@
  * `memoria import` (mission B5) — mince client des routes daemon :
  * enregistrement de la commande, validation des arguments, flux complet avec
  * fetch stubé (import_start → polling import_status → résumé), erreurs daemon
- * arrêté et job en échec. Aucun réseau réel, aucun vrai HOME.
+ * arrêté et job en échec, coupures réseau transitoires pendant le polling et
+ * attente d'un import concurrent (409). Aucun réseau réel, aucun vrai HOME.
  */
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -154,6 +155,161 @@ describe('memoria import', () => {
     const code = await cli.run(args('import', '--instance', 'inst-1', '--legacy', '/tmp/legacy.db', '--poll-ms', '10'), io.context)
     expect(code).toBe(1)
     expect(io.err()).toContain('integrity_check non-ok')
+  })
+
+  it('polling : « fetch failed » transitoires tolérés (compteur remis à zéro), l’import va au bout', async () => {
+    aliveDaemon()
+    let polls = 0
+    const fetchMock = vi.fn(async (url: string | URL | Request) => {
+      const u = String(url)
+      if (u.endsWith('/v1/health')) return jsonResponse({ ok: true, version: 'test', daemon_id: 'd-test' })
+      if (u.endsWith('/v1/admin/import_start')) return jsonResponse(status('running', { files_total: 3 }))
+      if (u.endsWith('/v1/admin/import_status')) {
+        polls++
+        // 2 coupures, une réponse, 3 coupures encore (le compteur est bien remis à zéro), puis la fin.
+        if (polls <= 2 || (polls >= 4 && polls <= 6)) throw new TypeError('fetch failed')
+        if (polls === 3) return jsonResponse(status('running', { files_done: 1, files_total: 3, facts_imported: 2 }))
+        return jsonResponse(status('done', { files_done: 3, files_total: 3, facts_imported: 9 }, { finished_at: new Date().toISOString() }))
+      }
+      throw new Error(`URL inattendue : ${u}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const cli = buildCli()
+    const io = makeIo()
+    const code = await cli.run(args('import', '--instance', 'inst-1', '--transcripts', '--poll-ms', '10'), io.context)
+    expect(code).toBe(0)
+    expect(polls).toBe(7)
+    expect(io.out()).toContain('daemon momentanément injoignable (fetch failed), on réessaie… (1/10)')
+    expect(io.out()).toContain('(3/10)')
+    expect(io.out()).not.toContain('(4/10)')
+    expect(io.out()).toContain('✓ 9 souvenir(s) importé(s)')
+    expect(io.err()).toBe('')
+  })
+
+  it('polling : au-delà de 10 coupures d’affilée → abandon avec un message clair (l’import continue peut-être)', async () => {
+    aliveDaemon()
+    let polls = 0
+    const fetchMock = vi.fn(async (url: string | URL | Request) => {
+      const u = String(url)
+      if (u.endsWith('/v1/health')) return jsonResponse({ ok: true, version: 'test', daemon_id: 'd-test' })
+      if (u.endsWith('/v1/admin/import_start')) return jsonResponse(status('running', { files_total: 3 }))
+      if (u.endsWith('/v1/admin/import_status')) {
+        polls++
+        throw new TypeError('fetch failed')
+      }
+      throw new Error(`URL inattendue : ${u}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const cli = buildCli()
+    const io = makeIo()
+    const code = await cli.run(args('import', '--instance', 'inst-1', '--transcripts', '--poll-ms', '10'), io.context)
+    expect(code).toBe(1)
+    expect(polls).toBe(11)
+    expect(io.out()).toContain('(10/10)')
+    expect(io.err()).toContain('injoignable 11 fois')
+    expect(io.err()).toContain('continue peut-être côté daemon')
+    expect(io.err()).not.toContain('    at ') // pas de stack
+  })
+
+  it('polling : une erreur HTTP du daemon (401 : clé changée) reste fatale, pas « transitoire »', async () => {
+    aliveDaemon()
+    const fetchMock = vi.fn(async (url: string | URL | Request) => {
+      const u = String(url)
+      if (u.endsWith('/v1/health')) return jsonResponse({ ok: true, version: 'test', daemon_id: 'd-test' })
+      if (u.endsWith('/v1/admin/import_start')) return jsonResponse(status('running', { files_total: 3 }))
+      if (u.endsWith('/v1/admin/import_status')) return jsonResponse({ error: 'token admin requis' }, 401)
+      throw new Error(`URL inattendue : ${u}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const cli = buildCli()
+    const io = makeIo()
+    expect(await cli.run(args('import', '--instance', 'inst-1', '--transcripts', '--poll-ms', '10'), io.context)).toBe(1)
+    expect(io.err()).toContain('401')
+    expect(io.out()).not.toContain('injoignable')
+  })
+
+  it('import_start → 409 : attend la fin de l’import en cours, puis relance le sien', async () => {
+    aliveDaemon()
+    let starts = 0
+    let polls = 0
+    const fetchMock = vi.fn(async (url: string | URL | Request) => {
+      const u = String(url)
+      if (u.endsWith('/v1/health')) return jsonResponse({ ok: true, version: 'test', daemon_id: 'd-test' })
+      if (u.endsWith('/v1/admin/import_start')) {
+        starts++
+        if (starts === 1) return jsonResponse({ error: 'un import est déjà en cours — attends sa fin (GET /v1/admin/import_status)' }, 409)
+        return jsonResponse(status('running', { files_total: 2 }))
+      }
+      if (u.endsWith('/v1/admin/import_status')) {
+        polls++
+        // L'import de l'autre instance : 2 sondes en cours, puis terminé.
+        if (polls <= 2) return jsonResponse(status('running', { files_done: polls, files_total: 5 }, { instance_id: 'inst-autre' }))
+        if (polls === 3) return jsonResponse(status('done', { files_done: 5, files_total: 5, facts_imported: 4 }, { instance_id: 'inst-autre' }))
+        // Puis le nôtre.
+        return jsonResponse(status('done', { files_done: 2, files_total: 2, facts_imported: 7 }, { finished_at: new Date().toISOString() }))
+      }
+      throw new Error(`URL inattendue : ${u}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const cli = buildCli()
+    const io = makeIo()
+    const code = await cli.run(args('import', '--instance', 'inst-1', '--transcripts', '--poll-ms', '10'), io.context)
+    expect(code).toBe(0)
+    expect(starts).toBe(2)
+    expect(polls).toBe(4)
+    expect(io.out()).toContain('Un autre import est déjà en cours')
+    expect(io.out()).toContain('(import en cours : 2/5 fichier(s)')
+    expect(io.out()).toContain('Import précédent terminé (done)')
+    expect(io.out()).toContain('Import des conversations lancé…')
+    expect(io.out()).toContain('✓ 7 souvenir(s) importé(s)')
+  })
+
+  it('import_start → 409 obstiné (5 attentes) → on renonce avec un message, pas de boucle infinie', async () => {
+    aliveDaemon()
+    let starts = 0
+    const fetchMock = vi.fn(async (url: string | URL | Request) => {
+      const u = String(url)
+      if (u.endsWith('/v1/health')) return jsonResponse({ ok: true, version: 'test', daemon_id: 'd-test' })
+      if (u.endsWith('/v1/admin/import_start')) {
+        starts++
+        return jsonResponse({ error: 'un import est déjà en cours' }, 409)
+      }
+      if (u.endsWith('/v1/admin/import_status')) return jsonResponse(status('idle', {}, { kind: null, instance_id: null }))
+      throw new Error(`URL inattendue : ${u}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const cli = buildCli()
+    const io = makeIo()
+    expect(await cli.run(args('import', '--instance', 'inst-1', '--transcripts', '--poll-ms', '10'), io.context)).toBe(1)
+    expect(starts).toBe(6)
+    expect(io.err()).toContain('occupe toujours le daemon')
+  })
+
+  it('la ligne de progression n’est réécrite que quand elle change (journal lisible)', async () => {
+    aliveDaemon()
+    let polls = 0
+    const fetchMock = vi.fn(async (url: string | URL | Request) => {
+      const u = String(url)
+      if (u.endsWith('/v1/health')) return jsonResponse({ ok: true, version: 'test', daemon_id: 'd-test' })
+      if (u.endsWith('/v1/admin/import_start')) return jsonResponse(status('running', { files_total: 2 }))
+      if (u.endsWith('/v1/admin/import_status')) {
+        polls++
+        if (polls <= 4) return jsonResponse(status('running', { files_done: 1, files_total: 2, facts_imported: 3 }))
+        return jsonResponse(status('done', { files_done: 2, files_total: 2, facts_imported: 3 }))
+      }
+      throw new Error(`URL inattendue : ${u}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const cli = buildCli()
+    const io = makeIo()
+    expect(await cli.run(args('import', '--instance', 'inst-1', '--transcripts', '--poll-ms', '10'), io.context)).toBe(0)
+    expect(io.out().split('1/2 fichier(s) — 3 souvenir(s)').length - 1).toBe(1)
   })
 
   it('422 du daemon (pas de LLM) → message « moteur d’intelligence » remonté tel quel', async () => {

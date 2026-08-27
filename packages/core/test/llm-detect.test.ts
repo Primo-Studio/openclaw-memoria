@@ -14,6 +14,7 @@ import {
   copyOpenClawKey,
   detectLlmOptions,
   scanOpenClawCredentials,
+  verifyProviderKey,
 } from '../src/index.js'
 
 type FetchFn = (input: string | URL | Request, init?: RequestInit) => Promise<Response>
@@ -275,5 +276,63 @@ describe('Memoria.llmHealth', () => {
     } finally {
       m.close()
     }
+  })
+})
+
+describe('verifyProviderKey — une clé collée est TESTÉE, pas seulement écrite', () => {
+  it('OpenAI : HTTP 200 sur /models → valid ; la clé ne sort jamais dans le détail', async () => {
+    fetchMock.mockImplementation(async () => jsonResponse({ data: [{ id: 'gpt-4o-mini' }] }))
+    const r = await verifyProviderKey('openai', 'sk-secret-123')
+    expect(r.status).toBe('valid')
+    expect(r.http_status).toBe(200)
+    const [url, init] = fetchMock.mock.calls[0]!
+    expect(String(url)).toBe('https://api.openai.com/v1/models')
+    expect((init?.headers as Record<string, string>)['Authorization']).toBe('Bearer sk-secret-123')
+    expect(JSON.stringify(r)).not.toContain('sk-secret-123')
+  })
+
+  it('OpenAI : HTTP 401 → invalid avec un détail lisible (clé refusée, code HTTP)', async () => {
+    fetchMock.mockImplementation(async () => new Response('{"error":{"message":"Incorrect API key"}}', { status: 401 }))
+    const r = await verifyProviderKey('openai', 'sk-bad')
+    expect(r.status).toBe('invalid')
+    expect(r.http_status).toBe(401)
+    expect(r.detail).toMatch(/refusée.*OpenAI.*401/i)
+    expect(r.detail).not.toContain('sk-bad')
+  })
+
+  it('Anthropic : en-têtes x-api-key + anthropic-version ; 403 → invalid', async () => {
+    fetchMock.mockImplementation(async () => new Response('forbidden', { status: 403 }))
+    const r = await verifyProviderKey('anthropic', 'sk-ant-x')
+    expect(r.status).toBe('invalid')
+    const [url, init] = fetchMock.mock.calls[0]!
+    expect(String(url)).toBe('https://api.anthropic.com/v1/models')
+    const h = init?.headers as Record<string, string>
+    expect(h['x-api-key']).toBe('sk-ant-x')
+    expect(h['anthropic-version']).toBeTruthy()
+  })
+
+  it('OpenRouter : vérifie sur /auth/key (le catalogue /models est public et ne prouve rien)', async () => {
+    fetchMock.mockImplementation(async () => jsonResponse({ data: { label: 'x' } }))
+    const r = await verifyProviderKey('openrouter', 'or-x')
+    expect(r.status).toBe('valid')
+    expect(String(fetchMock.mock.calls[0]![0])).toBe('https://openrouter.ai/api/v1/auth/key')
+  })
+
+  it('réseau KO ou 5xx → unknown (on ne déclare pas une clé fausse sur une panne), détail explicite', async () => {
+    fetchMock.mockRejectedValue(new TypeError('fetch failed'))
+    const r1 = await verifyProviderKey('openai', 'sk-x')
+    expect(r1.status).toBe('unknown')
+    expect(r1.detail).toMatch(/injoignable|réseau/i)
+
+    fetchMock.mockImplementation(async () => new Response('oops', { status: 503 }))
+    const r2 = await verifyProviderKey('openai', 'sk-x')
+    expect(r2.status).toBe('unknown')
+    expect(r2.http_status).toBe(503)
+  })
+
+  it('clé vide → invalid sans appel réseau', async () => {
+    const r = await verifyProviderKey('openai', '   ')
+    expect(r.status).toBe('invalid')
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })

@@ -24,7 +24,8 @@ export type {
   LlmProfile,
   LlmProvider,
 } from './provider.js'
-export { NullLlmProvider } from './provider.js'
+export { LlmTimeoutError, LlmTruncatedError, NullLlmProvider } from './provider.js'
+export { fetchWithTimeout } from './http.js'
 export {
   DEFAULT_LOCAL_EXTRACTION_MODEL,
   DEFAULT_OLLAMA_BASE_URL,
@@ -48,6 +49,7 @@ export {
   defaultHasCommand,
   detectLlmOptions,
   scanOpenClawCredentials,
+  verifyProviderKey,
 } from './detect.js'
 export type {
   ApiKeyOption,
@@ -59,6 +61,7 @@ export type {
   OpenClawKeyCandidate,
   OpenClawOption,
   OpenClawScan,
+  ProviderKeyCheck,
   ReusableProvider,
 } from './detect.js'
 export {
@@ -85,7 +88,7 @@ export {
 } from './openai.js'
 export type { OpenAiKeyOptions, OpenAiProviderOptions, OpenAiFlavor, OpenAiEmbeddingProviderOptions } from './openai.js'
 export { assertVectorDimensions, cosineSimilarity } from './embeddings-guard.js'
-export { auditExtraction, auditEmbeddings, isCloudProvider, formatCloudSend } from './cloud-audit.js'
+export { auditExtraction, auditEmbeddings, classifyLlmError, isCloudProvider, formatCloudSend } from './cloud-audit.js'
 export * from './usage-meter.js'
 export * from './pricing.js'
 export type { CloudSend, CloudAuditSink } from './cloud-audit.js'

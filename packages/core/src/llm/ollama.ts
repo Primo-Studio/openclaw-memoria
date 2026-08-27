@@ -4,8 +4,9 @@
  * isAvailable() vérifie que le serveur répond ET que le modèle est tiré
  * (GET /api/tags) — un échec réseau retourne false mais N'EST JAMAIS muet.
  */
-import type { CompleteOptions, CompletionResult, EmbeddingProvider, EmbeddingResult, LlmProvider, LlmUsage } from './provider.js'
+import { LlmTruncatedError, type CompleteOptions, type CompletionResult, type EmbeddingProvider, type EmbeddingResult, type LlmProvider, type LlmUsage } from './provider.js'
 import { assertVectorDimensions } from './embeddings-guard.js'
+import { fetchWithTimeout } from './http.js'
 
 export const DEFAULT_OLLAMA_BASE_URL = 'http://127.0.0.1:11434'
 export const DEFAULT_OLLAMA_EMBEDDING_MODEL = 'nomic-embed-text'
@@ -74,29 +75,49 @@ export class OllamaProvider implements LlmProvider {
     if (opts.system) messages.push({ role: 'system', content: opts.system })
     messages.push({ role: 'user', content: opts.prompt })
 
-    const res = await fetch(`${this.baseUrl}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: this.model,
-        messages,
-        stream: false,
-        options: {
-          num_predict: opts.maxTokens ?? 1024,
-          temperature: opts.temperature ?? 0.1,
-        },
-        format: opts.json ? 'json' : undefined,
-      }),
-      signal: AbortSignal.timeout(this.timeoutMs),
-    })
+    const res = await fetchWithTimeout(
+      `${this.baseUrl}/api/chat`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: this.model,
+          messages,
+          stream: false,
+          options: {
+            num_predict: opts.maxTokens ?? 1024,
+            temperature: opts.temperature ?? 0.1,
+          },
+          format: opts.json ? 'json' : undefined,
+        }),
+      },
+      this.timeoutMs,
+      { provider: 'ollama', model: this.model, what: '/api/chat' },
+    )
     if (!res.ok) {
       const detail = await res.text().catch(() => '')
       throw new Error(`ollama /api/chat HTTP ${res.status} (modèle ${this.model}) : ${detail.slice(0, 200)}`)
     }
-    const data = (await res.json()) as { message?: { content?: string }; prompt_eval_count?: number; eval_count?: number }
+    const data = (await res.json()) as {
+      message?: { content?: string }
+      done_reason?: string
+      prompt_eval_count?: number
+      eval_count?: number
+    }
     const content = data.message?.content
     if (typeof content !== 'string') {
       throw new Error(`réponse ollama invalide : message.content absent (modèle ${this.model})`)
+    }
+    // Coupé par num_predict : un JSON incomplet n'est pas une réponse (voir LlmTruncatedError).
+    if (data.done_reason === 'length') {
+      throw new LlmTruncatedError({
+        provider: 'ollama',
+        model: this.model,
+        budget: opts.maxTokens ?? 1024,
+        empty: content.trim() === '',
+        outputTokens: data.eval_count,
+        finishField: 'done_reason=length',
+      })
     }
     // Ollama compte lui-même : prompt_eval_count (entrée) + eval_count (sortie).
     const usage: LlmUsage = {}
@@ -137,12 +158,12 @@ export class OllamaEmbeddingProvider implements EmbeddingProvider {
 
   async embedDetailed(texts: string[]): Promise<EmbeddingResult> {
     if (texts.length === 0) return { vectors: [] }
-    const res = await fetch(`${this.baseUrl}/api/embed`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: this.model, input: texts }),
-      signal: AbortSignal.timeout(this.timeoutMs),
-    })
+    const res = await fetchWithTimeout(
+      `${this.baseUrl}/api/embed`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: this.model, input: texts }) },
+      this.timeoutMs,
+      { provider: 'ollama', model: this.model, what: '/api/embed' },
+    )
     if (!res.ok) {
       const detail = await res.text().catch(() => '')
       throw new Error(`ollama /api/embed HTTP ${res.status} (modèle ${this.model}) : ${detail.slice(0, 200)}`)

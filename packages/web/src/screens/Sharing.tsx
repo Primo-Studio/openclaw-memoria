@@ -23,6 +23,7 @@ import {
   type ScopeAccess,
 } from '../api'
 import { useT } from '../i18n'
+import { ErrorBanner, Spinner, humanError, listPhase } from '../components/ui'
 
 type Translate = (key: string, vars?: Record<string, string | number>) => string
 
@@ -43,13 +44,15 @@ export function Sharing() {
       setAgents(a)
       setError(null)
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : t('sharing.error_service'))
+      setError(err instanceof ApiError ? err.message : humanError(err))
     }
-  }, [t])
+  }, [])
 
   useEffect(() => {
     void refresh()
   }, [refresh])
+
+  const phase = listPhase(scopes, error)
 
   const toggle = useCallback(
     async (assistantId: string, scope: ScopeAccess, next: boolean) => {
@@ -77,16 +80,16 @@ export function Sharing() {
         </div>
       </header>
 
-      {error && <div className="error-banner">{error}</div>}
+      {error && <ErrorBanner message={error} onRetry={() => void refresh()} />}
 
       <div className="settings-block">
         <h2>{t('sharing.matrix_title')}</h2>
-        {scopes === null ? (
-          <div className="spinner-row"><span className="spinner" aria-hidden /> {t('common.loading')}</div>
-        ) : scopes.length === 0 ? (
+        {phase === 'loading' ? (
+          <Spinner />
+        ) : phase === 'failed' || scopes === null ? null : scopes.length === 0 ? (
           <p className="muted">{t('sharing.matrix_empty')}</p>
         ) : (
-          <table className="share-matrix">
+          <div className="table-wrap"><table className="share-matrix">
             <thead>
               <tr>
                 <th>{t('sharing.col_scope')}</th>
@@ -125,7 +128,7 @@ export function Sharing() {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </table></div>
         )}
         {exploring && <ScopeContent scopeId={exploring} onError={setError} />}
       </div>

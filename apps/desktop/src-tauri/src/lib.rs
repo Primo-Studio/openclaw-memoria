@@ -16,12 +16,14 @@ use serde::{Deserialize, Serialize};
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
+use tauri::{Manager, RunEvent, WindowEvent};
 use std::env;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 // ---------------------------------------------------------------------------
@@ -337,28 +339,59 @@ fn spawn_daemon(node: &NodeInfo, bin: &Path) -> Result<PathBuf, String> {
     Ok(log_path)
 }
 
-/// Cœur de `start_daemon` : réutilise un daemon vivant, sinon spawn + attente
-/// de `daemon.json` + health (budget 15 s, mêmes constantes qu'`ensureDaemon`).
+/// Comment démarrer le daemon, décidé à partir de ce qu'on a observé.
+#[derive(Debug, PartialEq, Eq)]
+enum StartPlan {
+    /// Un daemon répond déjà sur ce port : rien à lancer.
+    Reuse(u16),
+    /// Un service launchd (`memoria autostart on`) chargé vise ce stockage :
+    /// c'est LUI qui doit lancer le daemon (label `gui/<uid>/…`).
+    Kickstart(String),
+    /// Ni daemon vivant ni launchd : `node bin.js` détaché, lancé par l'app.
+    Spawn,
+}
+
+/// Politique de démarrage, pure (testable sans daemon ni launchd) : daemon
+/// vivant > service launchd chargé > spawn direct. Spawner alors qu'un service
+/// launchd existe prendrait daemon.lock et ferait boucler launchd en échec ;
+/// et après un arrêt propre, launchd ne relance pas seul
+/// (KeepAlive.SuccessfulExit=false) → kickstart explicite.
+fn decide_start(running_port: Option<u16>, launchd_label: Option<String>) -> StartPlan {
+    match (running_port, launchd_label) {
+        (Some(port), _) => StartPlan::Reuse(port),
+        (None, Some(label)) => StartPlan::Kickstart(label),
+        (None, None) => StartPlan::Spawn,
+    }
+}
+
+/// Cœur de `start_daemon` : réutilise un daemon vivant, sinon launchd, sinon
+/// spawn + attente de `daemon.json` + health (budget 15 s, mêmes constantes
+/// qu'`ensureDaemon`).
 fn start_daemon_blocking() -> Result<DaemonInfo, String> {
     let storage_root = resolve_storage_root()?;
-    if let Some(state) = read_daemon_state(&storage_root) {
-        if http_health(state.port) {
-            return Ok(DaemonInfo { port: state.port, healthy: true });
-        }
-    }
-
-    // Service launchd (`memoria autostart on`) installé pour CE stockage :
-    // c'est LUI qui doit lancer le daemon. Spawner ici prendrait daemon.lock et
-    // ferait boucler launchd en échec ; et après un arrêt propre, launchd ne
-    // relance pas seul (KeepAlive.SuccessfulExit=false) → kickstart explicite.
+    let running_port = read_daemon_state(&storage_root)
+        .filter(|state| http_health(state.port))
+        .map(|state| state.port);
+    // launchctl n'est interrogé que si nécessaire (un process de plus, sinon).
     #[cfg(target_os = "macos")]
-    if let Some(label) = launchd_service_for(&storage_root) {
-        if launchd_kickstart(&label) {
-            if let Some(info) = wait_for_health(&storage_root, Duration::from_secs(15)) {
-                return Ok(info);
+    let launchd_label = running_port.is_none().then(|| launchd_service_for(&storage_root)).flatten();
+    #[cfg(not(target_os = "macos"))]
+    let launchd_label: Option<String> = None;
+
+    match decide_start(running_port, launchd_label) {
+        StartPlan::Reuse(port) => return Ok(DaemonInfo { port, healthy: true }),
+        StartPlan::Kickstart(label) => {
+            #[cfg(target_os = "macos")]
+            if launchd_kickstart(&label) {
+                if let Some(info) = wait_for_health(&storage_root, Duration::from_secs(15)) {
+                    return Ok(info);
+                }
+                eprintln!("[memoria-desktop] launchd n'a pas relancé le daemon à temps — démarrage direct en repli");
             }
-            eprintln!("[memoria-desktop] launchd n'a pas relancé le daemon à temps — démarrage direct en repli");
+            #[cfg(not(target_os = "macos"))]
+            let _ = label;
         }
+        StartPlan::Spawn => {}
     }
 
     let node = find_node()?;
@@ -454,11 +487,43 @@ fn launchd_kickstart(label: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// URL finale de l'UI : token admin en fragment (#…), jamais en query — il
-/// n'apparaît ni dans les logs HTTP ni dans l'historique. `admin_token` est
-/// du base64url (cf. core/util.ts#newToken) : sûr tel quel dans un fragment.
+/// URL finale de l'UI : token admin en fragment (#…), jamais en query — le
+/// fragment n'est pas envoyé au serveur, donc jamais dans les logs HTTP. Seule
+/// la webview de l'app charge cette URL (jamais le navigateur externe, qui la
+/// conserverait dans son historique, fragment compris). `admin_token` est du
+/// base64url (cf. core/util.ts#newToken) : sûr tel quel dans un fragment.
 fn memoria_url(port: u16, admin_token: &str) -> String {
     format!("http://127.0.0.1:{port}/ui/#token={admin_token}")
+}
+
+/// Page de lancement embarquée (`frontendDist`) telle que Tauri la sert :
+/// `tauri://localhost` sur macOS/Linux, `http://tauri.localhost` sur Windows
+/// (cf. tauri `manager::tauri_protocol_url`, non public).
+fn launch_page_url() -> &'static str {
+    if cfg!(windows) {
+        "http://tauri.localhost/index.html"
+    } else {
+        "tauri://localhost/index.html"
+    }
+}
+
+/// Où envoyer la webview quand on clique « Ouvrir Memoria » (`None` = rester
+/// où elle est). Daemon sain (`Some((port, token))`) → son UI, sauf si elle y
+/// est déjà (on ne recharge pas : l'utilisateur garde son état). Daemon
+/// éteint → la page de lancement, qui montre la séquence Node → daemon → UI
+/// et relance le daemon : le clic a toujours un effet visible, jamais un no-op.
+fn open_target(current_url: &str, healthy: Option<(u16, &str)>) -> Option<String> {
+    match healthy {
+        Some((port, token)) => {
+            let ui_prefix = format!("http://127.0.0.1:{port}/ui");
+            (!current_url.starts_with(&ui_prefix)).then(|| memoria_url(port, token))
+        }
+        None => {
+            let launch = launch_page_url();
+            let launch_origin = &launch[..launch.rfind('/').unwrap_or(launch.len())];
+            (!current_url.starts_with(launch_origin)).then(|| launch.to_string())
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -512,10 +577,12 @@ async fn open_memoria() -> Result<String, String> {
 
 // ---------------------------------------------------------------------------
 // Barre d'état (menu bar macOS / zone de notification Windows)
-// Lettre « M » VERTE = daemon actif, ROUGE = éteint, GRISE = en cours de
-// démarrage. Sondage toutes les 5 s. Icônes 44×44 (@2x) : tray-icon les
-// redimensionne à la hauteur de la barre de menus, en couleur (non « template »,
-// sinon macOS les aplatirait en monochrome et l'état serait perdu).
+// Lettre « M » VERTE = daemon actif, ROUGE = éteint, GRISE = on ne sait pas
+// (démarrage en cours, 1er sondage pas encore fait, ou impossible de sonder :
+// la cause est alors dans l'info-bulle). Sondage toutes les 5 s. Icônes
+// 44×44 (@2x) : tray-icon les redimensionne à la hauteur de la barre de
+// menus, en couleur (non « template », sinon macOS les aplatirait en
+// monochrome et l'état serait perdu).
 // ---------------------------------------------------------------------------
 
 const TRAY_ID: &str = "memoria-status";
@@ -529,59 +596,199 @@ enum TrayState {
     Down,
     /// Démarrage demandé, résultat pas encore connu.
     Starting,
+    /// Impossible de conclure (pas encore sondé, ou sonde en erreur).
+    Unknown,
 }
 
 impl TrayState {
-    fn from_healthy(healthy: bool) -> Self {
-        if healthy {
-            TrayState::Active
-        } else {
-            TrayState::Down
-        }
-    }
-
     fn icon(self) -> Image<'static> {
         match self {
             TrayState::Active => Image::from_bytes(include_bytes!("../icons/m-green.png")).expect("icône M verte invalide"),
             TrayState::Down => Image::from_bytes(include_bytes!("../icons/m-red.png")).expect("icône M rouge invalide"),
-            TrayState::Starting => Image::from_bytes(include_bytes!("../icons/m-gray.png")).expect("icône M grise invalide"),
-        }
-    }
-
-    fn tooltip(self) -> &'static str {
-        match self {
-            TrayState::Active => "Memoria — actif",
-            TrayState::Down => "Memoria — éteint (clic → Démarrer)",
-            TrayState::Starting => "Memoria — démarrage…",
+            TrayState::Starting | TrayState::Unknown => {
+                Image::from_bytes(include_bytes!("../icons/m-gray.png")).expect("icône M grise invalide")
+            }
         }
     }
 }
 
-/// Le daemon répond-il ? (mêmes primitives que `daemon_health`, en synchrone.)
-fn daemon_is_healthy() -> bool {
-    match resolve_storage_root() {
-        Ok(root) => read_daemon_state(&root)
-            .map(|s| http_health(s.port))
-            .unwrap_or(false),
-        Err(_) => false,
+/// Ce que la barre d'état affiche : couleur du M + info-bulle. L'info-bulle
+/// porte la cause quand l'état n'est pas trivial (« jamais de mort
+/// silencieuse » : une sonde en erreur ou un démarrage raté doivent se voir).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TrayView {
+    state: TrayState,
+    tooltip: String,
+}
+
+impl TrayView {
+    /// Avant le 1er sondage (fait hors thread principal, cf. `run`).
+    fn checking() -> Self {
+        Self { state: TrayState::Unknown, tooltip: "Memoria — vérification…".into() }
+    }
+
+    fn starting() -> Self {
+        Self { state: TrayState::Starting, tooltip: "Memoria — démarrage…".into() }
+    }
+
+    /// Résultat d'un sondage : `Err` = on ne SAIT pas (config.toml invalide,
+    /// HOME absent…), à ne pas confondre avec « éteint » — Démarrer échouerait
+    /// pour la même raison, sans que l'utilisateur voie jamais laquelle.
+    fn from_probe(probe: &Result<bool, String>) -> Self {
+        match probe {
+            Ok(true) => Self { state: TrayState::Active, tooltip: "Memoria — actif".into() },
+            Ok(false) => Self {
+                state: TrayState::Down,
+                tooltip: "Memoria — éteint (clic → Démarrer)".into(),
+            },
+            Err(e) => Self { state: TrayState::Unknown, tooltip: format!("Memoria — état inconnu : {e}") },
+        }
+    }
+
+    /// « Démarrer » a échoué : rouge, avec la cause (le log seul est invisible en GUI).
+    fn down_after_failed_start(error: &str) -> Self {
+        Self { state: TrayState::Down, tooltip: format!("Memoria — démarrage échoué : {error}") }
     }
 }
 
-/// Ouvre une URL dans le navigateur par défaut (sans dépendance externe).
-fn open_url_in_browser(url: &str) {
-    #[cfg(target_os = "macos")]
-    let _ = Command::new("open").arg(url).spawn();
-    #[cfg(target_os = "windows")]
-    let _ = Command::new("cmd").args(["/C", "start", "", url]).spawn();
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let _ = Command::new("xdg-open").arg(url).spawn();
+/// Sondage du daemon (mêmes primitives que `daemon_health`, en synchrone).
+/// `Err` = impossible de sonder, remonté tel quel (jamais aplati en `false`).
+fn daemon_probe() -> Result<bool, String> {
+    let root = resolve_storage_root()?;
+    Ok(read_daemon_state(&root).map(|s| http_health(s.port)).unwrap_or(false))
 }
 
-/// Applique l'état (icône « M » + info-bulle) à la barre d'état.
-fn apply_tray_state(app: &tauri::AppHandle, state: TrayState) {
-    if let Some(tray) = app.tray_by_id(TRAY_ID) {
-        let _ = tray.set_icon(Some(state.icon()));
-        let _ = tray.set_tooltip(Some(String::from(state.tooltip())));
+/// Dernière erreur de « Démarrer », gardée tant que le daemon n'est pas revenu :
+/// sans elle, la sonde 5 s écraserait la cause par un simple « éteint ».
+static LAST_START_FAILURE: Mutex<Option<String>> = Mutex::new(None);
+
+fn remember_start_failure(error: Option<&str>) {
+    let mut slot = LAST_START_FAILURE.lock().unwrap_or_else(|e| e.into_inner());
+    *slot = error.map(str::to_string);
+}
+
+/// Vue issue d'un sondage, en tenant compte d'un démarrage raté encore d'actualité.
+fn probe_view(probe: &Result<bool, String>, last_start_failure: Option<&str>) -> TrayView {
+    match (probe, last_start_failure) {
+        (Ok(false), Some(error)) => TrayView::down_after_failed_start(error),
+        _ => TrayView::from_probe(probe),
+    }
+}
+
+/// Sonde puis construit la vue courante (efface l'erreur de démarrage dès que
+/// le daemon répond).
+fn current_tray_view() -> TrayView {
+    let probe = daemon_probe();
+    if probe == Ok(true) {
+        remember_start_failure(None);
+    }
+    let failure = LAST_START_FAILURE.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    probe_view(&probe, failure.as_deref())
+}
+
+/// « Ouvrir Memoria » : ramène la fenêtre de l'app (jamais le navigateur
+/// externe) et l'envoie au bon endroit selon `open_target`. Appelé hors du
+/// thread principal (health check bloquant).
+fn open_memoria_window(app: &tauri::AppHandle) {
+    let healthy = resolve_storage_root()
+        .ok()
+        .and_then(|root| read_daemon_state(&root))
+        .filter(|state| http_health(state.port));
+    match app.get_webview_window("main") {
+        Some(window) => {
+            let current = window.url().map(|u| u.to_string()).unwrap_or_default();
+            let target = open_target(
+                &current,
+                healthy.as_ref().map(|s| (s.port, s.admin_token.as_str())),
+            );
+            if let Some(target) = target {
+                match tauri::Url::parse(&target) {
+                    Ok(url) => {
+                        if let Err(e) = window.navigate(url) {
+                            eprintln!("memoria-desktop: navigation vers {target} impossible : {e}");
+                        }
+                    }
+                    Err(e) => eprintln!("memoria-desktop: URL cible invalide ({target}) : {e}"),
+                }
+            }
+        }
+        None => eprintln!("memoria-desktop: fenêtre principale introuvable — impossible d'ouvrir Memoria"),
+    }
+    show_main_window(app);
+}
+
+/// Fermer la dernière fenêtre ne doit PAS tuer l'app : la lettre M de la barre
+/// d'état doit survivre à la croix rouge (sinon « Ouvrir Memoria » et l'état
+/// « éteint (clic → Démarrer) » n'existent que fenêtre ouverte). wry envoie
+/// `ExitRequested { code: None }` quand plus aucune fenêtre n'existe ;
+/// `Some(_)` = sortie explicite (`app.exit`, menu Quitter). Cmd+Q passe par
+/// `NSApp terminate:` (LoopDestroyed) et n'est donc jamais bloqué ici.
+fn keep_running_without_window(exit_code: Option<i32>) -> bool {
+    exit_code.is_none()
+}
+
+/// Ramène la fenêtre principale au premier plan (cachée par la croix rouge,
+/// réduite dans le Dock, ou derrière une autre app).
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
+}
+
+/// « Démarrer le daemon » n'a de sens que s'il ne tourne pas : actif, le clic
+/// ferait clignoter gris→vert sans effet ; en cours, il doublerait le démarrage.
+fn start_menu_enabled(state: TrayState) -> bool {
+    matches!(state, TrayState::Down | TrayState::Unknown)
+}
+
+/// L'item « Démarrer le daemon », gardé dans l'état Tauri pour être
+/// (dés)activé par `apply_tray_view` selon l'état affiché.
+struct StartMenuItem(MenuItem<tauri::Wry>);
+
+/// Dernière vue effectivement appliquée à la barre d'état.
+static LAST_TRAY_VIEW: Mutex<Option<TrayView>> = Mutex::new(None);
+
+/// Ce qu'il faut redessiner entre deux vues : `(icône, info-bulle)`. Chaque
+/// `set_icon` décode le PNG, le ré-encode, alloue un NSImage et réveille le
+/// thread principal — inutile 17 000 fois par jour pour un état qui change
+/// quelques fois par jour (et source de micro-scintillement).
+fn tray_changes(last: Option<&TrayView>, next: &TrayView) -> (bool, bool) {
+    match last {
+        None => (true, true),
+        Some(last) => (last.state != next.state, last.tooltip != next.tooltip),
+    }
+}
+
+/// Applique la vue (icône « M » + info-bulle) à la barre d'état, seulement
+/// si elle change. À appeler HORS du thread principal : `set_icon` y est
+/// dispatché et attend — et le verrou n'est jamais tenu pendant cet appel
+/// (sinon un appel concurrent depuis le thread principal bloquerait tout).
+fn apply_tray_view(app: &tauri::AppHandle, view: &TrayView) {
+    let (icon, tooltip) = {
+        let last = LAST_TRAY_VIEW.lock().unwrap_or_else(|e| e.into_inner());
+        tray_changes(last.as_ref(), view)
+    };
+    if !icon && !tooltip {
+        return;
+    }
+    let Some(tray) = app.tray_by_id(TRAY_ID) else { return };
+    let mut applied = true;
+    if icon {
+        applied &= tray.set_icon(Some(view.state.icon())).is_ok();
+    }
+    if tooltip {
+        applied &= tray.set_tooltip(Some(view.tooltip.clone())).is_ok();
+    }
+    if icon {
+        if let Some(start) = app.try_state::<StartMenuItem>() {
+            let _ = start.0.set_enabled(start_menu_enabled(view.state));
+        }
+    }
+    if applied {
+        let mut last = LAST_TRAY_VIEW.lock().unwrap_or_else(|e| e.into_inner());
+        *last = Some(view.clone());
     }
 }
 
@@ -600,51 +807,78 @@ pub fn run() {
             let sep = PredefinedMenuItem::separator(app)?;
             let quit = MenuItem::with_id(app, "quit", "Quitter", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&open, &start, &sep, &quit])?;
+            app.manage(StartMenuItem(start));
 
-            // État initial (avant le 1er sondage) : selon la santé courante.
-            let initial = TrayState::from_healthy(daemon_is_healthy());
+            // État initial : gris « vérification… ». Le 1er sondage est fait
+            // par le thread de fond (ci-dessous, sans délai) : sonder ici
+            // bloquerait le thread principal jusqu'à 4 s (timeouts TCP) si le
+            // daemon est gelé, et la fenêtre n'apparaîtrait pas pendant ce temps.
+            let initial = TrayView::checking();
 
             TrayIconBuilder::with_id(TRAY_ID)
-                .icon(initial.icon())
-                .tooltip(initial.tooltip())
+                .icon(initial.state.icon())
+                .tooltip(&initial.tooltip)
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "open" => {
-                        std::thread::spawn(|| {
-                            if let Ok(root) = resolve_storage_root() {
-                                if let Some(state) = read_daemon_state(&root) {
-                                    if http_health(state.port) {
-                                        open_url_in_browser(&memoria_url(state.port, &state.admin_token));
-                                    }
-                                }
-                            }
-                        });
+                        let app = app.clone();
+                        std::thread::spawn(move || open_memoria_window(&app));
                     }
                     "start" => {
                         let app = app.clone();
-                        // Gris pendant le démarrage : l'utilisateur voit que le clic a pris.
-                        apply_tray_state(&app, TrayState::Starting);
                         std::thread::spawn(move || {
-                            let ok = start_daemon_blocking().is_ok();
-                            apply_tray_state(&app, TrayState::from_healthy(ok || daemon_is_healthy()));
+                            // L'item peut être en retard d'un sondage : si le daemon
+                            // tourne déjà, on rafraîchit la pastille sans clignoter.
+                            if daemon_probe() == Ok(true) {
+                                apply_tray_view(&app, &current_tray_view());
+                                return;
+                            }
+                            // Gris pendant le démarrage : l'utilisateur voit que le clic a pris.
+                            apply_tray_view(&app, &TrayView::starting());
+                            match start_daemon_blocking() {
+                                Ok(_) => remember_start_failure(None),
+                                Err(e) => {
+                                    eprintln!("memoria-desktop: démarrage du daemon échoué : {e}");
+                                    remember_start_failure(Some(&e));
+                                }
+                            }
+                            apply_tray_view(&app, &current_tray_view());
                         });
                     }
                     "quit" => app.exit(0),
                     _ => {}
                 })
                 .build(app)?;
+            *LAST_TRAY_VIEW.lock().unwrap_or_else(|e| e.into_inner()) = Some(initial);
 
-            // Sonde de fond : rafraîchit la pastille toutes les 5 s.
+            // Sonde de fond : 1er sondage immédiat, puis toutes les 5 s.
             let handle = app.handle().clone();
             std::thread::spawn(move || loop {
-                apply_tray_state(&handle, TrayState::from_healthy(daemon_is_healthy()));
+                apply_tray_view(&handle, &current_tray_view());
                 std::thread::sleep(Duration::from_secs(5));
             });
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("erreur au lancement de l'app bureau Memoria");
+        // Croix rouge = cacher la fenêtre, pas la détruire : l'app reste dans
+        // la barre d'état et « Ouvrir Memoria » la ré-affiche telle quelle.
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
+        .build(tauri::generate_context!())
+        .expect("erreur au lancement de l'app bureau Memoria")
+        .run(|app, event| match event {
+            RunEvent::ExitRequested { code, api, .. } if keep_running_without_window(code) => {
+                api.prevent_exit();
+            }
+            // Clic sur l'icône du Dock alors que la fenêtre est cachée.
+            #[cfg(target_os = "macos")]
+            RunEvent::Reopen { has_visible_windows: false, .. } => show_main_window(app),
+            _ => {}
+        });
 }
 
 // ---------------------------------------------------------------------------
@@ -790,5 +1024,173 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         drop(listener);
         assert!(!http_health(port));
+    }
+
+    #[test]
+    fn fermer_la_derniere_fenetre_ne_quitte_pas_l_app() {
+        // wry envoie `code: None` quand la dernière fenêtre est détruite : on
+        // reste dans la barre d'état. `Some(_)` = Quitter explicite → on sort.
+        assert!(keep_running_without_window(None));
+        assert!(!keep_running_without_window(Some(0)));
+        assert!(!keep_running_without_window(Some(1)));
+    }
+
+    #[test]
+    fn ouvrir_memoria_cible_la_bonne_page() {
+        let launch = launch_page_url();
+        let ui = "http://127.0.0.1:7437/ui/#token=tok";
+        // daemon éteint : la page de lancement (qui le redémarre, visiblement)
+        assert_eq!(open_target(ui, None).as_deref(), Some(launch));
+        assert_eq!(open_target(launch, None), None); // déjà dessus : on n'interrompt pas
+        assert_eq!(open_target("", None).as_deref(), Some(launch)); // URL inconnue
+        // daemon actif : l'UI, sauf si la webview y est déjà (état conservé)
+        assert_eq!(open_target(launch, Some((7437, "tok"))).as_deref(), Some(ui));
+        assert_eq!(open_target(ui, Some((7437, "tok"))), None);
+        // daemon redémarré sur un autre port : on suit le nouveau port
+        assert_eq!(
+            open_target(ui, Some((7438, "tok2"))).as_deref(),
+            Some("http://127.0.0.1:7438/ui/#token=tok2")
+        );
+    }
+
+    #[test]
+    fn la_pastille_distingue_inconnu_d_eteint() {
+        // Sonde concluante : vert / rouge.
+        assert_eq!(TrayView::from_probe(&Ok(true)).state, TrayState::Active);
+        assert_eq!(TrayView::from_probe(&Ok(false)).state, TrayState::Down);
+        // Impossible de sonder (config.toml invalide, HOME absent…) : gris
+        // « inconnu » avec la cause dans l'info-bulle — pas un faux « éteint »
+        // qui inviterait à Démarrer (et échouerait pour la même raison).
+        let view = TrayView::from_probe(&Err("config.toml invalide (/x) : ligne 3".into()));
+        assert_eq!(view.state, TrayState::Unknown);
+        assert!(view.tooltip.contains("inconnu"), "{}", view.tooltip);
+        assert!(view.tooltip.contains("config.toml invalide"), "{}", view.tooltip);
+        // Avant le 1er sondage (fait hors thread principal) : gris aussi.
+        assert_eq!(TrayView::checking().state, TrayState::Unknown);
+        // Échec de « Démarrer » : rouge, mais la cause reste visible tant que
+        // le daemon n'est pas revenu (la sonde 5 s ne l'écrase pas).
+        let view = probe_view(&Ok(false), Some("Node.js ≥ 20 introuvable"));
+        assert_eq!(view.state, TrayState::Down);
+        assert!(view.tooltip.contains("Node.js ≥ 20 introuvable"), "{}", view.tooltip);
+        assert_eq!(probe_view(&Ok(true), Some("vieille erreur")).state, TrayState::Active);
+        assert_eq!(probe_view(&Ok(false), None), TrayView::from_probe(&Ok(false)));
+    }
+
+    #[test]
+    fn la_pastille_n_est_redessinee_que_si_elle_change() {
+        let active = TrayView::from_probe(&Ok(true));
+        let down = TrayView::from_probe(&Ok(false));
+        let down_with_cause = TrayView::down_after_failed_start("boum");
+        // Rien d'affiché encore : tout redessiner.
+        assert_eq!(tray_changes(None, &active), (true, true));
+        // Même vue (cas de 99 % des sondages) : ne rien toucher.
+        assert_eq!(tray_changes(Some(&active), &active), (false, false));
+        // Changement d'état : icône ET info-bulle.
+        assert_eq!(tray_changes(Some(&active), &down), (true, true));
+        // Même couleur, seule la cause change : info-bulle seule.
+        assert_eq!(tray_changes(Some(&down), &down_with_cause), (false, true));
+    }
+
+    #[test]
+    fn icones_embarquees_se_decodent() {
+        // `include_bytes!` n'embarque que des octets : un PNG corrompu ou
+        // remplacé par erreur ne se verrait qu'au runtime, via `expect` =
+        // crash de l'app au démarrage. Ici on décode les 3 icônes et on
+        // vérifie qu'elles sont bien celles validées (44×44, M coloré).
+        for state in [TrayState::Active, TrayState::Down, TrayState::Starting, TrayState::Unknown] {
+            let icon = state.icon();
+            assert_eq!((icon.width(), icon.height()), (44, 44), "{state:?}");
+            let px = |x: u32, y: u32| -> [u8; 4] {
+                let i = ((y * icon.width() + x) * 4) as usize;
+                icon.rgba()[i..i + 4].try_into().unwrap()
+            };
+            assert_eq!(px(0, 0)[3], 0, "{state:?} : le coin doit être transparent");
+            let stroke = px(6, 22); // jambage gauche du M
+            assert_eq!(stroke[3], 255, "{state:?} : le M doit être opaque");
+            let expected = match state {
+                TrayState::Active => [56, 213, 95],
+                TrayState::Down => [255, 63, 51],
+                TrayState::Starting | TrayState::Unknown => [152, 152, 158],
+            };
+            assert_eq!(&stroke[..3], &expected, "{state:?} : couleur du M");
+        }
+    }
+
+    #[test]
+    fn le_plan_de_demarrage_prefere_le_daemon_vivant_puis_launchd() {
+        // Daemon qui répond : on le réutilise, même si launchd est installé.
+        assert_eq!(decide_start(Some(7437), Some("gui/501/x".into())), StartPlan::Reuse(7437));
+        assert_eq!(decide_start(Some(7437), None), StartPlan::Reuse(7437));
+        // Pas de daemon mais un service launchd chargé pour ce stockage :
+        // c'est lui qui lance (spawner ici prendrait daemon.lock).
+        assert_eq!(decide_start(None, Some("gui/501/x".into())), StartPlan::Kickstart("gui/501/x".into()));
+        // Ni l'un ni l'autre : l'app lance node bin.js elle-même.
+        assert_eq!(decide_start(None, None), StartPlan::Spawn);
+    }
+
+    /// Faux daemon : sert `GET /v1/health` en HTTP/1.1 brut sur un port
+    /// éphémère, avec le corps donné, puis ferme (comme `connection: close`).
+    fn fake_daemon(body: &'static str) -> u16 {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut stream = stream;
+                let mut req = [0u8; 1024];
+                let _ = stream.read(&mut req);
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(resp.as_bytes());
+            }
+        });
+        port
+    }
+
+    fn write_daemon_json(dir: &Path, port: u16) {
+        fs::write(
+            dir.join("daemon.json"),
+            format!("{{\"daemon_id\":\"abc\",\"port\":{port},\"admin_token\":\"tok\",\"pid\":1,\"started_at\":\"2026-06-10T00:00:00.000Z\"}}"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn attente_du_health_aboutit_des_que_le_daemon_repond() {
+        let tmp = TmpDir::new("wait-ok");
+        let port = fake_daemon("{\"ok\":true,\"version\":\"0.1.0\"}");
+        // daemon.json apparaît PENDANT l'attente (comme au vrai démarrage).
+        let dir = tmp.0.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            write_daemon_json(&dir, port);
+        });
+        let info = wait_for_health(&tmp.0, Duration::from_secs(5)).expect("daemon détecté");
+        assert_eq!(info.port, port);
+        assert!(info.healthy);
+    }
+
+    #[test]
+    fn attente_du_health_expire_si_le_daemon_ne_repond_pas_ok() {
+        let tmp = TmpDir::new("wait-ko");
+        // Un serveur qui répond mais pas `ok:true` (daemon en train de mourir,
+        // ou autre service sur le port recyclé) ne doit PAS passer pour sain.
+        let port = fake_daemon("{\"ok\":false}");
+        write_daemon_json(&tmp.0, port);
+        let started = Instant::now();
+        assert!(wait_for_health(&tmp.0, Duration::from_millis(600)).is_none());
+        assert!(started.elapsed() >= Duration::from_millis(600), "doit attendre tout le budget");
+        // Sans daemon.json du tout : même résultat, sans panique.
+        let empty = TmpDir::new("wait-vide");
+        assert!(wait_for_health(&empty.0, Duration::from_millis(250)).is_none());
+    }
+
+    #[test]
+    fn demarrer_n_est_proposable_que_si_le_daemon_ne_tourne_pas() {
+        assert!(!start_menu_enabled(TrayState::Active)); // sinon clignotement gris→vert sans effet
+        assert!(!start_menu_enabled(TrayState::Starting)); // un démarrage est déjà en cours
+        assert!(start_menu_enabled(TrayState::Down));
+        assert!(start_menu_enabled(TrayState::Unknown)); // tenter révèle la cause dans l'info-bulle
     }
 }

@@ -4,11 +4,20 @@
  * Local pour qui veut du local ; cloud (OpenAI/Anthropic/OpenRouter) sinon.
  * + emplacement de stockage. Routes « contrat » : 404 → « non disponible ».
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useCallback as useCb } from 'react'
-import { ConfirmButton, CopyButton, EmptyState, Spinner } from '../components/ui'
+import { ConfirmButton, CopyButton, EmptyState, Spinner, formatCompact, formatDate, formatNumber } from '../components/ui'
 import { EmbeddingsChooser } from '../components/EmbeddingsChooser'
-import { useT } from '../i18n'
+import { currentLocale, useT } from '../i18n'
+import {
+  HANDOVER_MAX_PROBES,
+  HANDOVER_RETRY_EVERY_MS,
+  HANDOVER_WAIT_MS,
+  afterHandoverProbeFailed,
+  planAutostartChange,
+  supervisorNoteKey,
+} from '../lib/autostart'
+import { summarizeCloudSends } from '../lib/cloud'
 import {
   ApiError,
   getControl,
@@ -307,7 +316,7 @@ export function Settings() {
  */
 function LlmHealthSummary({ health }: { health: LlmHealth }) {
   const { t } = useT()
-  const count = health.wal_pending.toLocaleString('fr-FR')
+  const count = formatNumber(health.wal_pending)
   return (
     <div className="llm-summary">
       <p className={health.extraction.available ? 'ok' : 'ko'}>
@@ -489,7 +498,7 @@ function SyncPanel({ onError }: { onError: (m: string) => void }) {
               {status.peers.map(p => (
                 <li key={p.machine_id} className="peer-row">
                   <span><strong>{p.display_name}</strong> <span className="badge badge-muted">{p.role}</span></span>
-                  <span className="muted">{p.revoked_at ? t('settings.sync.revoked') : p.last_seen_at ? t('settings.sync.seenAt', { date: new Date(p.last_seen_at).toLocaleString('fr-FR') }) : t('settings.sync.neverSeen')}</span>
+                  <span className="muted">{p.revoked_at ? t('settings.sync.revoked') : p.last_seen_at ? t('settings.sync.seenAt', { date: formatDate(p.last_seen_at) }) : t('settings.sync.neverSeen')}</span>
                   {!p.revoked_at && <ConfirmButton label={t('settings.sync.revoke')} confirmLabel={t('settings.sync.revokeConfirm')} onConfirm={() => void wrap(async () => { await syncRevoke(p.machine_id); refresh() })} />}
                 </li>
               ))}
@@ -508,6 +517,17 @@ function ControlPanel({ onError }: { onError: (m: string) => void }) {
   const [state, setState] = useState<ControlState | null>(null)
   const [unavailable, setUnavailable] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
+  const [note, setNote] = useState<string | null>(null)
+  // Une passation (redémarrage du daemon) sonde le service pendant ~20 s : si
+  // l'écran est quitté entre-temps, on n'écrit plus dans un composant démonté.
+  // Remis à false au (re)montage : StrictMode monte/démonte/remonte en dev.
+  const gone = useRef(false)
+  useEffect(() => {
+    gone.current = false
+    return () => {
+      gone.current = true
+    }
+  }, [])
 
   useEffect(() => {
     getControl().then(setState).catch(() => setUnavailable(true))
@@ -530,24 +550,58 @@ function ControlPanel({ onError }: { onError: (m: string) => void }) {
     [onError, t],
   )
 
+  /**
+   * Après `handover: true` : le daemon s'arrête et revient (launchd ou direct).
+   * On attend ~10 s bouton désactivé, puis on resonde GET /v1/admin/control
+   * quelques fois — la logique de décision est dans lib/autostart.ts.
+   */
+  const awaitHandover = useCb(async () => {
+    await sleep(HANDOVER_WAIT_MS)
+    for (let probe = 1; probe <= HANDOVER_MAX_PROBES; probe++) {
+      if (gone.current) return
+      try {
+        const fresh = await getControl()
+        if (gone.current) return
+        setState(fresh)
+        setNote(t('settings.control.handoverBack'))
+        return
+      } catch (err) {
+        const next = afterHandoverProbeFailed(err, probe)
+        if (next.kind !== 'retry') {
+          if (!gone.current) setNote(t(next.noteKey))
+          return
+        }
+        await sleep(HANDOVER_RETRY_EVERY_MS)
+      }
+    }
+  }, [t])
+
   const toggleAutostart = useCb(
     async (enabled: boolean) => {
       setBusy('autostart')
+      setNote(null)
       try {
-        const a = await setAutostart(enabled)
-        setState(prev => (prev ? { ...prev, autostart: a } : prev))
+        const plan = planAutostartChange(await setAutostart(enabled), enabled)
+        setState(prev => (prev ? { ...prev, autostart: plan.autostart } : prev))
+        if (plan.restarting) {
+          // Pas une erreur : le daemon redémarre, la page le dit calmement et attend.
+          setNote(t(plan.noteKey))
+          await awaitHandover()
+        }
       } catch (err) {
         onError(err instanceof ApiError ? err.message : t('settings.error.changeFailed'))
         getControl().then(setState).catch(() => {})
       } finally {
-        setBusy(null)
+        if (!gone.current) setBusy(null)
       }
     },
-    [onError, t],
+    [awaitHandover, onError, t],
   )
 
   if (unavailable) return null
   if (state === null) return <div className="settings-block"><div className="spinner-row"><span className="spinner" aria-hidden />{' '}{t('common.loading')}</div></div>
+
+  const supervisorKey = supervisorNoteKey(state)
 
   return (
     <div className="settings-block">
@@ -581,11 +635,17 @@ function ControlPanel({ onError }: { onError: (m: string) => void }) {
             {state.autostart.supported
               ? t('settings.control.autostartOn')
               : t('settings.control.autostartUnsupported')}
+            {supervisorKey && <> · {t(supervisorKey)}</>}
           </span>
         </span>
       </label>
+      {note && <p className="muted sync-note" role="status">{note}</p>}
     </div>
   )
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
 }
 
 function OptionsPanel({ onError }: { onError: (m: string) => void }) {
@@ -637,14 +697,57 @@ function OptionsPanel({ onError }: { onError: (m: string) => void }) {
 const USAGE_PERIODS: LlmUsagePeriod[] = ['24h', '7d', '30d', 'all']
 
 function fmtTokens(n: number | null): string {
-  return n === null ? '—' : n.toLocaleString()
+  return n === null ? '—' : formatNumber(n)
 }
 
 /** Coût estimé en dollars : « < 0,0001 $ » plutôt qu'un faux « 0,0000 $ ». */
 function fmtUsd(v: number): string {
   if (v === 0) return '0 $'
-  if (v < 0.0001) return `< ${(0.0001).toLocaleString(undefined, { maximumFractionDigits: 4 })} $`
-  return `${v.toLocaleString(undefined, { maximumFractionDigits: v < 0.01 ? 4 : 2 })} $`
+  const fmt = (x: number, digits: number) => new Intl.NumberFormat(currentLocale(), { maximumFractionDigits: digits }).format(x)
+  if (v < 0.0001) return `< ${fmt(0.0001, 4)} $`
+  return `${fmt(v, v < 0.01 ? 4 : 2)} $`
+}
+
+/**
+ * « Données envoyées au cloud » — la réponse directe au retour bêta « l'interface
+ * devrait indiquer clairement ce qui a été envoyé ». Jusqu'ici seul
+ * `memoria doctor` le montrait. Même fenêtre que le panneau Consommation.
+ * L'absence d'envoi EST l'information : on l'affiche en vert, pas en creux.
+ */
+function CloudSends({ rows }: { rows: LlmUsageReport['rows'] }) {
+  const { t } = useT()
+  const cloud = summarizeCloudSends(rows)
+  if (cloud.rows.length === 0) {
+    return (
+      <div className="cloud-summary cloud-none" role="status">
+        <strong>🔒 {t('settings.cloud.title')}</strong>
+        <p>{t('settings.cloud.none')}</p>
+      </div>
+    )
+  }
+  const vars = { calls: formatNumber(cloud.calls), providers: cloud.providers.join(', '), chars: formatCompact(cloud.chars) }
+  return (
+    <div className="cloud-summary cloud-some" role="status">
+      <strong>☁️ {t('settings.cloud.title')}</strong>
+      <p>
+        {t(cloud.calls > 1 ? 'settings.cloud.summary.plural' : 'settings.cloud.summary.one', vars)}
+        {cloud.last_ts ? ` ${t('settings.cloud.last', { date: formatDate(cloud.last_ts) })}` : ''}
+      </p>
+      <ul className="cloud-rows">
+        {cloud.rows.map(r => (
+          <li key={`${r.provider}|${r.model}|${r.purpose}`}>
+            <code>
+              {r.provider}/{r.model}
+            </code>{' '}
+            · {t(`settings.usage.purpose.${r.purpose}`)} —{' '}
+            {t('settings.cloud.row', { calls: formatNumber(r.calls), items: formatNumber(r.items), chars: formatCompact(r.chars) })}
+            {r.failures > 0 && <span className="badge badge-warn"> {t('settings.cloud.failures', { count: r.failures })}</span>}
+          </li>
+        ))}
+      </ul>
+      <p className="muted">{t('settings.cloud.note')}</p>
+    </div>
+  )
 }
 
 /**
@@ -703,9 +806,13 @@ function UsagePanel() {
       ) : unavailable ? (
         <p className="muted">{t('settings.usage.unavailable')}</p>
       ) : !report || report.rows.length === 0 ? (
-        <EmptyState title={t('settings.usage.empty.title')} body={t('settings.usage.empty.body')} />
+        <>
+          <CloudSends rows={[]} />
+          <EmptyState title={t('settings.usage.empty.title')} body={t('settings.usage.empty.body')} />
+        </>
       ) : (
         <>
+          <CloudSends rows={report.rows} />
           <div className="table-wrap">
             <table className="table">
               <thead>
@@ -734,7 +841,7 @@ function UsagePanel() {
                     </td>
                     <td>{t(`settings.usage.purpose.${r.purpose}`)}</td>
                     <td>
-                      {r.calls.toLocaleString()}
+                      {formatNumber(r.calls)}
                       {r.failures > 0 && (
                         <>
                           {' '}
@@ -746,7 +853,7 @@ function UsagePanel() {
                     <td>
                       {fmtTokens(r.output_tokens)}
                       {r.reasoning_tokens ? (
-                        <span className="muted"> ({t('settings.usage.reasoning', { count: r.reasoning_tokens.toLocaleString() })})</span>
+                        <span className="muted"> ({t('settings.usage.reasoning', { count: formatNumber(r.reasoning_tokens) })})</span>
                       ) : null}
                     </td>
                     <td>
@@ -764,7 +871,7 @@ function UsagePanel() {
                   <tr>
                     <th>{t('settings.usage.total')}</th>
                     <td />
-                    <td>{totals.calls.toLocaleString()}</td>
+                    <td>{formatNumber(totals.calls)}</td>
                     <td>{fmtTokens(totals.input_tokens)}</td>
                     <td>{fmtTokens(totals.output_tokens)}</td>
                     <td>{totals.estimated_cost_usd === null ? t('settings.usage.unknownCost') : `≈ ${fmtUsd(totals.estimated_cost_usd)}`}</td>
