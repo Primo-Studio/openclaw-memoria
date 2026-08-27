@@ -29,12 +29,13 @@ export {
   saveCredentials,
 } from './credentials.js'
 export type { InstanceCredentials } from './credentials.js'
-export { buildServer, serve, HttpDaemonGateway, MCP_SERVER_VERSION } from './serve.js'
+export { buildServer, serve, HttpDaemonGateway, MCP_SERVER_VERSION, compactStoredFact } from './serve.js'
 export type {
   BuildServerOptions,
   BuiltServer,
   CaptureMessage,
   DaemonGateway,
   ServeOptions,
+  StoreScope,
   ToolHandlers,
 } from './serve.js'

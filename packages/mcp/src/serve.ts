@@ -19,6 +19,36 @@ export interface CaptureMessage {
   content: string
 }
 
+/**
+ * Destination d'un fait déclaré. `private` = mémoire de CET agent seulement ;
+ * `user` = scope partagé « user » (nom de scope côté registre), lu par tous les
+ * assistants de l'utilisateur — c'est la seule voie par laquelle un agent peut
+ * faire circuler ce qu'il apprend sur l'humain. Le daemon refuse l'écriture si
+ * la policy de l'assistant n'a pas can_write sur ce scope (erreur explicite).
+ */
+export type StoreScope = 'private' | 'user'
+
+/**
+ * Réponse compacte de store_fact pour le LLM. Le daemon renvoie la ligne Fact
+ * entière (~30 colonnes : origin_machine_id, content_hash, relevance_weight…),
+ * soit ~770 caractères pour une phrase de 35 — du contexte brûlé pour rien.
+ */
+export function compactStoredFact(payload: unknown): Record<string, unknown> {
+  const p = (payload ?? {}) as { fact?: Record<string, unknown> | null; disabled?: boolean }
+  if (!p.fact) return { stored: false, ...(p.disabled ? { disabled: true } : {}) }
+  const f = p.fact
+  return {
+    stored: true,
+    id: f['id'],
+    content: f['fact'],
+    category: f['category'],
+    scope: f['visibility'] === 'shared' ? 'user' : 'private',
+    visibility: f['visibility'],
+    project_id: f['project_id'] ?? null,
+    client_org_id: f['client_org_id'] ?? null,
+  }
+}
+
 /** Sous-ensemble du daemon utilisé par les outils MCP (mockable en test). */
 export interface DaemonGateway {
   recall(input: Record<string, unknown>): Promise<RecallResult>
@@ -119,6 +149,7 @@ export interface ToolHandlers {
     category?: string
     tags?: string[]
     sensitivity?: Sensitivity
+    scope?: StoreScope
   }): Promise<CallToolResult>
   captureTurn(args: { messages: CaptureMessage[] }): Promise<CallToolResult>
   setContext(args: SetContextInput): Promise<CallToolResult>
@@ -210,7 +241,10 @@ export function buildServer(opts: BuildServerOptions): BuiltServer {
         if (ctx.project_id) input['project_id'] = ctx.project_id
         if (ctx.client_org_id) input['client_org_id'] = ctx.client_org_id
         if (ctx.org_id) input['org_id'] = ctx.org_id
-        return ok(await withDaemon(g => g.storeFact(input)))
+        // `private` (défaut) = on n'envoie rien : le daemon retombe sur le scope
+        // privé de l'instance. `user` = nom du scope partagé côté registre.
+        if (args.scope === 'user') input['scope'] = 'user'
+        return ok(compactStoredFact(await withDaemon(g => g.storeFact(input))))
       } catch (err) {
         return fail(err)
       }
@@ -336,6 +370,12 @@ export function buildServer(opts: BuildServerOptions): BuiltServer {
           .enum(['normal', 'sensitive', 'critical'])
           .optional()
           .describe('Sensitivity level; higher levels are shared more restrictively.'),
+        scope: z
+          .enum(['private', 'user'])
+          .optional()
+          .describe(
+            '"private" (default): remembered by this agent only. "user": shared with ALL of the user\'s AI assistants — use it for facts about the user themself (identity, preferences, how they like to work, stable personal/business details), NOT for project-specific or agent-specific details. If the daemon refuses the write, the user has not granted this agent write access to the shared scope: store it privately and tell the user.',
+          ),
       },
     },
     async args => handlers.storeFact(args),

@@ -188,6 +188,87 @@ describe('buildServer handlers', () => {
     expect(gateway.calls[0]?.input).not.toHaveProperty('repo_path')
   })
 
+  it('memoria_store_fact scope:"user" relaie le scope partagé ; défaut/private → aucun scope (privé)', async () => {
+    const gateway = fakeGateway()
+    const { handlers } = buildServer({ instanceId: 'i', tracker: new ActiveContextTracker(), connect: async () => gateway })
+
+    await handlers.storeFact({ content: 'Néto préfère les réponses courtes', category: 'preference', scope: 'user' })
+    await handlers.storeFact({ content: 'Le build passe par tsc -b', scope: 'private' })
+    await handlers.storeFact({ content: 'Sans scope' })
+
+    expect(gateway.calls[0]?.input).toMatchObject({ scope: 'user' })
+    expect(gateway.calls[1]?.input).not.toHaveProperty('scope')
+    expect(gateway.calls[2]?.input).not.toHaveProperty('scope')
+  })
+
+  it('memoria_store_fact renvoie une réponse compacte (id, contenu, scope) — pas la ligne SQL entière', async () => {
+    const gateway = fakeGateway()
+    gateway.storeFact = async input => {
+      gateway.calls.push({ method: 'storeFact', input })
+      // Forme réelle du daemon : la Fact complète (30 colonnes, ~770 caractères).
+      return {
+        fact: {
+          id: 'f-42',
+          fact: 'Néto préfère les réponses courtes.',
+          category: 'preference',
+          fact_type: 'fact',
+          confidence: 1,
+          source: 'manual',
+          assistant_instance_id: 'i',
+          user_id: null,
+          org_id: null,
+          client_org_id: 'primo',
+          project_id: 'site-primo',
+          topic_id: null,
+          scope_id: 'scope-uuid',
+          sensitivity: 'normal',
+          visibility: 'shared',
+          tags: [],
+          entity_ids: [],
+          lifecycle_state: 'active',
+          superseded: false,
+          superseded_by: null,
+          usefulness: 0,
+          recall_count: 0,
+          used_count: 0,
+          relevance_weight: 1,
+          created_at: '2026-08-27T09:00:00.000Z',
+          updated_at: '2026-08-27T09:00:00.000Z',
+          last_accessed_at: null,
+          origin_machine_id: 'mac',
+          origin_rev: 3,
+          content_hash: 'abc',
+          deleted_at: null,
+        },
+      }
+    }
+    const { handlers } = buildServer({ instanceId: 'i', tracker: new ActiveContextTracker(), connect: async () => gateway })
+
+    const res = await handlers.storeFact({ content: 'Néto préfère les réponses courtes.', scope: 'user' })
+    const payload = JSON.parse((res.content[0] as { type: 'text'; text: string }).text) as Record<string, unknown>
+    expect(payload).toEqual({
+      stored: true,
+      id: 'f-42',
+      content: 'Néto préfère les réponses courtes.',
+      category: 'preference',
+      scope: 'user',
+      visibility: 'shared',
+      project_id: 'site-primo',
+      client_org_id: 'primo',
+    })
+    expect(payload).not.toHaveProperty('origin_machine_id')
+    expect(payload).not.toHaveProperty('content_hash')
+  })
+
+  it('memoria_store_fact quand Memoria est en pause → stored:false, disabled:true (pas d’erreur)', async () => {
+    const gateway = fakeGateway()
+    gateway.storeFact = async () => ({ fact: null, disabled: true })
+    const { handlers } = buildServer({ instanceId: 'i', tracker: new ActiveContextTracker(), connect: async () => gateway })
+    const res = await handlers.storeFact({ content: 'x' })
+    expect(res.isError).toBeFalsy()
+    expect(JSON.parse((res.content[0] as { type: 'text'; text: string }).text)).toEqual({ stored: false, disabled: true })
+  })
+
   it('daemon mort → UNE re-connexion puis erreur MCP propre (jamais de throw)', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     let attempts = 0
