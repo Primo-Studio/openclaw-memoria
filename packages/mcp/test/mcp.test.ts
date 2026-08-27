@@ -610,6 +610,16 @@ describe('instructions serveur et descriptions d’outils — QUAND lire, QUAND 
     expect(d['memoria_store_fact']).toMatch(/e\.g\. "/)
   })
 
+  it('aucun nom de propriétaire codé en dur : le produit sert d’autres utilisateurs que Néto', () => {
+    // « the owner (Néto) » dans memoria_identify_interlocutor partait chez
+    // TOUTES les installations : chaque LLM apprenait que l'owner s'appelle Néto.
+    for (const [name, text] of Object.entries(descriptions())) {
+      expect(text, name).not.toMatch(/Néto|Neto/)
+    }
+    expect(SERVER_INSTRUCTIONS).not.toMatch(/Néto|Neto/)
+    expect(descriptions()['memoria_identify_interlocutor']).toMatch(/the owner/)
+  })
+
   it('aucune description ne promet un scoping par repo : seuls project/client/org déclarés comptent', () => {
     // Le core ne regarde que project_id/client_org_id/org_id (scoring.ts) ;
     // repo_path/topic auto-détectés sont envoyés mais inertes. Dire au LLM que

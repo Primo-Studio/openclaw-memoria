@@ -608,7 +608,7 @@ export function buildServer(opts: BuildServerOptions): BuiltServer {
     'memoria_identify_interlocutor',
     {
       description:
-        'Identify WHO you are talking to (the human on the other end) from an identifier — a phone number, email, Telegram/WhatsApp handle, or a name. Returns the matched person, their relation to the user (e.g. colleague, intern, client) and known facts about them. Call this at the start of a conversation when the speaker may not be the owner (Néto), so you address the right person and apply the right context. Returns no match when unknown (assume it is the owner).',
+        'Identify WHO you are talking to (the human on the other end) from an identifier — a phone number, email, Telegram/WhatsApp handle, or a name. Returns the matched person, their relation to the user (e.g. colleague, intern, client) and known facts about them. Call this at the start of a conversation when the speaker may not be the owner (the user whose memory this is), so you address the right person and apply the right context. Returns no match when unknown (assume it is the owner).',
       inputSchema: {
         phone: z.string().optional().describe('Phone number (any format).'),
         email: z.string().optional().describe('Email address.'),
