@@ -129,3 +129,64 @@ describe('écriture directe dans `user`', () => {
     expect(privateDb(claude).countFacts()).toBe(0)
   })
 })
+
+/**
+ * Opérations d'un agent sur un fait PARTAGÉ (id remonté par son recall depuis
+ * shared/user.sqlite). Avant : chaque méthode n'ouvrait que la DB privée →
+ * false / { replacement: null } / { updated: [] } sans un mot, et la mémoire
+ * partagée ne s'améliorait jamais par l'usage.
+ */
+describe('opérations sur un fait partagé', () => {
+  const shareOne = (content = 'Néto préfère les réponses en français') => {
+    const f = m.storeFact({ instance: codex.assistant_instance_id, content, category: 'preference' })
+    m.shareFacts([f.id], 'user')
+    return f.id
+  }
+
+  it('feedback « useful » sur un fait partagé renforce used_count dans user.sqlite', () => {
+    const id = shareOne()
+    const seen = m.recall({ instance: claude.assistant_instance_id, query: 'réponses français préfère' }).items
+    expect(seen.map(i => i.id)).toEqual([id])
+    const r = m.reinforceFacts(claude.assistant_instance_id, [id], true)
+    expect(r.updated).toEqual([id])
+    expect(r.domains).toEqual(['preference'])
+    const row = userDb().db.prepare('SELECT used_count, relevance_weight FROM facts WHERE id = ?').get(id) as { used_count: number; relevance_weight: number }
+    expect(row.used_count).toBe(1)
+    expect(row.relevance_weight).toBeGreaterThan(1)
+  })
+
+  it('pin et expiry sur un fait partagé sont effectifs (et refusés sans can_write)', () => {
+    const id = shareOne()
+    expect(m.setPinned(claude.assistant_instance_id, id, true)).toBe(true)
+    expect((userDb().db.prepare('SELECT pinned FROM facts WHERE id = ?').get(id) as { pinned: number }).pinned).toBe(1)
+    expect(m.setExpiry(claude.assistant_instance_id, id, '2099-01-01T00:00:00.000Z')).toBe(true)
+    expect((userDb().db.prepare('SELECT expires_at FROM facts WHERE id = ?').get(id) as { expires_at: string }).expires_at).toBe('2099-01-01T00:00:00.000Z')
+
+    const userScope = m.registry.getScopeByName('user')!
+    m.setScopeAccess(claude.assistant_id, userScope.id, { can_write: false })
+    expect(() => m.setPinned(claude.assistant_instance_id, id, false)).toThrow(/écriture refusée/)
+    // Un id inconnu de tous les scopes lisibles reste un simple `false` (contrat daemon).
+    expect(m.setPinned(claude.assistant_instance_id, 'inexistant', true)).toBe(false)
+  })
+
+  it('corriger un fait partagé : le remplaçant vit dans user.sqlite et l’autre agent le voit', () => {
+    const id = shareOne()
+    const { replacement } = m.correctFact(claude.assistant_instance_id, id, 'Néto préfère les réponses en français, courtes')
+    expect(replacement).not.toBeNull()
+    expect(userDb().getFact(replacement!.id)).not.toBeNull()
+    expect(privateDb(claude).getFact(replacement!.id)).toBeNull()
+    const old = userDb().db.prepare('SELECT superseded, superseded_by FROM facts WHERE id = ?').get(id) as { superseded: number; superseded_by: string }
+    expect(old).toEqual({ superseded: 1, superseded_by: replacement!.id })
+    // Codex repart avec la version corrigée, pas l'ancienne.
+    const seen = m.recall({ instance: codex.assistant_instance_id, query: 'réponses français préfère' }).items
+    expect(seen.map(i => i.id)).toEqual([replacement!.id])
+  })
+
+  it('fusionner deux faits partagés', () => {
+    const a = shareOne('Néto écrit ses commits en français')
+    const b = shareOne('Néto rédige ses messages de commit en français')
+    expect(m.mergeFacts(claude.assistant_instance_id, a, [b]).merged).toEqual([b])
+    const row = userDb().db.prepare('SELECT superseded_by FROM facts WHERE id = ?').get(b) as { superseded_by: string }
+    expect(row.superseded_by).toBe(a)
+  })
+})

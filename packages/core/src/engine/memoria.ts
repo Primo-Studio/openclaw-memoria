@@ -1139,9 +1139,64 @@ export class Memoria {
    */
   reinforceFacts(instanceId: string, factIds: string[], used: boolean): ReinforceResult {
     this.assertOpen()
-    const db = this.registry.dbForInstance(instanceId)
-    if (!db) return { updated: [], domains: [] }
-    return this.feedbackFor(this.openContent(db.path)).reinforce(factIds, { used })
+    const instance = this.mustInstance(instanceId)
+    // Même fan-out que le recall : les ids viennent de N'IMPORTE quelle DB
+    // lisible (privée OU partagée). Ne chercher que dans la privée laissait
+    // la mémoire partagée sans aucun signal d'usage (used_count figé à 0).
+    const remaining = new Set(factIds)
+    const updated: string[] = []
+    const domains = new Set<string>()
+    for (const target of this.resolveReadTargets(instance)) {
+      if (remaining.size === 0) break
+      const store = this.openContent(target.dbPath)
+      const present = this.factsPresentIn(store, [...remaining], target.scopeIds)
+      if (present.length === 0) continue
+      const r = this.feedbackFor(store).reinforce(present, { used })
+      for (const id of r.updated) {
+        updated.push(id)
+        remaining.delete(id)
+      }
+      for (const d of r.domains) domains.add(d)
+    }
+    return { updated, domains: [...domains] }
+  }
+
+  /** Ids (parmi `ids`) existant dans `store` sous l'un des scopes autorisés. */
+  private factsPresentIn(store: ContentStore, ids: string[], scopeIds: string[]): string[] {
+    if (ids.length === 0 || scopeIds.length === 0) return []
+    const ip = ids.map(() => '?').join(',')
+    const sp = scopeIds.map(() => '?').join(',')
+    const rows = store.db
+      .prepare(`SELECT id FROM facts WHERE id IN (${ip}) AND scope_id IN (${sp})`)
+      .all(...ids, ...scopeIds) as Array<{ id: string }>
+    return rows.map(r => r.id)
+  }
+
+  /**
+   * Localise un fait par id dans les DB LISIBLES par l'instance (sa privée +
+   * les partagées dont le scope est autorisé) — là d'où viennent les ids que
+   * memoria_recall lui a donnés. Null = introuvable dans SES scopes (un fait
+   * privé d'un autre agent reste invisible, même par son id).
+   */
+  private locateFact(instance: AssistantInstance, factId: string): { store: ContentStore; row: FactRow; scope: MemoryScope } | null {
+    for (const target of this.resolveReadTargets(instance)) {
+      const store = this.openContent(target.dbPath)
+      const row = store.db.prepare('SELECT * FROM facts WHERE id = ?').get(factId) as FactRow | undefined
+      if (!row || !target.scopeIds.includes(row.scope_id)) continue
+      const scope = this.registry.getScope(row.scope_id)
+      if (!scope) continue
+      return { store, row, scope }
+    }
+    return null
+  }
+
+  /** Modifier un fait partagé exige can_write sur son scope (le privé est toujours à soi). */
+  private assertWritable(instance: AssistantInstance, scope: MemoryScope): void {
+    if (scope.type === 'private') return
+    const policy = this.registry.getPolicy(instance.assistant_id, scope.id)
+    if (!policy?.can_write) {
+      throw new Error(`écriture refusée : l'assistant n'a pas can_write sur le scope « ${scope.name} »`)
+    }
   }
 
   /**
@@ -1214,14 +1269,16 @@ export class Memoria {
     this.assertOpen()
     const text = content.trim()
     if (!text) throw new Error('contenu de correction vide')
-    const db = this.registry.dbForInstance(instanceId)
-    if (!db || !existsSync(db.path)) return { replacement: null }
-    const store = this.openContent(db.path)
-    const old = store.getFact(factId)
-    if (!old || old.superseded) return { replacement: null }
+    const instance = this.mustInstance(instanceId)
+    const located = this.locateFact(instance, factId)
+    if (!located || located.row.superseded) return { replacement: null }
+    const { store, row: old, scope } = located
+    this.assertWritable(instance, scope)
 
     // La correction hérite du classement de l'original (catégorie, scope,
     // épinglage) : corriger une formulation ne doit pas dégrader le rangement.
+    // Le remplaçant naît dans la MÊME DB que l'original (storeForScope) : la
+    // chaîne superseded_by reste navigable dans une seule base.
     const replacement = this.storeFact({
       instance: instanceId,
       content: text,
@@ -1231,9 +1288,7 @@ export class Memoria {
     store.db
       .prepare("UPDATE facts SET superseded = 1, superseded_by = ?, updated_at = ? WHERE id = ? AND superseded = 0")
       .run(replacement.id, nowISO(), factId)
-    // `Fact` (forme exposée) ne porte pas `pinned` : on relit la colonne brute.
-    const wasPinned = store.db.prepare('SELECT pinned FROM facts WHERE id = ?').get(factId) as { pinned?: number } | undefined
-    if (wasPinned?.pinned) store.db.prepare('UPDATE facts SET pinned = 1 WHERE id = ?').run(replacement.id)
+    if (old.pinned) store.db.prepare('UPDATE facts SET pinned = 1 WHERE id = ?').run(replacement.id)
     this.registry.audit({
       actor_type: 'user', actor_id: 'local', action: 'fact_correct',
       target_id_hash: sha256Hex(factId), scope_id: null, reason: `replacement=${sha256Hex(replacement.id).slice(0, 12)}`,
@@ -1250,13 +1305,15 @@ export class Memoria {
     this.assertOpen()
     const targets = mergeIds.filter(id => id !== keepId)
     if (targets.length === 0) return { merged: [] }
-    const db = this.registry.dbForInstance(instanceId)
-    if (!db || !existsSync(db.path)) return { merged: [] }
-    const store = this.openContent(db.path)
-    const keep = store.getFact(keepId)
+    const instance = this.mustInstance(instanceId)
+    const located = this.locateFact(instance, keepId)
     // Refuser plutôt que fusionner vers un fait absent ou déjà supersédé :
     // on créerait une chaîne cassée, exactement le bug legacy 'split:'.
-    if (!keep || keep.superseded) throw new Error(`fusion impossible : le fait conservé ${keepId} est absent ou supersédé`)
+    if (!located || located.row.superseded) throw new Error(`fusion impossible : le fait conservé ${keepId} est absent ou supersédé`)
+    const { store, scope } = located
+    this.assertWritable(instance, scope)
+    // Les doublons fusionnés doivent vivre dans la MÊME DB que le conservé
+    // (superseded_by ne traverse pas les bases) : un id d'ailleurs est ignoré.
 
     const ts = nowISO()
     const merged: string[] = []
@@ -1304,9 +1361,11 @@ export class Memoria {
    */
   setPinned(instanceId: string, factId: string, pinned: boolean): boolean {
     this.assertOpen()
-    const db = this.registry.dbForInstance(instanceId)
-    if (!db || !existsSync(db.path)) return false
-    const store = this.openContent(db.path)
+    const instance = this.mustInstance(instanceId)
+    const located = this.locateFact(instance, factId)
+    if (!located) return false
+    this.assertWritable(instance, located.scope)
+    const { store } = located
     const r = store.db
       .prepare('UPDATE facts SET pinned = ?, updated_at = ? WHERE id = ?')
       .run(pinned ? 1 : 0, nowISO(), factId)
@@ -1330,9 +1389,11 @@ export class Memoria {
     if (expiresAt !== null && Number.isNaN(Date.parse(expiresAt))) {
       throw new Error(`date d'expiration invalide : ${expiresAt} (ISO 8601 attendu)`)
     }
-    const db = this.registry.dbForInstance(instanceId)
-    if (!db || !existsSync(db.path)) return false
-    const store = this.openContent(db.path)
+    const instance = this.mustInstance(instanceId)
+    const located = this.locateFact(instance, factId)
+    if (!located) return false
+    this.assertWritable(instance, located.scope)
+    const { store } = located
     const r = store.db
       .prepare('UPDATE facts SET expires_at = ?, updated_at = ? WHERE id = ?')
       .run(expiresAt, nowISO(), factId)
