@@ -8,7 +8,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
 import type { RecallResult, Sensitivity } from '@memoria/core'
-import { DaemonClient, ensureDaemon, type DaemonState } from '@memoria/daemon'
+import { ensureDaemon, type DaemonState } from '@memoria/daemon'
 import { loadCredentials } from './credentials.js'
 import { ActiveContextTracker, type SetContextInput } from './context.js'
 
@@ -64,29 +64,69 @@ export interface DaemonGateway {
 }
 
 /**
- * Gateway HTTP réel : DaemonClient pour recall/store_fact + appel direct pour
- * `POST /v1/memory/capture_turn` (route côté daemon en cours d'ajout — le
- * client est prêt, l'intégrateur câble la route serveur).
+ * Erreur HTTP renvoyée PAR le daemon (4xx/5xx) : le daemon est joignable, il a
+ * répondu. Distinguer ce cas d'une panne réseau est ce qui permet de ne pas
+ * annoncer « daemon injoignable, lance memoria doctor » pour une date invalide.
+ */
+export class DaemonHttpError extends Error {
+  readonly status: number
+  readonly path: string
+  readonly daemonMessage: string
+  constructor(path: string, status: number, daemonMessage: string) {
+    super(`daemon ${path} → ${status} : ${daemonMessage}`)
+    this.name = 'DaemonHttpError'
+    this.path = path
+    this.status = status
+    this.daemonMessage = daemonMessage
+  }
+}
+
+/** Le daemon n'a pas répondu dans le délai : la requête a PEUT-ÊTRE été traitée. */
+export class DaemonTimeoutError extends Error {
+  readonly path: string
+  readonly timeoutMs: number
+  constructor(path: string, timeoutMs: number) {
+    super(`daemon ${path} → pas de réponse en ${Math.round(timeoutMs / 1000)} s`)
+    this.name = 'DaemonTimeoutError'
+    this.path = path
+    this.timeoutMs = timeoutMs
+  }
+}
+
+/**
+ * Délais de garde. Sans `signal`, un fetch pendait jusqu'au timeout de l'hôte
+ * MCP (≈120 s) quand le provider d'extraction ne répondait plus.
+ * capture_turn est plus long : le daemon extrait DANS l'appel (LLM local
+ * possible) — mais l'appel doit rester sous le timeout de l'hôte.
+ */
+export const DAEMON_TIMEOUT_MS = 30_000
+export const CAPTURE_TIMEOUT_MS = 60_000
+
+/**
+ * Gateway HTTP réel : un seul chemin (`postMemory`) pour TOUTES les routes
+ * mémoire, avec délai de garde et erreurs typées — DaemonClient (daemon)
+ * lève des `Error` plates sans status, inutilisables pour différencier
+ * une panne d'un 400.
  */
 export class HttpDaemonGateway implements DaemonGateway {
-  private readonly client: DaemonClient
+  private readonly baseUrl: string
   private readonly token: string
 
   constructor(state: Pick<DaemonState, 'port'>, instanceToken: string) {
-    this.client = new DaemonClient(state, instanceToken)
+    this.baseUrl = `http://127.0.0.1:${state.port}`
     this.token = instanceToken
   }
 
   recall(input: Record<string, unknown>): Promise<RecallResult> {
-    return this.client.recall(input)
+    return this.postMemory('/v1/memory/recall', input) as Promise<RecallResult>
   }
 
   storeFact(input: Record<string, unknown>): Promise<unknown> {
-    return this.client.storeFact(input)
+    return this.postMemory('/v1/memory/store_fact', input)
   }
 
   captureTurn(input: Record<string, unknown>): Promise<unknown> {
-    return this.postMemory('/v1/memory/capture_turn', input)
+    return this.postMemory('/v1/memory/capture_turn', input, CAPTURE_TIMEOUT_MS)
   }
 
   identifyInterlocutor(input: Record<string, unknown>): Promise<unknown> {
@@ -117,19 +157,24 @@ export class HttpDaemonGateway implements DaemonGateway {
     return this.postMemory('/v1/memory/identify_or_create_interlocutor', input)
   }
 
-  private async postMemory(path: string, input: Record<string, unknown>): Promise<unknown> {
-    const res = await fetch(`${this.client.baseUrl}${path}`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${this.token}`,
-      },
-      body: JSON.stringify(input),
-    })
-    const payload = (await res.json().catch(() => ({}))) as Record<string, unknown>
-    if (!res.ok) {
-      throw new Error(`daemon ${path} → ${res.status} : ${String(payload['error'] ?? 'erreur')}`)
+  private async postMemory(path: string, input: Record<string, unknown>, timeoutMs = DAEMON_TIMEOUT_MS): Promise<unknown> {
+    let res: Response
+    try {
+      res = await fetch(`${this.baseUrl}${path}`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${this.token}`,
+        },
+        body: JSON.stringify(input),
+        signal: AbortSignal.timeout(timeoutMs),
+      })
+    } catch (err) {
+      if ((err as { name?: string }).name === 'TimeoutError') throw new DaemonTimeoutError(path, timeoutMs)
+      throw err // erreur réseau (ECONNREFUSED, fetch failed) : le daemon est absent
     }
+    const payload = (await res.json().catch(() => ({}))) as Record<string, unknown>
+    if (!res.ok) throw new DaemonHttpError(path, res.status, String(payload['error'] ?? 'erreur'))
     return payload
   }
 }
@@ -186,11 +231,21 @@ const SERVER_INSTRUCTIONS = [
 export function buildServer(opts: BuildServerOptions): BuiltServer {
   let gateway: DaemonGateway | null = null
 
+  /**
+   * Seule une erreur RÉSEAU (daemon absent : ECONNREFUSED, fetch failed) mérite
+   * une reconnexion + un rejeu. Une réponse 4xx/5xx prouve que le daemon est
+   * là : rejouer coûtait une requête pour rien. Un timeout est pire : la
+   * requête a pu aboutir (capture_turn déjà journalisé) → rejouer = doublons.
+   */
+  const isNetworkError = (err: unknown): boolean =>
+    !(err instanceof DaemonHttpError) && !(err instanceof DaemonTimeoutError)
+
   async function withDaemon<T>(op: (g: DaemonGateway) => Promise<T>): Promise<T> {
     if (!gateway) gateway = await opts.connect()
     try {
       return await op(gateway)
     } catch (err) {
+      if (!isNetworkError(err)) throw err
       // visible sur stderr + une seule relance — jamais de boucle
       console.warn(`[memoria-mcp] échec daemon, tentative de relance : ${(err as Error).message}`)
       gateway = null
@@ -203,14 +258,38 @@ export function buildServer(opts: BuildServerOptions): BuiltServer {
     content: [{ type: 'text', text: JSON.stringify(payload) }],
   })
 
+  /**
+   * Message d'erreur POUR LE LLM, différencié par cause. Avant, tout finissait
+   * en « daemon unreachable… run memoria doctor » — y compris une date
+   * invalide, un token révoqué ou Memoria mise en pause par l'utilisateur —
+   * et `memoria doctor` répondait ensuite que tout allait bien.
+   */
+  const explain = (err: unknown): string => {
+    if (err instanceof DaemonHttpError) {
+      const m = err.daemonMessage
+      if (err.status === 400 || err.status === 422) {
+        return `Memoria rejected this request: ${m}. The memory layer itself is fine — fix the arguments and retry.`
+      }
+      if (err.status === 401 || err.status === 403) {
+        return `Memoria refused this agent's token (${m}): it was revoked or never paired. Continue without memory and tell the user to reconnect this agent from the Memoria app (or run \`memoria-mcp connect\`).`
+      }
+      if (err.status === 404) {
+        return `Memoria could not serve this operation (${m}). Either the user has paused Memoria, or the daemon is older than this MCP server. Continue without it and do not retry; mention it to the user only if they expected memory to work.`
+      }
+      return `Memoria daemon failed on ${err.path} (HTTP ${err.status}: ${m}). Continue without memory for now; if it keeps happening, suggest the user runs \`memoria doctor\`.`
+    }
+    if (err instanceof DaemonTimeoutError) {
+      const hint = err.path.endsWith('/capture_turn')
+        ? ' The turn may still have been journaled and processed: check with memoria_capture_status (if you have wal_ids) instead of re-capturing, which would create duplicates.'
+        : ''
+      return `Memoria daemon did not answer within ${Math.round(err.timeoutMs / 1000)} s on ${err.path}.${hint} Continue without memory; if it keeps happening, suggest the user runs \`memoria doctor\`.`
+    }
+    return `Memoria daemon is unreachable (${(err as Error).message}). The memory layer is temporarily unavailable — continue without it and suggest the user runs \`memoria doctor\`.`
+  }
+
   const fail = (err: unknown): CallToolResult => ({
     isError: true,
-    content: [
-      {
-        type: 'text',
-        text: `Memoria daemon is unreachable or the request failed: ${(err as Error).message}. The memory layer is temporarily unavailable — continue without it and suggest the user runs \`memoria doctor\`.`,
-      },
-    ],
+    content: [{ type: 'text', text: explain(err) }],
   })
 
   const handlers: ToolHandlers = {
@@ -385,7 +464,7 @@ export function buildServer(opts: BuildServerOptions): BuiltServer {
     'memoria_capture_turn',
     {
       description:
-        'Hand over one or more raw conversation messages so Memoria can extract durable facts in the background. Use it after a meaningful exchange; extraction, deduplication and storage happen asynchronously on the daemon.',
+        'Hand over one or more raw conversation messages so Memoria can extract durable facts from them (deduplicated against existing memories). Use it after a meaningful exchange — a decision, a preference, a new procedure, a correction from the user — not for every message. The daemon journals the messages first, then extracts: the call returns when done (it may take a few seconds) and includes `wal_ids`. If it times out, do NOT re-send the same messages (duplicates): check `wal_ids` with memoria_capture_status.',
       inputSchema: {
         messages: z
           .array(

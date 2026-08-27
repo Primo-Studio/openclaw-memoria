@@ -14,6 +14,8 @@ import {
   buildServer,
   connect,
   credentialsPath,
+  DaemonHttpError,
+  DaemonTimeoutError,
   HttpDaemonGateway,
   loadCredentials,
   saveCredentials,
@@ -302,6 +304,73 @@ describe('buildServer handlers', () => {
     expect(warn).toHaveBeenCalled()
   })
 
+  it('erreur HTTP 400 du daemon → AUCUNE relance, message daemon verbatim, pas de « memoria doctor »', async () => {
+    // Une date invalide dans set_expiry était annoncée comme une panne du daemon,
+    // rejouée une fois pour rien, et le LLM envoyait l'utilisateur lancer
+    // `memoria doctor` qui disait que tout allait bien.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let connections = 0
+    let calls = 0
+    const gateway = fakeGateway()
+    gateway.expiry = async () => {
+      calls += 1
+      throw new DaemonHttpError('/v1/memory/expiry', 400, "date d'expiration invalide : demain")
+    }
+    const { handlers } = buildServer({
+      instanceId: 'i',
+      tracker: new ActiveContextTracker(),
+      connect: async () => {
+        connections += 1
+        return gateway
+      },
+    })
+    const res = await handlers.expiry({ fact_id: 'f1', expires_at: 'demain' })
+    expect(res.isError).toBe(true)
+    const text = (res.content[0] as { type: 'text'; text: string }).text
+    expect(text).toContain("date d'expiration invalide : demain")
+    expect(text).not.toMatch(/unreachable|memoria doctor/)
+    expect(calls).toBe(1)
+    expect(connections).toBe(1)
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('401 (token révoqué) → message de re-connexion, pas de relance', async () => {
+    const gateway = fakeGateway()
+    gateway.recall = async () => {
+      throw new DaemonHttpError('/v1/memory/recall', 401, 'token d’instance invalide ou révoqué')
+    }
+    const { handlers } = buildServer({ instanceId: 'i', tracker: new ActiveContextTracker(), connect: async () => gateway })
+    const text = (await handlers.recall({ query: 'x' })).content[0] as { type: 'text'; text: string }
+    expect(text.text).toMatch(/reconnect|memoria-mcp connect/)
+    expect(text.text).not.toMatch(/unreachable/)
+  })
+
+  it('404 (Memoria en pause ou daemon trop ancien) → dit « paused », pas « unreachable »', async () => {
+    const gateway = fakeGateway()
+    gateway.pin = async () => {
+      throw new DaemonHttpError('/v1/memory/pin', 404, 'route mémoire inconnue : POST /v1/memory/pin')
+    }
+    const { handlers } = buildServer({ instanceId: 'i', tracker: new ActiveContextTracker(), connect: async () => gateway })
+    const text = ((await handlers.pin({ fact_id: 'f1', pinned: true })).content[0] as { type: 'text'; text: string }).text
+    expect(text).toMatch(/paused/)
+    expect(text).not.toMatch(/unreachable/)
+  })
+
+  it('timeout sur capture_turn → UN SEUL appel (jamais de rejeu d’un POST non idempotent) + renvoi vers capture_status', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let calls = 0
+    const gateway = fakeGateway()
+    gateway.captureTurn = async () => {
+      calls += 1
+      throw new DaemonTimeoutError('/v1/memory/capture_turn', 60_000)
+    }
+    const { handlers } = buildServer({ instanceId: 'i', tracker: new ActiveContextTracker(), connect: async () => gateway })
+    const res = await handlers.captureTurn({ messages: [{ role: 'user', content: 'salut' }] })
+    expect(res.isError).toBe(true)
+    expect(calls).toBe(1)
+    expect((res.content[0] as { type: 'text'; text: string }).text).toContain('memoria_capture_status')
+  })
+
   it('memoria_set_context / memoria_get_context retournent le contexte effectif', async () => {
     const tracker = new ActiveContextTracker()
     const { handlers } = buildServer({ instanceId: 'i', tracker, connect: async () => fakeGateway() })
@@ -397,13 +466,40 @@ describe('HttpDaemonGateway.captureTurn', () => {
     expect(fetchMock).toHaveBeenCalledOnce()
   })
 
-  it('réponse non-OK → erreur avec status + message daemon', async () => {
+  it('réponse non-OK → DaemonHttpError typée (status + message daemon)', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => new Response(JSON.stringify({ error: 'route inconnue' }), { status: 404 })),
     )
     const gateway = new HttpDaemonGateway({ port: 5151 }, 'tok-abc')
-    await expect(gateway.captureTurn({ messages: [] })).rejects.toThrow(/404.*route inconnue/)
+    const err = await gateway.captureTurn({ messages: [] }).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(DaemonHttpError)
+    expect((err as DaemonHttpError).status).toBe(404)
+    expect((err as DaemonHttpError).message).toMatch(/404.*route inconnue/)
+  })
+
+  it('recall et store_fact passent aussi par la gateway typée (timeout + erreurs HTTP)', async () => {
+    const fetchMock = vi.fn(async (_url: unknown, init?: { signal?: AbortSignal }) => {
+      expect(init?.signal).toBeInstanceOf(AbortSignal) // un fetch sans délai pendait jusqu'au timeout de l'hôte MCP
+      return new Response(JSON.stringify({ error: 'boom' }), { status: 500 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const gateway = new HttpDaemonGateway({ port: 5151 }, 'tok-abc')
+    await expect(gateway.recall({ query: 'x' })).rejects.toBeInstanceOf(DaemonHttpError)
+    await expect(gateway.storeFact({ content: 'x' })).rejects.toBeInstanceOf(DaemonHttpError)
+    expect(String(fetchMock.mock.calls[0]![0])).toBe('http://127.0.0.1:5151/v1/memory/recall')
+    expect(String(fetchMock.mock.calls[1]![0])).toBe('http://127.0.0.1:5151/v1/memory/store_fact')
+  })
+
+  it('fetch qui expire → DaemonTimeoutError (pas une erreur réseau rejouable)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new DOMException('The operation was aborted due to timeout', 'TimeoutError')
+      }),
+    )
+    const gateway = new HttpDaemonGateway({ port: 5151 }, 'tok-abc')
+    await expect(gateway.captureTurn({ messages: [] })).rejects.toBeInstanceOf(DaemonTimeoutError)
   })
 })
 
