@@ -26,16 +26,21 @@ import { createMemoriaCorpus, registerCorpusSupplement, sdkCandidates, toCorpusR
 function fakeApi(config: Record<string, unknown>): {
   api: OpenClawPluginApi
   handlers: Map<string, (event: unknown, ctx?: unknown) => unknown>
+  hookOpts: Map<string, { priority?: number; timeoutMs?: number } | undefined>
   warnings: string[]
 } {
   const handlers = new Map<string, (event: unknown, ctx?: unknown) => unknown>()
+  const hookOpts = new Map<string, { priority?: number; timeoutMs?: number } | undefined>()
   const warnings: string[] = []
   const api: OpenClawPluginApi = {
     pluginConfig: config,
     logger: { warn: m => warnings.push(m), info: () => {}, debug: () => {} },
-    on: (hook, handler) => handlers.set(hook, handler as (event: unknown, ctx?: unknown) => unknown),
+    on: (hook, handler, opts) => {
+      handlers.set(hook, handler as (event: unknown, ctx?: unknown) => unknown)
+      hookOpts.set(hook, opts)
+    },
   }
-  return { api, handlers, warnings }
+  return { api, handlers, hookOpts, warnings }
 }
 
 const item = (over: Partial<RecallItem>): RecallItem => ({
@@ -287,6 +292,31 @@ describe('register → hooks → daemon', () => {
     const result = await handlers.get('before_prompt_build')!({ prompt: 'x' })
     expect(result).toBeUndefined()
     expect(getStats().recallEmpty).toBe(1)
+  })
+
+  it('recall : délai par défaut 2 s (embeddings distants : 425–929 ms mesurés, 1 845 ms à froid) — 800 ms perdait 1 tour sur 6', () => {
+    // Le hook before_prompt_build est enregistré avec timeoutMs = recallTimeoutMs + 200.
+    // Chaque dépassement = aucun souvenir injecté pour ce tour, sans que
+    // l'utilisateur le voie (warn 1×/min).
+    const { api, hookOpts } = fakeApi(baseConfig)
+    register(api)
+    expect(hookOpts.get('before_prompt_build')?.timeoutMs).toBe(2_200)
+  })
+
+  it('recall : un timeout est nommé comme tel dans le warn, avec le réglage à augmenter', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new DOMException('The operation was aborted due to timeout', 'TimeoutError')
+      }),
+    )
+    const { api, handlers, warnings } = fakeApi({ ...baseConfig, recallTimeoutMs: 300 })
+    register(api)
+    const result = await handlers.get('before_prompt_build')!({ prompt: 'x' })
+    expect(result).toBeUndefined()
+    expect(getStats().recallFail).toBe(1)
+    expect(warnings.join(' ')).toMatch(/300 ms/)
+    expect(warnings.join(' ')).toMatch(/recallTimeoutMs/)
   })
 
   it('recall : daemon injoignable → pas de throw, pas d’injection, compté comme échec', async () => {

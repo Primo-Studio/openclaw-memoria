@@ -126,7 +126,10 @@ function readConfig(raw: Record<string, unknown> | undefined): AdapterConfig {
     autoRecall: c['autoRecall'] !== false,
     autoCapture: c['autoCapture'] !== false,
     recallLimit: clampInt(c['recallLimit'], 12, 1, 20),
-    recallTimeoutMs: clampInt(c['recallTimeoutMs'], 800, 100, 5000),
+    // 2 s et non 800 ms : avec des embeddings distants (openai/text-embedding-3-
+    // small depuis le 24/08), un recall mesuré fait 425–929 ms et 1 845 ms à
+    // froid ; à 800 ms, 1 tour sur 6 perdait sa mémoire sans que personne le voie.
+    recallTimeoutMs: clampInt(c['recallTimeoutMs'], DEFAULT_RECALL_TIMEOUT_MS, 100, 5000),
     tokenBudget: clampInt(c['tokenBudget'], 600, 100, 4000),
     relevanceFloor: clampFloat(c['relevanceFloor'], 0.15, 0, 0.9),
     showProvenance: c['showProvenance'] !== false,
@@ -135,6 +138,8 @@ function readConfig(raw: Record<string, unknown> | undefined): AdapterConfig {
     orgId: str(c['orgId']),
   }
 }
+
+export const DEFAULT_RECALL_TIMEOUT_MS = 2_000
 
 function clampInt(v: unknown, def: number, min: number, max: number): number {
   const n = typeof v === 'number' ? v : Number(v)
@@ -555,6 +560,13 @@ export function register(api: OpenClawPluginApi): void {
         signal: AbortSignal.timeout(timeoutMs),
       })
     } catch (err) {
+      // Un timeout n'est pas une panne : le daemon travaille (embeddings
+      // distants, extraction LLM). Le dire tel quel, avec le réglage à toucher,
+      // sinon « aborted » se lit comme un daemon mort.
+      if ((err as { name?: string }).name === 'TimeoutError') {
+        warn(path, `appel ${path} abandonné après ${timeoutMs} ms — daemon lent (embeddings distants ?) : augmente recallTimeoutMs dans la config du plugin memoria.`)
+        return null
+      }
       warn(path, `appel ${path} ignoré : ${(err as Error).message}`)
       return null
     }
