@@ -189,29 +189,31 @@ describe('GET /v1/admin/version + POST /v1/admin/update', () => {
     expect(restarts).toEqual([])
   })
 
-  it('build effectué (rebuilt:true) → redémarrage planifié UNE fois, APRÈS la réponse', async () => {
+  it('build effectué (rebuilt:true) → redémarrage planifié UNE fois, APRÈS la réponse (un hook qui lève ne change ni la réponse ni la vie du daemon)', async () => {
     const restarts: string[] = []
-    let respondedBeforeRestart = false
     daemon = await startDaemon({
       storageRoot: root,
       configPath: join(root, 'config.toml'),
       llm: { extraction: null },
       updater: {
         pullAndBuild: async () => ({ ...baseResult, after: 'bbb', changed: true, rebuilt: true, message: 'Mis à jour aaa → bbb.' }),
+        // Le hook LÈVE : s'il était appelé avant sendJson, la route échouerait
+        // en 500 — c'est ce qui prouve l'ordre. Appelé après, la réponse 200
+        // est déjà partie et l'échec doit être journalisé, pas tuer le daemon
+        // (un rejet non géré dans le .catch du handler = crash du process).
         scheduleRestart: r => {
           restarts.push(r)
+          throw new Error('spawn sh EAGAIN (simulé)')
         },
       },
     })
-    const pending = post('/v1/admin/update', {}).then(r => {
-      respondedBeforeRestart = restarts.length <= 1
-      return r
-    })
-    const r = await pending
+    const r = await post('/v1/admin/update', {})
     expect(r.status).toBe(200)
     expect(r.json).toMatchObject({ ok: true, rebuilt: true })
     expect(restarts).toEqual([root])
-    expect(respondedBeforeRestart).toBe(true)
+    // le daemon a survécu à l'échec de planification et répond toujours
+    const health = await get('/v1/health')
+    expect(health.status).toBe(200)
   })
 
   it('échec (npm introuvable) → ok:false renvoyé au client, aucun redémarrage', async () => {

@@ -946,7 +946,16 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         // Redémarrage planifié APRÈS l'envoi de la réponse, dès qu'un build a eu
         // lieu — `rebuilt` et non `changed` : un rattrapage de build sans
         // nouveauté git remplace bien le code sur le disque, il faut recharger.
-        if (result.ok && result.rebuilt) updater.scheduleRestart(storageRoot)
+        if (result.ok && result.rebuilt) {
+          try {
+            updater.scheduleRestart(storageRoot)
+          } catch (err) {
+            // La réponse est partie : une exception ici remonterait dans
+            // reportAndSend, qui ne peut plus répondre. On la journalise avec
+            // la consigne — le nouveau build est sur le disque mais pas chargé.
+            console.error(`[memoria-daemon] mise à jour installée mais redémarrage NON planifié : ${(err as Error)?.message ?? err} — relance « memoria stop » puis « memoria start »`)
+          }
+        }
         return
       }
       default:
@@ -1403,6 +1412,14 @@ function reportAndSend(req: IncomingMessage, res: ServerResponse, err: unknown):
   if (status >= 500) {
     const detail = (err as Error)?.stack ?? message
     console.error(`[memoria-daemon] ${req.method ?? '?'} ${req.url ?? '?'} → ${status} : ${detail}`)
+  }
+  // Exception APRÈS l'envoi de la réponse (effet de bord post-réponse) :
+  // writeHead lèverait ERR_HTTP_HEADERS_SENT depuis le .catch du handler →
+  // rejet non géré → Node tue le daemon. On journalise et on coupe proprement.
+  if (res.headersSent) {
+    console.error(`[memoria-daemon] ${req.method ?? '?'} ${req.url ?? '?'} : erreur après la réponse (non transmise au client) : ${message}`)
+    if (!res.writableEnded) res.end()
+    return
   }
   sendJson(res, status, { error: message })
 }
