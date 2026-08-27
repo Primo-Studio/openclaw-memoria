@@ -99,6 +99,15 @@ describe('EmbeddingIndexer', () => {
     expect(count.c).toBe(6)
   })
 
+  it('un fait DORMANT (quarantaine, pas encore approuvé) n’est pas embeddé ; approuvé → il l’est', async () => {
+    const f = store.insertFact({ fact: 'note importée en attente de revue', scope_id: 's1', lifecycle_state: 'dormant' })
+    expect(indexer.pendingCount()).toBe(0)
+    expect((await indexer.runOnce()).indexed).toBe(0)
+    store.db.prepare("UPDATE facts SET lifecycle_state = 'active' WHERE id = ?").run(f.id)
+    expect(indexer.pendingCount()).toBe(1)
+    expect((await indexer.runOnce()).indexed).toBe(1)
+  })
+
   it('removeFor nettoie embeddings + index', async () => {
     const f = store.insertFact({ fact: 'la voiture rouge du garage', scope_id: 's1' })
     await indexer.runOnce()

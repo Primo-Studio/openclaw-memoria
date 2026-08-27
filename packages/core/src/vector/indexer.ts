@@ -31,12 +31,17 @@ export class EmbeddingIndexer {
     return { model: this.provider.model, dimensions: this.provider.dimensions }
   }
 
-  /** Faits actifs sans embedding pour ce modèle. */
+  /**
+   * Faits actifs sans embedding pour ce modèle. Un fait DORMANT (quarantaine
+   * d'import ou capture review-first, pas encore approuvé) n'est pas embeddé :
+   * l'envoyer au cloud avant la revue coûtait pour rien — et son vecteur était
+   * effacé s'il était rejeté. L'approbation le rend `active`, donc éligible.
+   */
   pendingFacts(limit = this.batchSize): Array<{ id: string; fact: string }> {
     return this.store.db
       .prepare(
         `SELECT f.id, f.fact FROM facts f
-         WHERE f.superseded = 0
+         WHERE f.superseded = 0 AND f.lifecycle_state = 'active'
            AND NOT EXISTS (
              SELECT 1 FROM embeddings e
              WHERE e.owner_type = 'fact' AND e.owner_id = f.id AND e.model = ?
@@ -51,7 +56,7 @@ export class EmbeddingIndexer {
     const r = this.store.db
       .prepare(
         `SELECT COUNT(*) AS c FROM facts f
-         WHERE f.superseded = 0
+         WHERE f.superseded = 0 AND f.lifecycle_state = 'active'
            AND NOT EXISTS (
              SELECT 1 FROM embeddings e
              WHERE e.owner_type = 'fact' AND e.owner_id = f.id AND e.model = ?

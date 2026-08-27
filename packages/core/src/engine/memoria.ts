@@ -1692,6 +1692,14 @@ export class Memoria {
         reason: `items=${rows.length}`,
       })
     }
+    // Un fait approuvé devient `active` : il est maintenant éligible à
+    // l'indexation (les dormants ne sont jamais embeddés avant revue). Même
+    // fire-and-forget que le post-capture — l'échec est loggé, jamais avalé.
+    if (decision === 'accepted' && updated > 0) {
+      void this.indexEmbeddings().catch((err: unknown) =>
+        console.warn(`[memoria] indexation après approbation en échec : ${(err as Error).message}`),
+      )
+    }
     return { updated }
   }
 
@@ -2362,9 +2370,10 @@ export class Memoria {
   }
 
   /**
-   * Faits actifs (superseded=0) sans vecteur pour le modèle d'embeddings
-   * courant, toutes bases confondues = ce qu'une (ré)indexation aurait à faire.
-   * 0 si aucun moteur d'embeddings n'est résolu.
+   * Faits actifs (superseded=0, lifecycle_state='active' — les dormants en
+   * attente de revue ne sont pas embeddés, cf. EmbeddingIndexer.pendingFacts)
+   * sans vecteur pour le modèle d'embeddings courant, toutes bases confondues =
+   * ce qu'une (ré)indexation aurait à faire. 0 si aucun moteur d'embeddings.
    */
   async embeddingsPending(): Promise<number> {
     this.assertOpen()
@@ -2377,7 +2386,7 @@ export class Memoria {
       const row = store.db
         .prepare(
           `SELECT COUNT(*) AS c FROM facts f
-           WHERE f.superseded = 0
+           WHERE f.superseded = 0 AND f.lifecycle_state = 'active'
              AND NOT EXISTS (
                SELECT 1 FROM embeddings e
                WHERE e.owner_type = 'fact' AND e.owner_id = f.id AND e.model = ?
