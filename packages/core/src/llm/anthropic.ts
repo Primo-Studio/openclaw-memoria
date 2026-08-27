@@ -8,6 +8,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { LlmTruncatedError, type CompleteOptions, type CompletionResult, type LlmProvider, type LlmUsage } from './provider.js'
+import { fetchWithTimeout } from './http.js'
 
 export const DEFAULT_ANTHROPIC_MODEL = 'claude-haiku-4-5-20251001'
 export const DEFAULT_ANTHROPIC_BASE_URL = 'https://api.anthropic.com'
@@ -92,22 +93,26 @@ export class AnthropicProvider implements LlmProvider {
       system = system ? `${system}\n${directive}` : directive
     }
 
-    const res = await fetch(`${this.baseUrl}/v1/messages`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': this.apiKey,
-        'anthropic-version': ANTHROPIC_API_VERSION,
+    const res = await fetchWithTimeout(
+      `${this.baseUrl}/v1/messages`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': this.apiKey,
+          'anthropic-version': ANTHROPIC_API_VERSION,
+        },
+        body: JSON.stringify({
+          model: this.model,
+          max_tokens: opts.maxTokens ?? 1024,
+          temperature: opts.temperature,
+          system,
+          messages: [{ role: 'user', content: opts.prompt }],
+        }),
       },
-      body: JSON.stringify({
-        model: this.model,
-        max_tokens: opts.maxTokens ?? 1024,
-        temperature: opts.temperature,
-        system,
-        messages: [{ role: 'user', content: opts.prompt }],
-      }),
-      signal: AbortSignal.timeout(this.timeoutMs),
-    })
+      this.timeoutMs,
+      { provider: 'anthropic', model: this.model, what: '/v1/messages' },
+    )
     if (!res.ok) {
       const detail = await res.text().catch(() => '')
       throw new Error(`anthropic /v1/messages HTTP ${res.status} (modèle ${this.model}) : ${detail.slice(0, 200)}`)

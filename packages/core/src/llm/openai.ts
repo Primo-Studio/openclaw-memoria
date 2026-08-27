@@ -13,6 +13,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { LlmTruncatedError, type CompleteOptions, type CompletionResult, type EmbeddingProvider, type EmbeddingResult, type LlmProvider, type LlmUsage } from './provider.js'
 import { assertVectorDimensions } from './embeddings-guard.js'
+import { fetchWithTimeout } from './http.js'
 
 export const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini'
 export const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1'
@@ -108,7 +109,9 @@ export class OpenAiProvider implements LlmProvider {
     this.model = opts.model ?? (this.flavor === 'openrouter' ? DEFAULT_OPENROUTER_MODEL : DEFAULT_OPENAI_MODEL)
     this.apiKey = resolveOpenAiApiKey(opts)
     this.baseUrl = (opts.baseUrl ?? (this.flavor === 'openrouter' ? DEFAULT_OPENROUTER_BASE_URL : DEFAULT_OPENAI_BASE_URL)).replace(/\/$/, '')
-    this.timeoutMs = opts.timeoutMs ?? 30_000
+    // Les modèles à raisonnement paient leur réflexion AVANT de répondre : sur
+    // un long tour, 30 s ne suffisent pas (abandons WAL vus en production).
+    this.timeoutMs = opts.timeoutMs ?? (usesCompletionTokens(this.model) ? 60_000 : 30_000)
   }
 
   isAvailable(): Promise<boolean> {
@@ -181,12 +184,12 @@ export class OpenAiProvider implements LlmProvider {
       headers['X-Title'] = 'Memoria'
     }
 
-    const res = await fetch(`${this.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(this.timeoutMs),
-    })
+    const res = await fetchWithTimeout(
+      `${this.baseUrl}/chat/completions`,
+      { method: 'POST', headers, body: JSON.stringify(body) },
+      this.timeoutMs,
+      { provider: this.flavor, model: this.model, what: '/chat/completions' },
+    )
     if (!res.ok) {
       const detail = await res.text().catch(() => '')
       throw new Error(`${this.flavor} /chat/completions HTTP ${res.status} (modèle ${this.model}) : ${detail.slice(0, 200)}`)
@@ -293,12 +296,12 @@ export class OpenAiEmbeddingProvider implements EmbeddingProvider {
     // l'appelant s'écarte du défaut du modèle.
     if (this.dimensions !== DEFAULT_OPENAI_EMBEDDING_DIMENSIONS) body['dimensions'] = this.dimensions
 
-    const res = await fetch(`${this.baseUrl}/embeddings`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.apiKey}` },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(this.timeoutMs),
-    })
+    const res = await fetchWithTimeout(
+      `${this.baseUrl}/embeddings`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.apiKey}` }, body: JSON.stringify(body) },
+      this.timeoutMs,
+      { provider: 'openai', model: this.model, what: '/embeddings' },
+    )
     if (!res.ok) {
       const detail = await res.text().catch(() => '')
       throw new Error(`openai /embeddings HTTP ${res.status} (modèle ${this.model}) : ${detail.slice(0, 200)}`)

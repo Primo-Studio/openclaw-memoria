@@ -6,6 +6,7 @@
  */
 import { LlmTruncatedError, type CompleteOptions, type CompletionResult, type EmbeddingProvider, type EmbeddingResult, type LlmProvider, type LlmUsage } from './provider.js'
 import { assertVectorDimensions } from './embeddings-guard.js'
+import { fetchWithTimeout } from './http.js'
 
 export const DEFAULT_OLLAMA_BASE_URL = 'http://127.0.0.1:11434'
 export const DEFAULT_OLLAMA_EMBEDDING_MODEL = 'nomic-embed-text'
@@ -74,21 +75,25 @@ export class OllamaProvider implements LlmProvider {
     if (opts.system) messages.push({ role: 'system', content: opts.system })
     messages.push({ role: 'user', content: opts.prompt })
 
-    const res = await fetch(`${this.baseUrl}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: this.model,
-        messages,
-        stream: false,
-        options: {
-          num_predict: opts.maxTokens ?? 1024,
-          temperature: opts.temperature ?? 0.1,
-        },
-        format: opts.json ? 'json' : undefined,
-      }),
-      signal: AbortSignal.timeout(this.timeoutMs),
-    })
+    const res = await fetchWithTimeout(
+      `${this.baseUrl}/api/chat`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: this.model,
+          messages,
+          stream: false,
+          options: {
+            num_predict: opts.maxTokens ?? 1024,
+            temperature: opts.temperature ?? 0.1,
+          },
+          format: opts.json ? 'json' : undefined,
+        }),
+      },
+      this.timeoutMs,
+      { provider: 'ollama', model: this.model, what: '/api/chat' },
+    )
     if (!res.ok) {
       const detail = await res.text().catch(() => '')
       throw new Error(`ollama /api/chat HTTP ${res.status} (modèle ${this.model}) : ${detail.slice(0, 200)}`)
@@ -153,12 +158,12 @@ export class OllamaEmbeddingProvider implements EmbeddingProvider {
 
   async embedDetailed(texts: string[]): Promise<EmbeddingResult> {
     if (texts.length === 0) return { vectors: [] }
-    const res = await fetch(`${this.baseUrl}/api/embed`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: this.model, input: texts }),
-      signal: AbortSignal.timeout(this.timeoutMs),
-    })
+    const res = await fetchWithTimeout(
+      `${this.baseUrl}/api/embed`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: this.model, input: texts }) },
+      this.timeoutMs,
+      { provider: 'ollama', model: this.model, what: '/api/embed' },
+    )
     if (!res.ok) {
       const detail = await res.text().catch(() => '')
       throw new Error(`ollama /api/embed HTTP ${res.status} (modèle ${this.model}) : ${detail.slice(0, 200)}`)

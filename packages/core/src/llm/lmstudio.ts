@@ -12,6 +12,7 @@
  * « objet JSON » dans le system, comme le provider OpenAI.
  */
 import { LlmTruncatedError, type CompleteOptions, type CompletionResult, type LlmProvider, type LlmUsage } from './provider.js'
+import { fetchWithTimeout } from './http.js'
 
 export const DEFAULT_LMSTUDIO_BASE_URL = 'http://127.0.0.1:1234/v1'
 /** Sentinelle « premier modèle chargé » (résolu via /models au 1er appel). */
@@ -131,21 +132,25 @@ export class LmStudioProvider implements LlmProvider {
     if (system) messages.push({ role: 'system', content: system })
     messages.push({ role: 'user', content: opts.prompt })
 
-    const res = await fetch(`${this.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        // Pas de clé requise — en-tête de convention, ignoré par LM Studio.
-        Authorization: 'Bearer lm-studio',
+    const res = await fetchWithTimeout(
+      `${this.baseUrl}/chat/completions`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          // Pas de clé requise — en-tête de convention, ignoré par LM Studio.
+          Authorization: 'Bearer lm-studio',
+        },
+        body: JSON.stringify({
+          model,
+          messages,
+          max_tokens: opts.maxTokens ?? 1024,
+          ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
+        }),
       },
-      body: JSON.stringify({
-        model,
-        messages,
-        max_tokens: opts.maxTokens ?? 1024,
-        ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
-      }),
-      signal: AbortSignal.timeout(this.timeoutMs),
-    })
+      this.timeoutMs,
+      { provider: 'lmstudio', model, what: '/chat/completions' },
+    )
     if (!res.ok) {
       const detail = await res.text().catch(() => '')
       throw new Error(`lmstudio /chat/completions HTTP ${res.status} (modèle ${model}) : ${detail.slice(0, 200)}`)

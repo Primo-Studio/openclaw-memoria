@@ -97,6 +97,25 @@ export class LlmTruncatedError extends Error {
   }
 }
 
+/**
+ * Délai dépassé sur un appel provider. `AbortSignal.timeout` lève un
+ * DOMException anonyme (« The operation was aborted due to timeout ») : sans
+ * provider, modèle ni durée, ni la signature WAL ni les logs ne disent QUI a
+ * expiré. On relance donc une erreur nommée (voir `fetchWithTimeout`).
+ */
+export class LlmTimeoutError extends Error {
+  readonly provider: string
+  readonly model: string
+  readonly timeoutMs: number
+  constructor(opts: { provider: string; model: string; timeoutMs: number; what: string }) {
+    super(`${opts.provider} ${opts.what} (modèle ${opts.model}) : délai dépassé après ${opts.timeoutMs} ms — modèle trop lent pour ce tour, ou serveur saturé`)
+    this.name = 'LlmTimeoutError'
+    this.provider = opts.provider
+    this.model = opts.model
+    this.timeoutMs = opts.timeoutMs
+  }
+}
+
 /** Appel détaillé si le provider le sait, sinon repli sur `complete` (usage absent). */
 export async function completeDetailed(provider: LlmProvider, opts: CompleteOptions): Promise<CompletionResult> {
   if (provider.completeDetailed) return provider.completeDetailed(opts)
