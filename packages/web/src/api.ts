@@ -291,7 +291,8 @@ export async function connectAgent(kind: DetectedAgentKind, name?: string): Prom
 }
 
 export interface ImportJobStatus {
-  state: 'idle' | 'running' | 'done' | 'error'
+  /** `interrupted` : le daemon s'est arrêté (stop, mise à jour, crash) pendant le job — message dans `error`. */
+  state: 'idle' | 'running' | 'done' | 'error' | 'interrupted'
   kind: 'transcripts' | 'legacy' | null
   instance_id: string | null
   progress: { files_done: number; files_total: number; facts_imported: number }

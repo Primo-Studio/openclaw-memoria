@@ -38,6 +38,7 @@ import {
   useLoad,
 } from '../components/ui'
 import { useT } from '../i18n'
+import { importPollOutcome, interruptedImport } from '../lib/import-flow'
 
 type Translate = (key: string, vars?: Record<string, string | number>) => string
 
@@ -210,6 +211,9 @@ export function MachineAgents({ onChanged, onOpenReview }: { onChanged: () => vo
   const [connectResults, setConnectResults] = useState<Record<string, ConnectAgentResult>>({})
   const [startFresh, setStartFresh] = useState<Set<string>>(loadStartFresh)
   const [flow, setFlow] = useState<ImportFlow>({ step: 'closed' })
+  // Statut d'import PERSISTÉ par le daemon, lu au montage : un job coupé par un
+  // arrêt du daemon (state `interrupted`) doit se voir ici, pas rester muet.
+  const [persisted, setPersisted] = useState<ImportJobStatus | null>(null)
 
   const detect = () => {
     setDetecting(true)
@@ -266,7 +270,10 @@ export function MachineAgents({ onChanged, onOpenReview }: { onChanged: () => vo
       kind: isLegacy ? 'legacy' : 'transcripts',
       ...(isLegacy && agent.data_found.legacy_db ? { legacy_path: agent.data_found.legacy_db.path } : {}),
     }).then(
-      status => setFlow({ step: 'running', agent, status }),
+      status => {
+        setPersisted(null) // le job relancé remplace le statut interrompu
+        setFlow({ step: 'running', agent, status })
+      },
       (err: unknown) => {
         console.warn('memoria-ui : démarrage de l’import échoué', err)
         setFlow({ step: 'failed', agent, message: humanError(err) })
@@ -277,6 +284,15 @@ export function MachineAgents({ onChanged, onOpenReview }: { onChanged: () => vo
   // P0 : détection automatique au montage (ne pas exiger un clic « Détecter »).
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { detect() }, [])
+
+  // Au montage : un import interrompu par un arrêt du daemon est affiché avec
+  // son message et un bouton pour le relancer (route absente / muette → rien).
+  useEffect(() => {
+    getImportStatus().then(
+      status => setPersisted(status.state === 'interrupted' ? status : null),
+      (err: unknown) => console.warn('memoria-ui : statut d’import persisté illisible', err),
+    )
+  }, [])
 
   // Compte des erreurs de polling consécutives : au-delà d'un seuil, le service
   // est considéré injoignable → on sort le spinner de son état infini (P0).
@@ -291,9 +307,12 @@ export function MachineAgents({ onChanged, onOpenReview }: { onChanged: () => vo
       getImportStatus().then(
         status => {
           pollErrors.current = 0
-          if (status.state === 'done') setFlow({ step: 'done', agent, status })
-          else if (status.state === 'error') setFlow({ step: 'failed', agent, message: status.error ?? t('agents.import.unknownError') })
-          else setFlow({ step: 'running', agent, status })
+          // done / error / interrupted / idle : chaque état a une issue explicite
+          // (lib/import-flow.ts) — un état inconnu ne laisse jamais tourner le spinner.
+          const next = importPollOutcome(status, t)
+          if (next.kind === 'done') setFlow({ step: 'done', agent, status: next.status })
+          else if (next.kind === 'failed') setFlow({ step: 'failed', agent, message: next.message })
+          else setFlow({ step: 'running', agent, status: next.status })
         },
         (err: unknown) => {
           // Erreur de polling : on retente, mais au bout de ~8 s sans réponse on
@@ -307,6 +326,9 @@ export function MachineAgents({ onChanged, onOpenReview }: { onChanged: () => vo
     return () => window.clearInterval(id)
   }, [flow])
 
+  const interrupted = persisted ? interruptedImport(persisted, detected, t) : null
+  const resumeAgent = interrupted?.agent ?? null
+
   return (
     <div className="machine-agents">
       <div className="machine-head">
@@ -316,6 +338,20 @@ export function MachineAgents({ onChanged, onOpenReview }: { onChanged: () => vo
         </button>
       </div>
       {error && <ErrorBanner message={error} />}
+      {interrupted && (
+        <div className="import-interrupted">
+          <ErrorBanner message={interrupted.message} />
+          <div className="machine-card-actions">
+            {resumeAgent ? (
+              <button type="button" className="btn btn-primary" onClick={() => launchImport(resumeAgent)}>
+                {t('agents.import.resume')}
+              </button>
+            ) : (
+              <span className="muted">{t('agents.import.resumeUnknownAgent')}</span>
+            )}
+          </div>
+        </div>
+      )}
       {detected !== null && detected.length === 0 && (
         <p className="muted">{t('agents.machine.none')}</p>
       )}

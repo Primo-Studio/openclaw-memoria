@@ -1324,6 +1324,7 @@ p.warn {
 .machine-card-head { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; }
 .machine-card-meta { font-size: 0.85rem; }
 .machine-card-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.import-interrupted { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 0.9rem; }
 .machine-connect-ok { color: var(--ok, #3fb950); font-size: 0.85rem; margin: 0; }
 .machine-connect-warn { color: var(--warn, #d29922); font-size: 0.85rem; margin: 0; }
 .btn-link { background: none; border: 0; padding: 0; color: var(--accent, #e85a1f); cursor: pointer; text-decoration: underline; font-size: inherit; }
