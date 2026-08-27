@@ -9,6 +9,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Wizard, type WizardStep } from '../components/Wizard'
 import { EmbeddingsChooser } from '../components/EmbeddingsChooser'
 import { MachineAgents } from './Agents'
+import { CopyButton, ErrorBanner, humanError } from '../components/ui'
 import { useT } from '../i18n'
 import { hasLiveAgent } from '../lib/agents'
 import {
@@ -61,7 +62,8 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   const [doctor, setDoctor] = useState<DoctorReport | null>(null)
   const [type, setType] = useState<AgentType>('claude-code')
   const [pair, setPair] = useState<PairResult | null>(null)
-  const [copied, setCopied] = useState(false)
+  // échec de POST /v1/admin/pair : affiché, jamais seulement console.warn
+  const [pairError, setPairError] = useState<string | null>(null)
   const [agentConnected, setAgentConnected] = useState(false)
 
   // --- état de l'étape moteur
@@ -201,11 +203,13 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   }, [refreshHealth])
 
   const startPairing = async () => {
+    setPairError(null)
     try {
       setPair(await pairAgent(type))
     } catch (err) {
       setPair(null)
       console.warn('pairing onboarding échoué', err instanceof ApiError ? err.message : err)
+      setPairError(humanError(err))
     }
   }
 
@@ -297,6 +301,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
           {/* Repli : connexion manuelle par commande (autre machine / cas avancé). */}
           <details className="ob-manual">
             <summary>{t('onboarding.agent.manualToggle')}</summary>
+            {pairError && <ErrorBanner message={pairError} onRetry={() => void startPairing()} />}
             {!pair ? (
               <>
                 <p>{t('onboarding.agent.question')}</p>
@@ -313,13 +318,8 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
               <>
                 <p>{t('onboarding.agent.pasteCommand')}</p>
                 <pre className="command">{pair.command}</pre>
-                <button
-                  type="button"
-                  className="btn btn-ghost"
-                  onClick={() => { void navigator.clipboard.writeText(pair.command); setCopied(true) }}
-                >
-                  {copied ? t('onboarding.agent.copied') : t('onboarding.agent.copy')}
-                </button>
+                {/* CopyButton : « Copié » seulement si la copie a réussi, « Échec » sinon, reset 2 s. */}
+                <CopyButton text={pair.command} label={t('onboarding.agent.copy')} />
                 <p className="muted">{t('onboarding.agent.codeLabel')}<strong>{pair.pairing_code}</strong>{t('onboarding.agent.codeValidity')}</p>
               </>
             )}
