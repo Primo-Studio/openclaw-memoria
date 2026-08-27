@@ -7,7 +7,7 @@ import { existsSync, mkdirSync, openSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
-import { autostartStorageRoot, kickstartService, resolveStorageRoot, type RecallResult } from '@memoria/core'
+import { DEFAULT_CONFIG_PATH, autostartStorageRoot, kickstartService, resolveStorageRoot, type RecallResult } from '@memoria/core'
 import type { ImportJobStatus } from './import-job.js'
 import { daemonLooksAlive, readDaemonState, type DaemonState } from './state.js'
 
@@ -191,6 +191,18 @@ export function daemonBinPath(): string {
 }
 
 /**
+ * Arguments du daemon pour le LaunchAgent : node + bin + stockage, et le
+ * `--config` quand il n'est pas celui par défaut. Sans lui, un daemon lancé
+ * pour `memoria … --config /autre.toml` retombait en silence sur
+ * ~/.memoria/config.toml (kill-switch, LLM, synchro d'une AUTRE config).
+ */
+export function daemonProgramArguments(storageRoot: string, configPath?: string): string[] {
+  const args = [process.execPath, daemonBinPath(), '--storage-root', storageRoot]
+  if (configPath && resolve(configPath) !== resolve(DEFAULT_CONFIG_PATH)) args.push('--config', configPath)
+  return args
+}
+
+/**
  * Garantit qu'un daemon tourne pour ce storage_root : réutilise le vivant,
  * sinon en démarre un détaché (`memoria-daemon`) et attend son health.
  */
@@ -204,6 +216,8 @@ export interface EnsureDaemonHooks {
     /** Délai d'attente du health après kickstart (défaut 15 s). */
     waitMs?: number
   }
+  /** Lancement détaché du daemon (tests : capture des arguments, daemon en process). */
+  spawnDaemon?: (args: string[], storageRoot: string) => void
 }
 
 /** launchd réel : le service `memoria autostart on` s'il cible ce storage_root. */
@@ -249,7 +263,11 @@ export async function ensureDaemon(opts: ClientOptions = {}, hooks: EnsureDaemon
 
   const args = [daemonBinPathForSpawn()]
   if (opts.storageRoot) args.push('--storage-root', opts.storageRoot)
-  spawnDetachedDaemon(args, storageRoot)
+  // Le daemon détaché recevait le storage_root mais PAS la config : il
+  // résolvait ~/.memoria/config.toml et tournait avec le mauvais kill-switch /
+  // LLM / synchro quand `--config` était fourni — sans le dire.
+  if (opts.configPath) args.push('--config', opts.configPath)
+  ;(hooks.spawnDaemon ?? spawnDetachedDaemon)(args, storageRoot)
 
   const started = await waitForHealthy(storageRoot, 15_000)
   if (started) return started

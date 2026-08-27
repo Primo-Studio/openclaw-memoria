@@ -10,7 +10,7 @@
  */
 import { Command, Option } from 'clipanion/lib/advanced/index.js'
 import { autostartStatus, disableAutostart, enableAutostart, moveStorage, setEnabled } from '@memoria/core'
-import { currentVersion, daemonBinPath, pullAndBuild, readDaemonState, scheduleRestart } from '@memoria/daemon'
+import { currentVersion, daemonProgramArguments, pullAndBuild, readDaemonState, scheduleRestart } from '@memoria/daemon'
 import { fail, findAliveDaemon, resolveCommon } from '../index.js'
 
 function pidAlive(pid: number): boolean {
@@ -84,9 +84,9 @@ export class AutostartCommand extends Command {
         return 0
       }
       if (this.mode === 'on') {
-        const { storageRoot } = resolveCommon(opts)
+        const { storageRoot, configPath } = resolveCommon(opts)
         const s = enableAutostart({
-          programArguments: [process.execPath, daemonBinPath(), '--storage-root', storageRoot],
+          programArguments: daemonProgramArguments(storageRoot, configPath),
           workingDirectory: storageRoot,
         })
         // `enableAutostart` lève désormais si le chargement n'a pas pris, mais on

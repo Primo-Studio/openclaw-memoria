@@ -8,7 +8,8 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { autostartStatus } from '@memoria/core'
+import { DEFAULT_CONFIG_PATH, autostartStatus } from '@memoria/core'
+import { daemonProgramArguments } from '../src/index.js'
 
 /** Extrait réel de `launchctl print gui/501/fr.primo-studio.memoria` (27/08). */
 const RUNNING = `gui/501/fr.primo-studio.memoria = {
@@ -69,5 +70,19 @@ describe('autostartStatus (launchd simulé)', () => {
     const s = autostartStatus('fr.primo-studio.memoria', p)
     expect(s).toMatchObject({ supported: false, loaded: false, running: false })
     expect(p.printService).not.toHaveBeenCalled()
+  })
+})
+
+describe('daemonProgramArguments (arguments du LaunchAgent)', () => {
+  it('config par défaut : node, bin, --storage-root, sans --config', () => {
+    const args = daemonProgramArguments('/tmp/root', DEFAULT_CONFIG_PATH)
+    expect(args[0]).toBe(process.execPath)
+    expect(args[1]).toMatch(/bin\.js$/)
+    expect(args.slice(2)).toEqual(['--storage-root', '/tmp/root'])
+  })
+
+  it('config personnalisée : --config transmis (sinon le daemon retombait sur ~/.memoria/config.toml)', () => {
+    const args = daemonProgramArguments('/tmp/root', '/tmp/autre.toml')
+    expect(args.slice(2)).toEqual(['--storage-root', '/tmp/root', '--config', '/tmp/autre.toml'])
   })
 })

@@ -44,7 +44,7 @@ import {
 } from '@memoria/core'
 import { OllamaPullJob } from './ollama-pull.js'
 import { ImportJobRunner } from './import-job.js'
-import { daemonBinPath } from './client.js'
+import { daemonProgramArguments } from './client.js'
 import { currentVersion, lastBuiltSha, pullAndBuild, repoRoot, scheduleRestart } from './update.js'
 import { findUiDist, serveUi } from './static.js'
 import { acquireLock, clearDaemonState, writeDaemonState, type DaemonState } from './state.js'
@@ -676,7 +676,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       case 'POST /v1/admin/autostart': {
         const body = await readJson(req)
         if (body['enabled'] === true) {
-          const args = [process.execPath, daemonBinPath(), '--storage-root', storageRoot]
+          const args = daemonProgramArguments(storageRoot, configPath)
           sendJson(res, 200, { autostart: enableAutostart({ programArguments: args, workingDirectory: storageRoot }) })
         } else {
           sendJson(res, 200, { autostart: disableAutostart() })

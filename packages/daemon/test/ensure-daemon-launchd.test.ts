@@ -87,6 +87,24 @@ describe('ensureDaemon + launchd', () => {
     expect(state.pid).toBe(process.pid)
   }, 30_000)
 
+  it('démarrage direct : le daemon spawné reçoit --storage-root ET --config (sinon il lisait ~/.memoria/config.toml)', async () => {
+    const spawned: string[][] = []
+    const spawnDaemon = vi.fn((args: string[]) => {
+      spawned.push(args)
+      // launchd absent : on simule le process détaché par un daemon en process.
+      void startDaemon({ storageRoot: root, configPath }).then(d => {
+        inProcess = d
+      })
+    })
+    const state = await ensureDaemon({ storageRoot: root, configPath }, { launchd: { targets: () => false, kickstart: () => false }, spawnDaemon })
+    expect(spawnDaemon).toHaveBeenCalledOnce()
+    expect(spawned[0]).toContain('--storage-root')
+    expect(spawned[0]![spawned[0]!.indexOf('--storage-root') + 1]).toBe(root)
+    expect(spawned[0]).toContain('--config')
+    expect(spawned[0]![spawned[0]!.indexOf('--config') + 1]).toBe(configPath)
+    expect(state.pid).toBe(process.pid)
+  }, 30_000)
+
   it('daemon déjà vivant → ni kickstart ni spawn', async () => {
     inProcess = await startDaemon({ storageRoot: root, configPath })
     const kickstart = vi.fn(() => true)
