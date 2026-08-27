@@ -55,8 +55,27 @@ export interface AutostartSpec {
 export interface AutostartStatus {
   supported: boolean
   installed: boolean
+  /** Service connu de launchd (`launchctl print` répond) — PAS « en marche ». */
   loaded: boolean
+  /**
+   * « chargé » ≠ « en marche » : launchd répond aussi pour un service dont le
+   * process est mort (après `memoria stop`) ou qui crash-loope sur le verrou.
+   * `running` reflète `state = running` ; `pid` le process supervisé.
+   */
+  running: boolean
+  pid: number | null
+  /** Nombre de lancements depuis le chargement : une boucle de crash se lit ici. */
+  runs: number | null
+  last_exit_code: number | null
   plistPath: string
+}
+
+/** Sondes injectables : les tests ne touchent jamais launchctl ni ~/Library. */
+export interface AutostartProbe {
+  platform(): string
+  exists(path: string): boolean
+  /** Sortie brute de `launchctl print gui/<uid>/<label>` ; null = non chargé. */
+  printService(label: string): string | null
 }
 
 function plistPath(label: string): string {
@@ -118,6 +137,43 @@ function isLoaded(label: string): boolean {
   }
 }
 
+/** Sortie complète de `launchctl print` (état, pid, relances) ; null si non chargé. */
+function printService(label: string): string | null {
+  try {
+    return execFileSync('launchctl', ['print', `gui/${process.getuid?.() ?? 501}/${label}`], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    })
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Lit ce que launchd sait du service. Le code retour de `launchctl print`
+ * vaut 0 dès que le service est CHARGÉ — y compris process mort ou en boucle
+ * de crash : c'est le texte qui dit la vérité (`state = running`, `pid = N`,
+ * `runs = N`, `last exit code = N`).
+ */
+function parseLaunchctlPrint(text: string): Pick<AutostartStatus, 'running' | 'pid' | 'runs' | 'last_exit_code'> {
+  const num = (re: RegExp): number | null => {
+    const m = re.exec(text)
+    return m ? Number.parseInt(m[1]!, 10) : null
+  }
+  return {
+    running: /^\s*state = running\s*$/m.test(text),
+    pid: num(/^\s*pid = (\d+)\s*$/m),
+    runs: num(/^\s*runs = (\d+)\s*$/m),
+    last_exit_code: num(/^\s*last exit code = (-?\d+)\s*$/m),
+  }
+}
+
+const REAL_PROBE: AutostartProbe = {
+  platform: () => platform(),
+  exists: p => existsSync(p),
+  printService,
+}
+
 function xmlUnescape(s: string): string {
   return s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
 }
@@ -159,13 +215,16 @@ export function kickstartService(label: string = AUTOSTART_LABEL): boolean {
   }
 }
 
-export function autostartStatus(label: string = AUTOSTART_LABEL): AutostartStatus {
+export function autostartStatus(label: string = AUTOSTART_LABEL, probe: AutostartProbe = REAL_PROBE): AutostartStatus {
   const path = plistPath(label)
-  const supported = platform() === 'darwin'
+  const supported = probe.platform() === 'darwin'
+  const printed = supported ? probe.printService(label) : null
+  const parsed = printed === null ? { running: false, pid: null, runs: null, last_exit_code: null } : parseLaunchctlPrint(printed)
   return {
     supported,
-    installed: existsSync(path),
-    loaded: supported ? isLoaded(label) : false,
+    installed: probe.exists(path),
+    loaded: printed !== null,
+    ...parsed,
     plistPath: path,
   }
 }

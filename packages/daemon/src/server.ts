@@ -16,6 +16,7 @@ import { existsSync, mkdirSync } from 'node:fs'
 import { timingSafeEqual } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import {
+  AUTOSTART_LABEL,
   Memoria,
   autoRegister,
   autostartStatus,
@@ -44,7 +45,7 @@ import {
 import { OllamaPullJob } from './ollama-pull.js'
 import { ImportJobRunner } from './import-job.js'
 import { daemonBinPath } from './client.js'
-import { currentVersion, pullAndBuild, scheduleRestart } from './update.js'
+import { currentVersion, lastBuiltSha, pullAndBuild, repoRoot, scheduleRestart } from './update.js'
 import { findUiDist, serveUi } from './static.js'
 import { acquireLock, clearDaemonState, writeDaemonState, type DaemonState } from './state.js'
 
@@ -91,7 +92,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   // doit jamais avoir touché SQLite (ni rejoué le WAL) — Memoria.init ouvre les
   // bases et le perdant les refermait après coup, fenêtre pendant laquelle deux
   // processus écrivaient la même mémoire.
-  const { storageRoot } = resolveStorageRoot({ storageRoot: opts.storageRoot, configPath: opts.configPath })
+  const { storageRoot, configPath } = resolveStorageRoot({ storageRoot: opts.storageRoot, configPath: opts.configPath })
   mkdirSync(storageRoot, { recursive: true })
   const release = acquireLock(storageRoot)
   if (!release) {
@@ -108,6 +109,13 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
 
   const adminToken = newToken()
   const daemonId = newToken().slice(0, 16)
+  const startedAt = nowISO()
+  // Ce process est-il celui du service launchd ? launchd pose XPC_SERVICE_NAME
+  // sur ses agents (visible dans `launchctl print … environment`).
+  const supervisor: 'launchd' | null = process.env['XPC_SERVICE_NAME'] === AUTOSTART_LABEL ? 'launchd' : null
+  // Build réellement chargé : après une mise à jour, c'est le seul moyen de
+  // vérifier que le daemon n'exécute pas encore l'ancien dist.
+  const builtSha = lastBuiltSha(repoRoot())
   // Un seul téléchargement de modèle Ollama à la fois (progression en mémoire).
   const ollamaPull = new OllamaPullJob(opts.ollamaBaseUrl)
 
@@ -129,7 +137,20 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     }
 
     if (route === 'GET /v1/health') {
-      sendJson(res, 200, { ok: true, version: DAEMON_VERSION, daemon_id: daemonId, ui: Boolean(uiDist) })
+      // pid / superviseur / build : ce qu'il faut pour distinguer « un daemon
+      // répond » de « LE daemon attendu répond » (launchd, dist à jour).
+      sendJson(res, 200, {
+        ok: true,
+        version: DAEMON_VERSION,
+        daemon_id: daemonId,
+        ui: Boolean(uiDist),
+        pid: process.pid,
+        started_at: startedAt,
+        supervisor,
+        built_sha: builtSha,
+        storage_root: storageRoot,
+        config_path: configPath,
+      })
       return
     }
 
@@ -1077,7 +1098,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     port,
     admin_token: adminToken,
     pid: process.pid,
-    started_at: nowISO(),
+    started_at: startedAt,
   }
   writeDaemonState(storageRoot, state)
 

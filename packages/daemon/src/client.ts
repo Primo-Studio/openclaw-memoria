@@ -18,6 +18,21 @@ export interface ClientOptions {
   token?: string
 }
 
+/** Réponse de GET /v1/health. Les champs pid/supervisor/built_sha sont absents d'un daemon antérieur. */
+export interface DaemonHealth {
+  ok: boolean
+  version: string
+  daemon_id: string
+  ui?: boolean
+  pid?: number
+  started_at?: string
+  /** 'launchd' quand le process EST celui du service `memoria autostart on`. */
+  supervisor?: 'launchd' | null
+  built_sha?: string | null
+  storage_root?: string
+  config_path?: string
+}
+
 export class DaemonClient {
   readonly baseUrl: string
   private readonly token: string | undefined
@@ -35,11 +50,11 @@ export class DaemonClient {
     return new DaemonClient(state, opts.token ?? state.admin_token)
   }
 
-  async health(): Promise<{ ok: boolean; version: string; daemon_id: string } | null> {
+  async health(): Promise<DaemonHealth | null> {
     try {
       const res = await fetch(`${this.baseUrl}/v1/health`, { signal: AbortSignal.timeout(2000) })
       if (!res.ok) return null
-      return (await res.json()) as { ok: boolean; version: string; daemon_id: string }
+      return (await res.json()) as DaemonHealth
     } catch {
       return null
     }
@@ -232,9 +247,17 @@ export async function ensureDaemon(opts: ClientOptions = {}, hooks: EnsureDaemon
     console.warn('[memoria] launchd n’a pas relancé le daemon à temps — démarrage direct en repli (voir ~/Library/Logs/memoria.err.log)')
   }
 
-  const binPath = daemonBinPathForSpawn()
-  const args = [binPath]
+  const args = [daemonBinPathForSpawn()]
   if (opts.storageRoot) args.push('--storage-root', opts.storageRoot)
+  spawnDetachedDaemon(args, storageRoot)
+
+  const started = await waitForHealthy(storageRoot, 15_000)
+  if (started) return started
+  throw new Error('le daemon n’a pas démarré dans les 15 s (voir memoria doctor)')
+}
+
+/** Daemon détaché, journal en append dans le stockage. */
+function spawnDetachedDaemon(args: string[], storageRoot: string): void {
   // `stdio: 'ignore'` jetait TOUT : warnings, échecs d'extraction, stacktraces.
   // Une panne du daemon lancé par `memoria start` était donc indiagnosticable —
   // c'est exactement ce qui a laissé une extraction morte pendant dix jours sans
@@ -250,10 +273,6 @@ export async function ensureDaemon(opts: ClientOptions = {}, hooks: EnsureDaemon
   }
   const child = spawn(process.execPath, args, { detached: true, stdio })
   child.unref()
-
-  const started = await waitForHealthy(storageRoot, 15_000)
-  if (started) return started
-  throw new Error('le daemon n’a pas démarré dans les 15 s (voir memoria doctor)')
 }
 
 /**

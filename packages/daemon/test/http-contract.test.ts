@@ -47,6 +47,20 @@ async function getAdmin(path: string): Promise<{ status: number; json: Record<st
   return { status: res.status, json: (await res.json()) as Record<string, unknown> }
 }
 
+describe('GET /v1/health — identité du daemon', () => {
+  it('expose pid, started_at, superviseur, build et stockage (distinguer « un daemon répond » de « LE daemon attendu »)', async () => {
+    const res = await fetch(url('/v1/health'))
+    const h = (await res.json()) as Record<string, unknown>
+    expect(h['ok']).toBe(true)
+    expect(h['pid']).toBe(process.pid)
+    expect(h['started_at']).toBe(daemon.state.started_at)
+    expect(h['supervisor']).toBeNull() // vitest n'est pas launchd
+    expect(h['storage_root']).toBe(root)
+    expect(h['config_path']).toBe(join(root, 'config.toml'))
+    expect(h['built_sha'] === null || typeof h['built_sha'] === 'string').toBe(true)
+  })
+})
+
 describe('corps JSON non-objet', () => {
   it('`null` → 400 « objet JSON attendu » (et non un TypeError 500)', async () => {
     const r = await postRaw('/v1/pairing/complete', 'null')
