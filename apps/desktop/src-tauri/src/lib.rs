@@ -13,6 +13,9 @@
 //! réseau local) — on les bascule donc sur le pool bloquant du runtime.
 
 use serde::{Deserialize, Serialize};
+use tauri::image::Image;
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::tray::TrayIconBuilder;
 use std::env;
 use std::fs;
 use std::io::{Read, Write};
@@ -421,6 +424,52 @@ async fn open_memoria() -> Result<String, String> {
     .await
 }
 
+// ---------------------------------------------------------------------------
+// Barre d'état (menu bar macOS / zone de notification Windows)
+// Pastille VERTE = daemon actif, ROUGE = éteint. Sondage toutes les 5 s.
+// ---------------------------------------------------------------------------
+
+const TRAY_ID: &str = "memoria-status";
+
+fn icon_green() -> Image<'static> {
+    Image::from_bytes(include_bytes!("../icons/dot-green.png")).expect("icône verte invalide")
+}
+fn icon_red() -> Image<'static> {
+    Image::from_bytes(include_bytes!("../icons/dot-red.png")).expect("icône rouge invalide")
+}
+
+/// Le daemon répond-il ? (mêmes primitives que `daemon_health`, en synchrone.)
+fn daemon_is_healthy() -> bool {
+    match resolve_storage_root() {
+        Ok(root) => read_daemon_state(&root)
+            .map(|s| http_health(s.port))
+            .unwrap_or(false),
+        Err(_) => false,
+    }
+}
+
+/// Ouvre une URL dans le navigateur par défaut (sans dépendance externe).
+fn open_url_in_browser(url: &str) {
+    #[cfg(target_os = "macos")]
+    let _ = Command::new("open").arg(url).spawn();
+    #[cfg(target_os = "windows")]
+    let _ = Command::new("cmd").args(["/C", "start", "", url]).spawn();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let _ = Command::new("xdg-open").arg(url).spawn();
+}
+
+/// Applique l'état (icône + info-bulle) à la pastille de barre d'état.
+fn apply_tray_status(app: &tauri::AppHandle, healthy: bool) {
+    if let Some(tray) = app.tray_by_id(TRAY_ID) {
+        let _ = tray.set_icon(Some(if healthy { icon_green() } else { icon_red() }));
+        let _ = tray.set_tooltip(Some(String::from(if healthy {
+            "Memoria — actif"
+        } else {
+            "Memoria — éteint (clic → Démarrer)"
+        })));
+    }
+}
+
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
@@ -429,6 +478,54 @@ pub fn run() {
             start_daemon,
             open_memoria
         ])
+        .setup(|app| {
+            // Menu de la pastille
+            let open = MenuItem::with_id(app, "open", "Ouvrir Memoria", true, None::<&str>)?;
+            let start = MenuItem::with_id(app, "start", "Démarrer le daemon", true, None::<&str>)?;
+            let sep = PredefinedMenuItem::separator(app)?;
+            let quit = MenuItem::with_id(app, "quit", "Quitter", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&open, &start, &sep, &quit])?;
+
+            // État initial (avant le 1er sondage) : selon la santé courante.
+            let initial_healthy = daemon_is_healthy();
+
+            TrayIconBuilder::with_id(TRAY_ID)
+                .icon(if initial_healthy { icon_green() } else { icon_red() })
+                .tooltip("Memoria")
+                .menu(&menu)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "open" => {
+                        std::thread::spawn(|| {
+                            if let Ok(root) = resolve_storage_root() {
+                                if let Some(state) = read_daemon_state(&root) {
+                                    if http_health(state.port) {
+                                        open_url_in_browser(&memoria_url(state.port, &state.admin_token));
+                                    }
+                                }
+                            }
+                        });
+                    }
+                    "start" => {
+                        let app = app.clone();
+                        std::thread::spawn(move || {
+                            let ok = start_daemon_blocking().is_ok();
+                            apply_tray_status(&app, ok || daemon_is_healthy());
+                        });
+                    }
+                    "quit" => app.exit(0),
+                    _ => {}
+                })
+                .build(app)?;
+
+            // Sonde de fond : rafraîchit la pastille toutes les 5 s.
+            let handle = app.handle().clone();
+            std::thread::spawn(move || loop {
+                apply_tray_status(&handle, daemon_is_healthy());
+                std::thread::sleep(Duration::from_secs(5));
+            });
+
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("erreur au lancement de l'app bureau Memoria");
 }
