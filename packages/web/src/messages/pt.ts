@@ -139,7 +139,10 @@ export const pt: Messages = {
   'audit.reason.chars': '≈ {n} caracteres',
   'audit.reason.duration': '{s} s',
   'audit.reason.failed': 'falha — enviado sem resposta',
-  'audit.reason.capture': '{facts} memória(s) criada(s) · {ms} ms',
+  'audit.reason.capture_facts': '{facts} memória(s) criada(s)',
+  'audit.reason.capture_failed': '{failed} falha(s)',
+  'audit.reason.capture_deferred': '{deferred} adiado(s)',
+  'audit.reason.capture_ms': '{ms} ms',
   'audit.reason.abandoned': 'abandonado após {attempts} tentativa(s)',
 
   // — Ecrãs (migração i18n 2026-07-08) —

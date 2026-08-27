@@ -98,10 +98,20 @@ export function humanReason(action: string, reason: string | null): string | nul
       return parts.join(' · ')
     }
     case 'capture_turn': {
+      // Format core : `appended=… facts=… deferred=… failed=… ms=…`
+      // (engine/memoria.ts). Les compteurs failed/deferred non nuls DOIVENT
+      // rester visibles : une capture « 0 souvenir » qui cache 2 échecs, c'est
+      // une mort silencieuse — la raison brute les montrait, la traduction aussi.
       const facts = int(kv.facts)
       const ms = int(kv.ms)
       if (facts === null || ms === null) return reason
-      return translate('audit.reason.capture', { facts, ms })
+      const parts = [translate('audit.reason.capture_facts', { facts })]
+      const failed = int(kv.failed)
+      if (failed !== null && failed > 0) parts.push(translate('audit.reason.capture_failed', { failed }))
+      const deferred = int(kv.deferred)
+      if (deferred !== null && deferred > 0) parts.push(translate('audit.reason.capture_deferred', { deferred }))
+      parts.push(translate('audit.reason.capture_ms', { ms }))
+      return parts.join(' · ')
     }
     case 'wal_entry_abandoned': {
       const attempts = int(kv.attempts)

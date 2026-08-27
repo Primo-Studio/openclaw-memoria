@@ -139,7 +139,10 @@ export const es: Messages = {
   'audit.reason.chars': '≈ {n} caracteres',
   'audit.reason.duration': '{s} s',
   'audit.reason.failed': 'fallo — enviado sin respuesta',
-  'audit.reason.capture': '{facts} recuerdo(s) creado(s) · {ms} ms',
+  'audit.reason.capture_facts': '{facts} recuerdo(s) creado(s)',
+  'audit.reason.capture_failed': '{failed} fallo(s)',
+  'audit.reason.capture_deferred': '{deferred} aplazado(s)',
+  'audit.reason.capture_ms': '{ms} ms',
   'audit.reason.abandoned': 'abandonado tras {attempts} intento(s)',
 
   // — Pantallas (migración i18n 2026-07-08) —

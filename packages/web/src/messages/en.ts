@@ -139,7 +139,10 @@ export const en: Messages = {
   'audit.reason.chars': '≈ {n} characters',
   'audit.reason.duration': '{s} s',
   'audit.reason.failed': 'failed — sent, no answer',
-  'audit.reason.capture': '{facts} memory(ies) created · {ms} ms',
+  'audit.reason.capture_facts': '{facts} memory(ies) created',
+  'audit.reason.capture_failed': '{failed} failure(s)',
+  'audit.reason.capture_deferred': '{deferred} deferred',
+  'audit.reason.capture_ms': '{ms} ms',
   'audit.reason.abandoned': 'dropped after {attempts} attempt(s)',
 
   // — Screens (i18n migration 2026-07-08) —

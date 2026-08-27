@@ -141,7 +141,10 @@ export const fr: Messages = {
   'audit.reason.chars': '≈ {n} caractères',
   'audit.reason.duration': '{s} s',
   'audit.reason.failed': 'échec — parti sans réponse',
-  'audit.reason.capture': '{facts} souvenir(s) créé(s) · {ms} ms',
+  'audit.reason.capture_facts': '{facts} souvenir(s) créé(s)',
+  'audit.reason.capture_failed': '{failed} échec(s)',
+  'audit.reason.capture_deferred': '{deferred} différé(s)',
+  'audit.reason.capture_ms': '{ms} ms',
   'audit.reason.abandoned': 'abandonné après {attempts} tentative(s)',
 
   // — Écrans (migration i18n 2026-07-08) —

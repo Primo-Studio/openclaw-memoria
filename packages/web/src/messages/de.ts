@@ -139,7 +139,10 @@ export const de: Messages = {
   'audit.reason.chars': '≈ {n} Zeichen',
   'audit.reason.duration': '{s} s',
   'audit.reason.failed': 'Fehler — gesendet, keine Antwort',
-  'audit.reason.capture': '{facts} Erinnerung(en) erstellt · {ms} ms',
+  'audit.reason.capture_facts': '{facts} Erinnerung(en) erstellt',
+  'audit.reason.capture_failed': '{failed} Fehler',
+  'audit.reason.capture_deferred': '{deferred} zurückgestellt',
+  'audit.reason.capture_ms': '{ms} ms',
   'audit.reason.abandoned': 'nach {attempts} Versuch(en) verworfen',
 
   // — Bildschirme (i18n-Migration 2026-07-08) —
