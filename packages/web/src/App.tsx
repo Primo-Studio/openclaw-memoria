@@ -324,9 +324,17 @@ function LangSwitch() {
 function VersionFoot() {
   const [label, setLabel] = useState<string | null>(null)
   useEffect(() => {
+    let cancelled = false
     getVersion()
-      .then(v => setLabel(v.sha ? `v${v.version} · ${v.sha}` : `v${v.version}`))
-      .catch(() => setLabel(null))
+      .then(v => {
+        if (!cancelled) setLabel(v.sha ? `v${v.version} · ${v.sha}` : `v${v.version}`)
+      })
+      .catch(() => {
+        if (!cancelled) setLabel(null)
+      })
+    return () => {
+      cancelled = true
+    }
   }, [])
   if (!label) return null
   return <div className="sidebar-version">{label}</div>

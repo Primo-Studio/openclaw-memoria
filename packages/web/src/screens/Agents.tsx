@@ -608,16 +608,31 @@ function AgentExpertise({ instanceId }: { instanceId: string }) {
   const { t } = useT()
   const [domains, setDomains] = useState<ExpertiseDomain[]>([])
   const [self, setSelf] = useState<SelfObservation[]>([])
+  // Garde `cancelled` : la liste se remonte à chaque reload() (révocation,
+  // modale…) ; sans elle, la réponse d'un ancien instanceId pouvait écraser
+  // les badges d'un autre agent.
   useEffect(() => {
+    let cancelled = false
     getExpertise(instanceId)
-      .then(d => setDomains(d.slice(0, 4)))
-      .catch(() => setDomains([]))
+      .then(d => {
+        if (!cancelled) setDomains(d.slice(0, 4))
+      })
+      .catch(() => {
+        if (!cancelled) setDomains([])
+      })
     // analyse fraîche du comportement puis lecture
     deriveSelf(instanceId)
       .catch(() => 0)
       .then(() => getSelfObservations(instanceId))
-      .then(o => setSelf(o.slice(0, 3)))
-      .catch(() => setSelf([]))
+      .then(o => {
+        if (!cancelled) setSelf(o.slice(0, 3))
+      })
+      .catch(() => {
+        if (!cancelled) setSelf([])
+      })
+    return () => {
+      cancelled = true
+    }
   }, [instanceId])
   if (domains.length === 0 && self.length === 0) return null
   return (

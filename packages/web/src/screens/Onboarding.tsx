@@ -80,7 +80,17 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   const [pullStatus, setPullStatus] = useState<OllamaPullStatus | null>(null)
 
   useEffect(() => {
-    getDoctor().then(setDoctor).catch(() => setDoctor(null))
+    let cancelled = false
+    getDoctor()
+      .then(d => {
+        if (!cancelled) setDoctor(d)
+      })
+      .catch(() => {
+        if (!cancelled) setDoctor(null)
+      })
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   const refreshHealth = useCallback(async (): Promise<LlmHealth | null> => {

@@ -42,10 +42,20 @@ export function EmbeddingsChooser({
   const [pulling, setPulling] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // Garde `cancelled` : navigation rapide Réglages → autre écran → Réglages,
+  // sinon la réponse tardive écrit dans un composant démonté (ou remonté).
   useEffect(() => {
+    let cancelled = false
     getMachineCaps()
-      .then(setCaps)
-      .catch(() => setCapsError(true))
+      .then(c => {
+        if (!cancelled) setCaps(c)
+      })
+      .catch(() => {
+        if (!cancelled) setCapsError(true)
+      })
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   // Polling du téléchargement du modèle local ; à la fin, on bascule dessus.
