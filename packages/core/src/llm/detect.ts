@@ -33,6 +33,8 @@ import {
   modelMatches,
 } from './ollama.js'
 import { DEFAULT_LMSTUDIO_BASE_URL, lmstudioListModels } from './lmstudio.js'
+import { ANTHROPIC_API_VERSION, DEFAULT_ANTHROPIC_BASE_URL } from './anthropic.js'
+import { DEFAULT_OPENAI_BASE_URL, DEFAULT_OPENROUTER_BASE_URL } from './openai.js'
 
 // ------------------------------------------------------------------- types
 
@@ -318,6 +320,72 @@ export function writeProviderKey(
   writeFileSync(keyFile, `${trimmed}\n`, { encoding: 'utf8', mode: 0o600 })
   chmodSync(keyFile, 0o600) // mode de writeFileSync ignoré si le fichier existait
   return { provider, keyFile }
+}
+
+// ------------------------------------------------- vérification de clé
+
+export interface ProviderKeyCheck {
+  provider: ReusableProvider
+  /**
+   * 'valid'   : le fournisseur accepte la clé (appel authentifié réussi) ;
+   * 'invalid' : il la refuse (401/403) — ou clé vide ;
+   * 'unknown' : impossible de trancher (réseau, timeout, 5xx) — une panne n'est
+   *             PAS une clé fausse, on ne le prétend pas.
+   */
+  status: 'valid' | 'invalid' | 'unknown'
+  http_status?: number
+  /** Lisible pour l'UI — ne contient JAMAIS la clé. */
+  detail: string
+}
+
+const PROVIDER_LABEL: Record<ReusableProvider, string> = { openai: 'OpenAI', anthropic: 'Anthropic', openrouter: 'OpenRouter' }
+
+/**
+ * TESTE une clé API auprès du fournisseur (appel authentifié le moins cher :
+ * la liste des modèles, ou `/auth/key` pour OpenRouter dont le catalogue
+ * `/models` est public et ne prouve rien). Sans ce test, une clé révoquée ou
+ * mal collée donnait un point vert et « Extraction prête », puis CHAQUE capture
+ * échouait en 401, trois fois, avant abandon — et seul `memoria doctor` le
+ * voyait. La valeur de la clé n'est jamais loggée ni renvoyée.
+ */
+export async function verifyProviderKey(
+  provider: ReusableProvider,
+  key: string,
+  opts: { baseUrl?: string; timeoutMs?: number } = {},
+): Promise<ProviderKeyCheck> {
+  const label = PROVIDER_LABEL[provider]
+  const trimmed = key.trim()
+  if (trimmed === '') return { provider, status: 'invalid', detail: `clé ${label} vide` }
+
+  let url: string
+  let headers: Record<string, string>
+  switch (provider) {
+    case 'openai':
+      url = `${(opts.baseUrl ?? DEFAULT_OPENAI_BASE_URL).replace(/\/$/, '')}/models`
+      headers = { Authorization: `Bearer ${trimmed}` }
+      break
+    case 'openrouter':
+      url = `${(opts.baseUrl ?? DEFAULT_OPENROUTER_BASE_URL).replace(/\/$/, '')}/auth/key`
+      headers = { Authorization: `Bearer ${trimmed}` }
+      break
+    case 'anthropic':
+      url = `${(opts.baseUrl ?? DEFAULT_ANTHROPIC_BASE_URL).replace(/\/$/, '')}/v1/models`
+      headers = { 'x-api-key': trimmed, 'anthropic-version': ANTHROPIC_API_VERSION }
+      break
+  }
+
+  let res: Response
+  try {
+    res = await fetch(url, { method: 'GET', headers, signal: AbortSignal.timeout(opts.timeoutMs ?? 5_000) })
+  } catch (err) {
+    const reason = (err as Error).name === 'TimeoutError' ? 'délai dépassé' : (err as Error).message
+    return { provider, status: 'unknown', detail: `${label} injoignable (réseau) : ${reason} — clé non vérifiée` }
+  }
+  if (res.ok) return { provider, status: 'valid', http_status: res.status, detail: `clé acceptée par ${label}` }
+  if (res.status === 401 || res.status === 403) {
+    return { provider, status: 'invalid', http_status: res.status, detail: `clé refusée par ${label} (HTTP ${res.status}) — vérifie qu'elle est complète et toujours active` }
+  }
+  return { provider, status: 'unknown', http_status: res.status, detail: `${label} a répondu HTTP ${res.status} — clé non vérifiée (réessaie plus tard)` }
 }
 
 // ------------------------------------------------------ détection globale

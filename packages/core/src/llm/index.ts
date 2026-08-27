@@ -48,6 +48,7 @@ export {
   defaultHasCommand,
   detectLlmOptions,
   scanOpenClawCredentials,
+  verifyProviderKey,
 } from './detect.js'
 export type {
   ApiKeyOption,
@@ -59,6 +60,7 @@ export type {
   OpenClawKeyCandidate,
   OpenClawOption,
   OpenClawScan,
+  ProviderKeyCheck,
   ReusableProvider,
 } from './detect.js'
 export {
