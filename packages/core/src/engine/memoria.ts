@@ -145,6 +145,8 @@ export interface MemoriaInitOptions extends ResolveOptions {
 
 const DEFAULT_TOKEN_BUDGET = 1500
 const DEFAULT_RECALL_LIMIT = 12
+/** Délai de regroupement des indexations d'embeddings déclenchées par storeFact. */
+const EMBEDDINGS_DEBOUNCE_MS = 250
 /** Plafond du niveau d'expertise AMORCÉ depuis le volume de thèmes (jamais « expert » sans usage réel). */
 const BOOTSTRAP_EXPERTISE_CAP = 0.4
 
@@ -172,6 +174,9 @@ export class Memoria {
    * Public pour les tests (0 = relance immédiate).
    */
   profileRetryMs = 60_000
+  /** Instances dont l'indexation d'embeddings est planifiée (storeFact, debounce). */
+  private readonly indexQueue = new Set<string>()
+  private indexTimer: NodeJS.Timeout | null = null
   private indexers = new WeakMap<ContentStore, EmbeddingIndexer>()
   private readonly cognitionEngines = new WeakMap<ContentStore, CognitionEngine>()
   private readonly topicEngines = new WeakMap<ContentStore, TopicEngine>()
@@ -658,7 +663,33 @@ export class Memoria {
       scope_id: scope.id,
       reason: null,
     })
+    // Un fait posé directement (MCP store_fact, partage, correction) n'était
+    // embeddé qu'à la capture suivante ou au redémarrage → invisible à la
+    // branche vectorielle du recall entre-temps. Bucket B, jamais bloquant.
+    this.scheduleEmbeddings(instance.id)
     return { fact, created: true }
+  }
+
+  /**
+   * Indexation différée (debounce court) des DB lisibles par l'instance :
+   * une rafale de storeFact (import, correction en série) donne UNE passe.
+   * Le timer n'empêche pas le process de se terminer ; close() l'annule.
+   */
+  private scheduleEmbeddings(instanceId: string): void {
+    this.indexQueue.add(instanceId)
+    if (this.indexTimer) return
+    this.indexTimer = setTimeout(() => {
+      this.indexTimer = null
+      const ids = [...this.indexQueue]
+      this.indexQueue.clear()
+      if (this.closed) return
+      for (const id of ids) {
+        void this.indexEmbeddings(id).catch((err: unknown) =>
+          console.warn('[memoria] indexation embeddings différée en échec :', (err as Error).message),
+        )
+      }
+    }, EMBEDDINGS_DEBOUNCE_MS)
+    this.indexTimer.unref()
   }
 
   /**
@@ -958,13 +989,9 @@ export class Memoria {
   async processCognition(instanceId?: string): Promise<{ processed: number }> {
     this.assertOpen()
     const { extraction } = await this.ensureProfile()
-    const targets = instanceId
-      ? [this.registry.dbForInstance(instanceId)].filter(Boolean)
-      : this.registry.listDbs().filter(e => e.kind !== 'registry')
     let processed = 0
-    for (const entry of targets) {
-      if (!entry || !existsSync(entry.path)) continue
-      const store = this.openContent(entry.path)
+    for (const path of this.contentDbPathsFor(instanceId)) {
+      const store = this.openContent(path)
       const engine = this.cognitionFor(store, extraction)
       // Faits jamais traités (marqueur fact_cognition), + ceux vus en
       // heuristique seulement si un LLM est disponible maintenant (une fois).
@@ -1713,21 +1740,38 @@ export class Memoria {
   }
 
   /**
+   * DB de contenu à traiter pour une instance : SA DB privée + les DB partagées
+   * dont le scope lui est lisible (même fan-out que le recall) — sans
+   * instance : toutes. Avant, les jobs par instance (embeddings, cognition)
+   * ne voyaient que la DB privée : un fait posé dans `user` restait sans
+   * vecteur ni entités jusqu'au prochain redémarrage.
+   */
+  private contentDbPathsFor(instanceId?: string): string[] {
+    if (!instanceId) {
+      return this.registry
+        .listDbs()
+        .filter(e => e.kind !== 'registry' && existsSync(e.path))
+        .map(e => e.path)
+    }
+    const instance = this.registry.getInstance(instanceId)
+    if (!instance || instance.revoked_at) return []
+    return this.resolveReadTargets(instance)
+      .map(t => t.dbPath)
+      .filter(p => existsSync(p))
+  }
+
+  /**
    * Indexe les faits sans embedding (une instance, ou toutes). Appelé après
-   * chaque capture (fire-and-forget) et au boot du daemon. Sans provider
-   * d'embeddings → no-op.
+   * chaque capture (fire-and-forget), après chaque storeFact (différé) et au
+   * boot du daemon. Sans provider d'embeddings → no-op.
    */
   async indexEmbeddings(instanceId?: string): Promise<{ indexed: number }> {
     this.assertOpen()
     const provider = await this.ensureEmbeddings()
     if (!provider) return { indexed: 0 }
     let indexed = 0
-    const targets = instanceId
-      ? [this.registry.dbForInstance(instanceId)].filter(Boolean)
-      : this.registry.listDbs().filter(e => e.kind !== 'registry')
-    for (const entry of targets) {
-      if (!entry || !existsSync(entry.path)) continue
-      const store = this.openContent(entry.path)
+    for (const path of this.contentDbPathsFor(instanceId)) {
+      const store = this.openContent(path)
       let indexer = this.indexers.get(store)
       if (!indexer) {
         indexer = new EmbeddingIndexer({ store, provider })
@@ -3263,6 +3307,10 @@ export class Memoria {
   close(): void {
     if (this.closed) return
     this.closed = true
+    if (this.indexTimer) {
+      clearTimeout(this.indexTimer)
+      this.indexTimer = null
+    }
     for (const store of this.pool.values()) store.close()
     this.pool.clear()
     this.registry.close()

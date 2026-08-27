@@ -142,3 +142,30 @@ describe('recallSemantic', () => {
     rmSync(r2, { recursive: true, force: true })
   })
 })
+
+/**
+ * Un fait posé dans un scope PARTAGÉ (memoria_store_fact scope 'user', ou
+ * partagé depuis l'UI) n'était embeddé qu'au redémarrage du daemon :
+ * indexEmbeddings(instance) ne ciblait que la DB privée. Le recall hybride
+ * ratait la branche vectorielle pour exactement les souvenirs entre modèles.
+ */
+describe('embeddings des scopes partagés', () => {
+  it('indexEmbeddings(instance) couvre les DB partagées lisibles → le synonyme retrouve le fait `user`', async () => {
+    m.storeFact({ instance, scope: 'user', content: 'La voiture de Néto est garée au parking' })
+    const r = await m.indexEmbeddings(instance)
+    expect(r.indexed).toBe(1)
+    const userDb = m['openContent'](m.paths.sharedDb('user'))
+    expect((userDb.db.prepare('SELECT COUNT(*) AS c FROM embeddings').get() as { c: number }).c).toBe(1)
+    expect(await m.embeddingsPending()).toBe(0)
+
+    const sem = await m.recallSemantic({ instance, query: 'véhicule' })
+    expect(sem.items.map(i => i.source_db)).toEqual(['shared/user.sqlite'])
+  })
+
+  it('storeFact planifie l’indexation sans attendre une capture ni un redémarrage', async () => {
+    m.storeFact({ instance, scope: 'user', content: 'La voiture de Néto est garée au parking' })
+    m.storeFact({ instance, content: 'Le vélo de Néto est dans le garage' })
+    await new Promise(r => setTimeout(r, 600))
+    expect(await m.embeddingsPending()).toBe(0)
+  })
+})
