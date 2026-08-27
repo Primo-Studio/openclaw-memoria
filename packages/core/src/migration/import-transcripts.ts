@@ -43,6 +43,8 @@ import type { Fact, StoreFactInput } from '../types.js'
  * n'a pas à modifier engine/memoria.ts pour le câbler (helper externe).
  */
 export interface ImportTranscriptsMemoria {
+  /** Fait déjà connu dans un scope PARTAGÉ lisible par l'instance (dédup inter-agents, cf. capture). */
+  findKnownDuplicate(instanceId: string, factText: string, opts?: { includePrivate?: boolean }): unknown | null
   /** storeFact gouverné (audite 'store_fact'). On le rend ensuite dormant + pending. */
   storeFact(input: StoreFactInput): Fact
   paths: { assistantDb(instanceId: string): string }
@@ -343,7 +345,13 @@ async function importOneFile(file: string, ctx: FileContext): Promise<void> {
         report.facts_skipped_duplicates++
         continue
       }
-      if (findDuplicate(store, scopeId, item.fact)) {
+      // + « déjà connu ailleurs » : un fait déjà partagé dans `user` (ou un
+      // autre scope lisible) ne doit pas être re-mis en quarantaine chez chaque
+      // agent — même règle que la capture (knownElsewhere).
+      if (
+        findDuplicate(store, scopeId, item.fact) ||
+        input.memoria.findKnownDuplicate(input.instanceId, item.fact, { includePrivate: false }) !== null
+      ) {
         report.facts_skipped_duplicates++
         continue
       }

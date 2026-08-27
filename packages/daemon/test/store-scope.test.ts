@@ -42,11 +42,17 @@ async function post(path: string, body: unknown, token: string): Promise<{ statu
 
 describe('POST /v1/memory/store_fact avec scope', () => {
   it('scope « user » sans can_write → 403 (policy), puis 200 une fois le droit accordé', async () => {
+    // Depuis la lane core (27/08), `user` est inscriptible PAR DÉFAUT pour les
+    // assistants (décision produit : les souvenirs doivent circuler). On retire
+    // donc le droit explicitement pour tester le refus.
+    const userScope = daemon.memoria.registry.getScopeByName('user')!
+    const revoked = await post('/v1/admin/policy', { assistant_id: assistantId, scope_id: userScope.id, can_write: false }, daemon.state.admin_token)
+    expect(revoked.status).toBe(200)
+
     const refused = await post('/v1/memory/store_fact', { content: 'Néto préfère les réponses courtes', scope: 'user' }, agentToken)
     expect(refused.status).toBe(403)
     expect(String(refused.json['error'])).toContain('can_write')
 
-    const userScope = daemon.memoria.registry.getScopeByName('user')!
     const granted = await post('/v1/admin/policy', { assistant_id: assistantId, scope_id: userScope.id, can_write: true }, daemon.state.admin_token)
     expect(granted.status).toBe(200)
 

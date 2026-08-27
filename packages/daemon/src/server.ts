@@ -1076,14 +1076,17 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       case 'POST /v1/memory/identify_interlocutor': {
         // L'agent demande « à qui je parle ? » via un identifiant (Telegram/mail/tel…).
         const body = await readJson(req)
-        sendJson(res, 200, { match: memoria.identifyInterlocutor(body as Record<string, never>) })
+        // instanceId = la vue « known » est bornée aux scopes LISIBLES de l'agent
+        // appelant (P0 27/08 : sans lui, un agent voyait les faits privés et
+        // critiques de TOUS les autres). Les routes /v1/admin/* gardent la vue globale.
+        sendJson(res, 200, { match: memoria.identifyInterlocutor(body as Record<string, never>, instanceId) })
         return
       }
       case 'POST /v1/memory/identify_or_create_interlocutor': {
         // Comme identify_interlocutor mais CRÉE la personne au 1er contact d'un
         // identifiant inconnu (auto-enregistrement WhatsApp/Telegram/…).
         const body = await readJson(req)
-        sendJson(res, 200, { match: memoria.identifyOrCreateInterlocutor(body as Record<string, never>) })
+        sendJson(res, 200, { match: memoria.identifyOrCreateInterlocutor(body as Record<string, never>, instanceId) })
         return
       }
       default:
