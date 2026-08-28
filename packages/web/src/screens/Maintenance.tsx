@@ -245,7 +245,12 @@ export function Maintenance() {
                   <MemSearchInput id="maintenance-query" value={query} placeholder={t('maintenance.search_placeholder')} onChange={e => setQuery(e.target.value)} />
                 </>
               ) : (
-                <p className="text-sm text-muted-foreground lg:self-end lg:pb-1.5">{t('maintenance.never_used_hint')}</p>
+                /* `mt-auto` et non `self-end` : dans une colonne flex, `self-end`
+                   aligne sur l'axe TRANSVERSAL, donc à droite — la phrase partait
+                   se poser au bout de la ligne du label « Source », loin des
+                   onglets qu'elle explique. `mt-auto` la pousse vraiment en bas
+                   de la colonne, à hauteur des onglets. */
+                <p className="text-sm text-muted-foreground lg:mt-auto lg:pb-1.5">{t('maintenance.never_used_hint')}</p>
               )}
             </div>
           </div>
