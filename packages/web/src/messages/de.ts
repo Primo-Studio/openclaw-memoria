@@ -1230,4 +1230,21 @@ export const de: Messages = {
   'review.pending_count_plural': '{count} Erinnerungen warten',
   'review.list_label': 'Wartende Erinnerungen',
   'review.action_failed_detail': 'Aktion nicht möglich: {message}',
+  // — Écrans mémoire (G2) : Révisions —
+  'revisions.agent_label': 'Analysierter Agent',
+  'revisions.reanalyze': 'Erneut analysieren',
+  'revisions.count': '{count} Vorschlag',
+  'revisions.count_plural': '{count} Vorschläge',
+  'revisions.list_label': 'Aufräumvorschläge',
+  'revisions.accepted': 'Aufgeräumt: die neuere Erinnerung bleibt, die alte wird beiseitegelegt.',
+  'revisions.dismissed': 'Vorschlag beiseitegelegt.',
+  // — Écrans mémoire (G2) : Maintenance —
+  'maintenance.never_used_hint': 'Erinnerungen, die nie in einer Antwort verwendet wurden — das Material zum Aufräumen.',
+  'maintenance.hidden_selected': '{count} außerhalb der angezeigten Liste ausgewählt.',
+  'maintenance.merge_title': 'Diese {count} Erinnerungen zusammenführen?',
+  'maintenance.merge_body': 'Die zuerst ausgewählte bleibt erhalten; die anderen verweisen darauf. Nichts wird gelöscht: die Originaltexte bleiben einsehbar.',
+  'maintenance.count': '{count} Erinnerung angezeigt',
+  'maintenance.count_plural': '{count} Erinnerungen angezeigt',
+  'maintenance.list_label': 'Zu pflegende Erinnerungen',
+  'maintenance.edit_label': 'Korrigierter Text',
 }

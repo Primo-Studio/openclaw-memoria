@@ -1230,4 +1230,21 @@ export const es: Messages = {
   'review.pending_count_plural': '{count} recuerdos pendientes',
   'review.list_label': 'Recuerdos pendientes',
   'review.action_failed_detail': 'Acción imposible: {message}',
+  // — Écrans mémoire (G2) : Révisions —
+  'revisions.agent_label': 'Agente analizado',
+  'revisions.reanalyze': 'Analizar de nuevo',
+  'revisions.count': '{count} propuesta',
+  'revisions.count_plural': '{count} propuestas',
+  'revisions.list_label': 'Propuestas de orden',
+  'revisions.accepted': 'Ordenado: se conserva el recuerdo reciente y se aparta el antiguo.',
+  'revisions.dismissed': 'Propuesta dejada de lado.',
+  // — Écrans mémoire (G2) : Maintenance —
+  'maintenance.never_used_hint': 'Recuerdos nunca usados en una respuesta: la materia prima de la limpieza.',
+  'maintenance.hidden_selected': '{count} seleccionado(s) fuera de la lista mostrada.',
+  'maintenance.merge_title': '¿Fusionar estos {count} recuerdos?',
+  'maintenance.merge_body': 'El primero seleccionado se conserva; los demás apuntarán a él. No se borra nada: los textos originales siguen disponibles.',
+  'maintenance.count': '{count} recuerdo mostrado',
+  'maintenance.count_plural': '{count} recuerdos mostrados',
+  'maintenance.list_label': 'Recuerdos por mantener',
+  'maintenance.edit_label': 'Texto corregido',
 }

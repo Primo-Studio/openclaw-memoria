@@ -2,19 +2,28 @@
  * Révisions — le « ménage » de la mémoire. Memoria repère les souvenirs qui se
  * contredisent ou font doublon, et PROPOSE de les ranger : garder le plus
  * récent, écarter l'ancien. Rien n'est modifié sans ta validation.
+ *
+ * Écran migré sur shadcn : PageHeader (« Analyser à nouveau » dans la barre
+ * supérieure), choix de l'agent en Select shadcn dans le flux (pas dans la
+ * barre : sur mobile elle n'a pas la place), propositions en cartes avec le
+ * type en badge (contradiction / doublon / obsolète) et l'arbitrage à droite,
+ * toasts, trois états. Mêmes appels : GET /v1/admin/agents,
+ * POST /v1/admin/propose_revisions puis GET /v1/admin/revisions,
+ * POST /v1/admin/revision_decision.
  */
 import { useCallback, useEffect, useState } from 'react'
-import {
-  ApiError,
-  decideRevision,
-  getAgents,
-  getRevisions,
-  proposeRevisions,
-  type AgentEntry,
-  type RevisionProposal,
-} from '../api'
+import { Bot, Check, GitCompareArrows, Sparkles, X } from 'lucide-react'
+import { toast } from 'sonner'
+import { ApiError, decideRevision, getAgents, getRevisions, proposeRevisions, type AgentEntry, type RevisionProposal } from '../api'
+import { MemAgentSelect } from '../components/MemAgentSelect'
+import { MemRefreshButton } from '../components/MemRefreshButton'
+import { EmptyState, ErrorBanner, PageHeader, Spinner, humanError, listPhase } from '../components/ui'
+import { Badge } from '../components/ui/badge'
+import { Button } from '../components/ui/button'
+import { Card, CardContent } from '../components/ui/card'
+import { Label } from '../components/ui/label'
+import { Skeleton } from '../components/ui/skeleton'
 import { useT } from '../i18n'
-import { EmptyState, ErrorBanner, Spinner, agentTypeLabel, humanError, listPhase } from '../components/ui'
 import { analyzableAgents } from '../lib/agents'
 
 type Translate = (key: string, vars?: Record<string, string | number>) => string
@@ -24,6 +33,13 @@ const KNOWN_KINDS = new Set(['contradicted', 'duplicate', 'obsolete'])
 /** Libellé traduit d'un type de révision (repli sur le type brut si inconnu). */
 function kindLabel(t: Translate, kind: string): string {
   return KNOWN_KINDS.has(kind) ? t(`revisions.kind_${kind}`) : kind
+}
+
+/** Une contradiction se voit (rouge), un doublon est neutre, le reste discret. */
+function kindVariant(kind: string): 'destructive' | 'secondary' | 'outline' {
+  if (kind === 'contradicted') return 'destructive'
+  if (kind === 'duplicate') return 'secondary'
+  return 'outline'
 }
 
 export function Revisions() {
@@ -43,9 +59,12 @@ export function Revisions() {
         const real = analyzableAgents(a)
         setAgents(real)
         setNoAgent(real.length === 0)
-        if (real[0]) setInstance(real[0].instance.id)
+        if (real[0]) setInstance(prev => prev || real[0]!.instance.id)
       })
-      .catch(err => setError(err instanceof ApiError ? err.message : humanError(err)))
+      .catch((err: unknown) => {
+        console.warn('memoria-ui : agents illisibles', err)
+        setError(humanError(err))
+      })
   }, [tick])
 
   const load = useCallback(async (inst: string) => {
@@ -57,7 +76,10 @@ export function Revisions() {
     } catch (err) {
       // 404 = vieux service sans la route : état vide, pas une panne.
       if (err instanceof ApiError && err.status === 404) setItems([])
-      else setError(err instanceof ApiError ? err.message : humanError(err))
+      else {
+        console.warn('memoria-ui : révisions illisibles', err)
+        setError(humanError(err))
+      }
     }
   }, [])
 
@@ -71,6 +93,7 @@ export function Revisions() {
   }, [])
 
   const phase = listPhase(items, error)
+  const list = items ?? []
 
   const decide = useCallback(
     async (id: string, decision: 'accept' | 'dismiss') => {
@@ -78,8 +101,11 @@ export function Revisions() {
       try {
         await decideRevision(instance, id, decision)
         setItems(prev => (prev ? prev.filter(i => i.id !== id) : prev))
+        toast.success(decision === 'accept' ? t('revisions.accepted') : t('revisions.dismissed'))
       } catch (err) {
-        setError(err instanceof ApiError ? err.message : t('revisions.error_action'))
+        // L'échec d'un arbitrage ne cache pas la liste : la proposition reste là, on le dit en toast.
+        console.warn('memoria-ui : arbitrage de révision refusé', err)
+        toast.error(t('review.action_failed_detail', { message: humanError(err) }))
       } finally {
         setBusy(false)
       }
@@ -88,50 +114,65 @@ export function Revisions() {
   )
 
   return (
-    <section>
-      <header className="screen-head">
-        <div>
-          <h1>{t('revisions.title')}</h1>
-          <p className="muted">{t('revisions.lead')}</p>
+    <>
+      <PageHeader
+        title={t('revisions.title')}
+        description={t('revisions.lead')}
+        actions={<MemRefreshButton label={t('revisions.reanalyze')} onClick={retry} disabled={!instance || phase === 'loading'} spinning={phase === 'loading'} />}
+      />
+
+      {agents.length > 0 && (
+        <div className="mb-4 flex flex-col gap-1.5 sm:max-w-sm">
+          <Label htmlFor="revisions-agent">{t('revisions.agent_label')}</Label>
+          <MemAgentSelect id="revisions-agent" agents={agents} value={instance} onChange={setInstance} disabled={busy} />
         </div>
-        {agents.length > 0 && (
-          <select className="agent-select" value={instance} onChange={e => setInstance(e.target.value)}>
-            {agents.map(a => <option key={a.instance.id} value={a.instance.id}>{agentTypeLabel(a.assistant_type)}</option>)}
-          </select>
-        )}
-      </header>
+      )}
 
       {error && <ErrorBanner message={error} onRetry={retry} />}
 
       {noAgent ? (
-        <EmptyState title={t('memory.no_agent_title')} body={t('memory.no_agent_body')} />
+        <EmptyState icon={<Bot className="size-5" />} title={t('memory.no_agent_title')} body={t('memory.no_agent_body')} />
       ) : phase === 'loading' ? (
-        <Spinner label={t('revisions.analyzing')} />
-      ) : phase === 'failed' || items === null ? null : items.length === 0 ? (
-        <div className="empty-state">
-          <p>{t('revisions.empty_title')}</p>
-          <p className="muted">{t('revisions.empty_body')}</p>
-        </div>
-      ) : (
-        <ul className="pattern-list">
-          {items.map(r => (
-            <li key={r.id} className="pattern-card">
-              <div className="pattern-head">
-                <span className="badge badge-accent">{kindLabel(t, r.kind)}</span>
-              </div>
-              <p className="pattern-canonical muted">{r.reason}</p>
-              <div className="pattern-actions">
-                <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void decide(r.id, 'accept')}>
-                  {t('revisions.action_accept')}
-                </button>
-                <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => void decide(r.id, 'dismiss')}>
-                  {t('revisions.action_dismiss')}
-                </button>
-              </div>
-            </li>
+        <div className="flex flex-col gap-3">
+          <Spinner label={t('revisions.analyzing')} />
+          {[0, 1].map(i => (
+            <Skeleton key={i} className="h-24 w-full rounded-xl" />
           ))}
-        </ul>
+        </div>
+      ) : phase === 'failed' ? null : phase === 'empty' ? (
+        <EmptyState icon={<Sparkles className="size-5" />} title={t('revisions.empty_title')} body={t('revisions.empty_body')} />
+      ) : (
+        <section aria-label={t('revisions.list_label')}>
+          <h2 className="mb-2 flex items-center gap-2 text-sm font-medium">
+            <GitCompareArrows className="size-4 text-muted-foreground" aria-hidden="true" />
+            {list.length > 1 ? t('revisions.count_plural', { count: list.length }) : t('revisions.count', { count: list.length })}
+          </h2>
+          <ul className="flex flex-col gap-3">
+            {list.map(r => (
+              <li key={r.id}>
+                <Card size="sm">
+                  <CardContent className="flex flex-col gap-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant={kindVariant(r.kind)}>{kindLabel(t, r.kind)}</Badge>
+                    </div>
+                    <p className="text-sm leading-relaxed break-words">{r.reason}</p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button size="sm" disabled={busy} onClick={() => void decide(r.id, 'accept')}>
+                        <Check aria-hidden="true" />
+                        {t('revisions.action_accept')}
+                      </Button>
+                      <Button variant="ghost" size="sm" disabled={busy} onClick={() => void decide(r.id, 'dismiss')}>
+                        <X aria-hidden="true" />
+                        {t('revisions.action_dismiss')}
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
-    </section>
+    </>
   )
 }

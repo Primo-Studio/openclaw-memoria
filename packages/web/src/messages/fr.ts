@@ -1232,4 +1232,21 @@ export const fr: Messages = {
   'review.pending_count_plural': '{count} souvenirs en attente',
   'review.list_label': 'Souvenirs en attente',
   'review.action_failed_detail': 'Action impossible : {message}',
+  // — Écrans mémoire (G2) : Révisions —
+  'revisions.agent_label': 'Agent analysé',
+  'revisions.reanalyze': 'Analyser à nouveau',
+  'revisions.count': '{count} proposition',
+  'revisions.count_plural': '{count} propositions',
+  'revisions.list_label': 'Propositions de rangement',
+  'revisions.accepted': 'Rangé : le souvenir récent est conservé, l’ancien est écarté.',
+  'revisions.dismissed': 'Proposition laissée de côté.',
+  // — Écrans mémoire (G2) : Maintenance —
+  'maintenance.never_used_hint': 'Les souvenirs jamais utilisés dans une réponse — la matière du ménage.',
+  'maintenance.hidden_selected': '{count} sélectionné(s) hors de la liste affichée.',
+  'maintenance.merge_title': 'Fusionner ces {count} souvenirs ?',
+  'maintenance.merge_body': 'Le premier sélectionné est conservé ; les autres pointeront sur lui. Rien n’est effacé : les textes d’origine restent consultables.',
+  'maintenance.count': '{count} souvenir affiché',
+  'maintenance.count_plural': '{count} souvenirs affichés',
+  'maintenance.list_label': 'Souvenirs à entretenir',
+  'maintenance.edit_label': 'Texte corrigé',
 }

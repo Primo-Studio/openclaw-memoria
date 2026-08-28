@@ -1230,4 +1230,21 @@ export const en: Messages = {
   'review.pending_count_plural': '{count} memories pending',
   'review.list_label': 'Pending memories',
   'review.action_failed_detail': 'Action failed: {message}',
+  // — Écrans mémoire (G2) : Révisions —
+  'revisions.agent_label': 'Agent analysed',
+  'revisions.reanalyze': 'Analyse again',
+  'revisions.count': '{count} proposal',
+  'revisions.count_plural': '{count} proposals',
+  'revisions.list_label': 'Tidy-up proposals',
+  'revisions.accepted': 'Tidied up: the recent memory is kept, the old one is set aside.',
+  'revisions.dismissed': 'Proposal left aside.',
+  // — Écrans mémoire (G2) : Maintenance —
+  'maintenance.never_used_hint': 'Memories never used in an answer — the raw material for tidying up.',
+  'maintenance.hidden_selected': '{count} selected outside the list shown.',
+  'maintenance.merge_title': 'Merge these {count} memories?',
+  'maintenance.merge_body': 'The first one selected is kept; the others will point to it. Nothing is deleted: the original texts remain available.',
+  'maintenance.count': '{count} memory shown',
+  'maintenance.count_plural': '{count} memories shown',
+  'maintenance.list_label': 'Memories to maintain',
+  'maintenance.edit_label': 'Corrected text',
 }
