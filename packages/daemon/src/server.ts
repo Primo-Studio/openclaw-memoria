@@ -932,10 +932,30 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       }
       case 'POST /v1/admin/sync/join': {
         const body = await readJson(req)
-        const hub = String(body['hub'] ?? '')
-        const code = String(body['code'] ?? '')
+        const hub = String(body['hub'] ?? '').trim()
+        const code = String(body['code'] ?? '').trim()
         if (!hub || !code) throw new HttpError(400, 'hub et code requis')
-        sendJson(res, 200, await memoria.sync.join({ hub, code }))
+        if (!isHostPort(hub)) throw new HttpError(400, `hub invalide : « ${hub} » (hôte:port attendu, ex. 192.168.1.20:47600)`)
+        // Le cas le plus courant (mauvaise IP/port, hub pas démarré, pare-feu)
+        // remontait « fetch failed » en 500 avec une stack : ici 502 avec
+        // l'adresse essayée et la piste ; code refusé → 400 (pas une panne).
+        try {
+          sendJson(res, 200, await memoria.sync.join({ hub, code }))
+        } catch (err) {
+          const message = (err as Error)?.message ?? String(err)
+          if (isNetworkFailure(err)) {
+            const cause = describeNetworkFailure(err)
+            throw new HttpError(
+              502,
+              `hub injoignable à ${hub}${cause ? ` (${cause})` : ''} — vérifie l'adresse hôte:port du hub, qu'il est démarré en mode hub (« memoria sync init-hub ») et joignable sur le LAN (pare-feu)`,
+            )
+          }
+          if (message.startsWith('pairing refusé par le hub')) {
+            throw new HttpError(400, `${message} : code expiré, déjà utilisé ou erroné — génère-en un nouveau sur le hub (« memoria sync invite »)`)
+          }
+          if (message.startsWith('échec du descellement')) throw new HttpError(400, message)
+          throw err
+        }
         return
       }
       case 'POST /v1/admin/sync/now': {
@@ -1301,6 +1321,30 @@ function headerStr(req: IncomingMessage, name: string): string | undefined {
   return Array.isArray(v) ? v[0] : v
 }
 
+/** « hôte:port » plausible : hôte sans espace, port 1..65535 (IPv6 entre crochets accepté). */
+function isHostPort(addr: string): boolean {
+  const i = addr.lastIndexOf(':')
+  if (i <= 0) return false
+  const host = addr.slice(0, i)
+  const port = Number(addr.slice(i + 1))
+  return /^[^\s/]+$/.test(host) && Number.isInteger(port) && port >= 1 && port <= 65535
+}
+
+/** Erreur RÉSEAU de fetch (connexion refusée, hôte introuvable, délai) — pas une réponse HTTP. */
+function isNetworkFailure(err: unknown): boolean {
+  if (!(err instanceof Error)) return false
+  if (err.name === 'AbortError' || err.name === 'TimeoutError') return true
+  if (err instanceof TypeError && /fetch failed/i.test(err.message)) return true
+  const code = (err as { cause?: { code?: string } }).cause?.code ?? (err as { code?: string }).code
+  return typeof code === 'string' && /^(ECONNREFUSED|ENOTFOUND|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|ECONNRESET|EAI_AGAIN)$/.test(code)
+}
+
+/** Cause lisible d'une panne réseau (code système ou message de la cause). */
+function describeNetworkFailure(err: unknown): string {
+  const cause = (err as { cause?: { code?: string; message?: string } }).cause
+  return cause?.code ?? cause?.message ?? (err as Error)?.name ?? ''
+}
+
 /** « host:port » → [host, port]. host vide → 0.0.0.0. */
 function parseHostPort(addr: string): [string, number] {
   const i = addr.lastIndexOf(':')
@@ -1596,7 +1640,10 @@ function reportAndSend(req: IncomingMessage, res: ServerResponse, err: unknown):
   // secret est masqué AVANT le journal et AVANT le client — la valeur d'un
   // secret ne sort jamais du daemon, quelle que soit la panne.
   const message = errorRedactor.redact((err as Error)?.message ?? 'erreur interne').text
-  if (status >= 500) {
+  // Journalisé : toute exception NON attendue, et les HttpError 500 posées
+  // sciemment (« voir le journal du daemon »). Un 502 expliqué (hub
+  // injoignable) est une réponse, pas une panne : pas de stack pour ça.
+  if (!(err instanceof HttpError) || status === 500) {
     const detail = errorRedactor.redact((err as Error)?.stack ?? message).text
     console.error(`[memoria-daemon] ${req.method ?? '?'} ${req.url ?? '?'} → ${status} : ${detail}`)
   }
