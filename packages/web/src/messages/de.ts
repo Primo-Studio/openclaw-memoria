@@ -1195,4 +1195,18 @@ export const de: Messages = {
   'capture.short.auto': 'Auto',
   'capture.short.review': 'Prüfung',
   'capture.short.pause': 'Pause',
+
+  // — Partage (écran shadcn) — confirmations, retours d'action, états —
+  'sharing.matrix_lead': 'Ein Schalter pro Agent und pro geteiltem Gedächtnis. Ohne Zugriff sieht ein Agent nichts aus diesem Gedächtnis.',
+  'sharing.matrix_empty_body': 'Geteilte Gedächtnisse (über dich, Firma, Kunden, Projekte) erscheinen hier, sobald eine erste Erinnerung geteilt wurde.',
+  'sharing.revoke_confirm': '{agent} den Lesezugriff auf {scope} entziehen?',
+  'sharing.grant_body': 'Der Agent kann ab sofort alle Erinnerungen dieses geteilten Gedächtnisses lesen.',
+  'sharing.revoke_body': 'Der Agent sieht die Erinnerungen dieses geteilten Gedächtnisses nicht mehr. Du kannst den Zugriff jederzeit wieder erteilen.',
+  'sharing.grant_action': 'Erlauben',
+  'sharing.revoke_action': 'Zugriff entziehen',
+  'sharing.toast_granted': '{agent} kann jetzt {scope} lesen.',
+  'sharing.toast_revoked': '{agent} liest {scope} nicht mehr.',
+  'sharing.toast_shared': '{count} Erinnerung(en) mit allen deinen Agenten geteilt.',
+  'sharing.identity_no_agents': 'Noch kein Agent verbunden — verbinde einen Agenten, um die Fakten über dich zu sehen.',
+  'sharing.scope_content_title': 'Inhalt von „{scope}“',
 }

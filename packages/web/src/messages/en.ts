@@ -1195,4 +1195,18 @@ export const en: Messages = {
   'capture.short.auto': 'Auto',
   'capture.short.review': 'Review',
   'capture.short.pause': 'Pause',
+
+  // — Partage (écran shadcn) — confirmations, retours d'action, états —
+  'sharing.matrix_lead': 'One switch per agent and per shared memory. Without access, an agent sees nothing from that memory.',
+  'sharing.matrix_empty_body': 'Shared memories (about you, company, clients, projects) will show up here as soon as a first memory is shared into one.',
+  'sharing.revoke_confirm': 'Remove {agent}’s read access to {scope}?',
+  'sharing.grant_body': 'The agent will be able to read every memory in this shared space, starting now.',
+  'sharing.revoke_body': 'The agent will no longer see the memories in this shared space. You can grant access again at any time.',
+  'sharing.grant_action': 'Allow',
+  'sharing.revoke_action': 'Remove access',
+  'sharing.toast_granted': '{agent} can now read {scope}.',
+  'sharing.toast_revoked': '{agent} no longer reads {scope}.',
+  'sharing.toast_shared': '{count} memory(ies) shared with all your agents.',
+  'sharing.identity_no_agents': 'No agent connected yet — connect an agent to see the facts about you.',
+  'sharing.scope_content_title': 'Contents of “{scope}”',
 }

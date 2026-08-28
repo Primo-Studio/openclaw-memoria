@@ -1197,4 +1197,18 @@ export const fr: Messages = {
   'capture.short.auto': 'Auto',
   'capture.short.review': 'Revue',
   'capture.short.pause': 'Pause',
+
+  // — Partage (écran shadcn) — confirmations, retours d'action, états —
+  'sharing.matrix_lead': 'Un interrupteur par agent et par mémoire partagée. Sans accès, un agent ne voit rien de cette mémoire.',
+  'sharing.matrix_empty_body': 'Les mémoires partagées (sur toi, entreprise, clients, projets) apparaîtront ici dès qu’un premier souvenir y sera partagé.',
+  'sharing.revoke_confirm': 'Retirer à {agent} l’accès en lecture à {scope} ?',
+  'sharing.grant_body': 'L’agent pourra lire tous les souvenirs de cette mémoire partagée, dès maintenant.',
+  'sharing.revoke_body': 'L’agent ne verra plus les souvenirs de cette mémoire partagée. Tu pourras lui redonner l’accès à tout moment.',
+  'sharing.grant_action': 'Autoriser',
+  'sharing.revoke_action': 'Retirer l’accès',
+  'sharing.toast_granted': '{agent} peut maintenant lire {scope}.',
+  'sharing.toast_revoked': '{agent} ne lit plus {scope}.',
+  'sharing.toast_shared': '{count} souvenir(s) partagé(s) avec tous tes agents.',
+  'sharing.identity_no_agents': 'Aucun agent connecté pour l’instant — connecte un agent pour voir les faits qui te concernent.',
+  'sharing.scope_content_title': 'Contenu de « {scope} »',
 }
