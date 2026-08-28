@@ -84,6 +84,7 @@ export const de: Messages = {
 
   // — Allgemeines —
   'common.refresh': 'Aktualisieren',
+  'common.open_screen': '„{screen}“ öffnen',
   'error.session_expired': 'Sitzung abgelaufen oder Schlüssel ungültig — starte „memoria“ im Terminal neu.',
   'error.not_available': 'Diese Funktion ist in deiner Memoria-Version noch nicht verfügbar.',
   'error.no_response': 'Der Memoria-Dienst antwortet nicht. Prüfe, ob er läuft („memoria“-Befehl).',
@@ -1128,7 +1129,6 @@ export const de: Messages = {
   'nav.maintenance': 'Wartung',
   'maintenance.title': 'Wartung',
   'maintenance.lead': 'Korrigieren, zusammenführen, vergessen. Korrigieren und Zusammenführen schreiben nichts um — die frühere Fassung bleibt lesbar. Nur „Vergessen“ ist endgültig.',
-  'maintenance.agent': 'Agent',
   'maintenance.source': 'Quelle',
   'maintenance.source_search': 'Suche',
   'maintenance.source_never_used': 'Nie verwendet',
@@ -1270,7 +1270,6 @@ export const de: Messages = {
   'settings.sync.peersTitle': 'Verbundene Rechner',
   'settings.usage.periodLabel': 'Zeitraum',
   // --- Écrans cognition sur shadcn (Thèmes, Récurrences, Procédures, Personnes) ---
-  'cog.agent_select_aria': 'Angezeigter Agent',
   'themes.refined_toast': '{count} Thema/Themen umbenannt.',
   'themes.importance': 'Bedeutung des Themas',
   'themes.list_title': 'Themen des Agenten',
@@ -1376,7 +1375,6 @@ export const de: Messages = {
   'review.list_label': 'Wartende Erinnerungen',
   'review.action_failed_detail': 'Aktion nicht möglich: {message}',
   // — Écrans mémoire (G2) : Révisions —
-  'revisions.agent_label': 'Analysierter Agent',
   'revisions.reanalyze': 'Erneut analysieren',
   'revisions.count': '{count} Vorschlag',
   'revisions.count_plural': '{count} Vorschläge',

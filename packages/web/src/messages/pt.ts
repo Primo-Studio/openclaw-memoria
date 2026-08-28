@@ -84,6 +84,7 @@ export const pt: Messages = {
 
   // — Comuns —
   'common.refresh': 'Atualizar',
+  'common.open_screen': 'Abrir «{screen}»',
   'error.session_expired': 'Sessão expirada ou chave inválida — reinicia «memoria» no teu terminal.',
   'error.not_available': 'Este recurso ainda não está disponível na tua versão do Memoria.',
   'error.no_response': 'O serviço Memoria não responde. Verifica se está ativo (comando «memoria»).',
@@ -1128,7 +1129,6 @@ export const pt: Messages = {
   'nav.maintenance': 'Manutenção',
   'maintenance.title': 'Manutenção',
   'maintenance.lead': 'Corrigir, fundir, esquecer. Corrigir e fundir não reescrevem nada: a versão anterior continua acessível. Só «esquecer» é definitivo.',
-  'maintenance.agent': 'Agente',
   'maintenance.source': 'Origem',
   'maintenance.source_search': 'Pesquisa',
   'maintenance.source_never_used': 'Nunca usados',
@@ -1270,7 +1270,6 @@ export const pt: Messages = {
   'settings.sync.peersTitle': 'Máquinas ligadas',
   'settings.usage.periodLabel': 'Período',
   // --- Écrans cognition sur shadcn (Thèmes, Récurrences, Procédures, Personnes) ---
-  'cog.agent_select_aria': 'Agente apresentado',
   'themes.refined_toast': '{count} tema(s) renomeado(s).',
   'themes.importance': 'Importância do tema',
   'themes.list_title': 'Temas do agente',
@@ -1376,7 +1375,6 @@ export const pt: Messages = {
   'review.list_label': 'Memórias pendentes',
   'review.action_failed_detail': 'Ação impossível: {message}',
   // — Écrans mémoire (G2) : Révisions —
-  'revisions.agent_label': 'Agente analisado',
   'revisions.reanalyze': 'Analisar de novo',
   'revisions.count': '{count} proposta',
   'revisions.count_plural': '{count} propostas',

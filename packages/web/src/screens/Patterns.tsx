@@ -9,10 +9,11 @@
  * vide / erreur — voir UI-GUIDE.md.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Bot, Check, Loader2, Repeat, X } from 'lucide-react'
+import { Check, Loader2, Repeat, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { ApiError, decidePattern, getPatterns, type Pattern } from '../api'
-import { CogAgentSelect, useAnalyzableAgents } from '../components/CogAgentSelect'
+import { useAnalyzableAgents } from '../components/CogAgentSelect'
+import { MemAgentPicker, MemNoAgentState } from '../components/MemAgentSelect'
 import { CogConfirmButton } from '../components/CogConfirm'
 import { EmptyState, ErrorBanner, PageHeader, SectionCard, formatNumber, humanError, listPhase } from '../components/ui'
 import { Badge } from '../components/ui/badge'
@@ -99,13 +100,17 @@ export function Patterns() {
       <PageHeader
         title={t('patterns.title')}
         description={t('patterns.lead')}
-        actions={<CogAgentSelect agents={ag.agents} value={ag.instance} onChange={ag.setInstance} />}
-      />
+      >
+        {/* Le sélecteur d'agent vit ICI sur les six écrans par agent : sous la
+            phrase d'intro, jamais dans la barre supérieure (à 390 px il y
+            écrasait le titre de l'écran). */}
+        <MemAgentPicker id="patterns-agent" agents={ag.agents} value={ag.instance} onChange={ag.setInstance} />
+      </PageHeader>
 
       {bannerError && <ErrorBanner message={bannerError} onRetry={ag.retry} />}
 
       {ag.noAgent ? (
-        <EmptyState icon={<Bot className="size-5" />} title={t('memory.no_agent_title')} body={t('memory.no_agent_body')} className="mx-auto w-full max-w-xl sm:py-8" />
+        <MemNoAgentState className="mx-auto w-full max-w-xl sm:py-8" />
       ) : phase === 'loading' ? (
         <PatternsSkeleton />
       ) : phase === 'failed' || patterns === null ? null : patterns.length === 0 ? (

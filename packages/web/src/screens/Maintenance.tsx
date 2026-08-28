@@ -22,10 +22,10 @@
  * anti-course (lib/sequence) sont conservées.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Bot, CheckSquare, Merge, Pencil, Save, Search, Sparkles, Square, X } from 'lucide-react'
+import { CheckSquare, Merge, Pencil, Save, Search, Sparkles, Square, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { correctFact, forgetFacts, getAgents, mergeFacts, neverUsedFacts, searchFacts, type AdminFact, type AgentEntry } from '../api'
-import { MemAgentSelect } from '../components/MemAgentSelect'
+import { MemAgentPicker, MemNoAgentState } from '../components/MemAgentSelect'
 import { MemFactCard, MemMetaText, MemSensitivityBadge } from '../components/MemFactCard'
 import { MemRefreshButton } from '../components/MemRefreshButton'
 import { MemSearchInput } from '../components/MemSearchInput'
@@ -224,14 +224,13 @@ export function Maintenance() {
         }
       />
 
+      {/* Même emplacement et même libellé que sur les cinq autres écrans par agent. */}
+      <MemAgentPicker id="maintenance-agent" agents={agents} value={instance} onChange={setInstance} disabled={busy} />
+
       {!noAgent && (
         <SectionCard title={t('memory.search.title')}>
-          {/* Une colonne sous 640 px, puis agent + source côte à côte, le champ prend le reste à partir de lg. */}
-          <div className="grid gap-3 sm:grid-cols-[minmax(0,15rem)_auto] lg:grid-cols-[minmax(0,15rem)_auto_minmax(0,1fr)]">
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="maintenance-agent">{t('maintenance.agent')}</Label>
-              <MemAgentSelect id="maintenance-agent" agents={agents} value={instance} onChange={setInstance} disabled={busy} />
-            </div>
+          {/* Une colonne sous 640 px, puis source + champ côte à côte à partir de lg. */}
+          <div className="grid gap-3 lg:grid-cols-[auto_minmax(0,1fr)]">
             <div className="flex flex-col gap-1.5">
               <Label id="maintenance-source-label">{t('maintenance.source')}</Label>
               <Tabs value={source} onValueChange={v => setSource(v as Source)}>
@@ -247,7 +246,7 @@ export function Maintenance() {
                 </TabsList>
               </Tabs>
             </div>
-            <div className="flex flex-col gap-1.5 sm:col-span-2 lg:col-span-1">
+            <div className="flex flex-col gap-1.5">
               {source === 'search' ? (
                 <>
                   <Label htmlFor="maintenance-query">{t('memory.search_one_label')}</Label>
@@ -306,7 +305,7 @@ export function Maintenance() {
       {error && <ErrorBanner message={error} onRetry={retry} />}
 
       {noAgent ? (
-        <EmptyState icon={<Bot className="size-5" />} title={t('memory.no_agent_title')} body={t('memory.no_agent_body')} />
+        <MemNoAgentState />
       ) : phase === 'loading' ? (
         <div className="flex flex-col gap-3" role="status" aria-label={t('common.loading')}>
           {[0, 1, 2].map(i => (

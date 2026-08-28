@@ -84,6 +84,7 @@ export const en: Messages = {
 
   // — Common —
   'common.refresh': 'Refresh',
+  'common.open_screen': 'Open “{screen}”',
   'error.session_expired': 'Session expired or invalid key — restart “memoria” from your terminal.',
   'error.not_available': 'This feature is not available yet in your version of Memoria.',
   'error.no_response': 'The Memoria service is not responding. Check it’s running (“memoria” command).',
@@ -1128,7 +1129,6 @@ export const en: Messages = {
   'nav.maintenance': 'Maintenance',
   'maintenance.title': 'Maintenance',
   'maintenance.lead': 'Correct, merge, forget. Correcting and merging rewrite nothing — the previous version stays readable. Only “forget” is permanent.',
-  'maintenance.agent': 'Agent',
   'maintenance.source': 'Source',
   'maintenance.source_search': 'Search',
   'maintenance.source_never_used': 'Never used',
@@ -1270,7 +1270,6 @@ export const en: Messages = {
   'settings.sync.peersTitle': 'Linked machines',
   'settings.usage.periodLabel': 'Period',
   // --- Écrans cognition sur shadcn (Thèmes, Récurrences, Procédures, Personnes) ---
-  'cog.agent_select_aria': 'Agent shown',
   'themes.refined_toast': '{count} theme(s) renamed.',
   'themes.importance': 'Theme importance',
   'themes.list_title': 'Agent themes',
@@ -1376,7 +1375,6 @@ export const en: Messages = {
   'review.list_label': 'Pending memories',
   'review.action_failed_detail': 'Action failed: {message}',
   // — Écrans mémoire (G2) : Révisions —
-  'revisions.agent_label': 'Agent analysed',
   'revisions.reanalyze': 'Analyse again',
   'revisions.count': '{count} proposal',
   'revisions.count_plural': '{count} proposals',

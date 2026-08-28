@@ -12,16 +12,15 @@
  * POST /v1/admin/revision_decision.
  */
 import { useCallback, useEffect, useState } from 'react'
-import { Bot, Check, GitCompareArrows, Sparkles, X } from 'lucide-react'
+import { Check, GitCompareArrows, Sparkles, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { ApiError, decideRevision, getAgents, getRevisions, proposeRevisions, searchFacts, type AdminFact, type AgentEntry, type RevisionProposal } from '../api'
-import { MemAgentSelect } from '../components/MemAgentSelect'
+import { MemAgentPicker, MemNoAgentState } from '../components/MemAgentSelect'
 import { MemRefreshButton } from '../components/MemRefreshButton'
 import { EmptyState, ErrorBanner, PageHeader, Spinner, formatDay, humanError, listPhase } from '../components/ui'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { Card, CardContent } from '../components/ui/card'
-import { Label } from '../components/ui/label'
 import { Skeleton } from '../components/ui/skeleton'
 import { useT } from '../i18n'
 import { analyzableAgents } from '../lib/agents'
@@ -152,19 +151,17 @@ export function Revisions() {
             spinning={phase === 'loading'}
           />
         }
-      />
-
-      {agents.length > 0 && (
-        <div className="mb-4 flex flex-col gap-1.5 sm:max-w-sm">
-          <Label htmlFor="revisions-agent">{t('revisions.agent_label')}</Label>
-          <MemAgentSelect id="revisions-agent" agents={agents} value={instance} onChange={setInstance} disabled={busy} />
-        </div>
-      )}
+      >
+        {/* Même emplacement et même libellé « Agent » que sur les cinq autres
+            écrans par agent : l'ancien « Agent analysé » était le seul de son
+            espèce. */}
+        <MemAgentPicker id="revisions-agent" agents={agents} value={instance} onChange={setInstance} disabled={busy} />
+      </PageHeader>
 
       {error && <ErrorBanner message={error} onRetry={retry} />}
 
       {noAgent ? (
-        <EmptyState icon={<Bot className="size-5" />} title={t('memory.no_agent_title')} body={t('memory.no_agent_body')} className="mx-auto w-full max-w-xl sm:py-8" />
+        <MemNoAgentState className="mx-auto w-full max-w-xl sm:py-8" />
       ) : phase === 'loading' ? (
         <div className="flex flex-col gap-3">
           <Spinner label={t('revisions.analyzing')} />
