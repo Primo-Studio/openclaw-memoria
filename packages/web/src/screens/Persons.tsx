@@ -298,7 +298,11 @@ function IdentifyTester() {
           <Label htmlFor="identify-value">{t('persons.identify.valueLabel')}</Label>
           <Input id="identify-value" value={value} onChange={e => setValue(e.target.value)} placeholder={t('persons.identify.placeholder')} />
         </div>
-        <Button type="submit" variant="outline" disabled={busy || !value.trim()}>
+        {/* `max-sm:h-11` et non `size="sm"` : le plancher tactile de 44 px n'est
+            porté que par la taille `sm`, qui vaut 28 px sur bureau — le bouton
+            serait alors plus court de 4 px que le champ d'à côté, avec lequel il
+            est aligné. On ajoute donc le plancher sans toucher au bureau. */}
+        <Button type="submit" variant="outline" className="max-sm:h-11" disabled={busy || !value.trim()}>
           {busy ? <Loader2 className="animate-spin" aria-hidden="true" /> : <Search aria-hidden="true" />}
           {t('persons.identify.submit')}
         </Button>
@@ -514,7 +518,9 @@ function PersonCard({ person, onChange }: { person: PersonProfile; onChange: () 
               {t('persons.card.valueLabel')}
             </Label>
             <Input id={`person-${person.id}-value`} value={idValue} onChange={e => setIdValue(e.target.value)} placeholder={placeholderFor(t, idKind)} className="sm:flex-1" />
-            <Button type="submit" variant="outline" disabled={adding || !idValue.trim()}>
+            {/* Plancher tactile de 44 px au téléphone, hauteur de bureau inchangée
+                (même raison que le bouton « Identifier » plus haut). */}
+            <Button type="submit" variant="outline" className="max-sm:h-11" disabled={adding || !idValue.trim()}>
               {adding ? <Loader2 className="animate-spin" aria-hidden="true" /> : <Plus aria-hidden="true" />}
               {t('persons.card.addIdent')}
             </Button>
