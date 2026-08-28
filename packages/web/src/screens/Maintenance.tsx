@@ -376,7 +376,11 @@ export function Maintenance() {
                     }
                   >
                     {isEditing ? (
-                      <>
+                      // `data-no-select` : tant que l'édition est ouverte, aucun
+                      // clic dans ce bloc ne coche la fiche — pas même sur la
+                      // phrase d'aide, qui n'est pas un élément interactif et
+                      // passait donc à travers le garde-fou de MemFactCard.
+                      <div data-no-select>
                         <Textarea
                           value={editing.text}
                           rows={3}
@@ -390,7 +394,7 @@ export function Maintenance() {
                             l'écran et le seul où l'on cliquait sans savoir si on
                             détruisait quelque chose. */}
                         <p className="mt-1.5 text-xs text-muted-foreground">{t('maintenance.edit_safe')}</p>
-                      </>
+                      </div>
                     ) : (
                       f.fact
                     )}

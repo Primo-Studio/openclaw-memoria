@@ -58,15 +58,17 @@ export function MemFactCard({
               sa zone tactile ~32 px — sous les 44 px visés — alors qu'on demande
               justement d'en cocher plusieurs pour fusionner. Le texte, lui, fait
               toute la largeur de la carte. Deux gardes pour ne pas cocher par
-              accident : on ignore le clic parti d'un élément interactif (la zone
-              d'édition « Corriger », un badge cliquable) et celui qui termine une
+              accident : on ignore le clic parti d'un élément interactif (un badge
+              cliquable) ou d'une zone marquée `data-no-select` (le bloc d'édition
+              ouvert par « Corriger », dont la phrase d'aide n'est PAS un élément
+              interactif et passait donc à travers), et celui qui termine une
               sélection de texte. Le clavier passe par la case, inchangée. */}
           <div
             className={cn('text-sm leading-relaxed break-words whitespace-pre-wrap', onSelectedChange && !disabled && 'cursor-pointer')}
             onClick={
               onSelectedChange && !disabled
                 ? e => {
-                    if ((e.target as HTMLElement).closest('button, a, input, textarea, select, label, [role="button"]')) return
+                    if ((e.target as HTMLElement).closest('button, a, input, textarea, select, label, [role="button"], [data-no-select]')) return
                     if (window.getSelection()?.toString()) return
                     onSelectedChange(!selected)
                   }
