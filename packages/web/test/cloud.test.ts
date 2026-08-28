@@ -73,17 +73,17 @@ describe('humanReason', () => {
   })
 
   it('capture_turn sans incident : souvenirs créés et durée, rien de plus', () => {
-    expect(humanReason('capture_turn', 'appended=2 facts=3 deferred=0 failed=0 ms=1200')).toBe('3 souvenir(s) créé(s) · 1200 ms')
+    expect(humanReason('capture_turn', 'appended=2 facts=3 deferred=0 failed=0 ms=1200')).toBe('3 souvenirs créés · 1200 ms')
   })
 
   it('capture_turn avec failed=2 mentionne l’échec (jamais de mort silencieuse)', () => {
     const out = humanReason('capture_turn', 'appended=2 facts=0 deferred=0 failed=2 ms=1200')
-    expect(out).toBe('0 souvenir(s) créé(s) · 2 échec(s) · 1200 ms')
+    expect(out).toBe('0 souvenir créé · 2 échecs · 1200 ms')
   })
 
   it('capture_turn avec deferred>0 mentionne les tours différés', () => {
     const out = humanReason('capture_turn', 'appended=1 facts=1 deferred=1 failed=0 ms=800')
-    expect(out).toBe('1 souvenir(s) créé(s) · 1 différé(s) · 800 ms')
+    expect(out).toBe('1 souvenir créé · 1 différé · 800 ms')
   })
 
   it('laisse la raison brute pour une action inconnue, et null sans raison', () => {

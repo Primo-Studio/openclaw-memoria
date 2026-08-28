@@ -108,7 +108,7 @@ export const en: Messages = {
   'audit.col.date': 'Date',
   'audit.col.actor': 'Actor',
   'audit.col.action': 'Action',
-  'audit.col.scope': 'Space',
+  'audit.col.scope': 'Memory',
   'audit.actor.assistant': 'Agent',
   'audit.actor.user': 'You',
   'audit.actor.system': 'System',
@@ -139,12 +139,15 @@ export const en: Messages = {
   'audit.reason.chars': '≈ {n} characters',
   'audit.reason.duration': '{s} s',
   'audit.reason.failed': 'failed — sent, no answer',
-  'audit.reason.capture_facts': '{facts} memory(ies) created',
-  'audit.reason.capture_failed': '{failed} failure(s)',
+  'audit.reason.capture_facts': '{facts} memory created',
+  'audit.reason.capture_facts_plural': '{facts} memories created',
+  'audit.reason.capture_failed': '{failed} failure',
+  'audit.reason.capture_failed_plural': '{failed} failures',
   'audit.reason.capture_deferred': '{deferred} deferred',
+  'audit.reason.capture_deferred_plural': '{deferred} deferred',
   'audit.reason.capture_ms': '{ms} ms',
-  'audit.reason.abandoned': 'dropped after {attempts} attempt(s)',
-
+  'audit.reason.abandoned': 'dropped after {attempts} attempt',
+  'audit.reason.abandoned_plural': 'dropped after {attempts} attempts',
   // — Screens (i18n migration 2026-07-08) —
   'agents.card.cliAbsent': 'CLI missing',
   'agents.card.cliInstalled': 'CLI installed',
@@ -1383,7 +1386,8 @@ export const en: Messages = {
 
   // — Journal (écran shadcn) — filtres, compteur, état « aucun résultat » —
   'audit.list_title': 'Latest actions',
-  'audit.count': '{shown} of {total} entries shown — the service keeps the last 200.',
+  'audit.count': '{shown} entry shown out of {total} — the service keeps the last 200.',
+  'audit.count_plural': '{shown} entries shown out of {total} — the service keeps the last 200.',
   'audit.filter.search': 'Search (agent, action, reason…)',
   'audit.filter.all_actors': 'All actors',
   'audit.filter.all_actions': 'All actions',

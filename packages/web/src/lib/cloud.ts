@@ -105,17 +105,19 @@ export function humanReason(action: string, reason: string | null): string | nul
       const facts = int(kv.facts)
       const ms = int(kv.ms)
       if (facts === null || ms === null) return reason
-      const parts = [translate('audit.reason.capture_facts', { facts })]
+      // Pluriels écrits, pas « souvenir(s) » : la valeur est connue, la
+      // parenthèse ne servait qu'à éviter d'écrire deux variantes.
+      const parts = [translate(facts > 1 ? 'audit.reason.capture_facts_plural' : 'audit.reason.capture_facts', { facts })]
       const failed = int(kv.failed)
-      if (failed !== null && failed > 0) parts.push(translate('audit.reason.capture_failed', { failed }))
+      if (failed !== null && failed > 0) parts.push(translate(failed > 1 ? 'audit.reason.capture_failed_plural' : 'audit.reason.capture_failed', { failed }))
       const deferred = int(kv.deferred)
-      if (deferred !== null && deferred > 0) parts.push(translate('audit.reason.capture_deferred', { deferred }))
+      if (deferred !== null && deferred > 0) parts.push(translate(deferred > 1 ? 'audit.reason.capture_deferred_plural' : 'audit.reason.capture_deferred', { deferred }))
       parts.push(translate('audit.reason.capture_ms', { ms }))
       return parts.join(' · ')
     }
     case 'wal_entry_abandoned': {
       const attempts = int(kv.attempts)
-      return attempts === null ? reason : translate('audit.reason.abandoned', { attempts })
+      return attempts === null ? reason : translate(attempts > 1 ? 'audit.reason.abandoned_plural' : 'audit.reason.abandoned', { attempts })
     }
     default:
       return reason

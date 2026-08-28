@@ -11,6 +11,8 @@ import { useState } from 'react'
 import { RefreshCw, Search, SearchX } from 'lucide-react'
 import { getAudit, type AuditEntry } from '../api'
 import { DataTable, EmptyState, ErrorBanner, PageHeader, SectionCard, formatDate, formatNumber, useLoad, type DataColumn } from '../components/ui'
+import { DataCards } from '../components/DataCards'
+import { useDirectory, type Directory, type Translate } from '../components/memory-names'
 import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select'
@@ -38,6 +40,8 @@ const ACTOR_TYPES: ReadonlyArray<AuditEntry['actor_type']> = ['assistant', 'user
 export function Audit() {
   const { t } = useT()
   const { state, reload } = useLoad(getAudit)
+  // Noms d'agents et de mémoires : sans eux le journal ne parle qu'en UUID.
+  const directory = useDirectory(t)
 
   return (
     <>
@@ -63,7 +67,7 @@ export function Audit() {
         (state.data.length === 0 ? (
           <EmptyState title={t('audit.empty.title')} body={t('audit.empty.body')} />
         ) : (
-          <AuditTable entries={state.data} />
+          <AuditTable entries={state.data} directory={directory} />
         ))}
     </>
   )
@@ -71,8 +75,6 @@ export function Audit() {
 
 type SortKey = 'ts' | 'actor' | 'action' | 'scope'
 const DATE_KEYS: readonly SortKey[] = ['ts']
-
-type Translate = (key: string, vars?: Record<string, string | number>) => string
 
 // `set_capture_mode:<mode>` (core) porte le mode dans l'action elle-même :
 // on sépare la famille (pour le libellé et le filtre) du détail (le mode, traduit).
@@ -98,38 +100,58 @@ function actionDetail(t: Translate, action: string): string | null {
   return key ? t(key) : mode
 }
 
-/** Valeur de tri (texte comparable) pour une colonne donnée. */
-function sortValue(t: Translate, e: AuditEntry, key: SortKey): string {
+/**
+ * Qui a agi, en clair. « Vous » / « Système » pour les acteurs non-agents ;
+ * pour un agent, son nom (« Claude Code ») et, à défaut seulement, l'ancien
+ * repli « Agent 29e37881 ».
+ */
+function actorLabel(t: Translate, e: AuditEntry, dir: Directory): string {
+  if (e.actor_type !== 'assistant') return t(`audit.actor.${e.actor_type}`)
+  const name = dir.agentName(e.actor_id)
+  return name ?? `${t('audit.actor.assistant')} ${e.actor_id.slice(0, 8)}`
+}
+
+/** La mémoire concernée, avec le même vocabulaire que l'écran Partage. */
+function scopeLabelOf(e: AuditEntry, dir: Directory): string | null {
+  if (!e.scope_id) return null
+  return dir.scopeName(e.scope_id) ?? e.scope_id.slice(0, 8)
+}
+
+/** Valeur de tri (texte comparable) pour une colonne donnée : ce que la ligne AFFICHE,
+ *  sinon la flèche de tri mentirait (tri sur l'UUID, noms à l'écran). */
+function sortValue(t: Translate, e: AuditEntry, key: SortKey, dir: Directory): string {
   switch (key) {
     case 'ts':
       return e.ts
     case 'actor':
-      return `${t(`audit.actor.${e.actor_type}`)} ${e.actor_id}`
+      return actorLabel(t, e, dir)
     case 'action':
       return actionLabel(t, e.action)
     case 'scope':
-      return e.scope_id ?? ''
+      return scopeLabelOf(e, dir) ?? ''
   }
 }
 
 /** Texte cherché par le filtre libre : tout ce que la ligne affiche (traduit) + les identifiants bruts. */
-function haystack(t: Translate, e: AuditEntry): string {
+function haystack(t: Translate, e: AuditEntry, dir: Directory): string {
   return [
     formatDate(e.ts),
     t(`audit.actor.${e.actor_type}`),
+    actorLabel(t, e, dir),
     e.actor_id,
     actionLabel(t, e.action),
     e.action,
     e.reason ?? '',
     humanReason(e.action, e.reason) ?? '',
     actionDetail(t, e.action) ?? '',
+    scopeLabelOf(e, dir) ?? '',
     e.scope_id ?? '',
   ]
     .join(' ')
     .toLowerCase()
 }
 
-function AuditTable({ entries }: { entries: AuditEntry[] }) {
+function AuditTable({ entries, directory }: { entries: AuditEntry[]; directory: Directory }) {
   const { t } = useT()
   // Tri par défaut : Date décroissante (le plus récent d'abord).
   const [sort, setSort] = useState<SortState<SortKey>>({ key: 'ts', dir: 'desc' })
@@ -140,10 +162,10 @@ function AuditTable({ entries }: { entries: AuditEntry[] }) {
 
   const q = query.trim().toLowerCase()
   const filtered = entries.filter(
-    e => (actor === 'all' || e.actor_type === actor) && (action === 'all' || actionKey(e.action) === action) && (q === '' || haystack(t, e).includes(q)),
+    e => (actor === 'all' || e.actor_type === actor) && (action === 'all' || actionKey(e.action) === action) && (q === '' || haystack(t, e, directory).includes(q)),
   )
   const sorted = [...filtered].sort((a, b) => {
-    const cmp = sortValue(t, a, sort.key).localeCompare(sortValue(t, b, sort.key), undefined, { numeric: true })
+    const cmp = sortValue(t, a, sort.key, directory).localeCompare(sortValue(t, b, sort.key, directory), undefined, { numeric: true })
     return sort.dir === 'asc' ? cmp : -cmp
   })
 
@@ -161,18 +183,16 @@ function AuditTable({ entries }: { entries: AuditEntry[] }) {
     setPage(0)
   }
 
+  const reasonOf = (e: AuditEntry) => humanReason(e.action, e.reason) ?? actionDetail(t, e.action)
+
   const columns: DataColumn<AuditEntry>[] = [
     { id: 'ts', header: t('audit.col.date'), sortable: true, cell: e => formatDate(e.ts) },
     {
       id: 'actor',
       header: t('audit.col.actor'),
       sortable: true,
-      cell: e => (
-        <>
-          {t(`audit.actor.${e.actor_type}`)}
-          {e.actor_type === 'assistant' && <code className="ml-1 font-mono text-xs text-muted-foreground">{e.actor_id.slice(0, 8)}</code>}
-        </>
-      ),
+      // L'identifiant technique reste accessible au survol : il ne s'affiche plus.
+      cell: e => <span title={e.actor_type === 'assistant' ? e.actor_id : undefined}>{actorLabel(t, e, directory)}</span>,
     },
     {
       id: 'action',
@@ -182,7 +202,7 @@ function AuditTable({ entries }: { entries: AuditEntry[] }) {
       // au lieu d'étirer le tableau hors de la carte.
       className: 'min-w-56 whitespace-normal',
       cell: e => {
-        const reason = humanReason(e.action, e.reason) ?? actionDetail(t, e.action)
+        const reason = reasonOf(e)
         return (
           <>
             <div>{actionLabel(t, e.action)}</div>
@@ -195,12 +215,15 @@ function AuditTable({ entries }: { entries: AuditEntry[] }) {
       id: 'scope',
       header: t('audit.col.scope'),
       sortable: true,
-      cell: e => (e.scope_id ? <code className="font-mono text-xs text-muted-foreground">{e.scope_id.slice(0, 8)}</code> : '—'),
+      cell: e => {
+        const label = scopeLabelOf(e, directory)
+        return label ? <span title={e.scope_id ?? undefined}>{label}</span> : '—'
+      },
     },
   ]
 
   return (
-    <SectionCard title={t('audit.list_title')} description={t('audit.count', { shown: formatNumber(filtered.length), total: formatNumber(entries.length) })}>
+    <SectionCard title={t('audit.list_title')} description={t(filtered.length > 1 ? 'audit.count_plural' : 'audit.count', { shown: formatNumber(filtered.length), total: formatNumber(entries.length) })}>
       <div className="mb-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
         <div className="relative">
           <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
@@ -269,16 +292,37 @@ function AuditTable({ entries }: { entries: AuditEntry[] }) {
         />
       ) : (
         <>
-          <DataTable
-            columns={columns}
-            rows={slice}
-            rowKey={e => String(e.id)}
-            sort={{ by: sort.key, dir: sort.dir }}
-            onSort={next => {
-              setSort(s => nextSort(s, next.by as SortKey, DATE_KEYS))
-              setPage(0)
-            }}
-          />
+          {/* Sous 640 px, le tableau était tranché en plein mot (« Mode de »,
+              « Convers ») et la colonne mémoire tombait hors écran : une fiche
+              par entrée, l'action en titre, le reste en clair dessous. */}
+          <div className="sm:hidden">
+            <DataCards
+              rows={slice}
+              rowKey={e => String(e.id)}
+              title={e => actionLabel(t, e.action)}
+              subtitle={e => reasonOf(e)}
+              fields={e => {
+                const scope = scopeLabelOf(e, directory)
+                return [
+                  { label: t('audit.col.actor'), value: actorLabel(t, e, directory) },
+                  ...(scope ? [{ label: t('audit.col.scope'), value: scope }] : []),
+                  { label: t('audit.col.date'), value: <span className="text-muted-foreground">{formatDate(e.ts)}</span> },
+                ]
+              }}
+            />
+          </div>
+          <div className="hidden sm:block">
+            <DataTable
+              columns={columns}
+              rows={slice}
+              rowKey={e => String(e.id)}
+              sort={{ by: sort.key, dir: sort.dir }}
+              onSort={next => {
+                setSort(s => nextSort(s, next.by as SortKey, DATE_KEYS))
+                setPage(0)
+              }}
+            />
+          </div>
           <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
             <Button variant="outline" size="sm" disabled={current === 0} onClick={() => setPage(current - 1)}>
               {t('common.prev')}

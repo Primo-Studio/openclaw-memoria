@@ -108,7 +108,7 @@ export const de: Messages = {
   'audit.col.date': 'Datum',
   'audit.col.actor': 'Akteur',
   'audit.col.action': 'Aktion',
-  'audit.col.scope': 'Bereich',
+  'audit.col.scope': 'Speicher',
   'audit.actor.assistant': 'Agent',
   'audit.actor.user': 'Du',
   'audit.actor.system': 'System',
@@ -139,12 +139,15 @@ export const de: Messages = {
   'audit.reason.chars': '≈ {n} Zeichen',
   'audit.reason.duration': '{s} s',
   'audit.reason.failed': 'Fehler — gesendet, keine Antwort',
-  'audit.reason.capture_facts': '{facts} Erinnerung(en) erstellt',
+  'audit.reason.capture_facts': '{facts} Erinnerung erstellt',
+  'audit.reason.capture_facts_plural': '{facts} Erinnerungen erstellt',
   'audit.reason.capture_failed': '{failed} Fehler',
+  'audit.reason.capture_failed_plural': '{failed} Fehler',
   'audit.reason.capture_deferred': '{deferred} zurückgestellt',
+  'audit.reason.capture_deferred_plural': '{deferred} zurückgestellt',
   'audit.reason.capture_ms': '{ms} ms',
-  'audit.reason.abandoned': 'nach {attempts} Versuch(en) verworfen',
-
+  'audit.reason.abandoned': 'nach {attempts} Versuch verworfen',
+  'audit.reason.abandoned_plural': 'nach {attempts} Versuchen verworfen',
   // — Bildschirme (i18n-Migration 2026-07-08) —
   'agents.card.cliAbsent': 'CLI fehlt',
   'agents.card.cliInstalled': 'CLI installiert',
@@ -1383,7 +1386,8 @@ export const de: Messages = {
 
   // — Journal (écran shadcn) — filtres, compteur, état « aucun résultat » —
   'audit.list_title': 'Letzte Aktionen',
-  'audit.count': '{shown} von {total} Einträgen angezeigt — der Dienst behält die letzten 200.',
+  'audit.count': '{shown} Eintrag von {total} angezeigt — der Dienst behält die letzten 200.',
+  'audit.count_plural': '{shown} Einträge von {total} angezeigt — der Dienst behält die letzten 200.',
   'audit.filter.search': 'Suchen (Agent, Aktion, Grund…)',
   'audit.filter.all_actors': 'Alle Akteure',
   'audit.filter.all_actions': 'Alle Aktionen',
