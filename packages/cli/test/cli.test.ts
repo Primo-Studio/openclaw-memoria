@@ -191,6 +191,38 @@ describe('forget — gardes', () => {
   })
 })
 
+describe('move — après déplacement, tout suit (registre, stats, doctor, forget)', () => {
+  it('memoria move puis stats/doctor/forget sur le nouvel emplacement', async () => {
+    const memoria = Memoria.init({ storageRoot: root, configPath: cfg, llm: { extraction: null } })
+    const paired = memoria.pairAssistant({ type: 'claude-code' })
+    const fact = memoria.storeFact({ instance: paired.assistant_instance_id, content: 'Fait test numéro 3 sur Acme' })
+    memoria.storeFact({ instance: paired.assistant_instance_id, scope: 'user', content: 'Le studio déploie sur Vercel' })
+    memoria.close()
+
+    const usb = join(root, '..', `memoria-cli-usb-${Date.now()}`)
+    try {
+      const mv = makeIo()
+      expect(await buildCli().run(args('move', '--to', usb), mv.context)).toBe(0)
+      expect(mv.out()).toContain('Mémoire déplacée')
+
+      // Après le move, config.toml pointe sur la destination : plus de --storage-root.
+      const stats = makeIo()
+      expect(await buildCli().run(['stats', '--config', cfg], stats.context)).toBe(0)
+      expect(stats.out()).toContain('Souvenirs : 2')
+
+      const doctor = makeIo()
+      expect(await buildCli().run(['doctor', '--config', cfg], doctor.context)).toBe(0)
+      expect(doctor.out()).not.toContain('absente du disque')
+
+      const forget = makeIo()
+      expect(await buildCli().run(['forget', '--id', fact.id, '--config', cfg], forget.context)).toBe(0)
+      expect(forget.out()).toContain('1 souvenir(s) supprimé(s)')
+    } finally {
+      rmSync(usb, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('commandes locales (daemon arrêté)', () => {
   it('stats : compteurs à zéro sur une racine neuve, code 0', async () => {
     const io = makeIo()

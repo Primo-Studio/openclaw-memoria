@@ -75,6 +75,7 @@ import type {
   AssistantInstance,
   AssistantType,
   CaptureMode,
+  DbRegistryEntry,
   DoctorReport,
   LlmUsagePeriod,
   LlmUsageReport,
@@ -206,6 +207,9 @@ export class Memoria {
     ensureStorageTree(resolved.storageRoot)
     this.registry = new RegistryStore(this.paths.registry)
     this.registry.bootstrap(opts.userDisplayName)
+    // AVANT registerDb : sinon le registre déplacé se ré-enregistrait sous son
+    // nouveau chemin à côté de l'ancienne entrée (deux « registres »).
+    this.rebaseDbRegistry()
     this.registry.registerDb({ kind: 'registry', path: this.paths.registry, assistant_instance_id: null, scope_id: null })
     this.secretProvider = opts.secretProvider ?? createSecretProvider(this.paths.secretsDir, { force: opts.secretsVault })
     this.llmOverride = opts.llm
@@ -243,6 +247,46 @@ export class Memoria {
         scope_id: userScope.id,
         reason: null,
       })
+    }
+  }
+
+  /**
+   * Réaligne db_registry sur la racine COURANTE. Les chemins y sont absolus :
+   * après `memoria move` (clé USB, autre dossier) ils pointaient sur l'ancien
+   * emplacement et rien ne les recalculait — tout ce qui passe par
+   * listDbs/dbForInstance (stats, doctor, forget, revue, thèmes, options…)
+   * voyait des bases « absentes du disque » : 0 souvenir, `forget` « 0
+   * supprimé » alors que le recall (chemins recalculés) marchait encore.
+   * Chaque chemin se dérive de racine + kind + instance/scope : on le
+   * recalcule à chaque boot — idempotent, silencieux quand rien ne bouge.
+   */
+  private rebaseDbRegistry(): void {
+    for (const entry of this.registry.listDbs()) {
+      const expected = this.expectedDbPath(entry)
+      if (expected === null || expected === entry.path) continue
+      this.registry.rebaseDb(entry.id, expected)
+      console.log(`[memoria] base ${entry.kind} réalignée sur la racine courante : ${entry.path} → ${expected}`)
+    }
+  }
+
+  /** Chemin canonique d'une entrée du registre sous la racine courante (null si indérivable). */
+  private expectedDbPath(entry: DbRegistryEntry): string | null {
+    switch (entry.kind) {
+      case 'registry':
+        return this.paths.registry
+      case 'assistant':
+        return entry.assistant_instance_id ? this.paths.assistantDb(entry.assistant_instance_id) : null
+      case 'shared': {
+        const scope = entry.scope_id ? this.registry.getScope(entry.scope_id) : null
+        if (!scope) return null
+        try {
+          return this.sharedDbPath(scope)
+        } catch {
+          return null // type de scope sans DB partagée : on ne touche pas
+        }
+      }
+      default:
+        return null
     }
   }
 
