@@ -87,10 +87,12 @@ export function App() {
     )
   }
   if (onboarding) {
+    // Onboarding migré sur shadcn : rendu hors coquille, sans wrapper legacy.
     return (
-      <div className="legacy-screen">
+      <>
         <Onboarding onDone={() => setOnboarding(false)} />
-      </div>
+        <Toaster position="bottom-right" />
+      </>
     )
   }
 
