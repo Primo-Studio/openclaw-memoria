@@ -1161,4 +1161,18 @@ export const en: Messages = {
   'settings.cloud.row': 'sends: {calls} · items: {items} · text: ≈ {chars} characters',
   'settings.cloud.failures': '{count} failure(s) — the data left even without an answer.',
   'settings.cloud.note': 'What leaves: the text to analyse (extraction) or to index (indexing). Memoria keeps track of the volume, never the content — the line-by-line detail is in the Log.',
+
+  // --- Coquille shadcn (barre latérale, préférences, confirmations, tableaux) ---
+  'nav.essential': 'Essentials',
+  'nav.collapse': 'Collapse menu',
+  'nav.expand': 'Expand menu',
+  'prefs.title': 'Preferences',
+  'common.cancel': 'Cancel',
+  'common.confirm_action': 'Confirm',
+  'confirm.body': 'This action is immediate and cannot be undone.',
+  'table.sort': 'Sort by {column}',
+  'table.empty': 'No data',
+  'capture.short.auto': 'Auto',
+  'capture.short.review': 'Review',
+  'capture.short.pause': 'Pause',
 }

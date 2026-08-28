@@ -1,10 +1,36 @@
 /**
- * Petits composants partagés + helpers d'affichage.
- * Volontairement légers : pas de framework UI, juste du CSS maison.
+ * Point d'entrée UNIQUE des primitives d'écran + helpers d'affichage.
+ *
+ * Les composants sont construits sur shadcn/ui (src/components/ui/*) : un
+ * écran n'importe que d'ici (Spinner, ErrorBanner, EmptyState, ConfirmButton,
+ * CopyButton, PageHeader, StatCard, DataTable, SectionCard) et, au besoin,
+ * les briques shadcn elles-mêmes (Button, Card, Badge…). Voir UI-GUIDE.md.
+ * Les helpers (formatage, humanError, useLoad, listPhase) sont inchangés.
  */
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
+import { ArrowDown, ArrowUp, ArrowUpDown, Check, CircleAlert, Copy, Inbox, Loader2 } from 'lucide-react'
+import { toast } from 'sonner'
 import { ApiError } from '../api'
 import { currentLocale, translate, useT } from '../i18n'
+import { useShellSlots } from '../app/shell-context'
+import { cn } from '../lib/utils'
+import { Alert, AlertAction, AlertDescription, AlertTitle } from './ui/alert'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from './ui/alert-dialog'
+import { Button, type buttonVariants } from './ui/button'
+import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table'
+import type { VariantProps } from 'class-variance-authority'
 
 // ------------------------------------------------------------------- helpers
 
@@ -163,55 +189,82 @@ export function listPhase<T>(items: readonly T[] | null, error: string | null): 
 
 // --------------------------------------------------------------- composants
 
-export function Spinner({ label }: { label?: string }) {
+/** Indicateur de chargement en ligne (role=status pour les lecteurs d'écran). */
+export function Spinner({ label, className }: { label?: string; className?: string }) {
   const { t } = useT()
   return (
-    <div className="spinner-row" role="status">
-      <span className="spinner" aria-hidden="true" />
-      <span className="muted">{label ?? t('common.loading')}</span>
+    <div className={cn('flex items-center gap-2 py-2 text-sm text-muted-foreground', className)} role="status">
+      <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+      <span>{label ?? t('common.loading')}</span>
     </div>
   )
 }
 
-export function ErrorBanner({ message, onRetry }: { message: string; onRetry?: () => void }) {
+/** Erreur visible (jamais de mort silencieuse) + « Réessayer » si l'appelant sait relancer. */
+export function ErrorBanner({ message, onRetry, className }: { message: string; onRetry?: () => void; className?: string }) {
   const { t } = useT()
   return (
-    <div className="error-banner" role="alert">
-      <span>{message}</span>
+    <Alert variant="destructive" className={cn('my-3', className)}>
+      <CircleAlert />
+      <AlertTitle>{message}</AlertTitle>
       {onRetry && (
-        <button type="button" className="btn btn-ghost" onClick={onRetry}>
-          {t('common.retry')}
-        </button>
+        <AlertAction>
+          <Button variant="outline" size="sm" onClick={onRetry}>
+            {t('common.retry')}
+          </Button>
+        </AlertAction>
       )}
-    </div>
+    </Alert>
   )
 }
 
-export function EmptyState({ title, body, action }: { title: string; body?: string; action?: ReactNode }) {
+/** État vide : titre, explication, action facultative — centré, jamais un tableau vide muet. */
+export function EmptyState({
+  title,
+  body,
+  action,
+  icon,
+  className,
+}: {
+  title: string
+  body?: string
+  action?: ReactNode
+  icon?: ReactNode
+  className?: string
+}) {
   return (
-    <div className="empty-state">
-      <h2>{title}</h2>
-      {body && <p className="muted">{body}</p>}
-      {action}
+    <div className={cn('flex flex-col items-center gap-2 rounded-xl border border-dashed px-6 py-10 text-center', className)}>
+      <span className="mb-1 flex size-10 items-center justify-center rounded-full bg-muted text-muted-foreground" aria-hidden="true">
+        {icon ?? <Inbox className="size-5" />}
+      </span>
+      <h2 className="text-base font-semibold">{title}</h2>
+      {body && <p className="max-w-md text-sm text-muted-foreground">{body}</p>}
+      {action && <div className="mt-2">{action}</div>}
     </div>
   )
 }
 
 /**
- * Copie dans le presse-papiers avec retour visuel ; l'échec est visible aussi.
- * Le retour à « idle » n'est armé qu'APRÈS la réponse du presse-papiers (sinon
- * un « Échec » tardif pouvait ne jamais s'afficher) et le timer est nettoyé
- * au démontage (pas de setState sur composant démonté).
- *
- * `mounted` est remis à true dans le setup de l'effet, pas seulement initialisé
- * par useRef : sous <StrictMode> (main.tsx), React 19 en dev joue
- * setup → cleanup → setup au montage et la ref SURVIT à ce cycle. Avec un
- * `false` posé uniquement au cleanup, la ref restait fausse et « Copié » /
- * « Échec » ne s'affichaient plus jamais en `vite dev`.
+ * Copie dans le presse-papiers avec retour visuel (toast) ; l'échec est
+ * visible aussi. Le timer de retour à l'icône « copier » est nettoyé au
+ * démontage, et `mounted` est remis à true dans le setup de l'effet (sous
+ * <StrictMode>, React 19 joue setup → cleanup → setup au montage).
  */
-export function CopyButton({ text, label }: { text: string; label?: string }) {
+export function CopyButton({
+  text,
+  label,
+  variant = 'outline',
+  size = 'sm',
+  className,
+}: {
+  text: string
+  label?: string
+  variant?: VariantProps<typeof buttonVariants>['variant']
+  size?: VariantProps<typeof buttonVariants>['size']
+  className?: string
+}) {
   const { t } = useT()
-  const [feedback, setFeedback] = useState<'idle' | 'done' | 'failed'>('idle')
+  const [done, setDone] = useState(false)
   const timer = useRef<number | null>(null)
   const mounted = useRef(false)
 
@@ -225,69 +278,290 @@ export function CopyButton({ text, label }: { text: string; label?: string }) {
 
   const copy = () => {
     if (timer.current !== null) window.clearTimeout(timer.current)
-    navigator.clipboard
-      .writeText(text)
-      .then(
-        () => 'done' as const,
-        (err: unknown) => {
-          console.warn('memoria-ui : copie presse-papiers refusée', err)
-          return 'failed' as const
-        },
-      )
-      .then(result => {
+    navigator.clipboard.writeText(text).then(
+      () => {
+        toast.success(t('common.copied'))
         if (!mounted.current) return
-        setFeedback(result)
-        timer.current = window.setTimeout(() => setFeedback('idle'), 2000)
-      })
+        setDone(true)
+        timer.current = window.setTimeout(() => setDone(false), 2000)
+      },
+      (err: unknown) => {
+        console.warn('memoria-ui : copie presse-papiers refusée', err)
+        toast.error(t('common.copy_failed'))
+      },
+    )
   }
 
   return (
-    <button type="button" className="btn btn-ghost" onClick={copy}>
-      {feedback === 'done' ? t('common.copied') : feedback === 'failed' ? t('common.copy_failed') : (label ?? t('common.copy'))}
-    </button>
+    <Button type="button" variant={variant} size={size} className={className} onClick={copy}>
+      {done ? <Check className="text-success" aria-hidden="true" /> : <Copy aria-hidden="true" />}
+      {label ?? t('common.copy')}
+    </Button>
   )
 }
 
 /**
- * Bouton à confirmation en deux temps (pas de window.confirm) :
- * 1er clic = armé pendant 4 s, 2e clic = action.
+ * Bouton à confirmation : ouvre une boîte de dialogue modale (AlertDialog)
+ * au lieu de l'ancien double-clic armé 4 s — plus lisible pour un
+ * non-technicien, et l'action destructrice est nommée deux fois.
+ * `variant`/`size` stylent le bouton déclencheur ; l'action de confirmation
+ * est toujours en style destructif.
  */
 export function ConfirmButton({
   label,
   confirmLabel,
   onConfirm,
   disabled = false,
+  title,
+  description,
+  variant = 'outline',
+  size = 'sm',
+  className,
 }: {
   label: string
   confirmLabel?: string
   onConfirm: () => void
   disabled?: boolean
+  /** Titre de la boîte (défaut : le libellé du bouton). */
+  title?: string
+  /** Explication (défaut : « action immédiate, irréversible »). */
+  description?: string
+  variant?: VariantProps<typeof buttonVariants>['variant']
+  size?: VariantProps<typeof buttonVariants>['size']
+  className?: string
 }) {
   const { t } = useT()
-  const [armed, setArmed] = useState(false)
-  const timer = useRef<number | null>(null)
-
-  useEffect(
-    () => () => {
-      if (timer.current !== null) window.clearTimeout(timer.current)
-    },
-    [],
-  )
-
-  const click = () => {
-    if (!armed) {
-      setArmed(true)
-      timer.current = window.setTimeout(() => setArmed(false), 4000)
-      return
-    }
-    if (timer.current !== null) window.clearTimeout(timer.current)
-    setArmed(false)
-    onConfirm()
-  }
-
   return (
-    <button type="button" className={`btn ${armed ? 'btn-danger' : 'btn-ghost'}`} onClick={click} disabled={disabled}>
-      {armed ? (confirmLabel ?? t('common.confirm')) : label}
-    </button>
+    <AlertDialog>
+      <AlertDialogTrigger asChild>
+        <Button type="button" variant={variant} size={size} className={className} disabled={disabled}>
+          {label}
+        </Button>
+      </AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{title ?? label}</AlertDialogTitle>
+          <AlertDialogDescription>{description ?? t('confirm.body')}</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
+          <AlertDialogAction variant="destructive" onClick={onConfirm}>
+            {confirmLabel ?? t('common.confirm_action')}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  )
+}
+
+/**
+ * En-tête d'écran : titre (h1) + actions, PROJETÉS dans la barre supérieure
+ * de la coquille (voir app/shell-context.ts). `description` et `children`
+ * restent dans le flux, sous la barre. Hors coquille : rendu en ligne.
+ */
+export function PageHeader({
+  title,
+  description,
+  actions,
+  children,
+}: {
+  title: string
+  description?: string
+  actions?: ReactNode
+  children?: ReactNode
+}) {
+  const slots = useShellSlots()
+  const titleNode = <h1 className="truncate text-lg font-semibold tracking-tight">{title}</h1>
+  const actionsNode = actions ? <div className="flex flex-wrap items-center justify-end gap-2">{actions}</div> : null
+  const inline = !slots
+  return (
+    <>
+      {slots?.titleEl && createPortal(titleNode, slots.titleEl)}
+      {slots?.actionsEl && actionsNode && createPortal(actionsNode, slots.actionsEl)}
+      {inline && (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          {titleNode}
+          {actionsNode}
+        </div>
+      )}
+      {description && <p className="mb-4 text-sm text-muted-foreground">{description}</p>}
+      {children}
+    </>
+  )
+}
+
+/** Chiffre clé : valeur, libellé, aide, tonalité (warn = attention, ok = sain, danger = alerte). */
+export function StatCard({
+  value,
+  label,
+  hint,
+  tone = 'default',
+  icon,
+  className,
+}: {
+  value: number | string
+  label: string
+  hint?: string
+  tone?: 'default' | 'ok' | 'warn' | 'danger'
+  icon?: ReactNode
+  className?: string
+}) {
+  const toneClass = {
+    default: 'text-foreground',
+    ok: 'text-success',
+    warn: 'text-warning',
+    danger: 'text-destructive',
+  }[tone]
+  return (
+    <Card size="sm" className={cn('gap-1', className)}>
+      <CardContent className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className={cn('text-2xl font-semibold tabular-nums tracking-tight', toneClass)}>
+            {typeof value === 'number' ? formatNumber(value) : value}
+          </div>
+          <div className="mt-0.5 text-sm font-medium">{label}</div>
+          {hint && <div className="mt-0.5 text-xs text-muted-foreground">{hint}</div>}
+        </div>
+        {icon && (
+          <span className={cn('flex size-8 shrink-0 items-center justify-center rounded-md bg-muted', toneClass)} aria-hidden="true">
+            {icon}
+          </span>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+/** Bloc de contenu titré (Card) : titre, description, actions à droite, contenu. */
+export function SectionCard({
+  title,
+  description,
+  actions,
+  children,
+  className,
+  contentClassName,
+}: {
+  title: ReactNode
+  description?: ReactNode
+  actions?: ReactNode
+  children: ReactNode
+  className?: string
+  contentClassName?: string
+}) {
+  return (
+    <Card className={cn('mb-4', className)}>
+      <CardHeader>
+        <CardTitle>{title}</CardTitle>
+        {description && <CardDescription>{description}</CardDescription>}
+        {actions && <CardAction className="flex items-center gap-2">{actions}</CardAction>}
+      </CardHeader>
+      <CardContent className={contentClassName}>{children}</CardContent>
+    </Card>
+  )
+}
+
+// --------------------------------------------------------------- DataTable
+
+export interface DataColumn<T> {
+  id: string
+  header: ReactNode
+  cell: (row: T) => ReactNode
+  /** En-tête cliquable (bouton) ; le tri lui-même est fait par l'appelant (onSort). */
+  sortable?: boolean
+  align?: 'left' | 'right' | 'center'
+  className?: string
+}
+
+export interface DataSort {
+  by: string
+  dir: 'asc' | 'desc'
+}
+
+/**
+ * Tableau de données : en-têtes triables = de vrais boutons (clavier, lecteur
+ * d'écran, `aria-sort`), défilement horizontal interne (jamais la page),
+ * état vide explicite. Le tri reste à l'appelant (données déjà triées).
+ */
+export function DataTable<T>({
+  columns,
+  rows,
+  rowKey,
+  sort,
+  onSort,
+  empty,
+  dense = false,
+  className,
+}: {
+  columns: DataColumn<T>[]
+  rows: readonly T[]
+  rowKey: (row: T) => string
+  sort?: DataSort
+  onSort?: (next: DataSort) => void
+  /** Contenu affiché quand `rows` est vide (défaut : « Aucune donnée »). */
+  empty?: ReactNode
+  dense?: boolean
+  className?: string
+}) {
+  const { t } = useT()
+  const alignClass = (a?: DataColumn<T>['align']) => (a === 'right' ? 'text-right' : a === 'center' ? 'text-center' : 'text-left')
+  const toggle = (col: DataColumn<T>) => {
+    if (!onSort) return
+    const dir = sort?.by === col.id && sort.dir === 'asc' ? 'desc' : 'asc'
+    onSort({ by: col.id, dir })
+  }
+  return (
+    <Table className={className}>
+      <TableHeader>
+        <TableRow className="hover:bg-transparent">
+          {columns.map(col => {
+            const active = sort?.by === col.id
+            const ariaSort = active ? (sort.dir === 'asc' ? 'ascending' : 'descending') : undefined
+            const label = typeof col.header === 'string' ? col.header : col.id
+            return (
+              <TableHead key={col.id} aria-sort={ariaSort} className={cn(alignClass(col.align), col.className)}>
+                {col.sortable && onSort ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className={cn('-ml-2 h-8 gap-1 px-2 font-medium', active && 'text-primary')}
+                    onClick={() => toggle(col)}
+                    aria-label={t('table.sort', { column: label })}
+                  >
+                    {col.header}
+                    {active ? (
+                      sort.dir === 'asc' ? <ArrowUp aria-hidden="true" /> : <ArrowDown aria-hidden="true" />
+                    ) : (
+                      <ArrowUpDown className="opacity-50" aria-hidden="true" />
+                    )}
+                  </Button>
+                ) : (
+                  col.header
+                )}
+              </TableHead>
+            )
+          })}
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {rows.length === 0 ? (
+          <TableRow className="hover:bg-transparent">
+            <TableCell colSpan={columns.length} className="py-6 text-center text-muted-foreground">
+              {empty ?? t('table.empty')}
+            </TableCell>
+          </TableRow>
+        ) : (
+          rows.map(row => (
+            <TableRow key={rowKey(row)}>
+              {columns.map(col => (
+                <TableCell key={col.id} className={cn(alignClass(col.align), dense && 'py-1', col.className)}>
+                  {col.cell(row)}
+                </TableCell>
+              ))}
+            </TableRow>
+          ))
+        )}
+      </TableBody>
+    </Table>
   )
 }

@@ -1161,4 +1161,18 @@ export const de: Messages = {
   'settings.cloud.row': 'Übertragungen: {calls} · Elemente: {items} · Text: ≈ {chars} Zeichen',
   'settings.cloud.failures': '{count} Fehler — die Daten wurden auch ohne Antwort gesendet.',
   'settings.cloud.note': 'Was den Rechner verlässt: der zu analysierende Text (Extraktion) oder der zu indexierende (Indexierung). Memoria protokolliert das Volumen, nie den Inhalt — die Einzelheiten stehen im Protokoll.',
+
+  // --- Coquille shadcn (barre latérale, préférences, confirmations, tableaux) ---
+  'nav.essential': 'Wesentlich',
+  'nav.collapse': 'Menü einklappen',
+  'nav.expand': 'Menü ausklappen',
+  'prefs.title': 'Einstellungen',
+  'common.cancel': 'Abbrechen',
+  'common.confirm_action': 'Bestätigen',
+  'confirm.body': 'Diese Aktion ist sofort wirksam und kann nicht rückgängig gemacht werden.',
+  'table.sort': 'Nach {column} sortieren',
+  'table.empty': 'Keine Daten',
+  'capture.short.auto': 'Auto',
+  'capture.short.review': 'Prüfung',
+  'capture.short.pause': 'Pause',
 }

@@ -1161,4 +1161,18 @@ export const pt: Messages = {
   'settings.cloud.row': 'envios: {calls} · elementos: {items} · texto: ≈ {chars} caracteres',
   'settings.cloud.failures': '{count} falha(s) — os dados saíram mesmo sem resposta.',
   'settings.cloud.note': 'O que sai: o texto a analisar (extração) ou a indexar (indexação). Memoria regista o volume, nunca o conteúdo — o detalhe linha a linha está no Registo.',
+
+  // --- Coquille shadcn (barre latérale, préférences, confirmations, tableaux) ---
+  'nav.essential': 'Essencial',
+  'nav.collapse': 'Recolher o menu',
+  'nav.expand': 'Expandir o menu',
+  'prefs.title': 'Preferências',
+  'common.cancel': 'Cancelar',
+  'common.confirm_action': 'Confirmar',
+  'confirm.body': 'Esta ação é imediata e não pode ser desfeita.',
+  'table.sort': 'Ordenar por {column}',
+  'table.empty': 'Sem dados',
+  'capture.short.auto': 'Auto',
+  'capture.short.review': 'Revisão',
+  'capture.short.pause': 'Pausa',
 }

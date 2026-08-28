@@ -9,6 +9,13 @@
  * Ne rien AJOUTER ici : un nouvel écran se construit avec les composants
  * (voir UI-GUIDE.md). Chaque écran migré rapproche ce fichier de sa suppression.
  */
+/* Animations : hors du scope (un @keyframes ne peut pas être imbriqué dans une règle). */
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .legacy-screen {
   /* Compat preflight Tailwind : ces écrans ont été écrits sur les défauts du navigateur. */
   ul, ol, menu { list-style: revert; margin: revert; padding: revert; }
@@ -410,11 +417,6 @@
     animation: spin 0.8s linear infinite;
   }
 
-  @keyframes spin {
-    to {
-      transform: rotate(360deg);
-    }
-  }
 
   .error-banner {
     display: flex;
