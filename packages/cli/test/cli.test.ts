@@ -279,6 +279,39 @@ describe('commandes locales (daemon arrêté)', () => {
     expect(vi.mocked(fetch)).not.toHaveBeenCalled()
   })
 
+  it('pair via un daemon vivant (fetch mocké) : affiche la commande ET le stockage ciblé', async () => {
+    mkdirSync(root, { recursive: true })
+    writeDaemonState(root, { daemon_id: 'd-test', port: 4242, admin_token: 'token-admin-test', pid: process.pid, started_at: new Date().toISOString() })
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request) => {
+      const u = String(url)
+      if (u.endsWith('/v1/health')) return jsonResponse({ ok: true, version: 'test', daemon_id: 'd-test' })
+      if (u.endsWith('/v1/admin/pair')) {
+        return jsonResponse({ assistant_instance_id: 'inst-1', pairing_code: 'ABCD-EFGH', command: `node bin.js connect --code ABCD-EFGH --storage-root ${root}` })
+      }
+      throw new Error(`URL inattendue : ${u}`)
+    }))
+    const io = makeIo()
+    const code = await buildCli().run(args('pair', 'codex'), io.context)
+    expect(code).toBe(0)
+    expect(io.out()).toContain('ABCD-EFGH')
+    expect(io.out()).toContain(`--storage-root ${root}`)
+    expect(io.out()).toContain(`Stockage : ${root}`)
+  })
+
+  it('export : les faits partagés « user » sont exportés et comptés', async () => {
+    const memoria = Memoria.init({ storageRoot: root, configPath: cfg, llm: { extraction: null } })
+    const paired = memoria.pairAssistant({ type: 'claude-code' })
+    memoria.storeFact({ instance: paired.assistant_instance_id, content: 'Fait privé' })
+    memoria.storeFact({ instance: paired.assistant_instance_id, scope: 'user', content: 'Le studio déploie sur Vercel' })
+    memoria.close()
+
+    const io = makeIo()
+    const code = await buildCli().run(args('export', '--flat'), io.context)
+    expect(code).toBe(0)
+    expect(io.out()).toMatch(/claude-code : 1 souvenir.*1 partagé/)
+    expect(io.out()).toContain('user')
+  })
+
   it('revoke sur une instance inconnue : erreur propre, code 1', async () => {
     const io = makeIo()
     const code = await buildCli().run(args('revoke', 'instance-fantome'), io.context)

@@ -1393,12 +1393,50 @@ export class Memoria {
     return proposals.map(p => ({ label: p.label, steps: p.steps, source: p.source }))
   }
 
-  /** Markdown sync (couche 20, opt-in) : exporte la mémoire d'une instance en .md lisibles. */
-  exportMarkdown(instanceId: string, outDir: string, byTopic = true): { files: string[]; facts: number } {
+  /**
+   * Markdown sync (couche 20, opt-in) : exporte la mémoire d'une instance en
+   * .md lisibles — sa DB privée à la racine de `outDir`, ET chaque scope
+   * PARTAGÉ qu'elle peut lire sous `outDir/shared/<scope>/` (`user` compris :
+   * c'est la destination nominale de « ce qu'un agent apprend SUR
+   * l'utilisateur »). Avant, seule la DB privée partait : un utilisateur qui
+   * exportait « sa mémoire » perdait la partie partagée sans avertissement.
+   */
+  exportMarkdown(instanceId: string, outDir: string, byTopic = true): { files: string[]; facts: number; shared_facts: number; scopes: string[] } {
     this.assertOpen()
-    const db = this.registry.dbForInstance(instanceId)
-    if (!db || !existsSync(db.path)) return { files: [], facts: 0 }
-    return new MarkdownSync({ store: this.openContent(db.path), outDir }).export({ byTopic })
+    const instance = this.registry.getInstance(instanceId)
+    const privateDb = this.paths.assistantDb(instanceId)
+    if (!instance || !existsSync(privateDb)) return { files: [], facts: 0, shared_facts: 0, scopes: [] }
+
+    const files: string[] = []
+    let facts = 0
+    let sharedFacts = 0
+    const scopes: string[] = []
+    for (const target of this.resolveReadTargets(instance)) {
+      if (!existsSync(target.dbPath)) continue
+      const store = this.openContent(target.dbPath)
+      if (target.dbPath === privateDb) {
+        const r = new MarkdownSync({ store, outDir }).export({ byTopic })
+        files.push(...r.files)
+        facts += r.facts
+        continue
+      }
+      target.scopeIds.forEach((scopeId, i) => {
+        // Un scope sans fait actif ne produit pas de dossier vide.
+        const n = store.db
+          .prepare("SELECT COUNT(*) AS n FROM facts WHERE superseded = 0 AND lifecycle_state = 'active' AND scope_id = ?")
+          .get(scopeId) as { n: number }
+        if (n.n === 0) return
+        const name = target.scopeNames[i] ?? scopeId
+        const r = new MarkdownSync({ store, outDir: join(outDir, 'shared', name.replace(/[^A-Za-z0-9._-]+/g, '-')) }).export({
+          byTopic,
+          scopeFilter: [scopeId],
+        })
+        files.push(...r.files)
+        sharedFacts += r.facts
+        scopes.push(name)
+      })
+    }
+    return { files, facts, shared_facts: sharedFacts, scopes }
   }
 
   // ---------------------------------------------------------- procédures (couche 6)
