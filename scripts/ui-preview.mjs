@@ -291,10 +291,10 @@ async function seed(memoria, fake) {
   // Personnes + identifiants (interlocuteurs WhatsApp/e-mail de Koda).
   const helene = memoria.createPerson({ display_name: 'Hélène Rey', relation: 'cliente — GIREM', notes: 'Organise la plénière annuelle.' })
   memoria.addPersonIdentifier(helene.id, 'email', 'h.rey@girem.example', 'pro')
-  memoria.addPersonIdentifier(helene.id, 'phone', '+594 694 00 00 01', 'mobile')
+  memoria.addPersonIdentifier(helene.id, 'phone', '+33 6 00 00 00 01', 'mobile')
   const ines = memoria.createPerson({ display_name: 'Inès Fabre', relation: 'cliente — Mairie de Belleville', notes: 'Pôle lecture, salon du livre jeunesse.' })
   memoria.addPersonIdentifier(ines.id, 'email', 'i.fabre@ville-belleville.example', 'pro')
-  memoria.addPersonIdentifier(ines.id, 'whatsapp', '+594 694 00 00 02', 'WhatsApp')
+  memoria.addPersonIdentifier(ines.id, 'whatsapp', '+33 6 00 00 00 02', 'WhatsApp')
 
   // Souvenirs DORMANTS : capture en mode « Revue d'abord » via le faux extracteur.
   memoria.setCaptureMode('review-first')
