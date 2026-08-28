@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { ContentStore } from '../src/storage/content.js'
 import { CognitionEngine } from '../src/cognition/index.js'
 import { TopicEngine, cleanTopicLabel, topicKeywordSurfaces } from '../src/cognition/topics.js'
+import type { LlmProvider } from '../src/llm/provider.js'
 
 describe('topicKeywordSurfaces (mots du fait, TELS QU’ÉCRITS)', () => {
   it('garde les accents et la casse — la normalisation ne sert qu’à comparer', () => {
@@ -41,6 +42,16 @@ describe('cleanTopicLabel (mise en forme d’un libellé)', () => {
     expect(cleanTopicLabel('L’application PixConsent')).toBe('Application PixConsent')
     expect(cleanTopicLabel('The Vercel deployment')).toBe('Vercel deployment')
     expect(cleanTopicLabel('De la mairie de Saint-Laurent')).toBe('Mairie de Saint-Laurent')
+  })
+
+  it('retire aussi une préposition de tête — un sujet ne commence pas par « Sur »', () => {
+    expect(cleanTopicLabel('Sur Hello-Primo Vercel')).toBe('Hello-Primo Vercel')
+    expect(cleanTopicLabel('Au tarif horaire')).toBe('Tarif horaire')
+    expect(cleanTopicLabel('En Guyane')).toBe('Guyane')
+    // Deux passes au plus : préposition + article.
+    expect(cleanTopicLabel('Pour le client Maroway')).toBe('Client Maroway')
+    // Un mot COMPOSÉ n'est pas un mot-outil : « Sous-traitance » reste entier.
+    expect(cleanTopicLabel('Sous-traitance Awara')).toBe('Sous-traitance Awara')
   })
 
   it('garde les sigles et la casse interne (CLI, API, MCP, RSMA, JamBoard, macOS)', () => {
@@ -156,5 +167,53 @@ describe('TopicEngine — les 4 libellés réels, avant → après', () => {
     // L'accent survit au passage par les mots-clés normalisés.
     expect(labels.join(' ')).toContain('Néto')
     expect(labels.join(' ')).toContain('boîtier')
+  })
+})
+
+describe('TopicEngine — libellé venu du LLM', () => {
+  let dir: string
+  let store: ContentStore
+  let topics: TopicEngine
+
+  /** Faux modèle : répond ce qu'on lui dit, sans réseau. */
+  function stubLlm(answer: string): LlmProvider {
+    return {
+      name: 'stub',
+      model: 'stub',
+      isAvailable: async () => true,
+      complete: async () => answer,
+    }
+  }
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'memoria-topic-llm-'))
+    store = new ContentStore(join(dir, 'c.sqlite'))
+    topics = new TopicEngine({ store })
+  })
+
+  afterEach(() => {
+    store.close()
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  /** Sans entités (aucun appel à la cognition) : le libellé heuristique tient en un mot → le LLM est sollicité. */
+  async function labelWithLlm(text: string, answer: string): Promise<string> {
+    topics.setLlm(stubLlm(answer))
+    const f = store.insertFact({ fact: text, scope_id: `s-${Math.random()}` })
+    await topics.assignFact(f.id)
+    return topics.topicsForFact(f.id)[0]?.name ?? ''
+  }
+
+  it('la réponse du modèle passe par le même nettoyage : article de tête retiré', async () => {
+    // « Ce tarif. » n'a qu'un mot-clé → libellé heuristique d'un seul mot → le
+    // modèle est sollicité, et sa réponse est nettoyée comme le reste.
+    const label = await labelWithLlm('Ce tarif.', 'Le tarif horaire du studio')
+    expect(label).toBe('Tarif horaire du studio')
+  })
+
+  it('une réponse hors sujet (JSON) est REFUSÉE : on garde l’heuristique', async () => {
+    const label = await labelWithLlm('Ce tarif.', '{"facts":[]}')
+    expect(label).toBe('Tarif')
+    expect(label).not.toContain('{')
   })
 })

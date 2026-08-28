@@ -154,21 +154,27 @@ export function topicKeywordSurfaces(text: string): string[] {
 }
 
 /**
- * Articles de tête retirés d'un libellé de thème, dans les 5 langues de
- * l'interface. « Le Memoria CLI » est un début de phrase ; « Memoria CLI » est
- * un nom de sujet. Comparaison sans accent ni casse.
+ * Mots de tête retirés d'un libellé de thème, dans les 5 langues de l'interface :
+ * articles, puis prépositions courantes. « Le Memoria CLI » et « Sur Hello-Primo
+ * Vercel » sont des débuts de phrase ; « Memoria CLI » et « Hello-Primo Vercel »
+ * sont des noms de sujet. Comparaison sans accent ni casse.
  */
-const LEADING_ARTICLES = new Set([
-  // français
+const LEADING_FILLERS = new Set([
+  // articles — français
   'le', 'la', 'les', 'l', 'un', 'une', 'des', 'du', 'de', 'd',
-  // anglais
+  // articles — anglais
   'the', 'a', 'an',
-  // espagnol
+  // articles — espagnol
   'el', 'los', 'las', 'unos', 'unas',
-  // portugais
+  // articles — portugais
   'o', 'os', 'as', 'um', 'uma', 'uns', 'umas',
-  // allemand
+  // articles — allemand
   'der', 'die', 'das', 'ein', 'eine', 'einen', 'dem', 'den',
+  // prépositions de tête (français)
+  'sur', 'dans', 'avec', 'pour', 'chez', 'par', 'sous', 'vers', 'au', 'aux', 'en', 'a',
+  // prépositions de tête (autres langues)
+  'on', 'in', 'at', 'with', 'for', 'about', 'con', 'para', 'por', 'sobre', 'em', 'com',
+  'auf', 'mit', 'fur', 'uber',
 ])
 
 /**
@@ -239,12 +245,12 @@ export function cleanTopicLabel(raw: string, opts: { source?: string; maxWords?:
   // Deux passes au plus : « De la mairie » → « mairie ».
   for (let pass = 0; pass < 2; pass++) {
     const elided = text.match(/^(\p{L}+)['’]\s*(?=\p{L})/u)
-    if (elided && LEADING_ARTICLES.has(fold(elided[1] ?? ''))) {
+    if (elided && LEADING_FILLERS.has(fold(elided[1] ?? ''))) {
       text = text.slice(elided[0].length)
       continue
     }
     const parts = text.split(' ')
-    if (parts.length > 1 && LEADING_ARTICLES.has(fold(parts[0] ?? ''))) {
+    if (parts.length > 1 && LEADING_FILLERS.has(fold(parts[0] ?? ''))) {
       text = parts.slice(1).join(' ')
       continue
     }
@@ -462,7 +468,11 @@ export class TopicEngine {
           const cleaned = raw.trim().replace(/^["'#\s]+|["'.\s]+$/g, '').slice(0, 60)
           // Même nettoyage que l'heuristique : un LLM qui ignore la consigne
           // (Title Case, article de tête) ne salit pas la base pour autant.
-          if (cleaned.length >= 3) label = cleanTopicLabel(cleaned, { source: fact.fact })
+          if (isUsableLlmLabel(cleaned)) label = cleanTopicLabel(cleaned, { source: fact.fact })
+          else if (cleaned !== '') {
+            // Pas de mort silencieuse : on DIT qu'on a jeté la réponse du modèle.
+            console.warn(`[memoria:topics] libellé LLM inutilisable (fait ${fact.id}) — heuristique : ${cleaned.slice(0, 40)}`)
+          }
         }
       } catch (err) {
         console.warn(`[memoria:topics] libellé LLM en échec (fait ${fact.id}) — heuristique :`, (err as Error).message)
@@ -685,6 +695,19 @@ export class TopicEngine {
 
 function slugify(s: string): string {
   return normalizeText(s).replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-+|-+$/g, '').slice(0, 60)
+}
+
+/**
+ * La réponse du modèle peut-elle NOMMER un thème ? Un modèle qui répond à côté
+ * rend du JSON (« {"facts":[]} »), une balise ou une phrase entière — et ça
+ * devenait un nom de thème affiché à l'utilisateur. On retombe alors sur
+ * l'heuristique, qui produit toujours quelque chose de lisible.
+ */
+function isUsableLlmLabel(s: string): boolean {
+  if (s.length < 3) return false
+  if (!/\p{L}/u.test(s)) return false
+  if (/[{}[\]<>]/u.test(s)) return false
+  return s.split(/\s+/).length <= 8
 }
 
 /**

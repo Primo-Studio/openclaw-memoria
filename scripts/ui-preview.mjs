@@ -47,7 +47,7 @@ const THEMES = ['light', 'dark']
  * usages du moteur, reconnus par leur prompt système :
  *  - extraction de capture  → les messages [user] deviennent des faits ;
  *  - graphe d'entités       → entités connues trouvées dans le texte ;
- *  - libellé de thème       → 2-3 mots pris dans le fait ;
+ *  - libellé de thème       → 2-3 mots pris dans le fait (prompt « Name the SUBJECT ») ;
  *  - confirmation de contradiction → « NO » (l'heuristique décide seule).
  * `completeDetailed` rapporte une consommation plausible (tokens ≈ caractères/4)
  * pour alimenter l'écran de conso et le doctor.
@@ -80,7 +80,7 @@ class FakeExtraction {
       const entities = KNOWN_ENTITIES.filter(([name]) => fact.includes(name)).map(([name, type]) => ({ name, type }))
       const relations = entities.length >= 2 ? [{ from: entities[0].name, to: entities[1].name, type: 'related_to' }] : []
       text = JSON.stringify({ entities, relations })
-    } else if (system.includes('SHORT topic title')) {
+    } else if (system.includes('Name the SUBJECT of this memory')) {
       const words = opts.prompt.split(/\s+/).filter(w => /^[A-ZÀ-Ý]/.test(w)).slice(0, 3)
       text = words.length >= 2 ? words.join(' ') : opts.prompt.split(/\s+/).slice(0, 3).join(' ')
     } else if (system.includes('compare two statements')) {
