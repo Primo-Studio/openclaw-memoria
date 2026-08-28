@@ -434,7 +434,7 @@ function PersonCard({ person, onChange }: { person: PersonProfile; onChange: () 
         </div>
 
         {/* POURQUOI deux colonnes égales : « Relation » contient presque toujours un
-            nom d'organisation (« cliente — Mairie de Saint-Laurent-du-Maroni ») que
+            nom d'organisation (« cliente — Mairie de Sainte-Colombe-du-Vallon ») que
             224 px coupaient en plein mot, pendant que « Notes » gardait 700 px inutilisés. */}
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="flex flex-col gap-1.5">

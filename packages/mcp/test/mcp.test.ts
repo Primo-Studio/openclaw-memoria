@@ -136,20 +136,20 @@ describe('ActiveContextTracker', () => {
 })
 
 describe('normalisation des identifiants de contexte', () => {
-  it('« Maroway », « maroway » et « MAROWAY  » donnent le même client_org_id', () => {
+  it('« Velmar », « velmar » et « VELMAR  » donnent le même client_org_id', () => {
     // Deux agents n'écrivent jamais le même identifiant à la main ; l'isolation
     // client (égalité stricte côté core) masquait alors les souvenirs de l'autre.
-    const a = new ActiveContextTracker().set({ client: 'Maroway' })
-    const b = new ActiveContextTracker().set({ client: 'maroway' })
-    const c = new ActiveContextTracker().set({ client: ' MAROWAY  ' })
-    expect(a.client_org_id).toBe('maroway')
-    expect(b.client_org_id).toBe('maroway')
-    expect(c.client_org_id).toBe('maroway')
+    const a = new ActiveContextTracker().set({ client: 'Velmar' })
+    const b = new ActiveContextTracker().set({ client: 'velmar' })
+    const c = new ActiveContextTracker().set({ client: ' VELMAR  ' })
+    expect(a.client_org_id).toBe('velmar')
+    expect(b.client_org_id).toBe('velmar')
+    expect(c.client_org_id).toBe('velmar')
   })
 
   it('accents, espaces et ponctuation → slug stable ; un UUID reste intact', () => {
-    expect(normalizeContextId('Mairie Saint-Laurent du Maroni')).toBe('mairie-saint-laurent-du-maroni')
-    expect(normalizeContextId('Terra Plena / refonte')).toBe('terra-plena-refonte')
+    expect(normalizeContextId('Mairie Sainte-Colombe du Vallon')).toBe('mairie-sainte-colombe-du-vallon')
+    expect(normalizeContextId('Atelier Nord / refonte')).toBe('atelier-nord-refonte')
     expect(normalizeContextId('Néto & Cie')).toBe('neto-cie')
     expect(normalizeContextId('7f3c2a10-4b2e-4c1d-9c6a-2c9d3e8f1a2b')).toBe('7f3c2a10-4b2e-4c1d-9c6a-2c9d3e8f1a2b')
     expect(normalizeContextId('')).toBeNull()
@@ -260,7 +260,7 @@ describe('buildServer handlers', () => {
       id: 'p-1',
       display_name: 'Hélène Rey',
       relation: 'client',
-      notes: 'GCSMS',
+      notes: 'GIREM',
       org_id: 'org-1',
       user_id: null,
       created_at: '2026-08-24T10:00:00.000Z',
@@ -268,15 +268,15 @@ describe('buildServer handlers', () => {
       identifiers: [{ id: 'pi-1', person_id: 'p-1', kind: 'email', value: 'm@x.fr', created_at: '2026-08-24T10:00:00.000Z' }],
     }
     const gateway = fakeGateway()
-    gateway.identifyInterlocutor = async () => ({ match: { person: full, known: ['Hélène Rey pilote la plénière GCSMS.'] } })
+    gateway.identifyInterlocutor = async () => ({ match: { person: full, known: ['Hélène Rey pilote la plénière GIREM.'] } })
     gateway.identifyOrCreateInterlocutor = async () => ({ match: { person: full, known: [], created: true } })
     const { handlers } = buildServer({ instanceId: 'i', tracker: new ActiveContextTracker(), connect: async () => gateway })
 
     const a = JSON.parse(((await handlers.identifyInterlocutor({ email: 'm@x.fr' })).content[0] as { type: 'text'; text: string }).text)
     expect(a).toEqual({
       found: true,
-      person: { id: 'p-1', display_name: 'Hélène Rey', relation: 'client', notes: 'GCSMS' },
-      known: ['Hélène Rey pilote la plénière GCSMS.'],
+      person: { id: 'p-1', display_name: 'Hélène Rey', relation: 'client', notes: 'GIREM' },
+      known: ['Hélène Rey pilote la plénière GIREM.'],
     })
     const b = JSON.parse(((await handlers.identifyOrCreateInterlocutor({ email: 'm@x.fr' })).content[0] as { type: 'text'; text: string }).text)
     expect(b).toMatchObject({ found: true, created: true })
@@ -801,11 +801,13 @@ describe('instructions serveur et descriptions d’outils — QUAND lire, QUAND 
     // « the owner (Néto) » dans memoria_identify_interlocutor partait chez
     // TOUTES les installations : chaque LLM apprenait que l'owner s'appelle Néto.
     // Puis les EXEMPLES (« commits must be authored by Nieto42 », « site-primo »,
-    // « maroway ») embarquaient le handle GitHub et les clients du propriétaire
-    // dans le contexte de chaque LLM — même fuite, autre porte. On vérifie donc
-    // une liste de jetons propriétaire sur les descriptions ET les schémas
-    // d'arguments (les `.describe()` partent aussi chez le client MCP).
-    const ownerTokens = /Néto|Neto|Nieto|primo|maroway/i
+    // un nom de client réel) embarquaient le handle GitHub du propriétaire et
+    // ceux de ses clients dans le contexte de chaque LLM — même fuite, autre
+    // porte. On vérifie donc une liste de jetons propriétaire sur les
+    // descriptions ET les schémas d'arguments (les `.describe()` partent aussi
+    // chez le client MCP). Les noms de clients ne sont plus énumérables ici :
+    // le dépôt étant public, ils ont été retirés du code (chore(privacy)).
+    const ownerTokens = /Néto|Neto|Nieto|primo/i
     for (const [name, text] of Object.entries(descriptions())) {
       expect(text, name).not.toMatch(ownerTokens)
     }

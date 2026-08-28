@@ -24,8 +24,8 @@ export interface DetectedRepo {
  * slug stable : minuscules, sans accents, mots séparés par « - ».
  *
  * Le core compare ces identifiants par ÉGALITÉ STRICTE (passesClientIsolation,
- * boost projet) : Koda configuré avec « Maroway » et Claude qui déclare
- * « maroway » gravaient deux client_org_id différents, et chacun était aveugle
+ * boost projet) : Koda configuré avec « Velmar » et Claude qui déclare
+ * « velmar » gravaient deux client_org_id différents, et chacun était aveugle
  * aux souvenirs de l'autre. Tant que le daemon ne résout pas les noms contre
  * son registre, ce slug commun est ce qui fait converger les agents.
  * Un UUID (minuscules + tirets) traverse inchangé. Vide → null (= effacer).

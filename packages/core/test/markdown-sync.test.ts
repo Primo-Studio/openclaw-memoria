@@ -48,7 +48,7 @@ async function addWithTopic(text: string, scope = 's1'): Promise<string> {
 
 describe('MarkdownSync — export global', () => {
   it('crée un MEMORY.md contenant les faits actifs', () => {
-    addFact('Le client Transport Rino utilise des bons de livraison numériques', { category: 'client' })
+    addFact('Le client Transport Riva utilise des bons de livraison numériques', { category: 'client' })
     addFact('Je préfère le café sans sucre', { category: 'preference' })
     const sync = new MarkdownSync({ store, outDir })
 
@@ -59,13 +59,13 @@ describe('MarkdownSync — export global', () => {
 
     const md = readFileSync(res.files[0]!, 'utf8')
     expect(md).toContain('# MEMORY')
-    expect(md).toContain('Transport Rino')
+    expect(md).toContain('Transport Riva')
     expect(md).toContain('café sans sucre')
     // groupé par catégorie : titres lisibles présents
     expect(md).toContain('Clients')
     expect(md).toContain('Préférences')
     // chaque fait est une puce
-    expect(md).toContain('- Le client Transport Rino utilise des bons de livraison numériques')
+    expect(md).toContain('- Le client Transport Riva utilise des bons de livraison numériques')
   })
 
   it('exclut les faits supersédés et dormants du miroir', () => {

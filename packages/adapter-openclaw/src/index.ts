@@ -192,8 +192,8 @@ export interface ActiveContextPayload {
 
 /**
  * Slug d'identifiant projet/client/org : minuscules, sans accents, « - » entre
- * les mots. Le core compare ces identifiants par égalité stricte : « Maroway »
- * ici et « maroway » déclaré par un autre agent via memoria_set_context
+ * les mots. Le core compare ces identifiants par égalité stricte : « Velmar »
+ * ici et « velmar » déclaré par un autre agent via memoria_set_context
  * donnaient deux clients différents, chacun aveugle aux souvenirs de l'autre.
  *
  * ⚠ Copie volontaire de normalizeContextId (packages/mcp/src/context.ts) : ce

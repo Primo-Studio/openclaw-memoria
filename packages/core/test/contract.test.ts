@@ -129,9 +129,9 @@ describe('storeFact — hygiène (audit 27/08)', () => {
     // ≥ 13 tokens, tout changement d'UN mot (date, montant, négation) était perdu.
     const a = m.pairAssistant({ type: 'claude-code' })
     const inst = a.assistant_instance_id
-    const base = 'La plénière annuelle du GCSMS est fixée au 13 octobre 2026 à Cayenne avec option vidéo pour Hélène Rey'
+    const base = 'La plénière annuelle du GIREM est fixée au 4 novembre 2026 à Cayenne avec option vidéo pour Hélène Rey'
     const first = m.storeFact({ instance: inst, content: base })
-    const date = m.storeFact({ instance: inst, content: base.replace('13 octobre', '14 octobre') })
+    const date = m.storeFact({ instance: inst, content: base.replace('4 novembre', '5 novembre') })
     const negation = m.storeFact({ instance: inst, content: base.replace('avec option', 'sans option') })
     expect(date.id).not.toBe(first.id)
     expect(negation.id).not.toBe(first.id)
@@ -148,7 +148,7 @@ describe('storeFact — hygiène (audit 27/08)', () => {
     const inst = a.assistant_instance_id
     const store = m['openContent'](m.paths.assistantDb(inst))
     const scope = m.registry.getScopeByName(`private:${inst}`)!
-    const base = 'Le devis salon du livre jeunesse de la mairie est envoyé à Gaëlle Ferrand le 24 août 2026 sans acompte'
+    const base = 'Le devis du salon des métiers de la mairie est envoyé à Gaëlle Ferrand le 12 septembre 2026 sans acompte'
     const dormant = store.insertFact({ fact: base, scope_id: scope.id, lifecycle_state: 'dormant' })
     const declared = m.storeFact({ instance: inst, content: base.replace('sans acompte', 'avec acompte') })
     expect(declared.id).not.toBe(dormant.id)

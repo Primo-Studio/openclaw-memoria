@@ -44,13 +44,13 @@ describe('storeFact — doublon exact et contexte', () => {
   })
 
   it('même texte sous un AUTRE client/projet = fait distinct, pas une redite', () => {
-    const a = m.storeFact({ instance, content: TEXT, category: 'infra', client_org_id: 'maroway' })
+    const a = m.storeFact({ instance, content: TEXT, category: 'infra', client_org_id: 'velmar' })
     const b = m.storeFact({ instance, content: TEXT, category: 'infra', project_id: 'primo-site' })
     expect(b.id).not.toBe(a.id)
-    expect(a.client_org_id).toBe('maroway')
+    expect(a.client_org_id).toBe('velmar')
     expect(b.project_id).toBe('primo-site')
     // et le même texte, même contexte → bien dédoublonné
-    const a2 = m.storeFact({ instance, content: TEXT, category: 'infra', client_org_id: 'maroway' })
+    const a2 = m.storeFact({ instance, content: TEXT, category: 'infra', client_org_id: 'velmar' })
     expect(a2.id).toBe(a.id)
   })
 

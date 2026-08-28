@@ -284,7 +284,7 @@ const FR_FACT_TEMPLATES = [
   'Le projet JamBoard utilise Firebase jamboard-primo sur le compte hello',
   'Erreur récurrente : le build échoue quand le cache npm est corrompu sur la CI',
   "L'outil Maestro sert aux tests UI iOS avant chaque upload App Store",
-  'Le client Transport Rino veut des bons de livraison numériques pour le BTP',
+  'Le client Transports Riva veut des bons de livraison numériques pour le BTP',
   'Préférence : toujours répondre en français dans les rapports de session',
   "L'app PixConsent gère les consentements droit à l'image pour les photographes",
   'Le pricing AutoCare est fixé à dix-neuf euros via achat intégré annuel',

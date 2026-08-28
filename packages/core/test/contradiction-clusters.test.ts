@@ -86,7 +86,7 @@ describe('contradiction — heuristiques pures', () => {
   })
 
   it('hasNegation : « plus de » (= davantage), « sans » et un nombre ne sont PAS des négations', () => {
-    expect(hasNegation('Le devis GCSMS fait plus de 1 900 €')).toBe(false)
+    expect(hasNegation('Le devis GIREM fait plus de 1 900 €')).toBe(false)
     expect(hasNegation('Néto prend son café sans sucre')).toBe(false)
     expect(hasNegation('Le tarif est de plus de 94 €/h le week-end')).toBe(false)
     // …mais « pas de », « il n'y a plus de » et « impossible » en restent.
@@ -294,20 +294,20 @@ describe('ClusterEngine.rebuild', () => {
   })
 
   it('s’appuie aussi sur les entités du graphe (entité-first)', async () => {
-    // L'entité partagée « Transport Rino » (extraite par la couche graph) pèse
+    // L'entité partagée « Transport Riva » (extraite par la couche graph) pèse
     // plus que les keywords : les 3 faits se regroupent même avec un vocabulaire
     // partiellement différent — c'est le principe entité-first du cluster.
     const cognition = new CognitionEngine({ store })
     const ids = [
-      fact('Transport Rino veut des bons de livraison numériques'),
-      fact('Transport Rino gère ses bons de livraison sur chantier'),
-      fact('Transport Rino édite des bons de livraison pour Nora'),
+      fact('Transport Riva veut des bons de livraison numériques'),
+      fact('Transport Riva gère ses bons de livraison sur chantier'),
+      fact('Transport Riva édite des bons de livraison pour Lina'),
     ]
     for (const id of ids) await cognition.processFact(id)
     const engine = new ClusterEngine({ store })
     const res = engine.rebuild({ minSize: 3 })
     expect(res.clusters).toBe(1)
-    // L'entité Transport Rino est bien le liant (présente dans le centroïde/keywords).
+    // L'entité Transport Riva est bien le liant (présente dans le centroïde/keywords).
     const cl = engine.listClusters()[0]!
     expect(cl.member_fact_ids).toHaveLength(3)
   })

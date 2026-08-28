@@ -223,11 +223,11 @@ describe('buildActiveContext', () => {
   })
 
   it('normalise projectId/clientOrgId/orgId comme le serveur MCP (même slug des deux côtés)', () => {
-    // Koda (config « Maroway ») et Claude (set_context « maroway ») doivent
+    // Koda (config « Velmar ») et Claude (set_context « velmar ») doivent
     // graver le MÊME client_org_id, sinon l'isolation client les sépare.
-    expect(buildActiveContext({ projectId: 'Site Primo', clientOrgId: 'Maroway', orgId: 'Primo Studio ' }, undefined)).toEqual({
+    expect(buildActiveContext({ projectId: 'Site Primo', clientOrgId: 'Velmar', orgId: 'Primo Studio ' }, undefined)).toEqual({
       project_id: 'site-primo',
-      client_org_id: 'maroway',
+      client_org_id: 'velmar',
       org_id: 'primo-studio',
     })
   })

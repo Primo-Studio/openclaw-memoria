@@ -38,10 +38,10 @@ describe('topicKeywordSurfaces (mots du fait, TELS QU’ÉCRITS)', () => {
 describe('cleanTopicLabel (mise en forme d’un libellé)', () => {
   it('retire l’article de tête — « Le Memoria CLI » → « Memoria CLI »', () => {
     expect(cleanTopicLabel('Le Memoria CLI')).toBe('Memoria CLI')
-    expect(cleanTopicLabel('Les devis GCSMS')).toBe('Devis GCSMS')
+    expect(cleanTopicLabel('Les devis GIREM')).toBe('Devis GIREM')
     expect(cleanTopicLabel('L’application PixConsent')).toBe('Application PixConsent')
     expect(cleanTopicLabel('The Vercel deployment')).toBe('Vercel deployment')
-    expect(cleanTopicLabel('De la mairie de Saint-Laurent')).toBe('Mairie de Saint-Laurent')
+    expect(cleanTopicLabel('De la mairie de Sainte-Colombe')).toBe('Mairie de Sainte-Colombe')
   })
 
   it('garde une particule de NOM : « De Souza » n’est pas « Souza »', () => {
@@ -49,7 +49,7 @@ describe('cleanTopicLabel (mise en forme d’un libellé)', () => {
     expect(cleanTopicLabel('Du Bellay poèmes')).toBe('Du Bellay poèmes')
     expect(cleanTopicLabel('D’Artagnan mousquetaire')).toBe('D’Artagnan mousquetaire')
     // Suivie d'une minuscule, la même particule redevient un début de phrase.
-    expect(cleanTopicLabel('De la mairie de Saint-Laurent')).toBe('Mairie de Saint-Laurent')
+    expect(cleanTopicLabel('De la mairie de Sainte-Colombe')).toBe('Mairie de Sainte-Colombe')
     expect(cleanTopicLabel('Du tarif horaire')).toBe('Tarif horaire')
   })
 
@@ -58,15 +58,15 @@ describe('cleanTopicLabel (mise en forme d’un libellé)', () => {
     expect(cleanTopicLabel('Au tarif horaire')).toBe('Tarif horaire')
     expect(cleanTopicLabel('En Guyane')).toBe('Guyane')
     // Deux passes au plus : préposition + article.
-    expect(cleanTopicLabel('Pour le client Maroway')).toBe('Client Maroway')
+    expect(cleanTopicLabel('Pour le client Velmar')).toBe('Client Velmar')
     // Un mot COMPOSÉ n'est pas un mot-outil : « Sous-traitance » reste entier.
     expect(cleanTopicLabel('Sous-traitance Awara')).toBe('Sous-traitance Awara')
   })
 
-  it('garde les sigles et la casse interne (CLI, API, MCP, RSMA, JamBoard, macOS)', () => {
+  it('garde les sigles et la casse interne (CLI, API, MCP, CIRAM, JamBoard, macOS)', () => {
     expect(cleanTopicLabel('Le serveur MCP')).toBe('Serveur MCP')
     expect(cleanTopicLabel('API Directus')).toBe('API Directus')
-    expect(cleanTopicLabel('Gala RSMA 2026')).toBe('Gala RSMA 2026')
+    expect(cleanTopicLabel('Gala CIRAM 2026')).toBe('Gala CIRAM 2026')
     expect(cleanTopicLabel('JamBoard TestFlight')).toBe('JamBoard TestFlight')
     expect(cleanTopicLabel('macOS Tahoe')).toBe('macOS Tahoe')
   })

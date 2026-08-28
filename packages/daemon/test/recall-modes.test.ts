@@ -50,7 +50,7 @@ async function boot(embeddings: EmbeddingProvider | null): Promise<DaemonClient>
   const done = await new DaemonClient(daemon.state).completePairing(paired.pairing_code)
   const agent = new DaemonClient(daemon.state, done.instance_token)
   await agent.storeFact({ content: 'Le studio ferme le vendredi après-midi' })
-  await agent.storeFact({ content: 'Le devis GCSMS est parti le 24 août' })
+  await agent.storeFact({ content: 'Le devis GIREM est parti le 24 août' })
   return agent
 }
 

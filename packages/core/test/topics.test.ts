@@ -56,7 +56,7 @@ describe('TopicEngine', () => {
   })
 
   it('idempotent : re-assigner ne duplique pas le lien', async () => {
-    const id = await add('Le client Transport Rino veut des bons de livraison numériques')
+    const id = await add('Le client Transport Riva veut des bons de livraison numériques')
     await topics.assignFact(id)
     await topics.assignFact(id)
     const tf = topics.topicsForFact(id)
@@ -100,9 +100,9 @@ describe('TopicEngine', () => {
 
 describe('TopicEngine — consolidation (anti-fragmentation)', () => {
   const sample = [
-    'Le devis GCSMS pour la plénière annuelle est à 1 209 € avec remise de 5 %',
-    'Le devis GCSMS inclut une option vidéo à 752 € avec assistant caméra',
-    'Hélène Rey est le contact pour le devis GCSMS de la plénière',
+    'Le devis GIREM pour la plénière annuelle est à 1 209 € avec remise de 5 %',
+    'Le devis GIREM inclut une option vidéo à 752 € avec assistant caméra',
+    'Hélène Rey est le contact pour le devis GIREM de la plénière',
     'Le build 17 de JamBoard est bloqué en WAITING_FOR_REVIEW chez Apple',
     'Le build 18 de JamBoard corrige le rejet Apple sur Sign in with Apple',
     'JamBoard utilise Firebase eur3 et un compte démo appreview@primo-studio.fr',
@@ -117,7 +117,7 @@ describe('TopicEngine — consolidation (anti-fragmentation)', () => {
     const list = topics.listTopics()
     const names = list.map(t => t.name.toLowerCase())
     expect(new Set(names).size).toBe(names.length) // jamais deux thèmes du même nom
-    expect(list.find(t => /gcsms/i.test(t.name))?.fact_count).toBe(3)
+    expect(list.find(t => /girem/i.test(t.name))?.fact_count).toBe(3)
     expect(list.find(t => /jamboard/i.test(t.name))?.fact_count).toBe(3)
     expect(list.length).toBeLessThanOrEqual(6)
   })
@@ -138,11 +138,11 @@ describe('TopicEngine — consolidation (anti-fragmentation)', () => {
   })
 
   it('un libellé déjà pris désigne le thème existant — jamais deux thèmes homonymes', async () => {
-    await add('Le devis GCSMS est parti hier')
-    await add('GCSMS a confirmé la date de la plénière')
-    const gcsms = topics.listTopics().filter(t => /^gcsms$/i.test(t.name))
-    expect(gcsms).toHaveLength(1)
-    expect(gcsms[0]!.fact_count).toBe(2)
+    await add('Le devis GIREM est parti hier')
+    await add('GIREM a confirmé la date de la plénière')
+    const girem = topics.listTopics().filter(t => /^girem$/i.test(t.name))
+    expect(girem).toHaveLength(1)
+    expect(girem[0]!.fact_count).toBe(2)
   })
 })
 

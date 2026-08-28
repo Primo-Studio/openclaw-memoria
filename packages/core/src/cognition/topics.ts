@@ -2,7 +2,7 @@
  * Couche TOPICS (thèmes, couche 14, bucket B async) — ENTITÉ-first.
  *
  * Produit : chaque fait est rangé dans un ou plusieurs SUJETS lisibles
- * (« Déploiement Vercel », « Client Transport Rino ») → l'utilisateur voit OÙ
+ * (« Déploiement Vercel », « Client Transports Riva ») → l'utilisateur voit OÙ
  * un souvenir va, et filtre par thème. 0 LLM par défaut : le label dérive des
  * ENTITÉS déjà extraites par la couche graph (`fact_entities`/`entities`) et,
  * à défaut, des mots-clés saillants du fait.
@@ -76,7 +76,7 @@ export const topicMigrations: Migration[] = [
     up(db) {
       // L'entité « ancre » = celle qui NOMME le thème. Un fait qui la porte
       // rejoint le thème même s'il ne partage rien d'autre — sans ça, chaque
-      // fait « devis GCSMS » créait son propre thème « GCSMS » (89 % de thèmes
+      // fait « devis GIREM » créait son propre thème « GIREM » (89 % de thèmes
       // à 1 fait sur la mémoire réelle). Rétro-remplissage des thèmes existants :
       // le libellé heuristique commence toujours par le nom de l'entité dominante.
       const cols = (db.pragma('table_info(topics)') as Array<{ name: string }>).map(c => c.name)
@@ -215,7 +215,7 @@ function fold(word: string): string {
   return normalizeText(word)
 }
 
-/** Un sigle garde sa casse : CLI, API, MCP, RSMA, GCSMS. */
+/** Un sigle garde sa casse : CLI, API, MCP, CIRAM, GIREM. */
 function isAcronym(word: string): boolean {
   return word.length >= 2 && word === word.toUpperCase() && /\p{Lu}/u.test(word)
 }
@@ -744,7 +744,7 @@ function isUsableLlmLabel(s: string): boolean {
  *
  * Une majuscule ne suffit pas : le premier mot d'une phrase en porte une
  * (« Nouveau boîtier… »). On exige donc une occurrence AILLEURS qu'en tête de
- * phrase — sauf casse interne (JamBoard) ou sigle (CLI, RSMA), qui parlent
+ * phrase — sauf casse interne (JamBoard) ou sigle (CLI, CIRAM), qui parlent
  * d'eux-mêmes.
  */
 function looksLikeName(word: string, source: string): boolean {

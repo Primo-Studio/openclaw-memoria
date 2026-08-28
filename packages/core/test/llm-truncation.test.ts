@@ -11,7 +11,7 @@ import { AnthropicProvider, LlmTruncatedError, LmStudioProvider, OllamaProvider,
 type FetchFn = (input: string | URL | Request, init?: RequestInit) => Promise<Response>
 let fetchMock: ReturnType<typeof vi.fn<FetchFn>>
 
-const CUT = '{"facts":[{"fact":"Le devis GCSMS est à 1 209 €","category":"savoir"},{"fact":"Le bui'
+const CUT = '{"facts":[{"fact":"Le devis GIREM est à 1 209 €","category":"savoir"},{"fact":"Le bui'
 
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
