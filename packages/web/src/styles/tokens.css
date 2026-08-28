@@ -1,0 +1,180 @@
+/*
+ * Jetons de thème Memoria — UNE source de vérité pour les couleurs.
+ *
+ * Deux palettes complètes (claire par défaut, sombre sous `[data-theme=dark]`),
+ * pilotées par l'attribut `data-theme` de <html> que main.tsx/lib/theme.ts
+ * RÉSOUT toujours en `light` ou `dark` (le mode « Système » lit la préférence
+ * OS et l'écrit ici, puis suit ses changements). Aucun composant ne doit
+ * coder une couleur en dur : tout passe par ces variables, exposées à
+ * Tailwind via `@theme inline` (bg-primary, text-muted-foreground…).
+ *
+ * Identité : accent orange Primo (#e85a1f sombre / #d64f16 clair) comme
+ * `--primary`, neutres sobres légèrement froids (héritage de l'ancienne
+ * palette #14141f), radius 0.5rem, police système.
+ */
+
+:root {
+  color-scheme: light;
+  --radius: 0.5rem;
+
+  --background: oklch(0.985 0.003 285);
+  --foreground: oklch(0.21 0.02 285);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.21 0.02 285);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.21 0.02 285);
+  --primary: #d64f16;
+  --primary-foreground: oklch(0.99 0 0);
+  --secondary: oklch(0.955 0.006 285);
+  --secondary-foreground: oklch(0.25 0.02 285);
+  --muted: oklch(0.955 0.006 285);
+  --muted-foreground: oklch(0.49 0.02 285);
+  --accent: oklch(0.945 0.008 285);
+  --accent-foreground: oklch(0.21 0.02 285);
+  --destructive: oklch(0.55 0.2 25);
+  --destructive-foreground: oklch(0.99 0 0);
+  --success: oklch(0.52 0.14 160);
+  --success-foreground: oklch(0.99 0 0);
+  --warning: oklch(0.58 0.14 70);
+  --warning-foreground: oklch(0.99 0 0);
+  --border: oklch(0.9 0.006 285);
+  --input: oklch(0.88 0.008 285);
+  --ring: oklch(0.65 0.19 40);
+
+  --sidebar: oklch(0.965 0.005 285);
+  --sidebar-foreground: oklch(0.25 0.02 285);
+  --sidebar-primary: #d64f16;
+  --sidebar-primary-foreground: oklch(0.99 0 0);
+  --sidebar-accent: oklch(0.92 0.008 285);
+  --sidebar-accent-foreground: oklch(0.21 0.02 285);
+  --sidebar-border: oklch(0.9 0.006 285);
+  --sidebar-ring: oklch(0.65 0.19 40);
+
+  --chart-1: #d64f16;
+  --chart-2: oklch(0.55 0.15 250);
+  --chart-3: oklch(0.55 0.14 160);
+  --chart-4: oklch(0.62 0.14 70);
+  --chart-5: oklch(0.5 0.14 300);
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --background: oklch(0.19 0.018 285);
+  --foreground: oklch(0.94 0.01 285);
+  --card: oklch(0.23 0.02 285);
+  --card-foreground: oklch(0.94 0.01 285);
+  --popover: oklch(0.245 0.02 285);
+  --popover-foreground: oklch(0.94 0.01 285);
+  --primary: #e85a1f;
+  --primary-foreground: oklch(0.99 0 0);
+  --secondary: oklch(0.29 0.02 285);
+  --secondary-foreground: oklch(0.94 0.01 285);
+  --muted: oklch(0.28 0.02 285);
+  --muted-foreground: oklch(0.73 0.02 285);
+  --accent: oklch(0.3 0.022 285);
+  --accent-foreground: oklch(0.96 0.01 285);
+  --destructive: oklch(0.68 0.19 22);
+  --destructive-foreground: oklch(0.99 0 0);
+  --success: oklch(0.76 0.15 160);
+  --success-foreground: oklch(0.15 0.02 160);
+  --warning: oklch(0.8 0.14 80);
+  --warning-foreground: oklch(0.18 0.03 80);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 14%);
+  --ring: oklch(0.7 0.17 40);
+
+  --sidebar: oklch(0.165 0.018 285);
+  --sidebar-foreground: oklch(0.9 0.01 285);
+  --sidebar-primary: #e85a1f;
+  --sidebar-primary-foreground: oklch(0.99 0 0);
+  --sidebar-accent: oklch(0.255 0.02 285);
+  --sidebar-accent-foreground: oklch(0.96 0.01 285);
+  --sidebar-border: oklch(1 0 0 / 8%);
+  --sidebar-ring: oklch(0.7 0.17 40);
+
+  --chart-1: #e85a1f;
+  --chart-2: oklch(0.7 0.14 250);
+  --chart-3: oklch(0.72 0.14 160);
+  --chart-4: oklch(0.8 0.14 80);
+  --chart-5: oklch(0.7 0.14 300);
+}
+
+/*
+ * Alias pour l'ancien CSS (styles.css, écrans non migrés) : ils suivent
+ * désormais les jetons ci-dessus, donc le même thème. À supprimer avec le
+ * dernier écran legacy. `--brand` = ex-`--accent` (renommé : shadcn utilise
+ * `--accent` pour un fond de survol neutre).
+ */
+:root {
+  --bg: var(--background);
+  --bg-raised: var(--card);
+  --bg-hover: var(--accent);
+  --text: var(--foreground);
+  --text-muted: var(--muted-foreground);
+  --brand: var(--primary);
+  --brand-hover: color-mix(in oklch, var(--primary) 88%, white);
+  --brand-soft: color-mix(in oklch, var(--primary) 14%, transparent);
+  --ok: var(--success);
+  --warn: var(--warning);
+  --danger: var(--destructive);
+  --font: var(--font-sans);
+  --mono: var(--font-mono);
+  --surface: var(--card);
+  --bg-input: var(--background);
+  --err: var(--destructive);
+}
+
+/* Exposition à Tailwind : bg-primary, text-muted-foreground, border-border, rounded-lg… */
+@theme inline {
+  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-heading: var(--font-sans);
+  --font-mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}

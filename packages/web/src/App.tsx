@@ -9,6 +9,7 @@ import { getAgents, getCaptureMode, getReview, getVersion, hasToken, setCaptureM
 import { useT, LANGS, type Lang } from './i18n'
 import { humanError } from './components/ui'
 import { hasLiveAgent } from './lib/agents'
+import { parseThemePref, useThemePref } from './lib/theme'
 import { Dashboard } from './screens/Dashboard'
 import { Agents } from './screens/Agents'
 import { Memory } from './screens/Memory'
@@ -129,9 +130,9 @@ export function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [navOpen])
 
-  if (!authed) return <Welcome />
-  if (onboarding === null) return <div className="welcome"><div className="spinner" aria-hidden /></div>
-  if (onboarding) return <Onboarding onDone={() => setOnboarding(false)} />
+  if (!authed) return <div className="legacy-screen"><Welcome /></div>
+  if (onboarding === null) return <div className="legacy-screen"><div className="welcome"><div className="spinner" aria-hidden /></div></div>
+  if (onboarding) return <div className="legacy-screen"><Onboarding onDone={() => setOnboarding(false)} /></div>
 
   const navButton = (id: ScreenId) => (
     <button
@@ -149,7 +150,7 @@ export function App() {
   )
 
   return (
-    <>
+    <div className="legacy-screen">
       <a href="#main-content" className="skip-link">{t('a11y.skip')}</a>
       <div className="layout">
         <aside className={`sidebar${navOpen ? ' sidebar-open' : ''}`}>
@@ -207,36 +208,18 @@ export function App() {
         {screen === 'docs' && <Docs />}
         </main>
       </div>
-    </>
+    </div>
   )
 }
 
 /** Sélecteur de thème (clair / sombre / système) — barre latérale. */
 function ThemeSwitch() {
   const { t } = useT()
-  const [theme, setTheme] = useState<string>(() => {
-    try {
-      return localStorage.getItem('memoria-theme') ?? 'system'
-    } catch {
-      return 'system'
-    }
-  })
-  const change = (v: string) => {
-    setTheme(v)
-    try {
-      if (v === 'system') localStorage.removeItem('memoria-theme')
-      else localStorage.setItem('memoria-theme', v)
-    } catch {
-      /* localStorage indisponible */
-    }
-    const root = document.documentElement
-    if (v === 'light' || v === 'dark') root.setAttribute('data-theme', v)
-    else root.removeAttribute('data-theme')
-  }
+  const [theme, setTheme] = useThemePref()
   return (
     <div className="lang-switch">
       <label className="field-label" htmlFor="theme-select">{t('theme.title')}</label>
-      <select id="theme-select" className="lang-select" value={theme} onChange={e => change(e.target.value)}>
+      <select id="theme-select" className="lang-select" value={theme} onChange={e => setTheme(parseThemePref(e.target.value))}>
         <option value="system">{t('theme.system')}</option>
         <option value="light">{t('theme.light')}</option>
         <option value="dark">{t('theme.dark')}</option>

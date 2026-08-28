@@ -3,11 +3,23 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="color-scheme" content="dark" />
+    <meta name="color-scheme" content="light dark" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="alternate icon" href="/favicon-32.png" sizes="32x32" type="image/png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <title>Memoria — votre mémoire locale</title>
+    <!-- Thème posé AVANT le premier rendu (sinon flash clair pour un utilisateur
+         en sombre). Même logique que src/lib/theme.ts : ?theme= > préférence > OS. -->
+    <script>
+      try {
+        var q = new URLSearchParams(location.search).get('theme');
+        var p = localStorage.getItem('memoria-theme');
+        var t = q === 'dark' || q === 'light' ? q
+          : p === 'dark' || p === 'light' ? p
+          : matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        document.documentElement.setAttribute('data-theme', t);
+      } catch (e) {}
+    </script>
   </head>
   <body>
     <div id="root"></div>
