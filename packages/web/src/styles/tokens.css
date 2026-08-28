@@ -113,31 +113,6 @@
   --chart-5: oklch(0.7 0.14 300);
 }
 
-/*
- * Alias pour l'ancien CSS (styles.css, écrans non migrés) : ils suivent
- * désormais les jetons ci-dessus, donc le même thème. À supprimer avec le
- * dernier écran legacy. `--brand` = ex-`--accent` (renommé : shadcn utilise
- * `--accent` pour un fond de survol neutre).
- */
-:root {
-  --bg: var(--background);
-  --bg-raised: var(--card);
-  --bg-hover: var(--accent);
-  --text: var(--foreground);
-  --text-muted: var(--muted-foreground);
-  --brand: var(--primary);
-  --brand-hover: color-mix(in oklch, var(--primary) 88%, white);
-  --brand-soft: color-mix(in oklch, var(--primary) 14%, transparent);
-  --ok: var(--success);
-  --warn: var(--warning);
-  --danger: var(--destructive);
-  --font: var(--font-sans);
-  --mono: var(--font-mono);
-  --surface: var(--card);
-  --bg-input: var(--background);
-  --err: var(--destructive);
-}
-
 /* Exposition à Tailwind : bg-primary, text-muted-foreground, border-border, rounded-lg… */
 @theme inline {
   --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;

@@ -1,5 +1,5 @@
 /**
- * Coquille d'application : barre latérale (groupes Essentiel / Avancé, icônes,
+ * Coquille d'application : barre latérale (trois groupes, icônes,
  * repliable en rail sur bureau, tiroir sur mobile), barre supérieure (titre
  * de l'écran + actions projetées par PageHeader, préférences langue/thème),
  * mode de capture toujours visible, version.
@@ -45,14 +45,11 @@ export function Shell({
   screen,
   onNavigate,
   reviewCount,
-  /** Titre de repli pour les écrans qui n'ont pas encore de PageHeader (legacy). */
-  title,
   children,
 }: {
   screen: ScreenId
   onNavigate: (id: ScreenId) => void
   reviewCount: number
-  title?: string
   children: ReactNode
 }) {
   const { t } = useT()
@@ -136,9 +133,8 @@ export function Shell({
               </Sheet>
               {/* Pas de marque au téléphone : la barre doit d'abord dire OÙ ON EST.
                   Le logo reste en tête du tiroir de navigation. */}
-              <div ref={setTitleEl} className="min-w-0 flex-1">
-                {title && <h1 className="truncate text-lg font-semibold tracking-tight">{title}</h1>}
-              </div>
+              {/* Le titre est projeté ici par le PageHeader de l'écran (portail). */}
+              <div ref={setTitleEl} className="min-w-0 flex-1" />
               <div ref={setActionsEl} className="flex shrink-0 items-center gap-2" />
               {/* L'interrupteur principal du produit vit en pied de barre latérale ;
                   sous 768 px cette barre est dans un tiroir, donc invisible. Ici,

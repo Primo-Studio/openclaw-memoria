@@ -1,23 +1,19 @@
 /*
  * Point d'entrée CSS de l'UI Memoria (importé UNE fois par main.tsx).
  *
- * Ordre des couches (cascade) — c'est la stratégie de transition :
- *   theme < base (preflight Tailwind) < legacy (ancien styles.css) < components < utilities
- * L'ancien CSS maison est importé dans la couche `legacy`, ENTRE le preflight
- * et les utilitaires : il bat le reset de Tailwind (les écrans non migrés
- * gardent leur rendu) mais perd contre toute classe utilitaire (les écrans
- * migrés ne subissent pas ses sélecteurs d'éléments). Il est en outre scopé
- * sous `.legacy-screen` (voir styles.css) : hors de ce conteneur, il n'existe
- * pas. Un écran migré = zéro classe legacy + plus de wrapper.
+ * Il n'y a plus qu'une seule feuille de style : les 16 écrans sont écrits en
+ * Tailwind + composants shadcn. L'ancien CSS maison (`styles.css`, importé dans
+ * une couche `legacy` et scopé sous `.legacy-screen` pendant la migration) a
+ * été supprimé — plus aucun écran ne l'utilisait, et le garder aurait laissé
+ * deux façons de styler la même chose.
  */
-@layer theme, base, legacy, components, utilities;
+@layer theme, base, components, utilities;
 
 @import 'tailwindcss';
 @import 'tw-animate-css';
 /* Variantes/utilitaires shadcn vendorisés (pas de dépendance runtime au CLI). */
 @import './styles/shadcn-variants.css';
 @import './styles/tokens.css';
-@import './styles.css' layer(legacy);
 
 /* Mode sombre = attribut résolu sur <html>, jamais la media query directement
    (c'est lib/theme.ts qui traduit « Système » en light/dark). */

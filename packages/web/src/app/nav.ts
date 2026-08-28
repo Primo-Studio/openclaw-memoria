@@ -1,8 +1,6 @@
 /**
  * Navigation de la coquille : identifiants d'écran (= routes par hash
- * `#/<id>` et clés i18n `nav.<id>`), groupes, icônes, et la liste des
- * écrans MIGRÉS sur shadcn (les autres sont enveloppés dans `.legacy-screen`
- * par App.tsx — voir UI-GUIDE.md, « Transition »).
+ * `#/<id>` et clés i18n `nav.<id>`), groupes et icônes.
  */
 import {
   BookOpen,
@@ -95,23 +93,3 @@ export function screenFromHash(hash: string): ScreenId {
   const h = hash.replace(/^#\/?/, '')
   return (NAV_IDS as string[]).includes(h) ? (h as ScreenId) : 'dashboard'
 }
-
-/** Écrans déjà réécrits sur la coquille + composants shadcn (sans wrapper legacy). */
-export const MIGRATED_SCREENS: ReadonlySet<ScreenId> = new Set<ScreenId>([
-  'dashboard',
-  'agents',
-  'settings',
-  'themes',
-  'patterns',
-  'procedures',
-  'persons',
-  'memory',
-  'review',
-  'revisions',
-  'maintenance',
-  'sharing',
-  'vault',
-  'audit',
-  'system',
-  'docs',
-])
