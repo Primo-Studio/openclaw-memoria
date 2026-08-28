@@ -84,6 +84,8 @@ export const de: Messages = {
 
   // — Allgemeines —
   'common.refresh': 'Aktualisieren',
+  // Version courte pour la barre supérieure mobile (jamais d'icône muette).
+  'common.refresh_short': 'Neu laden',
   'error.session_expired': 'Sitzung abgelaufen oder Schlüssel ungültig — starte „memoria“ im Terminal neu.',
   'error.not_available': 'Diese Funktion ist in deiner Memoria-Version noch nicht verfügbar.',
   'error.no_response': 'Der Memoria-Dienst antwortet nicht. Prüfe, ob er läuft („memoria“-Befehl).',
@@ -1274,7 +1276,11 @@ export const de: Messages = {
   'themes.refined_toast': '{count} Thema/Themen umbenannt.',
   'themes.importance': 'Bedeutung des Themas',
   'themes.list_title': 'Themen des Agenten',
-  'themes.list_hint': 'Es werden nur Themen mit mindestens zwei Erinnerungen angezeigt. Der Balken zeigt die Bedeutung des Themas.',
+  // Nombre de souvenirs d'un thème, écrit en toutes lettres sur la carte
+  // (le chiffre nu ne disait pas de quoi il parlait).
+  'themes.card_facts': '{count} Erinnerung',
+  'themes.card_facts_plural': '{count} Erinnerungen',
+  'themes.list_hint': 'Es werden nur Themen mit mindestens zwei Erinnerungen angezeigt, die reichhaltigsten zuerst.',
   'themes.relations_title': 'Beziehungen zwischen Themen',
   'themes.relations_hint': 'Zwei Themen sind verbunden, wenn sie Erinnerungen oder Entitäten teilen (eine Person, ein Kunde, ein Projekt). Je dicker die Linie, desto stärker die Verbindung. Klicke ein Thema an, um seine Erinnerungen zu öffnen.',
   'themes.keywords': 'Schlüsselwörter',
@@ -1296,6 +1302,8 @@ export const de: Messages = {
   'procedures.less_steps': 'Weniger anzeigen',
   'procedures.triggers': 'Ausgelöst durch',
   'persons.add.title': 'Person hinzufügen',
+  // Libellé COURT de la même action, pour la barre supérieure mobile (icône seule interdite).
+  'persons.add.short': 'Hinzufügen',
   'persons.add.lead': 'Ein Name genügt; Kennungen werden danach auf der Karte hinzugefügt.',
   'persons.add.nameLabel': 'Name',
   'persons.add.relationLabel': 'Beziehung (optional)',
@@ -1337,6 +1345,7 @@ export const de: Messages = {
   'selection.unselect_all': 'Alle abwählen',
   'fact.sensitivity.sensitive': 'Sensibel',
   'fact.sensitivity.critical': 'Kritisch',
+<<<<<<< HEAD
   // Kategorie einer Erinnerung (Rohwert der Engine) → lesbares Wort; Rückfall auf den Rohwert (lib/labels.ts).
   'fact.category.general': 'Allgemein',
   'fact.category.preference': 'Vorliebe',
@@ -1354,6 +1363,16 @@ export const de: Messages = {
   'fact.category.statement': 'Fakt',
   'fact.topics_more': '+{count}',
   'fact.topics_more_title': 'Weitere Themen: {list}',
+=======
+  // Catégories de souvenir renvoyées en anglais par le moteur : on les traduit.
+  'fact.category.preference': 'Präferenz',
+  'fact.category.decision': 'Entscheidung',
+  'fact.category.config': 'Konfiguration',
+  'fact.category.error': 'Fehler',
+  'fact.category.process': 'Ablauf',
+  'fact.category.general': 'Allgemein',
+  'fact.category.identity': 'Identität',
+>>>>>>> feat/ui-fixC
   // — Écrans mémoire (G2) : Revue —
   'review.approve_selected': 'Auswahl genehmigen',
   'review.reject_selected': 'Auswahl ablehnen',
@@ -1376,6 +1395,16 @@ export const de: Messages = {
   'revisions.list_label': 'Aufräumvorschläge',
   'revisions.accepted': 'Aufgeräumt: die neuere Erinnerung bleibt, die alte wird beiseitegelegt.',
   'revisions.dismissed': 'Vorschlag beiseitegelegt.',
+  // Carte de proposition : on MONTRE les deux souvenirs en cause, avec leur date.
+  'revisions.explain_contradicted': 'Diese beiden Erinnerungen widersprechen sich. Beim Aufräumen bleibt die neuere erhalten; die ältere bleibt einsehbar.',
+  'revisions.explain_duplicate': 'Diese beiden Erinnerungen sagen dasselbe. Beim Aufräumen bleibt die neuere erhalten; die ältere bleibt einsehbar.',
+  'revisions.explain_obsolete': 'Diese Erinnerung wurde von einer neueren überholt. Beim Aufräumen bleibt die neuere erhalten; die ältere bleibt einsehbar.',
+  'revisions.explain_alone': 'Diese Erinnerung gilt als veraltet. Beim Aufräumen taucht sie nicht mehr in Antworten auf, bleibt aber einsehbar.',
+  'revisions.action_accept_alone': 'Diese Erinnerung aufräumen',
+  'revisions.fact_kept': 'Bleibt',
+  'revisions.fact_archived': 'Wird aufgeräumt',
+  'revisions.fact_missing': 'Text nicht angezeigt: Diese Erinnerung ist älter als die letzten {count}.',
+  'revisions.reanalyze_short': 'Analysieren',
   // — Écrans mémoire (G2) : Maintenance —
   'maintenance.never_used_hint': 'Erinnerungen, die nie in einer Antwort verwendet wurden — das Material zum Aufräumen.',
   'maintenance.hidden_selected': '{count} außerhalb der angezeigten Liste ausgewählt.',

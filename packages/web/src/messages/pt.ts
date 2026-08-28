@@ -84,6 +84,8 @@ export const pt: Messages = {
 
   // — Comuns —
   'common.refresh': 'Atualizar',
+  // Version courte pour la barre supérieure mobile (jamais d'icône muette).
+  'common.refresh_short': 'Atualizar',
   'error.session_expired': 'Sessão expirada ou chave inválida — reinicie «memoria» no seu terminal.',
   'error.not_available': 'Este recurso ainda não está disponível na sua versão do Memoria.',
   'error.no_response': 'O serviço Memoria não responde. Verifique se está ativo (comando «memoria»).',
@@ -1274,7 +1276,11 @@ export const pt: Messages = {
   'themes.refined_toast': '{count} tema(s) renomeado(s).',
   'themes.importance': 'Importância do tema',
   'themes.list_title': 'Temas do agente',
-  'themes.list_hint': 'Só aparecem os temas com pelo menos duas memórias. A barra indica a importância do tema.',
+  // Nombre de souvenirs d'un thème, écrit en toutes lettres sur la carte
+  // (le chiffre nu ne disait pas de quoi il parlait).
+  'themes.card_facts': '{count} memória',
+  'themes.card_facts_plural': '{count} memórias',
+  'themes.list_hint': 'Só aparecem os temas com pelo menos duas memórias, primeiro os mais fartos.',
   'themes.relations_title': 'Relações entre temas',
   'themes.relations_hint': 'Dois temas estão ligados quando partilham memórias ou entidades (uma pessoa, um cliente, um projeto). Quanto mais grosso o traço, mais forte o elo. Clica num tema para abrir as suas memórias.',
   'themes.keywords': 'Palavras-chave',
@@ -1296,6 +1302,8 @@ export const pt: Messages = {
   'procedures.less_steps': 'Mostrar menos',
   'procedures.triggers': 'Ativa-se com',
   'persons.add.title': 'Adicionar uma pessoa',
+  // Libellé COURT de la même action, pour la barre supérieure mobile (icône seule interdite).
+  'persons.add.short': 'Adicionar',
   'persons.add.lead': 'Basta o nome; os identificadores adicionam-se depois no seu cartão.',
   'persons.add.nameLabel': 'Nome',
   'persons.add.relationLabel': 'Relação (opcional)',
@@ -1337,6 +1345,7 @@ export const pt: Messages = {
   'selection.unselect_all': 'Anular a seleção',
   'fact.sensitivity.sensitive': 'Sensível',
   'fact.sensitivity.critical': 'Crítico',
+<<<<<<< HEAD
   // Categoria de uma memória (valor bruto do motor) → palavra legível; recurso ao valor bruto (lib/labels.ts).
   'fact.category.general': 'Geral',
   'fact.category.preference': 'Preferência',
@@ -1354,6 +1363,16 @@ export const pt: Messages = {
   'fact.category.statement': 'Facto',
   'fact.topics_more': '+{count}',
   'fact.topics_more_title': 'Outros temas: {list}',
+=======
+  // Catégories de souvenir renvoyées en anglais par le moteur : on les traduit.
+  'fact.category.preference': 'Preferência',
+  'fact.category.decision': 'Decisão',
+  'fact.category.config': 'Configuração',
+  'fact.category.error': 'Erro',
+  'fact.category.process': 'Método',
+  'fact.category.general': 'Geral',
+  'fact.category.identity': 'Identidade',
+>>>>>>> feat/ui-fixC
   // — Écrans mémoire (G2) : Revue —
   'review.approve_selected': 'Aprovar a seleção',
   'review.reject_selected': 'Rejeitar a seleção',
@@ -1376,6 +1395,16 @@ export const pt: Messages = {
   'revisions.list_label': 'Propostas de arrumação',
   'revisions.accepted': 'Arrumado: a memória recente é mantida, a antiga é posta de lado.',
   'revisions.dismissed': 'Proposta deixada de lado.',
+  // Carte de proposition : on MONTRE les deux souvenirs en cause, avec leur date.
+  'revisions.explain_contradicted': 'Estas duas memórias se contradizem. Ao arrumar, a mais recente é mantida; a antiga continua consultável.',
+  'revisions.explain_duplicate': 'Estas duas memórias dizem a mesma coisa. Ao arrumar, a mais recente é mantida; a antiga continua consultável.',
+  'revisions.explain_obsolete': 'Esta memória foi superada por uma mais recente. Ao arrumar, a recente é mantida; a antiga continua consultável.',
+  'revisions.explain_alone': 'Esta memória é proposta como ultrapassada. Ao arrumá-la, ela deixa de aparecer nas respostas, mas continua consultável.',
+  'revisions.action_accept_alone': 'Arrumar esta memória',
+  'revisions.fact_kept': 'Mantida',
+  'revisions.fact_archived': 'Será arrumada',
+  'revisions.fact_missing': 'Texto não exibido: esta memória é anterior às últimas {count}.',
+  'revisions.reanalyze_short': 'Analisar',
   // — Écrans mémoire (G2) : Maintenance —
   'maintenance.never_used_hint': 'Memórias nunca usadas numa resposta — a matéria-prima da arrumação.',
   'maintenance.hidden_selected': '{count} selecionada(s) fora da lista apresentada.',

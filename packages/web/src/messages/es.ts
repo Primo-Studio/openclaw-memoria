@@ -84,6 +84,8 @@ export const es: Messages = {
 
   // — Comunes —
   'common.refresh': 'Actualizar',
+  // Version courte pour la barre supérieure mobile (jamais d'icône muette).
+  'common.refresh_short': 'Actualizar',
   'error.session_expired': 'Sesión expirada o clave inválida — reinicia «memoria» desde tu terminal.',
   'error.not_available': 'Esta función aún no está disponible en tu versión de Memoria.',
   'error.no_response': 'El servicio Memoria no responde. Verifica que esté activo (comando «memoria»).',
@@ -1274,7 +1276,11 @@ export const es: Messages = {
   'themes.refined_toast': '{count} tema(s) renombrado(s).',
   'themes.importance': 'Importancia del tema',
   'themes.list_title': 'Temas del agente',
-  'themes.list_hint': 'Solo se muestran los temas con al menos dos recuerdos. La barra indica la importancia del tema.',
+  // Nombre de souvenirs d'un thème, écrit en toutes lettres sur la carte
+  // (le chiffre nu ne disait pas de quoi il parlait).
+  'themes.card_facts': '{count} recuerdo',
+  'themes.card_facts_plural': '{count} recuerdos',
+  'themes.list_hint': 'Solo se muestran los temas con al menos dos recuerdos, primero los más nutridos.',
   'themes.relations_title': 'Relaciones entre temas',
   'themes.relations_hint': 'Dos temas están relacionados cuando comparten recuerdos o entidades (una persona, un cliente, un proyecto). Cuanto más grueso el trazo, más fuerte el vínculo. Haz clic en un tema para abrir sus recuerdos.',
   'themes.keywords': 'Palabras clave',
@@ -1296,6 +1302,8 @@ export const es: Messages = {
   'procedures.less_steps': 'Mostrar menos',
   'procedures.triggers': 'Se activa con',
   'persons.add.title': 'Añadir una persona',
+  // Libellé COURT de la même action, pour la barre supérieure mobile (icône seule interdite).
+  'persons.add.short': 'Añadir',
   'persons.add.lead': 'Con el nombre basta; los identificadores se añaden después en su tarjeta.',
   'persons.add.nameLabel': 'Nombre',
   'persons.add.relationLabel': 'Relación (opcional)',
@@ -1337,6 +1345,7 @@ export const es: Messages = {
   'selection.unselect_all': 'Deseleccionar todo',
   'fact.sensitivity.sensitive': 'Sensible',
   'fact.sensitivity.critical': 'Crítico',
+<<<<<<< HEAD
   // Categoría de un recuerdo (valor bruto del motor) → palabra legible; repliegue al valor bruto (lib/labels.ts).
   'fact.category.general': 'General',
   'fact.category.preference': 'Preferencia',
@@ -1354,6 +1363,16 @@ export const es: Messages = {
   'fact.category.statement': 'Hecho',
   'fact.topics_more': '+{count}',
   'fact.topics_more_title': 'Otros temas: {list}',
+=======
+  // Catégories de souvenir renvoyées en anglais par le moteur : on les traduit.
+  'fact.category.preference': 'Preferencia',
+  'fact.category.decision': 'Decisión',
+  'fact.category.config': 'Configuración',
+  'fact.category.error': 'Error',
+  'fact.category.process': 'Método',
+  'fact.category.general': 'General',
+  'fact.category.identity': 'Identidad',
+>>>>>>> feat/ui-fixC
   // — Écrans mémoire (G2) : Revue —
   'review.approve_selected': 'Aprobar la selección',
   'review.reject_selected': 'Rechazar la selección',
@@ -1376,6 +1395,16 @@ export const es: Messages = {
   'revisions.list_label': 'Propuestas de orden',
   'revisions.accepted': 'Ordenado: se conserva el recuerdo reciente y se aparta el antiguo.',
   'revisions.dismissed': 'Propuesta dejada de lado.',
+  // Carte de proposition : on MONTRE les deux souvenirs en cause, avec leur date.
+  'revisions.explain_contradicted': 'Estos dos recuerdos se contradicen. Al ordenar se conserva el más reciente; el antiguo sigue consultable.',
+  'revisions.explain_duplicate': 'Estos dos recuerdos dicen lo mismo. Al ordenar se conserva el más reciente; el antiguo sigue consultable.',
+  'revisions.explain_obsolete': 'Este recuerdo quedó superado por uno más reciente. Al ordenar se conserva el reciente; el antiguo sigue consultable.',
+  'revisions.explain_alone': 'Este recuerdo se propone como caducado. Al ordenarlo deja de aparecer en las respuestas, pero sigue consultable.',
+  'revisions.action_accept_alone': 'Ordenar este recuerdo',
+  'revisions.fact_kept': 'Conservado',
+  'revisions.fact_archived': 'Se ordenará',
+  'revisions.fact_missing': 'Texto no mostrado: este recuerdo es anterior a los últimos {count}.',
+  'revisions.reanalyze_short': 'Analizar',
   // — Écrans mémoire (G2) : Maintenance —
   'maintenance.never_used_hint': 'Recuerdos nunca usados en una respuesta: la materia prima de la limpieza.',
   'maintenance.hidden_selected': '{count} seleccionado(s) fuera de la lista mostrada.',

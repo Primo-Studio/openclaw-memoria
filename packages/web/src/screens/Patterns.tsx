@@ -105,11 +105,11 @@ export function Patterns() {
       {bannerError && <ErrorBanner message={bannerError} onRetry={ag.retry} />}
 
       {ag.noAgent ? (
-        <EmptyState icon={<Bot className="size-5" />} title={t('memory.no_agent_title')} body={t('memory.no_agent_body')} />
+        <EmptyState icon={<Bot className="size-5" />} title={t('memory.no_agent_title')} body={t('memory.no_agent_body')} className="mx-auto w-full max-w-xl sm:py-8" />
       ) : phase === 'loading' ? (
         <PatternsSkeleton />
       ) : phase === 'failed' || patterns === null ? null : patterns.length === 0 ? (
-        <EmptyState icon={<Repeat className="size-5" />} title={t('patterns.empty_title')} body={t('patterns.empty_body')} />
+        <EmptyState icon={<Repeat className="size-5" />} title={t('patterns.empty_title')} body={t('patterns.empty_body')} className="mx-auto w-full max-w-xl sm:py-8" />
       ) : (
         <SectionCard
           title={t('patterns.list_title')}

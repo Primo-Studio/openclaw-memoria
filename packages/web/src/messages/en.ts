@@ -84,6 +84,8 @@ export const en: Messages = {
 
   // — Common —
   'common.refresh': 'Refresh',
+  // Version courte pour la barre supérieure mobile (jamais d'icône muette).
+  'common.refresh_short': 'Refresh',
   'error.session_expired': 'Session expired or invalid key — restart “memoria” from your terminal.',
   'error.not_available': 'This feature is not available yet in your version of Memoria.',
   'error.no_response': 'The Memoria service is not responding. Check it’s running (“memoria” command).',
@@ -1274,7 +1276,11 @@ export const en: Messages = {
   'themes.refined_toast': '{count} theme(s) renamed.',
   'themes.importance': 'Theme importance',
   'themes.list_title': 'Agent themes',
-  'themes.list_hint': 'Only themes with at least two memories are shown. The gauge shows how important the theme is.',
+  // Nombre de souvenirs d'un thème, écrit en toutes lettres sur la carte
+  // (le chiffre nu ne disait pas de quoi il parlait).
+  'themes.card_facts': '{count} memory',
+  'themes.card_facts_plural': '{count} memories',
+  'themes.list_hint': 'Only themes with at least two memories are shown, the richest first.',
   'themes.relations_title': 'Relations between themes',
   'themes.relations_hint': 'Two themes are linked when they share memories or entities (a person, a client, a project). The thicker the line, the stronger the link. Click a theme to open its memories.',
   'themes.keywords': 'Keywords',
@@ -1296,6 +1302,8 @@ export const en: Messages = {
   'procedures.less_steps': 'Show less',
   'procedures.triggers': 'Triggered by',
   'persons.add.title': 'Add a person',
+  // Libellé COURT de la même action, pour la barre supérieure mobile (icône seule interdite).
+  'persons.add.short': 'Add',
   'persons.add.lead': 'A name is enough; identifiers are added afterwards on the person’s card.',
   'persons.add.nameLabel': 'Name',
   'persons.add.relationLabel': 'Relation (optional)',
@@ -1337,6 +1345,7 @@ export const en: Messages = {
   'selection.unselect_all': 'Deselect all',
   'fact.sensitivity.sensitive': 'Sensitive',
   'fact.sensitivity.critical': 'Critical',
+<<<<<<< HEAD
   // Memory category (raw engine value) → readable word; falls back to the raw value (lib/labels.ts).
   'fact.category.general': 'General',
   'fact.category.preference': 'Preference',
@@ -1354,6 +1363,16 @@ export const en: Messages = {
   'fact.category.statement': 'Fact',
   'fact.topics_more': '+{count}',
   'fact.topics_more_title': 'Other topics: {list}',
+=======
+  // Catégories de souvenir renvoyées en anglais par le moteur : on les traduit.
+  'fact.category.preference': 'Preference',
+  'fact.category.decision': 'Decision',
+  'fact.category.config': 'Configuration',
+  'fact.category.error': 'Error',
+  'fact.category.process': 'Process',
+  'fact.category.general': 'General',
+  'fact.category.identity': 'Identity',
+>>>>>>> feat/ui-fixC
   // — Écrans mémoire (G2) : Revue —
   'review.approve_selected': 'Approve selection',
   'review.reject_selected': 'Reject selection',
@@ -1376,6 +1395,16 @@ export const en: Messages = {
   'revisions.list_label': 'Tidy-up proposals',
   'revisions.accepted': 'Tidied up: the recent memory is kept, the old one is set aside.',
   'revisions.dismissed': 'Proposal left aside.',
+  // Carte de proposition : on MONTRE les deux souvenirs en cause, avec leur date.
+  'revisions.explain_contradicted': 'These two memories contradict each other. Tidying keeps the newer one; the older one stays readable.',
+  'revisions.explain_duplicate': 'These two memories say the same thing. Tidying keeps the newer one; the older one stays readable.',
+  'revisions.explain_obsolete': 'This memory is outdated by a newer one. Tidying keeps the newer one; the older one stays readable.',
+  'revisions.explain_alone': 'This memory is flagged as outdated. Tidying it takes it out of answers, but it stays readable.',
+  'revisions.action_accept_alone': 'Tidy this memory',
+  'revisions.fact_kept': 'Kept',
+  'revisions.fact_archived': 'Will be tidied away',
+  'revisions.fact_missing': 'Text not shown: this memory is older than the last {count}.',
+  'revisions.reanalyze_short': 'Analyse',
   // — Écrans mémoire (G2) : Maintenance —
   'maintenance.never_used_hint': 'Memories never used in an answer — the raw material for tidying up.',
   'maintenance.hidden_selected': '{count} selected outside the list shown.',

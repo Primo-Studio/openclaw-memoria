@@ -925,8 +925,12 @@ export function Docs() {
         <nav aria-label={t('docs.nav.aria')} className="sticky top-20 hidden max-h-[calc(100vh-6rem)] w-52 shrink-0 overflow-y-auto lg:block">
           <div className="mb-2 text-[11px] font-medium tracking-wider text-muted-foreground uppercase">{t('docs.toc')}</div>
           {GROUP_ORDER.map((group, gi) => (
-            <div key={group} className={cn(gi > 0 && 'mt-3')}>
-              <div className="px-2 pb-1 text-xs font-medium text-muted-foreground">{t(`docs.group.${group}`)}</div>
+            <div key={group} className={cn(gi > 0 && 'mt-5')}>
+              {/* POURQUOI en capitales espacées : à deux centimètres, la barre
+                  latérale titre ses groupes « ESSENTIEL » / « AVANCÉ » ainsi. En
+                  minuscules grises et à la même indentation que les entrées, ces
+                  titres passaient pour des liens désactivés. */}
+              <div className="px-2 pb-1.5 text-[11px] font-medium tracking-wider text-muted-foreground uppercase">{t(`docs.group.${group}`)}</div>
               <ul className="flex flex-col gap-0.5">
                 {SECTIONS.filter(s => s.group === group).map(s => {
                   const isActive = active === s.id

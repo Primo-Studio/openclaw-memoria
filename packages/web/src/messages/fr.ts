@@ -86,6 +86,8 @@ export const fr: Messages = {
 
   // — Communs —
   'common.refresh': 'Actualiser',
+  // Version courte pour la barre supérieure mobile (jamais d'icône muette).
+  'common.refresh_short': 'Actualiser',
   'error.session_expired': 'Session expirée ou clé invalide — relancez « memoria » depuis votre terminal.',
   'error.not_available': 'Cette fonction n’est pas encore disponible dans votre version de Memoria.',
   'error.no_response': 'Le service Memoria ne répond pas. Vérifiez qu’il tourne (commande « memoria »).',
@@ -1276,7 +1278,11 @@ export const fr: Messages = {
   'themes.refined_toast': '{count} thème(s) renommé(s).',
   'themes.importance': 'Importance du thème',
   'themes.list_title': 'Thèmes de l’agent',
-  'themes.list_hint': 'Seuls les thèmes d’au moins deux souvenirs sont affichés. La jauge indique l’importance du thème.',
+  // Nombre de souvenirs d'un thème, écrit en toutes lettres sur la carte
+  // (le chiffre nu ne disait pas de quoi il parlait).
+  'themes.card_facts': '{count} souvenir',
+  'themes.card_facts_plural': '{count} souvenirs',
+  'themes.list_hint': 'Seuls les thèmes d’au moins deux souvenirs sont affichés, les plus fournis en premier.',
   'themes.relations_title': 'Relations entre thèmes',
   'themes.relations_hint': 'Deux thèmes sont reliés quand ils partagent des souvenirs ou des entités (une personne, un client, un projet). Plus le trait est épais, plus le lien est fort. Clique un thème pour ouvrir ses souvenirs.',
   'themes.keywords': 'Mots-clés',
@@ -1298,6 +1304,8 @@ export const fr: Messages = {
   'procedures.less_steps': 'Réduire',
   'procedures.triggers': 'Se déclenche sur',
   'persons.add.title': 'Ajouter une personne',
+  // Libellé COURT de la même action, pour la barre supérieure mobile (icône seule interdite).
+  'persons.add.short': 'Ajouter',
   'persons.add.lead': 'Un nom suffit ; ses identifiants s’ajoutent ensuite sur sa carte.',
   'persons.add.nameLabel': 'Nom',
   'persons.add.relationLabel': 'Relation (facultatif)',
@@ -1339,6 +1347,7 @@ export const fr: Messages = {
   'selection.unselect_all': 'Tout désélectionner',
   'fact.sensitivity.sensitive': 'Sensible',
   'fact.sensitivity.critical': 'Critique',
+<<<<<<< HEAD
   // Catégorie d’un souvenir (valeur brute du moteur) → mot lisible ; repli sur la valeur brute (lib/labels.ts).
   'fact.category.general': 'Général',
   'fact.category.preference': 'Préférence',
@@ -1356,6 +1365,16 @@ export const fr: Messages = {
   'fact.category.statement': 'Fait',
   'fact.topics_more': '+{count}',
   'fact.topics_more_title': 'Autres thèmes : {list}',
+=======
+  // Catégories de souvenir renvoyées en anglais par le moteur : on les traduit.
+  'fact.category.preference': 'Préférence',
+  'fact.category.decision': 'Décision',
+  'fact.category.config': 'Configuration',
+  'fact.category.error': 'Erreur',
+  'fact.category.process': 'Méthode',
+  'fact.category.general': 'Général',
+  'fact.category.identity': 'Identité',
+>>>>>>> feat/ui-fixC
   // — Écrans mémoire (G2) : Revue —
   'review.approve_selected': 'Approuver la sélection',
   'review.reject_selected': 'Rejeter la sélection',
@@ -1378,6 +1397,16 @@ export const fr: Messages = {
   'revisions.list_label': 'Propositions de rangement',
   'revisions.accepted': 'Rangé : le souvenir récent est conservé, l’ancien est écarté.',
   'revisions.dismissed': 'Proposition laissée de côté.',
+  // Carte de proposition : on MONTRE les deux souvenirs en cause, avec leur date.
+  'revisions.explain_contradicted': 'Ces deux souvenirs se contredisent. En rangeant, le plus récent est gardé ; l’ancien reste consultable.',
+  'revisions.explain_duplicate': 'Ces deux souvenirs disent la même chose. En rangeant, le plus récent est gardé ; l’ancien reste consultable.',
+  'revisions.explain_obsolete': 'Ce souvenir est dépassé par un plus récent. En rangeant, le récent est gardé ; l’ancien reste consultable.',
+  'revisions.explain_alone': 'Ce souvenir est proposé comme dépassé. En le rangeant, il n’apparaît plus dans les réponses, mais reste consultable.',
+  'revisions.action_accept_alone': 'Ranger ce souvenir',
+  'revisions.fact_kept': 'Gardé',
+  'revisions.fact_archived': 'Sera rangé',
+  'revisions.fact_missing': 'Texte non affiché : ce souvenir est plus ancien que les {count} derniers.',
+  'revisions.reanalyze_short': 'Analyser',
   // — Écrans mémoire (G2) : Maintenance —
   'maintenance.never_used_hint': 'Les souvenirs jamais utilisés dans une réponse — la matière du ménage.',
   'maintenance.hidden_selected': '{count} sélectionné(s) hors de la liste affichée.',

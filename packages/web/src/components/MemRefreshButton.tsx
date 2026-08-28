@@ -12,11 +12,18 @@ import { Button } from './ui/button'
 
 export function MemRefreshButton({
   label,
+  shortLabel,
   onClick,
   disabled = false,
   spinning = false,
 }: {
   label: string
+  /**
+   * Libellé COURT affiché sous 640 px à la place de l'icône seule. Sans lui, le
+   * comportement historique est conservé (icône seule sur mobile) : les écrans
+   * qui n'en passent pas ne changent pas d'un pixel.
+   */
+  shortLabel?: string
   onClick: () => void
   disabled?: boolean
   /** Rotation de l'icône pendant le rechargement. */
@@ -25,6 +32,7 @@ export function MemRefreshButton({
   return (
     <Button type="button" variant="outline" size="sm" onClick={onClick} disabled={disabled} aria-label={label}>
       <RefreshCw className={cn(spinning && 'animate-spin')} aria-hidden="true" />
+      {shortLabel && <span className="sm:hidden">{shortLabel}</span>}
       <span className="hidden sm:inline">{label}</span>
     </Button>
   )

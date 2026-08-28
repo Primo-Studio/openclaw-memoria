@@ -68,11 +68,11 @@ export function Procedures() {
       {bannerError && <ErrorBanner message={bannerError} onRetry={ag.retry} />}
 
       {ag.noAgent ? (
-        <EmptyState icon={<Bot className="size-5" />} title={t('memory.no_agent_title')} body={t('memory.no_agent_body')} />
+        <EmptyState icon={<Bot className="size-5" />} title={t('memory.no_agent_title')} body={t('memory.no_agent_body')} className="mx-auto w-full max-w-xl sm:py-8" />
       ) : phase === 'loading' ? (
         <ProceduresSkeleton />
       ) : phase === 'failed' || procedures === null ? null : procedures.length === 0 ? (
-        <EmptyState icon={<ListOrdered className="size-5" />} title={t('procedures.empty_title')} body={t('procedures.empty_body')} />
+        <EmptyState icon={<ListOrdered className="size-5" />} title={t('procedures.empty_title')} body={t('procedures.empty_body')} className="mx-auto w-full max-w-xl sm:py-8" />
       ) : (
         <SectionCard
           title={t('procedures.list_title')}

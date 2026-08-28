@@ -328,9 +328,14 @@ export async function getImportStatus(): Promise<ImportJobStatus> {
   return request<ImportJobStatus>('GET', '/v1/admin/import_status')
 }
 
-/** Recherche dans la mémoire d'un agent. `q` vide = derniers souvenirs. */
-export async function searchFacts(instance: string, q: string): Promise<AdminFact[]> {
+/**
+ * Recherche dans la mémoire d'un agent. `q` vide = derniers souvenirs.
+ * `limit` est facultatif : sans lui, le daemon garde son défaut (50) — les
+ * appelants existants ne changent pas de comportement.
+ */
+export async function searchFacts(instance: string, q: string, limit?: number): Promise<AdminFact[]> {
   const params = new URLSearchParams({ instance, q })
+  if (limit) params.set('limit', String(limit))
   const res = await request<{ facts: AdminFact[] }>('GET', `/v1/admin/facts?${params.toString()}`)
   return res.facts
 }
