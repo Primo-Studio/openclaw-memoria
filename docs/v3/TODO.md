@@ -1,168 +1,137 @@
 # Memoria V3 — TODO de passation
 
-> **But** : reprendre le travail SANS contexte oral. Lire d'abord `STATUS.md`, puis ce fichier,
-> puis `DECISIONS-LOG.md`. Spec gelée = `~/Downloads/Memoria-V3-Dossier-Dev-2026-06-10/PLAN-Memoria-v3-2026-06-03.md`.
-> Carte des agents/mémoires à récupérer = `AGENTS-RESEAU.md`.
+> **But** : reprendre le travail SANS contexte oral. Lire d'abord `STATUS.md` (état mesuré), puis ce
+> fichier, puis `DECISIONS-LOG.md`. Spec gelée = `~/Downloads/Memoria-V3-Dossier-Dev-2026-06-10/PLAN-Memoria-v3-2026-06-03.md`.
+> Carte des agents/mémoires du réseau = `AGENTS-RESEAU.md` (snapshot juin).
 >
-> **Dernière session : `PASSATION-2026-08-04.md`** — PR #14 à #18 (mise à jour depuis l'UI,
-> embeddings épinglables, adaptateur, autostart). À lire avant de toucher à `update.ts`,
-> `control/autostart.ts`, `llm/index.ts` ou l'adaptateur. Contient aussi les pièges de
-> diagnostic : plusieurs machines, deux copies du dépôt par machine, logs trompeurs.
+> **Dernière session : `JOURNAL-2026-08-27.md`** — PR #20 à #24, 80 commits d'audit multi-agents,
+> **980 tests / 105 fichiers**. À lire en entier avant de toucher `packages/daemon/src/server.ts`,
+> `packages/core/src/engine/memoria.ts`, `packages/mcp/src/serve.ts` ou `apps/desktop/src-tauri/src/lib.rs`.
+> Puis `PHASES-1-2-3-2026-08-25.md` et `AUDIT-CONSOLIDATION-2026-08-24.md` (contexte), et
+> `PASSATION-2026-08-04.md` § 3-4 (remarques non appliquées + pièges de diagnostic, toujours valables).
 
 ## Reprendre le travail
 
 ```bash
 cd ~/openclaw-memoria        # branche memoria-v1
-npm install && npm run build && npm test   # doit être 100% vert AVANT toute modif
+npm install && npm run build && npm test   # doit être 100 % vert AVANT toute modif (980 tests au 27/08)
+memoria stop && memoria start              # le daemon pointe sur packages/*/dist : relancer après un rebuild
 ```
 
-- Le « juge du produit » = `packages/core/test/benchmark.test.ts` (anti-fuite = 0). Toute
-  évolution du recall doit le laisser vert.
+- Le « juge du produit » = `packages/core/test/benchmark.test.ts` (anti-fuite = 0). Toute évolution du
+  recall doit le laisser vert.
 - Règle anti « mort silencieuse » : aucun catch muet ; tout chemin actif a un test qui le prouve.
-  ~106 bugs legacy documentés `docs/v3/port-map.json` — ne pas les réintroduire.
+  ~106 bugs legacy documentés dans `port-map.json` — ne pas les réintroduire.
+- Règle de session : **test rouge avant correctif**, puis vert ; on regarde l'écran (UI) avant de dire « fait ».
 - Auteur git = **Hello-Primo**. `.claude/`, `dist/`, `*.tsbuildinfo` gitignorés.
 
-## ✅ Déjà fait (sessions 1-2, 2026-06-10)
+## Décisions produit du 27/08 — à confirmer par Néto (implémentées, réversibles)
 
-- **Fondation** : monorepo (core/daemon/mcp/cli/web + apps/desktop), schéma gouverné, CI stricte verte.
-- **Recall** : fan-out FTS + **vectoriel sqlite-vec hybride** (recallSemantic) + **expansion graphe**,
-  anti-fuite inter-clients = 0, cap tokens.
-- **Capture** : WAL-first, redaction secrets (gate dur, coffre Keychain/AES), extraction LLM
-  (Ollama/Anthropic), review-first.
-- **Cognition** (bucket B) : entités/relations/observations async + decay.
-- **Gouvernance** : pairing, partage par référence (`shareFacts`/`setScopeAccess`/`suggestIdentityFacts`),
-  hard-delete, audit neutre, capture_mode (pause/incognito).
-- **Migration** : Koda (Mac Studio) récupérée — 3515 faits + 364 procédures + 3038 entités +
-  3329 relations + 1920 observations, embeddings réindexés. Importeur legacy + adoption.
-- **Connexion/déconnexion** : 1 commande (`connect`/`disconnect`), auto-enregistrement MCP par hôte.
-- **UI** : Dashboard, Agents, Mémoire, Revue, Audit, Réglages, Onboarding, sélecteur pause.
-- **Desktop** : Memoria.app + DMG construits.
-- **Agents connectés en réel** : Claude Code (`72615d82`), Codex (`0b5322e1`), Koda (`405290ba`, mémoire complète).
-
-## ✅ Session 3 (2026-06-11) — Contrôle & config + audit OpenClaw
-
-- **Kill-switch global** (`config.enabled`) : `memoria enable`/`disable` + engine `isEnabled/setEnabled`
-  + daemon no-op ANNONCÉ (`{disabled:true}`) sur capture/recall en pause + toggle UI Réglages.
-- **Suppression définitive d'agent** : `deleteInstance` (engine+registry), `memoria delete-agent --yes`,
-  route `POST /v1/admin/delete_agent`, bouton « Supprimer » (confirm) écran Agents. ≠ revoke (efface la DB privée).
-- **Déplacement du stockage (clé USB)** : `moveStorage` (rename même volume / cpSync+rm cross-volume) +
-  `memoria move --to <dir>` (arrête le daemon, déplace, réécrit `config.toml`). UI : commande affichée.
-- **Lancement auto au login** : `control/autostart.ts` (LaunchAgent launchd, KeepAlive), `memoria autostart on|off`,
-  route `POST /v1/admin/autostart`, toggle UI. macOS only (échoue proprement ailleurs).
-- **Route `GET /v1/admin/control`** : enabled + autostart status + storageInfo (pour l'UI).
-- **Relations entre thèmes** (demande Néto) : `TopicEngine.relations()` (graphe par faits/entités partagés,
-  borné 28 nœuds/70 arêtes, `via` = entités fortes d'abord, bruit filtré). `Memoria.topicRelations`,
-  route `GET /v1/admin/topic_relations`, vue SVG circulaire « Relations » dans l'écran Thèmes (0 dépendance).
-  Validé sur Koda : 23 nœuds, 70 arêtes réelles (JamBoard↔CoreBluetooth, RSMA↔Devis, Directus↔SEO).
-- **Recherche globale** : `Memoria.globalSearch` (tous agents d'un coup, résultat étiqueté de l'agent),
-  route `GET /v1/admin/search?q=`, option « 🔍 Toutes les mémoires » dans l'écran Mémoire.
-- Tests : `control.test.ts` (9) + `topics.test.ts` relations (3). Suite = **374 verts**. Daemon réel redémarré,
-  routes control/topic_relations/search vérifiées live.
-- **Audit OpenClaw 2026.6.5** (`DIAG-OPENCLAW-2026.6.5.md`) : ⚠️ **NOUVEAU gate `allowConversationAccess`
-  bloque par défaut** les hooks de conversation (`llm_output`, `agent_end`) pour tout plugin non bundlé →
-  **cause #1 plausible de la casse de capture v3.34**. L'install de l'adaptateur DOIT poser
-  `plugins.entries.memoria.hooks.allowConversationAccess=true`. L'auto-recall (`before_prompt_build`) survit.
-
-## ✅ Session 4 (2026-06-11) — Réseau multi-machines + interlocuteur + install/update
-
-- **Interlocuteur (Personnes)** : registry v3 `person_identifiers` (tel/mail/Telegram/WhatsApp/handle,
-  normalisés, 1 identifiant→1 personne) + colonnes persons (relation/org_id/user_id). Engine
-  `identifyInterlocutor` (+ faits connus), `describeInterlocutor`, CRUD. Routes admin + route mémoire
-  `identify_interlocutor` + **outil MCP `memoria_identify_interlocutor`**. Écran **Personnes** (UI). 7 tests.
-- **Synchro inter-machines** (hub-and-spoke, design `SYNC-INTER-MACHINES.md`) :
-  - content v2 (provenance origin_machine_id/rev/content_hash + tombstones) + `sync/merge.ts` LWW
-    déterministe + `sync/clock.ts`. registry v4 (sync_peers/cursor/secret_envelopes/nonces).
-  - `sync/peer-auth.ts` (HMAC ±60 s + nonce 5 min), `sync/secrets-sync.ts` (GVK AES-GCM, sealGvk scrypt),
-    GVK/CPK en Keychain. `SyncEngine` (invite/completePairing/authenticate/collectDelta/snapshot/
-    applyIncoming/serveSecrets ; join/pull/push/syncAll/tick/leave). **adoptScope** aligne les IDs de scope.
-  - daemon : **second listener LAN** (hub) `/v1/sync/*` (HMAC) ; admin/memory restent loopback
-    (anti-rebinding préservé) ; timer best-effort (spoke). Routes admin sync + CLI `memoria sync *` + UI Réglages.
-  - Tests : sync-merge (11) + sync-crypto (10) + sync-engine intégration in-memory (8) + **sync-http 2 daemons
-    réels (4)**. Coffre inter-machines validé (secret déchiffré chez le spoke, jamais en clair sur le réseau).
-  - ⏳ Reste OPTIONNEL : incrément 6 (relais NAS QNAP pour bootstrap quand le hub dort) + `sync verify`.
-- **Install iMac + mise à jour** : `scripts/install-memoria.sh` (1 commande, non-dev), route+CLI+bouton UI
-  **Mise à jour** (git pull + build + redémarrage auto), `GET /v1/admin/version`. Guide `INSTALLATION-RESEAU.md`.
-- Suite = **430 verts**. Tout vérifié live sur le daemon réel (version, sync status, personnes).
-- **Terrain (Néto/Badette)** : sur le Mac Studio `memoria sync init-hub` + redémarrer + inviter ;
-  sur l'iMac, `install-memoria.sh` puis « Relier au hub » → Luna partage la mémoire d'équipe + le coffre avec Koda.
+- **Les agents écrivent dans `user`** par défaut (`memoria_store_fact scope:'user'`, policy `can_write`
+  au pairing + migration douce). Si Néto ne confirme pas : revenir à `can_write=false` par défaut
+  (`grantDefaultUserWrite` + `pairAssistant`, `memoria.ts`).
+- **OpenClaw en lecture seule** sur `user` (bot de canal exposé à des tiers) → ses propositions passent
+  par la Revue.
+- **Modes de capture** unifiés : `Revue d'abord` et `Pause` s'appliquent aussi aux faits déclarés
+  (`store_fact`), pas seulement à la capture.
+- Fait déclaré dédoublonné en **exact** seulement ; `forget({query})` = ET sémantique + `confirm_bulk`.
 
 ## Reste à faire (ordre conseillé)
 
-### Import des mémoires Claude Code / Codex
-- [x] ~~Importeur de transcripts~~ **FAIT + INTÉGRÉ** : `Memoria.importTranscripts`.
-- [x] ~~Bulk import RÉEL avec gpt-4o-mini~~ **FAIT 2026-06-10** : **2266 faits en quarantaine**
-      (Claude Code 1021, Codex 1245) en ~28 min. Échantillon qwen nettoyé avant. Idempotent.
-- [x] ~~Providers OpenAI/OpenRouter + choix utilisateur~~ FAIT (Réglages UI + clés par fichier).
-- [ ] **Approuver/trier la quarantaine** : 2266 faits dormants à valider. Options pour Néto :
-      - Écran Revue « Tout approuver » par agent (chaque agent récupère SA mémoire active). Le plus
-        rapide ; un peu de bruit (gpt-4o-mini extrait parfois de l'éphémère) mais ranké au recall.
-      - Tri sélectif si Néto préfère.
-- [ ] **Partager les faits sur Néto** : écran Partage → par agent, `suggestIdentityFacts` (50 candidats
-      réels/agent : préférences, identité, conventions) → cocher → `shareFacts` vers `user`. Reste
-      la décision de Néto.
-- [ ] (optionnel) prompt d'extraction encore plus sélectif / post-filtre de l'éphémère résiduel.
-
-### UI manquante
-- [x] ~~Écran Partage (matrice scopes × agents)~~ **FAIT** (`Sharing.tsx`) : matrice « qui lit quoi »
-      (`setPolicy`), explorateur de contenu de scope, panneau « Faits sur toi à partager »
-      (`suggestIdentityFacts` → `shareFacts` vers `user`). Vérifié live (top candidat Koda = « Neto Pompeu »).
-      Reste optionnel : raffiner le tri des candidats identité (du bruit type « Token » dans la longue traîne).
-- [ ] Écran Organisations & projets (créer org client, projet, scopes) — logique core prête.
-- [x] ~~Onboarding : barres de progression de téléchargement des modèles Ollama (spec §14)~~ **FAIT session 5**
-      (étape « Moteur d'intelligence » complète : choix Ollama/LM Studio/clés/OpenClaw, pulls avec
-      progression, mode dégradé explicite).
-- [x] ~~Vue relations entre thèmes~~ **FAIT** (onglet « Relations » écran Thèmes, graphe SVG).
-- [x] ~~Recherche globale (tous agents)~~ **FAIT** (option « Toutes les mémoires » écran Mémoire).
-
-### Reconnecter OpenClaw (P6) — FAIT (adaptateur livré + validé E2E)
-- [x] ~~Diagnostic compatibilité 2026.6.5~~ **FAIT** (`DIAG-OPENCLAW-2026.6.5.md`).
-- [x] ~~Adaptateur hooks mince~~ **FAIT** : `packages/adapter-openclaw` (zéro dépendance native).
-      `before_prompt_build`→`/v1/memory/recall` (timeout dur 400 ms → `prependContext`),
-      `agent_end`→`/v1/memory/capture_turn` (VRAI fire-and-forget, WAL persiste avant extraction).
-      Découverte du port via `daemon.json`, auth token d'instance. 12 tests de contrat.
-- [x] ~~Install auto + gate~~ **FAIT** : `memoria connect` (openclaw) pose le serveur MCP + lie le plugin
-      dans `~/.openclaw/extensions/memoria` + écrit `openclaw.json` avec **`allowConversationAccess=true`**
-      (sinon capture morte). `disconnect` nettoie. 4 tests (paths injectables). `event.toolCallCount` non lu (corrigé).
-- [x] ~~Validation bout-en-bout~~ **FAIT 2026-06-11** sur le daemon réel : recall injecte un fait semé,
-      `agent_end` capture une conversation, gpt-4o-mini extrait le fait, recallable juste après. Instance test supprimée.
-- [ ] **Reste (terrain)** : sur le Mac Studio, `openclaw plugins enable memoria` + `plugins inspect memoria`
-      (vérifier `allowConversationAccess: true`) + grep logs « blocked because non-bundled… » ; reconnecter Koda
-      avec son vrai token (re-pairing) et confirmer la capture en conditions réelles. Optionnel : hook `llm_output`
-      (continuous learning) + `after_compaction` (flush avant perte de contexte).
-
-### Couches avancées restantes (P6)
-- [ ] Clusters (fact-clusters), carte 3D UMAP (opt-in), couches D sur validation (patterns/auto-skill).
-- [ ] Job cron daemon : `decayCognition` quotidien (méthode prête, manque le scheduler).
-
-### Distribution & finitions
-- [ ] **Publier npm** (`@memoria/*` ou `@primo-studio/memoria`) — tant que non publié, les commandes
-      utilisent le chemin local `node ~/openclaw-memoria/packages/mcp/dist/bin.js` (déjà géré par le
-      daemon et connect). Après publication : repasser aux formes `npx -y @memoria/mcp`.
-- [ ] Signature/notarisation `Memoria.app` (process Igara), Node embarqué SEA (v1.5).
-- [x] ~~Auto-démarrage daemon au login (launchd plist macOS)~~ **FAIT** (`memoria autostart on` + toggle UI).
-- [ ] `getSecretRef`/`secret_access` de bout en bout (engine→daemon→MCP `memoria_get_secret_ref`).
+### 🔴 Distribution (seules décisions bloquantes)
+- [ ] **Scope npm** : `@memoria/*` → `@primo-studio/*` (4 packages publiables, `files:[dist]` +
+      `publishConfig` déjà posés ; web reste `private`). Tant que rien n'est publié, les commandes
+      utilisent `node ~/openclaw-memoria/packages/mcp/dist/bin.js` (géré par le daemon / `agents_connect`).
+      Au passage : **18 alertes Dependabot sur `main`** (branche figée depuis mars) → remettre `main`
+      au niveau de `memoria-v1`.
+- [ ] **Notarisation** de `Memoria.app` (signée Developer ID `4QB44XVHNL`, `tauri.conf.json`
+      `signingIdentity`, installée dans `/Applications`) — process Igara, **feu vert Néto**. Node
+      embarqué SEA = v1.5.
 - [ ] Renommer le repo `openclaw-memoria` → `memoria` (à la release, décision Néto).
-- [ ] Récupérer **Sol** (Mac mini) quand Néto le voudra — procédure dans AGENTS-RESEAU.md.
 
-## ✅ Session 5 (2026-06-11) — Readiness test iMac
+### Mineurs de revue (JOURNAL-2026-08-27 § « Mineurs restants », non bloquants)
+- [ ] Refus de policy sur un fait PARTAGÉ dans correct/merge/pin/expiry → passer par `mapScopeErrors`
+      (403 au lieu de 500).
+- [ ] `reinforceFacts` écrit dans la DB partagée sur simple `can_read` (classement modifié pour tous).
+- [ ] `forget` avec `ids` : `matched` compté par DB sans vérifier l'existence → `dry_run` ment.
+- [ ] `knownAboutPerson` n'applique pas `passesClientIsolation`.
+- [ ] `shareFacts` ne dédoublonne pas contre la DB partagée cible ; `INSERT OR IGNORE` laisse un
+      dormant dormant.
+- [ ] `hardDeleteFacts` laisse des orphelins `fact_entities` (nettoyage centralisé à faire).
+- [ ] Tables legacy `vec_index_768` / `vec_index_1536` jamais supprimées après migration (≈ 35 Mo morts).
+- [ ] `repairVecIndex` réinsère aussi les dormants (4 238 / 5 286 vecteurs sur la base réelle).
+- [ ] Concurrence `indexEmbeddings` / `scheduleEmbeddings` (deux `runAll` sur le même store).
+- [ ] Corps de `/v1/memory/store_fact` relayé sans liste blanche.
+- [ ] `explain()` MCP : distinguer « privé d'un autre agent » de « pas de droit d'écriture » ; branche
+      404 périmée (« paused » → la pause répond `200 {disabled:true}`) ; expliquer `disabled` au LLM.
+- [ ] Clés i18n mortes (`onboarding.agent.copied`, `patterns.service_unavailable`, …) ; actions d'audit
+      `store_fact_dedup` / `grant_user_write_default` absentes des catalogues ; `fmtUsd` suffixe `$` en dur.
+- [ ] Tests : `sync-http.test.ts` port LAN fixe 47733 → port 0 ; `lifecycle.test.ts` spawn du vrai
+      `dist/bin.js` ; fuite `POST 11434` dans `llm-profile-refresh.test.ts` ; `auto-import.test.ts` ne
+      vérifie que le suffixe du chemin du plist.
+- [ ] Commentaire d'en-tête `packages/cli/src/commands/sync.ts` : sous-commande `peers` inexistante.
+- [ ] `--help` de `memoria doctor` (« santé du stockage ») en retard sur le rapport réel (activité,
+      envois cloud, coût) — la doc UI est déjà alignée.
+- [ ] `onboarding.engine.ollamaHint` dit encore « Recommandé » pour l'extraction Ollama alors que
+      Réglages et Docs recommandent OpenAI (clé hors périmètre docs, à aligner dans l'onboarding).
+- [ ] Routes servies sans client : `adopt_legacy`, `clusters`, `dialectic`, `skill_proposals`,
+      `sync/peers`, `/v1/memory/merge` — brancher (outil MCP / écran) ou retirer.
 
-- Onboarding « Moteur d'intelligence » + santé LLM (`llm_health`, bannière Dashboard, provider LM Studio
-  extraction) ; détection d'agents + connexion 1 clic + import par bouton (job daemon, progression, Revue) ;
-  `memoria import` ; install-memoria.sh durci (CLT, garde anti-écrasement, PATH, autostart, ouverture UI) ;
-  `memoria ui` = défaut. 514 tests verts. Détail : STATUS.md session 5.
-- Reste de ce chantier : embeddings LM Studio (V1 = Ollama-only, dit explicitement dans la santé) ;
-  harmoniser le tutoiement de l'écran Agents historique ; annulation d'un job d'import ;
-  vérité terrain du format SQLite `auth_profile_stores` OpenClaw (table vide ici, parsing défensif).
+### Adaptateur PUSH pour Claude Code (décision produit)
+- [ ] Hooks `SessionStart` / `UserPromptSubmit` → `memoria recall` injecté, `Stop` → `capture_turn` du
+      dernier tour via `transcript_path`, installés par `register.ts`. Aujourd'hui Claude Code est en
+      **pull** (outils MCP) + auto-import launchd toutes les 6 h.
 
-### Tests sync flaky (préexistant — à corriger dans le chantier sync)
-- [ ] `sync-engine.test.ts` + `sync-http.test.ts` : contention Keychain macOS réel
-      (`security add-generic-password -U` sur `__cluster_pairing_key`) + port LAN fixe 47733 →
-      passer ces tests sur `secretsVault: 'aes-vault'` + port 0.
+### Données réelles
+- [ ] **5 révisions** à arbitrer (écran Révisions, `doctor` l'affiche en avertissement).
+- [ ] **Revue re-remplie à chaque auto-import** (toutes les 6 h) : décider « tout approuver par agent »
+      (bouton à créer) vs tri manuel ; exposer `review_pending` dans `/stats` pour le badge Revue.
+- [ ] Isolation client/projet : slugification faite (27/08), mapping registre ⚪, isolation
+      projet→client ⚪ (`passesClientIsolation` ne regarde que `client_org_id`).
+- [ ] Machines A (Mac Studio) / B (iMac) : état inconnu depuis le 04/08 (adaptateur, `[llm.embeddings]`,
+      rebuild) — vérifier sur place, `memoria doctor` + `/v1/health.built_sha`.
+
+### Planificateurs / robustesse
+- [ ] `decayCognition()` existe mais n'est appelée par personne : `setInterval` quotidien après
+      `replayWal()` (comme le tick sync) ou `memoria doctor --decay`.
+- [ ] Rejouer le WAL quand un moteur redevient disponible (`POST /v1/admin/llm_extraction` ou tick
+      `llm_health`) — aujourd'hui la file attend le prochain `capture_turn` ou le boot.
+- [ ] `/v1/admin/version` : renvoyer aussi `built_sha` et l'afficher dans `VersionFoot` (écart dépôt/build).
+- [ ] Plist auto-import portable : généré par la CLI (`memoria autoimport on`) avec `$HOME` et le node
+      courant, au lieu du plist versionné aux chemins de ce poste.
+- [ ] Port stable persisté + `admin_token` stable (redémarrage après mise à jour sans re-pairing UI).
+- [ ] Synchro : `sync peers` CLI (route déjà là), `sync verify` / `rotate-key`, relais NAS (incrément 6),
+      opt-in de partage de secrets (aucun appelant de `SyncEngine.shareSecret`).
+
+### UI P2 restants (AUDIT-UX-UI § 9)
+- [ ] Recherche au frappé dans Mémoire (formulaire à soumission) ; uniformisation ErrorBanner /
+      humanError (Settings, Dashboard, Audit, System, Review, Vault) ; focus trap du menu hamburger.
+- [ ] Toast après action, bouton « Exporter maintenant », empty-states actionnables (Thèmes, Récurrences).
+- [ ] Écran Organisations & projets (créer org client, projet, scopes) — logique core prête.
+- [ ] `getSecretRef` / `secret_access` de bout en bout (engine → daemon → MCP).
+
+### Hors périmètre (⛔ Néto, 24/08)
+- Carte 3D UMAP, continuous-learning OpenClaw (`llm_output`), nouvelles features avant la distribution.
+
+## ✅ Fait (résumé, détail dans STATUS.md et les journaux)
+- Fondation V3, 24 couches cognitives, recall hybride sqlite-vec + graphe, capture WAL-first,
+  redaction + Keychain/AES, review-first, pairing, partage gouverné + écriture directe dans `user`,
+  16 écrans UI (5 langues), 12 outils MCP, 28 commandes CLI, adaptateur OpenClaw (`allowConversationAccess`),
+  synchro hub-and-spoke incréments 1-5, Personnes, install 1 commande, `memoria update`, onboarding
+  moteur, détection/connexion/import d'agents, consommation par modèle + journal cloud, launchd d'abord,
+  icône M, app signée, import auto launchd, `fact_cognition`, index vectoriel (dims, modèle).
+- Import des mémoires : Koda (3 515 faits + graphe), transcripts Claude Code/Codex (bulk 06/06,
+  1 355 fichiers le 25/08, 1 523 le 27/08), quarantaine triée le 24/08 (re-remplie depuis, cf. ci-dessus).
 
 ## Pièges connus
 - bm25 NON comparable entre DB → scoring fan-out = couverture de requête (`content.ts searchFacts`). Ne pas « simplifier ».
 - FTS5 : maintenance par TRIGGERS uniquement (pas de rebuild manuel sans rowid).
-- Embeddings : `model`+`dimensions` obligatoires, comparaison inter-dim interdite (cosine throw).
+- Embeddings : `model`+`dimensions` obligatoires, comparaison inter-dim interdite (cosine throw) ; index
+  nommé `(dims, modèle)`.
 - Mode JSON Ollama : demander un OBJET `{"facts":[...]}`, pas un tableau nu (petits modèles).
-- Le daemon pointe sur le build du repo : `memoria stop && memoria start` après un rebuild.
+- Le daemon pointe sur le build du repo : `memoria stop && memoria start` après un rebuild ; vérifier
+  `built_sha` dans `GET /v1/health` (la route `version` lit le dépôt, pas le build).
+- `autostart on` puis `start` : `start` passe par launchd (kickstart) — ne pas spawner à la main.
 - Migration : toujours `.backup` (snapshot cohérent) côté source, jamais toucher l'original.
+- Plusieurs machines, deux copies du dépôt par machine, logs trompeurs : `PASSATION-2026-08-04.md` § 4.
+- Commandes qui n'existent PAS (docs anciennes) : `memoria connect` / `disconnect`, `npx @memoria/web`.
