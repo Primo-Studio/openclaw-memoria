@@ -145,7 +145,10 @@ function DashboardBody({
 
       {overview.length > 0 && (
         <SectionCard title={t('dashboard.overview.title')}>
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {/* items-start : sans lui, les cartes sans ligne « maîtrise » étaient étirées
+              à la hauteur de la plus haute et se terminaient par un grand vide gris,
+              qui se lit comme un chargement inachevé. */}
+          <div className="grid items-start gap-3 sm:grid-cols-2 xl:grid-cols-3">
             {overview.map(a => (
               <Card key={a.instance} size="sm" className="bg-muted/40 ring-0">
                 <CardContent className="flex flex-col gap-2">
@@ -238,20 +241,44 @@ function HealthCard({ doctor }: { doctor: DoctorReport }) {
       </Card>
     )
   }
+  return <HealthWarnings warnings={doctor.warnings} />
+}
+
+/**
+ * Avertissements du doctor — MÊME composant Alert que la bannière moteur juste
+ * au-dessus (avant, une Card « presque pareille » : deux pavés ambre jumeaux
+ * mais aux bordures et paddings différents), et REPLIABLE : sur mobile les
+ * deux blocs mangeaient la moitié de l'écran d'accueil et le premier chiffre
+ * de l'application passait sous la ligne de flottaison.
+ *
+ * Ouvert d'emblée sur bureau (la place ne manque pas), fermé sur mobile où il
+ * ne reste qu'une ligne « À vérifier (1) ». La gravité est ainsi lisible :
+ * l'alerte moteur, elle, est dépliée et porte un bouton.
+ */
+function HealthWarnings({ warnings }: { warnings: string[] }) {
+  const { t } = useT()
+  // Décidé une seule fois au montage : c'est un état par défaut, pas une
+  // mise en page — l'utilisateur peut toujours l'ouvrir ou le fermer.
+  const [open, setOpen] = useState(() => (typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? window.matchMedia('(min-width: 640px)').matches : true))
   return (
-    <Card size="sm" className="ring-warning/40">
-      <CardContent className="flex items-start gap-3">
-        <TriangleAlert className="mt-0.5 size-5 shrink-0 text-warning" aria-hidden="true" />
-        <div className="min-w-0">
-          <div className="font-medium">{t('dashboard.health.warnTitle')}</div>
+    <Alert className="text-warning">
+      <TriangleAlert />
+      <Collapsible open={open} onOpenChange={setOpen} className="col-start-2 min-w-0">
+        <CollapsibleTrigger asChild>
+          <button type="button" className="flex w-full items-center gap-1.5 text-left font-medium" aria-label={t('dashboard.health.warnToggle')}>
+            {t('dashboard.health.warnCountTitle', { count: warnings.length })}
+            <ChevronDown className={cn('size-4 transition-transform', open && 'rotate-180')} aria-hidden="true" />
+          </button>
+        </CollapsibleTrigger>
+        <CollapsibleContent>
           <ul className="mt-1 list-disc space-y-0.5 pl-4 text-sm text-muted-foreground">
-            {doctor.warnings.map(w => (
+            {warnings.map(w => (
               <li key={w}>{w}</li>
             ))}
           </ul>
-        </div>
-      </CardContent>
-    </Card>
+        </CollapsibleContent>
+      </Collapsible>
+    </Alert>
   )
 }
 

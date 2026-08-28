@@ -34,7 +34,10 @@ import { Button } from '../components/ui/button'
 import { Label } from '../components/ui/label'
 import { Skeleton } from '../components/ui/skeleton'
 import { useT } from '../i18n'
+import { categoryLabel, splitTopics } from '../lib/labels'
 import { createSequence } from '../lib/sequence'
+import { TOUCH_ROW_ACTION } from '../lib/touch'
+import { cn } from '../lib/utils'
 
 /** Souvenir affiché : optionnellement étiqueté de l'agent (recherche globale). */
 type ShownFact = AdminFact & { agent_type?: string }
@@ -242,6 +245,7 @@ function MemoryBrowser({ agents }: { agents: AgentEntry[] }) {
       <MemSelectionBar count={selected.size} onClear={() => setSelected(new Set())}>
         <ConfirmButton
           variant="destructive"
+          className={TOUCH_ROW_ACTION}
           label={t('memory.forget_selected')}
           title={selected.size > 1 ? t('memory.forget_selected_title', { count: selected.size }) : t('memory.forget_one_title')}
           description={selected.size > 1 ? t('memory.forget_selected_body') : t('memory.forget_one_body')}
@@ -279,13 +283,15 @@ function MemoryBrowser({ agents }: { agents: AgentEntry[] }) {
                   {search.query === '' ? t('memory.results_latest') : t('memory.results_for', { query: search.query })}
                 </p>
               </div>
-              <Button type="button" variant="ghost" size="sm" onClick={toggleAll} disabled={busy}>
+              <Button type="button" variant="ghost" size="sm" className={TOUCH_ROW_ACTION} onClick={toggleAll} disabled={busy}>
                 {allSelected ? <Square aria-hidden="true" /> : <CheckSquare aria-hidden="true" />}
                 {allSelected ? t('selection.unselect_all') : t('selection.select_all')}
               </Button>
             </div>
             <ul className="flex flex-col gap-3">
-              {facts.map(fact => (
+              {facts.map(fact => {
+                const topics = splitTopics(fact.topics)
+                return (
                 <li key={fact.id}>
                   <MemFactCard
                     selected={selected.has(fact.id)}
@@ -300,13 +306,21 @@ function MemoryBrowser({ agents }: { agents: AgentEntry[] }) {
                             {agentTypeLabel(fact.agent_type)}
                           </Badge>
                         )}
-                        {(fact.topics ?? []).map(topic => (
+                        {topics.shown.map(topic => (
                           <MemBadgeButton key={topic} title={t('memory.badge_topic_filter')} onClick={() => filterBy(topic)}>
                             {topic}
                           </MemBadgeButton>
                         ))}
+                        {topics.hidden.length > 0 && (
+                          <Badge variant="outline" title={t('fact.topics_more_title', { list: topics.hidden.join(', ') })}>
+                            {t('fact.topics_more', { count: topics.hidden.length })}
+                          </Badge>
+                        )}
+                        {/* AFFICHAGE traduit, FILTRE sur la valeur brute : la recherche
+                            interroge la base, qui ne connaît que « preference » — traduire
+                            l'argument de filterBy() ne ramènerait plus rien. */}
                         <MemBadgeButton variant="secondary" title={t('memory.badge_category_filter')} onClick={() => filterBy(fact.category)}>
-                          {fact.category}
+                          {categoryLabel(t, fact.category)}
                         </MemBadgeButton>
                         <ScopeBadge fact={fact} />
                         <MemSensitivityBadge sensitivity={fact.sensitivity} />
@@ -316,7 +330,7 @@ function MemoryBrowser({ agents }: { agents: AgentEntry[] }) {
                     actions={
                       <ConfirmButton
                         variant="ghost"
-                        className="text-destructive hover:text-destructive"
+                        className={cn('text-destructive hover:text-destructive', TOUCH_ROW_ACTION)}
                         label={t('memory.forget')}
                         title={t('memory.forget_one_title')}
                         description={t('memory.forget_one_body')}
@@ -329,7 +343,8 @@ function MemoryBrowser({ agents }: { agents: AgentEntry[] }) {
                     {fact.fact}
                   </MemFactCard>
                 </li>
-              ))}
+                )
+              })}
             </ul>
           </section>
         ))}

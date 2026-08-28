@@ -58,7 +58,12 @@ export function MemFactCard({
           {(meta || actions) && (
             <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
               {meta && <div className="flex min-w-0 flex-wrap items-center gap-1.5">{meta}</div>}
-              {actions && <div className="ml-auto flex flex-wrap items-center gap-1.5">{actions}</div>}
+              {/* `sm:ml-auto` seulement : sur mobile les pastilles prennent toute la
+                  largeur, les actions passent à la ligne et un `ml-auto` les
+                  envoyait flotter seules à l'extrême droite, loin du souvenir
+                  auquel elles s'appliquent. `gap-3` éloigne l'action principale
+                  du destructif voisin (« Approuver » / « Rejeter »). */}
+              {actions && <div className="flex flex-wrap items-center gap-3 sm:ml-auto">{actions}</div>}
             </div>
           )}
         </div>

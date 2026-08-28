@@ -9,6 +9,12 @@
  * barre de sélection collante pour traiter un lot, AlertDialog avant tout
  * rejet (c'est un effacement), toasts, trois états (chargement / erreur /
  * vide). Mêmes appels : GET /v1/admin/review, POST /v1/admin/review/<décision>.
+ *
+ * HIÉRARCHIE DES ACTIONS (une seule action pleine à l'écran) : « Tout
+ * approuver » (les six d'un coup) est le seul bouton orange plein ;
+ * l'« Approuver » d'une ligne est un contour ; « Rejeter » reste discret mais
+ * rouge. Ce qui sépare « ce souvenir » de « les six », c'est le poids visuel,
+ * jamais l'apparition ou la disparition d'un bouton.
  */
 import { useCallback, useEffect, useState } from 'react'
 import { Check, CheckSquare, ClipboardCheck, Sparkles, Square } from 'lucide-react'
@@ -22,6 +28,9 @@ import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { Skeleton } from '../components/ui/skeleton'
 import { useT } from '../i18n'
+import { categoryLabel, splitTopics } from '../lib/labels'
+import { TOUCH_ROW_ACTION } from '../lib/touch'
+import { cn } from '../lib/utils'
 
 type Decision = 'approve' | 'reject'
 
@@ -109,12 +118,13 @@ export function Review() {
       />
 
       <MemSelectionBar count={selected.size} onClear={() => setSelected(new Set())}>
-        <Button size="sm" disabled={busy} onClick={() => void decide([...selected], 'approve')}>
+        <Button size="sm" className={TOUCH_ROW_ACTION} disabled={busy} onClick={() => void decide([...selected], 'approve')}>
           <Check aria-hidden="true" />
           {t('review.approve_selected')}
         </Button>
         <ConfirmButton
           variant="destructive"
+          className={TOUCH_ROW_ACTION}
           label={t('review.reject_selected')}
           title={selected.size > 1 ? t('review.reject_selected_title', { count: selected.size }) : t('review.reject_one_title')}
           description={t('review.reject_body')}
@@ -138,20 +148,29 @@ export function Review() {
               <ClipboardCheck className="size-4 text-muted-foreground" aria-hidden="true" />
               {list.length > 1 ? t('review.pending_count_plural', { count: list.length }) : t('review.pending_count', { count: list.length })}
             </h2>
-            {/* Actions de masse ici, pas dans la barre supérieure : à 390 px elles y écrasaient le titre. */}
-            <div className="flex flex-wrap items-center gap-2">
-              <Button type="button" variant="ghost" size="sm" onClick={toggleAll} disabled={busy}>
+            {/* Actions de masse ici, pas dans la barre supérieure : à 390 px elles y écrasaient le titre.
+                `w-full … justify-end sm:w-auto` : au retour à la ligne sous 640 px, le groupe prend
+                toute la largeur et reste aligné sur le MÊME axe droit — sinon « Tout rejeter »
+                retombait seul à gauche, ce qui se lisait comme un bug de mise en page. */}
+            <div className="flex w-full flex-wrap items-center justify-end gap-2 sm:w-auto">
+              <Button type="button" variant="ghost" size="sm" className={TOUCH_ROW_ACTION} onClick={toggleAll} disabled={busy}>
                 {allSelected ? <Square aria-hidden="true" /> : <CheckSquare aria-hidden="true" />}
                 {allSelected ? t('selection.unselect_all') : t('selection.select_all')}
               </Button>
+              {/* Ces actions restent visibles même pendant une sélection : « Tout
+                  approuver (6) » et « Approuver la sélection (2) » ne font PAS la même
+                  chose, et faire disparaître une rangée de boutons au premier clic sur
+                  une case ferait sauter la liste sous le doigt. La distinction se joue
+                  sur le poids visuel (plein vs contour), pas sur l'apparition. */}
               {list.length > 1 && (
                 <>
-                  <Button size="sm" disabled={busy} onClick={() => void decide(list.map(i => i.id), 'approve')}>
+                  <Button size="sm" className={TOUCH_ROW_ACTION} disabled={busy} onClick={() => void decide(list.map(i => i.id), 'approve')}>
                     <Check aria-hidden="true" />
                     {t('review.approve_all', { count: list.length })}
                   </Button>
                   <ConfirmButton
                     variant="destructive"
+                    className={TOUCH_ROW_ACTION}
                     label={t('review.reject_all')}
                     title={t('review.reject_all_confirm', { count: list.length })}
                     description={t('review.reject_body')}
@@ -164,7 +183,9 @@ export function Review() {
             </div>
           </div>
           <ul className="flex flex-col gap-3">
-            {list.map(item => (
+            {list.map(item => {
+              const topics = splitTopics(item.topics)
+              return (
               <li key={item.id}>
                 <MemFactCard
                   selected={selected.has(item.id)}
@@ -173,12 +194,19 @@ export function Review() {
                   disabled={busy}
                   meta={
                     <>
-                      {(item.topics ?? []).map(topic => (
+                      {topics.shown.map(topic => (
                         <Badge key={topic} variant="outline" title={t('review.badge_topic_title')}>
                           {topic}
                         </Badge>
                       ))}
-                      <Badge variant="secondary">{item.category}</Badge>
+                      {topics.hidden.length > 0 && (
+                        <Badge variant="outline" title={t('fact.topics_more_title', { list: topics.hidden.join(', ') })}>
+                          {t('fact.topics_more', { count: topics.hidden.length })}
+                        </Badge>
+                      )}
+                      {/* La catégorie vient de la base en anglais (« general », « decision ») :
+                          on l'affiche traduite, sans jamais inventer de mot pour une valeur inconnue. */}
+                      <Badge variant="secondary">{categoryLabel(t, item.category)}</Badge>
                       <Badge variant="outline">{item.source_type === 'capture-review' ? t('review.source_capture') : t('review.source_import')}</Badge>
                       <MemMetaText>{t('review.confidence', { percent: (item.confidence * 100).toFixed(0) })}</MemMetaText>
                       <MemMetaText>{formatDate(item.created_at)}</MemMetaText>
@@ -186,13 +214,17 @@ export function Review() {
                   }
                   actions={
                     <>
-                      <Button size="sm" disabled={busy} onClick={() => void decide([item.id], 'approve')}>
+                      {/* Contour, pas orange plein : le seul bloc plein de l'écran est
+                          « Tout approuver », l'action de masse. Six « Approuver » pleins
+                          en colonne à droite écrasaient les souvenirs à juger, et rien
+                          ne distinguait plus « ce souvenir » de « les six ». */}
+                      <Button variant="outline" size="sm" className={TOUCH_ROW_ACTION} disabled={busy} onClick={() => void decide([item.id], 'approve')}>
                         <Check aria-hidden="true" />
                         {t('review.approve')}
                       </Button>
                       <ConfirmButton
                         variant="ghost"
-                        className="text-destructive hover:text-destructive"
+                        className={cn('text-destructive hover:text-destructive', TOUCH_ROW_ACTION)}
                         label={t('review.reject')}
                         title={t('review.reject_one_title')}
                         description={t('review.reject_body')}
@@ -206,7 +238,8 @@ export function Review() {
                   {item.content}
                 </MemFactCard>
               </li>
-            ))}
+              )
+            })}
           </ul>
         </section>
       )}
