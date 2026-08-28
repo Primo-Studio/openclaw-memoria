@@ -84,8 +84,6 @@ export const es: Messages = {
 
   // — Comunes —
   'common.refresh': 'Actualizar',
-  // Version courte pour la barre supérieure mobile (jamais d'icône muette).
-  'common.refresh_short': 'Actualizar',
   'error.session_expired': 'Sesión expirada o clave inválida — reinicia «memoria» desde tu terminal.',
   'error.not_available': 'Esta función aún no está disponible en tu versión de Memoria.',
   'error.no_response': 'El servicio Memoria no responde. Verifica que esté activo (comando «memoria»).',

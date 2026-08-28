@@ -84,8 +84,6 @@ export const en: Messages = {
 
   // — Common —
   'common.refresh': 'Refresh',
-  // Version courte pour la barre supérieure mobile (jamais d'icône muette).
-  'common.refresh_short': 'Refresh',
   'error.session_expired': 'Session expired or invalid key — restart “memoria” from your terminal.',
   'error.not_available': 'This feature is not available yet in your version of Memoria.',
   'error.no_response': 'The Memoria service is not responding. Check it’s running (“memoria” command).',

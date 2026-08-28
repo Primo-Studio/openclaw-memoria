@@ -217,7 +217,6 @@ export function Maintenance() {
         actions={
           <MemRefreshButton
             label={t('common.refresh')}
-            shortLabel={t('common.refresh_short')}
             onClick={retry}
             disabled={!instance || phase === 'loading'}
             spinning={phase === 'loading'}

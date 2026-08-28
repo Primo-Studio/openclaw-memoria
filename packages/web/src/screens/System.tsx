@@ -9,8 +9,8 @@
  * Même source de données qu'avant (GET /v1/admin/cognitive_stats) — la santé
  * du stockage vit sur le Tableau de bord, la consommation dans Réglages.
  */
-import { RefreshCw } from 'lucide-react'
 import { getCognitiveStats } from '../api'
+import { MemRefreshButton } from '../components/MemRefreshButton'
 import { ErrorBanner, PageHeader, SectionCard, StatCard, formatNumber, useLoad } from '../components/ui'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
@@ -89,10 +89,7 @@ export function System() {
         title={t('system.title')}
         description={t('system.lead')}
         actions={
-          <Button variant="outline" size="sm" onClick={reload} disabled={state.status === 'loading'}>
-            <RefreshCw className={cn(state.status === 'loading' && 'animate-spin')} aria-hidden="true" />
-            {t('common.refresh')}
-          </Button>
+          <MemRefreshButton label={t('common.refresh')} onClick={reload} disabled={state.status === 'loading'} spinning={state.status === 'loading'} />
         }
       />
 

@@ -9,10 +9,11 @@
  * plutôt que `keychain`), états chargement / erreur / vide.
  */
 import { useState } from 'react'
-import { Lock, RefreshCw, ShieldCheck } from 'lucide-react'
+import { Lock, ShieldCheck } from 'lucide-react'
 import { getSecrets, type SecretRef } from '../api'
 import { DataTable, EmptyState, ErrorBanner, PageHeader, SectionCard, formatDay, formatNumber, useLoad, type DataColumn } from '../components/ui'
 import { DataCards } from '../components/DataCards'
+import { MemRefreshButton } from '../components/MemRefreshButton'
 import { Alert, AlertDescription, AlertTitle } from '../components/ui/alert'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
@@ -57,10 +58,7 @@ export function Vault() {
         title={t('vault.title')}
         description={t('vault.lead')}
         actions={
-          <Button variant="outline" size="sm" onClick={reload} disabled={state.status === 'loading'}>
-            <RefreshCw className={cn(state.status === 'loading' && 'animate-spin')} aria-hidden="true" />
-            {t('common.refresh')}
-          </Button>
+          <MemRefreshButton label={t('common.refresh')} onClick={reload} disabled={state.status === 'loading'} spinning={state.status === 'loading'} />
         }
       />
 

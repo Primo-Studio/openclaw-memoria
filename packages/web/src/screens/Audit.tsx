@@ -8,10 +8,11 @@
  * DataTable triable (tri = lib/sort.ts, testé), pagination, 3 états.
  */
 import { useState } from 'react'
-import { RefreshCw, Search, SearchX } from 'lucide-react'
+import { Search, SearchX } from 'lucide-react'
 import { getAudit, type AuditEntry } from '../api'
 import { DataTable, EmptyState, ErrorBanner, PageHeader, SectionCard, formatDate, formatNumber, useLoad, type DataColumn } from '../components/ui'
 import { DataCards } from '../components/DataCards'
+import { MemRefreshButton } from '../components/MemRefreshButton'
 import { useDirectory, type Directory, type Translate } from '../components/memory-names'
 import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
@@ -49,10 +50,7 @@ export function Audit() {
         title={t('audit.title')}
         description={t('audit.lead')}
         actions={
-          <Button variant="outline" size="sm" onClick={reload} disabled={state.status === 'loading'}>
-            <RefreshCw className={cn(state.status === 'loading' && 'animate-spin')} aria-hidden="true" />
-            {t('common.refresh')}
-          </Button>
+          <MemRefreshButton label={t('common.refresh')} onClick={reload} disabled={state.status === 'loading'} spinning={state.status === 'loading'} />
         }
       />
 
