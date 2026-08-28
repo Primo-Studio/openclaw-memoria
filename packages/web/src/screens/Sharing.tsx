@@ -203,12 +203,29 @@ export function Sharing() {
                   </div>
                   <ul className="divide-y">
                     {assistants.map(a => (
-                      <li key={a.id} className="flex items-center justify-between gap-3 px-3 py-2.5">
+                      /* POURQUOI toute la ligne bascule et pas seulement
+                         l'interrupteur : au pouce, la zone réelle de
+                         l'interrupteur plafonne à ~34 px de haut, sous les 44 px
+                         visés — on rate la cible et on rappuie. La ligne fait
+                         41 px et porte déjà le nom de l'agent. Le clavier et les
+                         lecteurs d'écran continuent de passer par
+                         l'interrupteur, qui garde son libellé ; d'où le
+                         `stopPropagation`, sinon le clic serait compté deux
+                         fois. Rien n'est appliqué directement : comme avant, on
+                         ouvre la demande de confirmation. */
+                      <li
+                        key={a.id}
+                        className="flex cursor-pointer items-center justify-between gap-3 px-3 py-2.5"
+                        onClick={() => {
+                          if (!busy) setPending({ assistant: a, scope, next: !scope.readers.includes(a.id) })
+                        }}
+                      >
                         <span className="min-w-0 truncate text-sm font-medium">{agentFullName(a.display_name, a.type)}</span>
                         <Switch
                           checked={scope.readers.includes(a.id)}
                           disabled={busy}
                           aria-label={t('sharing.reader_aria', { agent: agentFullName(a.display_name, a.type), scope: scopeLabel(t, scope) })}
+                          onClick={e => e.stopPropagation()}
                           onCheckedChange={next => setPending({ assistant: a, scope, next })}
                         />
                       </li>
