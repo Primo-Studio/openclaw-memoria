@@ -8,7 +8,9 @@ function Table({ className, ...props }: React.ComponentProps<"table">) {
   return (
     <div
       data-slot="table-container"
-      className="relative w-full overflow-x-auto"
+      // scroll-shadow-x : un tableau plus large que sa carte doit LE DIRE.
+      // L'ombre n'apparaît que du côté où il reste des colonnes (voir index.css).
+      className="relative w-full overflow-x-auto scroll-shadow-x"
     >
       <table
         data-slot="table"

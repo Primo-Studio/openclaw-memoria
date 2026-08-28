@@ -30,6 +30,8 @@ import {
 import { Button, type buttonVariants } from './ui/button'
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table'
+// Ré-exporté plus bas : les écrans n'importent QUE depuis ce fichier.
+import { DataCards, type CardField } from './DataCards'
 import type { VariantProps } from 'class-variance-authority'
 
 // ------------------------------------------------------------------- helpers
@@ -232,8 +234,12 @@ export function EmptyState({
   icon?: ReactNode
   className?: string
 }) {
+  // POURQUOI `mx-auto max-w-xl` : sans borne, l'état vide s'étirait sur toute la
+  // largeur du contenu (990 px sur bureau) — une grande boîte pâle et vide, qui
+  // pèse plus lourd à l'écran que ce qu'elle a à dire. Bornée, elle se lit
+  // comme un message, pas comme une zone de contenu manquante.
   return (
-    <div className={cn('flex flex-col items-center gap-2 rounded-xl border border-dashed px-6 py-10 text-center', className)}>
+    <div className={cn('mx-auto flex w-full max-w-xl flex-col items-center gap-2 rounded-xl border border-dashed px-6 py-8 text-center', className)}>
       <span className="mb-1 flex size-10 items-center justify-center rounded-full bg-muted text-muted-foreground" aria-hidden="true">
         {icon ?? <Inbox className="size-5" />}
       </span>
@@ -416,10 +422,20 @@ export function StatCard({
     <Card size="sm" className={cn('gap-1', className)}>
       <CardContent className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className={cn('text-2xl font-semibold tabular-nums tracking-tight', toneClass)}>
-            {typeof value === 'number' ? formatNumber(value) : value}
+          {/*
+            UN SEUL dessin, partout : chiffre, libellé, aide, pastille d'icône
+            facultative à droite. VARIANTE COMPACTE sous 640 px — le chiffre et
+            son libellé passent sur la même ligne de base : en pleine largeur
+            (écran Système), une tuile empilée mangeait 100 px de haut pour dire
+            « 24 couches ». Compactée, elle en prend deux fois moins et l'écran
+            reste lisible sans faire défiler.
+          */}
+          <div className="max-sm:flex max-sm:flex-wrap max-sm:items-baseline max-sm:gap-x-2">
+            <div className={cn('text-2xl font-semibold tabular-nums tracking-tight max-sm:text-xl', toneClass)}>
+              {typeof value === 'number' ? formatNumber(value) : value}
+            </div>
+            <div className="mt-0.5 text-sm font-medium max-sm:mt-0">{label}</div>
           </div>
-          <div className="mt-0.5 text-sm font-medium">{label}</div>
           {hint && <div className="mt-0.5 text-xs text-muted-foreground">{hint}</div>}
         </div>
         {icon && (
@@ -478,9 +494,37 @@ export interface DataSort {
 }
 
 /**
+ * Fenêtre étroite (< 640 px) — la borne `sm` de Tailwind. On S'ABONNE au
+ * changement plutôt que de mesurer une fois : faire pivoter le téléphone doit
+ * suffire à repasser d'une forme à l'autre.
+ */
+const NARROW_QUERY = '(max-width: 639.98px)'
+
+export function useIsNarrow(): boolean {
+  const [narrow, setNarrow] = useState(() => (typeof window === 'undefined' ? false : window.matchMedia(NARROW_QUERY).matches))
+  useEffect(() => {
+    const mq = window.matchMedia(NARROW_QUERY)
+    const sync = () => setNarrow(mq.matches)
+    sync()
+    mq.addEventListener('change', sync)
+    return () => mq.removeEventListener('change', sync)
+  }, [])
+  return narrow
+}
+
+/**
  * Tableau de données : en-têtes triables = de vrais boutons (clavier, lecteur
- * d'écran, `aria-sort`), défilement horizontal interne (jamais la page),
- * état vide explicite. Le tri reste à l'appelant (données déjà triées).
+ * d'écran, `aria-sort`), défilement horizontal signalé (voir `scroll-shadow-x`
+ * dans index.css), état vide explicite. Le tri reste à l'appelant.
+ *
+ * SOUS 640 px, PAR DÉFAUT : une fiche par ligne au lieu du tableau.
+ * POURQUOI : un tableau de 5 colonnes dans une carte de 326 px était coupé au
+ * bord — sur Partage, deux agents sur trois n'existaient plus à l'écran ; sur
+ * le Journal, la colonne « Action » était tranchée en plein mot. C'était le
+ * défaut le plus grave de la revue mobile, et il revenait sur chaque nouvel
+ * écran parce que chaque écran devait y penser. Il est donc réglé ICI, une
+ * fois : un écran doit désormais demander explicitement `mobile="table"` pour
+ * retrouver le tableau rogné.
  */
 export function DataTable<T>({
   columns,
@@ -490,6 +534,7 @@ export function DataTable<T>({
   onSort,
   empty,
   dense = false,
+  mobile = 'cards',
   className,
 }: {
   columns: DataColumn<T>[]
@@ -500,15 +545,37 @@ export function DataTable<T>({
   /** Contenu affiché quand `rows` est vide (défaut : « Aucune donnée »). */
   empty?: ReactNode
   dense?: boolean
+  /** Forme sous 640 px : fiches (défaut) ou tableau défilant. */
+  mobile?: 'cards' | 'table'
   className?: string
 }) {
   const { t } = useT()
+  const narrow = useIsNarrow()
   const alignClass = (a?: DataColumn<T>['align']) => (a === 'right' ? 'text-right' : a === 'center' ? 'text-center' : 'text-left')
   const toggle = (col: DataColumn<T>) => {
     if (!onSort) return
     const dir = sort?.by === col.id && sort.dir === 'asc' ? 'desc' : 'asc'
     onSort({ by: col.id, dir })
   }
+
+  // Fiches : la première colonne identifie la ligne (titre), les autres
+  // deviennent des paires libellé / valeur — donc AUCUNE colonne ne disparaît.
+  const [first, ...rest] = columns
+  if (narrow && mobile === 'cards' && first) {
+    if (rows.length === 0) {
+      return <p className="py-4 text-center text-sm text-muted-foreground">{empty ?? t('table.empty')}</p>
+    }
+    return (
+      <DataCards
+        rows={rows}
+        rowKey={rowKey}
+        className={className}
+        title={row => first.cell(row)}
+        fields={row => rest.map(col => ({ key: col.id, label: col.header, value: col.cell(row) }))}
+      />
+    )
+  }
+
   return (
     <Table className={className}>
       <TableHeader>
@@ -524,7 +591,9 @@ export function DataTable<T>({
                     type="button"
                     variant="ghost"
                     size="sm"
-                    className={cn('-ml-2 h-8 gap-1 px-2 font-medium', active && 'text-primary')}
+                    // Plancher tactile explicite : `h-8` battrait la hauteur `sm` du
+                    // variant, il faut donc re-poser le `max-sm:` ici.
+                    className={cn('-ml-2 h-8 max-sm:h-11 gap-1 px-2 font-medium', active && 'text-primary')}
                     onClick={() => toggle(col)}
                     aria-label={t('table.sort', { column: label })}
                   >
@@ -565,3 +634,7 @@ export function DataTable<T>({
     </Table>
   )
 }
+
+// Ré-export : un écran qui a besoin de la forme « fiches » hors DataTable
+// (liste maison, colonnes composites) l'importe depuis ce fichier.
+export { DataCards, type CardField }

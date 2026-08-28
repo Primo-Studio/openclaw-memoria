@@ -23,6 +23,34 @@
    (c'est lib/theme.ts qui traduit « Système » en light/dark). */
 @custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
 
+/*
+ * Indice de défilement horizontal (utilisé par le conteneur de <Table>).
+ *
+ * POURQUOI : un tableau plus large que sa carte était coupé NET au bord, sans
+ * ombre ni barre — rien ne disait qu'il restait des colonnes (sur Partage, deux
+ * agents sur trois devenaient invisibles). Technique des « ombres de
+ * défilement » : deux calques couvercle solidaires du contenu
+ * (background-attachment: local) masquent deux ombres fixes (attachment:
+ * scroll). Conséquence recherchée : l'ombre n'apparaît QUE du côté où il reste
+ * du contenu, et rien ne s'affiche quand le tableau tient en entier — donc
+ * aucune décoration parasite sur les écrans qui ne débordent pas. Zéro JS.
+ *
+ * `--scroll-shadow-surface` = la couleur du couvercle : celle du fond réel
+ * derrière le tableau (une carte, par défaut).
+ */
+@utility scroll-shadow-x {
+  --scroll-shadow-surface: var(--card);
+  background-image:
+    linear-gradient(to right, var(--scroll-shadow-surface) 55%, transparent),
+    linear-gradient(to left, var(--scroll-shadow-surface) 55%, transparent),
+    linear-gradient(to right, color-mix(in oklch, var(--foreground) 22%, transparent), transparent),
+    linear-gradient(to left, color-mix(in oklch, var(--foreground) 22%, transparent), transparent);
+  background-position: left center, right center, left center, right center;
+  background-repeat: no-repeat;
+  background-size: 28px 100%, 28px 100%, 12px 100%, 12px 100%;
+  background-attachment: local, local, scroll, scroll;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
