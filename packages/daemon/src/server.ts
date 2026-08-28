@@ -13,7 +13,7 @@
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { existsSync, mkdirSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { timingSafeEqual } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import {
@@ -24,6 +24,7 @@ import {
   autostartStatus,
   collectTranscriptFiles,
   copyOpenClawKey,
+  defaultStorageRoot,
   writeProviderKey,
   detectAgents,
   disableAutostart,
@@ -615,8 +616,12 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
           profile: (body['profile'] as string | undefined) ?? null,
         })
         // Tant que @memoria/mcp n'est pas publié sur npm, la commande npx ne
-        // marche pas : on la remplace par le binaire LOCAL s'il existe.
-        sendJson(res, 200, { ...result, command: localConnectCommand(result.pairing_code) ?? result.command })
+        // marche pas : on la remplace par le binaire LOCAL s'il existe. Et la
+        // commande vise CE stockage (--storage-root) quand il n'est pas celui
+        // par défaut : sans lui, memoria-mcp résolvait ~/.memoria/config.toml →
+        // autre daemon (ou un daemon neuf dans ~/.memoria/data) → « code de
+        // pairing invalide ou expiré » alors que le code était bon ici.
+        sendJson(res, 200, { ...result, command: connectCommand(result.pairing_code, storageRoot, result.command), storage_root: storageRoot })
         return
       }
       case 'POST /v1/admin/revoke': {
@@ -1367,18 +1372,27 @@ function parseHostPort(addr: string): [string, number] {
 }
 
 /**
- * Commande de connexion LOCALE : `node <repo>/packages/mcp/dist/bin.js connect
- * --code XXXX`. Le bin MCP est voisin du daemon dans le monorepo. Retourne null
- * si introuvable (paquet publié npm → on garde la forme npx).
+ * Commande de connexion à coller dans le chat de l'agent : binaire LOCAL
+ * (`node <repo>/packages/mcp/dist/bin.js connect --code XXXX`, voisin du
+ * daemon dans le monorepo) sinon la forme npx ; plus ` --storage-root <racine>`
+ * dès que le stockage n'est pas ~/.memoria/data, pour que memoria-mcp parle
+ * au BON daemon.
  */
-function localConnectCommand(code: string): string | null {
+function connectCommand(code: string, storageRoot: string, npxCommand: string): string {
+  let base = npxCommand
   try {
     const binPath = fileURLToPath(new URL('../../mcp/dist/bin.js', import.meta.url))
-    if (existsSync(binPath)) return `${process.execPath} ${binPath} connect --code ${code}`
+    if (existsSync(binPath)) base = `${process.execPath} ${binPath} connect --code ${code}`
   } catch {
-    /* ignore */
+    /* paquet publié npm : forme npx conservée */
   }
-  return null
+  if (resolve(storageRoot) === resolve(defaultStorageRoot())) return base
+  return `${base} --storage-root ${shellQuote(storageRoot)}`
+}
+
+/** Chemin cité pour un shell si nécessaire (espaces, caractères spéciaux). */
+function shellQuote(p: string): string {
+  return /^[A-Za-z0-9_./~:@+-]+$/.test(p) ? p : `'${p.replace(/'/g, `'\\''`)}'`
 }
 
 /** Hôte loopback uniquement (anti-DNS-rebinding). Absent = client non-HTTP/1.0 toléré. */
