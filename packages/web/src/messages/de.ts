@@ -685,7 +685,7 @@ export const de: Messages = {
   'memory.field_agent': 'Agent',
   'memory.forget': 'Vergessen',
   'memory.forget_confirm': 'Endgültig vergessen',
-  'memory.hint': 'Suchen Sie nach einem Stichwort, einem Thema, einem Projektnamen: Die Suche startet von selbst beim Tippen. „Alle anzeigen“ kehrt zu den neuesten Erinnerungen zurück.',
+  'memory.hint': 'Such nach einem Stichwort, einem Thema, einem Projektnamen: Die Suche startet von selbst beim Tippen. „Alle anzeigen“ kehrt zu den neuesten Erinnerungen zurück.',
   'memory.forget_no_effect': 'Diese Erinnerung konnte nicht vergessen werden (nichts serverseitig gelöscht). Neu laden oder erneut versuchen.',
   'memory.count': '{count} Erinnerung gefunden',
   'memory.count_plural': '{count} Erinnerungen gefunden',
