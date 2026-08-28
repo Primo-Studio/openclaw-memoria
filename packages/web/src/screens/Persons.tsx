@@ -108,13 +108,20 @@ export function Persons() {
 
   return (
     <>
-      <PageHeader title={t('persons.title')} actions={<AddPersonDialog onAdded={refresh} />}>
-        <p className="mb-4 text-sm text-muted-foreground">
-          {t('persons.lead.before')}
-          <strong className="font-medium text-foreground">{t('persons.lead.strong')}</strong>
-          {t('persons.lead.after')}
-        </p>
-      </PageHeader>
+      <PageHeader
+        title={t('persons.title')}
+        actions={<AddPersonDialog onAdded={refresh} />}
+        // En `description` et non en `children` : PageHeader place la
+        // description AVANT les actions, donc au téléphone l'écran s'ouvre sur
+        // sa phrase d'explication et non sur le bouton « Ajouter » tout seul.
+        description={
+          <>
+            {t('persons.lead.before')}
+            <strong className="font-medium text-foreground">{t('persons.lead.strong')}</strong>
+            {t('persons.lead.after')}
+          </>
+        }
+      />
 
       <div className="flex flex-col gap-4">
         {phase === 'loading' && <PersonsSkeleton />}
