@@ -2,39 +2,85 @@
  * Revue — souvenirs en attente (mode « revue d'abord » et imports en
  * quarantaine) : approuver = le souvenir devient actif, rejeter = effacé
  * définitivement. Tant qu'un souvenir attend ici, aucun agent ne le voit.
+ *
+ * Écran migré sur shadcn : PageHeader (Actualiser dans la barre supérieure ;
+ * « Tout approuver » / « Tout rejeter » en tête de liste, où il y a la place
+ * sur mobile), cartes MemFactCard avec case à cocher,
+ * barre de sélection collante pour traiter un lot, AlertDialog avant tout
+ * rejet (c'est un effacement), toasts, trois états (chargement / erreur /
+ * vide). Mêmes appels : GET /v1/admin/review, POST /v1/admin/review/<décision>.
  */
 import { useCallback, useEffect, useState } from 'react'
-import { ApiError, getReview, reviewDecision, type ReviewItem } from '../api'
-import { ConfirmButton, ErrorBanner, Spinner, listPhase } from '../components/ui'
+import { Check, CheckSquare, ClipboardCheck, Sparkles, Square } from 'lucide-react'
+import { toast } from 'sonner'
+import { getReview, reviewDecision, type ReviewItem } from '../api'
+import { MemFactCard, MemMetaText } from '../components/MemFactCard'
+import { MemRefreshButton } from '../components/MemRefreshButton'
+import { MemSelectionBar } from '../components/MemSelectionBar'
+import { ConfirmButton, EmptyState, ErrorBanner, PageHeader, formatDate, humanError, listPhase } from '../components/ui'
+import { Badge } from '../components/ui/badge'
+import { Button } from '../components/ui/button'
+import { Skeleton } from '../components/ui/skeleton'
 import { useT } from '../i18n'
+
+type Decision = 'approve' | 'reject'
 
 export function Review() {
   const { t } = useT()
   const [items, setItems] = useState<ReviewItem[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
 
   const refresh = useCallback(async () => {
+    setRefreshing(true)
     try {
       setItems(await getReview())
       setError(null)
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : t('review.service_unavailable'))
+      console.warn('memoria-ui : revue illisible', err)
+      setError(humanError(err))
+    } finally {
+      setRefreshing(false)
     }
-  }, [t])
+  }, [])
 
   useEffect(() => {
     void refresh()
   }, [refresh])
 
+  // La sélection ne garde que les souvenirs encore en attente après un rechargement.
+  useEffect(() => {
+    if (items === null) return
+    const visible = new Set(items.map(i => i.id))
+    setSelected(prev => {
+      const next = new Set([...prev].filter(id => visible.has(id)))
+      return next.size === prev.size ? prev : next
+    })
+  }, [items])
+
   const decide = useCallback(
-    async (ids: string[], decision: 'approve' | 'reject') => {
+    async (ids: string[], decision: Decision) => {
+      if (ids.length === 0) return
       setBusy(true)
       try {
-        await reviewDecision(ids, decision)
+        const updated = await reviewDecision(ids, decision)
+        toast.success(
+          decision === 'approve'
+            ? updated > 1
+              ? t('review.approved_plural', { count: updated })
+              : t('review.approved')
+            : updated > 1
+              ? t('review.rejected_plural', { count: updated })
+              : t('review.rejected'),
+        )
         await refresh()
       } catch (err) {
-        setError(err instanceof ApiError ? err.message : t('review.action_failed'))
+        // L'échec d'une décision ne remplace pas la liste par une bannière :
+        // les souvenirs sont toujours en attente, on le dit en toast.
+        console.warn('memoria-ui : décision de revue refusée', err)
+        toast.error(t('review.action_failed_detail', { message: humanError(err) }))
       } finally {
         setBusy(false)
       }
@@ -43,84 +89,140 @@ export function Review() {
   )
 
   const phase = listPhase(items, error)
+  const list = items ?? []
+  const allSelected = list.length > 0 && list.every(i => selected.has(i.id))
+  const toggleAll = () => setSelected(allSelected ? new Set() : new Set(list.map(i => i.id)))
+  const setOne = (id: string, on: boolean) =>
+    setSelected(prev => {
+      const next = new Set(prev)
+      if (on) next.add(id)
+      else next.delete(id)
+      return next
+    })
 
   return (
-    <section>
-      <header className="screen-head">
-        <div>
-          <h1>{t('review.title')}</h1>
-          <p className="muted">{t('review.lead')}</p>
-        </div>
-        {items !== null && items.length > 1 && (
-          <div className="review-bulk">
-            <button
-              type="button"
-              className="btn btn-primary"
-              disabled={busy}
-              onClick={() => void decide(items.map(i => i.id), 'approve')}
-            >
-              {t('review.approve_all', { count: items.length })}
-            </button>
-            <button
-              type="button"
-              className="btn btn-danger"
-              disabled={busy}
-              onClick={() => {
-                if (confirm(t('review.reject_all_confirm', { count: items.length }))) {
-                  void decide(items.map(i => i.id), 'reject')
-                }
-              }}
-            >
-              {t('review.reject_all')}
-            </button>
-          </div>
-        )}
-      </header>
+    <>
+      <PageHeader
+        title={t('review.title')}
+        description={t('review.lead')}
+        actions={<MemRefreshButton label={t('common.refresh')} onClick={() => void refresh()} disabled={refreshing || busy} spinning={refreshing} />}
+      />
 
-      {error && <ErrorBanner message={error} onRetry={() => void refresh()} />}
+      <MemSelectionBar count={selected.size} onClear={() => setSelected(new Set())}>
+        <Button size="sm" disabled={busy} onClick={() => void decide([...selected], 'approve')}>
+          <Check aria-hidden="true" />
+          {t('review.approve_selected')}
+        </Button>
+        <ConfirmButton
+          variant="destructive"
+          label={t('review.reject_selected')}
+          title={selected.size > 1 ? t('review.reject_selected_title', { count: selected.size }) : t('review.reject_one_title')}
+          description={t('review.reject_body')}
+          confirmLabel={t('review.reject_confirm')}
+          disabled={busy}
+          onConfirm={() => void decide([...selected], 'reject')}
+        />
+      </MemSelectionBar>
 
-      {phase === 'loading' ? (
-        <Spinner />
-      ) : phase === 'failed' || items === null ? null : items.length === 0 ? (
-        <div className="empty-state">
-          <p>{t('review.empty_title')}</p>
-          <p className="muted">{t('review.empty_body')}</p>
-        </div>
-      ) : (
-        <ul className="fact-list">
-          {items.map(item => (
-            <li key={item.id} className="fact-card">
-              <p className="fact-content">{item.content}</p>
-              <div className="fact-meta">
-                {(item.topics ?? []).map(topic => (
-                  <span key={topic} className="badge badge-theme" title={t('review.badge_topic_title')}>{topic}</span>
-                ))}
-                <span className="badge badge-muted">{item.category}</span>
-                <span className="badge badge-muted">
-                  {item.source_type === 'capture-review' ? t('review.source_capture') : t('review.source_import')}
-                </span>
-                <span className="muted">{t('review.confidence', { percent: (item.confidence * 100).toFixed(0) })}</span>
-                <span className="fact-actions">
-                  <button
-                    type="button"
-                    className="btn btn-primary"
-                    disabled={busy}
-                    onClick={() => void decide([item.id], 'approve')}
-                  >
-                    {t('review.approve')}
-                  </button>
+      {phase === 'loading' && <ReviewSkeleton />}
+      {phase === 'failed' && error && <ErrorBanner message={error} onRetry={() => void refresh()} />}
+      {phase === 'empty' && (
+        <EmptyState icon={<Sparkles className="size-5" />} title={t('review.empty_title')} body={t('review.empty_body')} />
+      )}
+      {phase === 'ready' && (
+        <section aria-label={t('review.list_label')}>
+          {/* Une erreur de rechargement laisse la dernière liste connue visible, avec la bannière au-dessus. */}
+          {error && <ErrorBanner message={error} onRetry={() => void refresh()} />}
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <h2 className="flex items-center gap-2 text-sm font-medium">
+              <ClipboardCheck className="size-4 text-muted-foreground" aria-hidden="true" />
+              {list.length > 1 ? t('review.pending_count_plural', { count: list.length }) : t('review.pending_count', { count: list.length })}
+            </h2>
+            {/* Actions de masse ici, pas dans la barre supérieure : à 390 px elles y écrasaient le titre. */}
+            <div className="flex flex-wrap items-center gap-2">
+              <Button type="button" variant="ghost" size="sm" onClick={toggleAll} disabled={busy}>
+                {allSelected ? <Square aria-hidden="true" /> : <CheckSquare aria-hidden="true" />}
+                {allSelected ? t('selection.unselect_all') : t('selection.select_all')}
+              </Button>
+              {list.length > 1 && (
+                <>
+                  <Button size="sm" disabled={busy} onClick={() => void decide(list.map(i => i.id), 'approve')}>
+                    <Check aria-hidden="true" />
+                    {t('review.approve_all', { count: list.length })}
+                  </Button>
                   <ConfirmButton
-                    label={t('review.reject')}
+                    variant="destructive"
+                    label={t('review.reject_all')}
+                    title={t('review.reject_all_confirm', { count: list.length })}
+                    description={t('review.reject_body')}
                     confirmLabel={t('review.reject_confirm')}
                     disabled={busy}
-                    onConfirm={() => void decide([item.id], 'reject')}
+                    onConfirm={() => void decide(list.map(i => i.id), 'reject')}
                   />
-                </span>
-              </div>
-            </li>
-          ))}
-        </ul>
+                </>
+              )}
+            </div>
+          </div>
+          <ul className="flex flex-col gap-3">
+            {list.map(item => (
+              <li key={item.id}>
+                <MemFactCard
+                  selected={selected.has(item.id)}
+                  onSelectedChange={on => setOne(item.id, on)}
+                  selectLabel={t('selection.select')}
+                  disabled={busy}
+                  meta={
+                    <>
+                      {(item.topics ?? []).map(topic => (
+                        <Badge key={topic} variant="outline" title={t('review.badge_topic_title')}>
+                          {topic}
+                        </Badge>
+                      ))}
+                      <Badge variant="secondary">{item.category}</Badge>
+                      <Badge variant="outline">{item.source_type === 'capture-review' ? t('review.source_capture') : t('review.source_import')}</Badge>
+                      <MemMetaText>{t('review.confidence', { percent: (item.confidence * 100).toFixed(0) })}</MemMetaText>
+                      <MemMetaText>{formatDate(item.created_at)}</MemMetaText>
+                    </>
+                  }
+                  actions={
+                    <>
+                      <Button size="sm" disabled={busy} onClick={() => void decide([item.id], 'approve')}>
+                        <Check aria-hidden="true" />
+                        {t('review.approve')}
+                      </Button>
+                      <ConfirmButton
+                        variant="ghost"
+                        className="text-destructive hover:text-destructive"
+                        label={t('review.reject')}
+                        title={t('review.reject_one_title')}
+                        description={t('review.reject_body')}
+                        confirmLabel={t('review.reject_confirm')}
+                        disabled={busy}
+                        onConfirm={() => void decide([item.id], 'reject')}
+                      />
+                    </>
+                  }
+                >
+                  {item.content}
+                </MemFactCard>
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
-    </section>
+    </>
+  )
+}
+
+/** Squelette : trois cartes à la forme des souvenirs en attente. */
+function ReviewSkeleton() {
+  const { t } = useT()
+  return (
+    <div className="flex flex-col gap-3" role="status" aria-label={t('common.loading')}>
+      <Skeleton className="h-5 w-40" />
+      {[0, 1, 2].map(i => (
+        <Skeleton key={i} className="h-28 w-full rounded-xl" />
+      ))}
+    </div>
   )
 }
