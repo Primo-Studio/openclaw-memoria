@@ -12,16 +12,16 @@
  * POST /v1/admin/revision_decision.
  */
 import { useCallback, useEffect, useState } from 'react'
-import { Bot, Check, GitCompareArrows, Sparkles, X } from 'lucide-react'
+import { Check, GitCompareArrows, Sparkles, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { ApiError, decideRevision, getAgents, getRevisions, proposeRevisions, searchFacts, type AdminFact, type AgentEntry, type RevisionProposal } from '../api'
-import { MemAgentSelect } from '../components/MemAgentSelect'
+import { MemAgentPicker, MemNoAgentState } from '../components/MemAgentSelect'
+import { MemListCount } from '../components/MemListCount'
 import { MemRefreshButton } from '../components/MemRefreshButton'
 import { EmptyState, ErrorBanner, PageHeader, Spinner, formatDay, humanError, listPhase } from '../components/ui'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { Card, CardContent } from '../components/ui/card'
-import { Label } from '../components/ui/label'
 import { Skeleton } from '../components/ui/skeleton'
 import { useT } from '../i18n'
 import { analyzableAgents } from '../lib/agents'
@@ -152,19 +152,17 @@ export function Revisions() {
             spinning={phase === 'loading'}
           />
         }
-      />
-
-      {agents.length > 0 && (
-        <div className="mb-4 flex flex-col gap-1.5 sm:max-w-sm">
-          <Label htmlFor="revisions-agent">{t('revisions.agent_label')}</Label>
-          <MemAgentSelect id="revisions-agent" agents={agents} value={instance} onChange={setInstance} disabled={busy} />
-        </div>
-      )}
+      >
+        {/* Même emplacement et même libellé « Agent » que sur les cinq autres
+            écrans par agent : l'ancien « Agent analysé » était le seul de son
+            espèce. */}
+        <MemAgentPicker id="revisions-agent" agents={agents} value={instance} onChange={setInstance} disabled={busy} />
+      </PageHeader>
 
       {error && <ErrorBanner message={error} onRetry={retry} />}
 
       {noAgent ? (
-        <EmptyState icon={<Bot className="size-5" />} title={t('memory.no_agent_title')} body={t('memory.no_agent_body')} className="mx-auto w-full max-w-xl sm:py-8" />
+        <MemNoAgentState className="mx-auto w-full max-w-xl sm:py-8" />
       ) : phase === 'loading' ? (
         <div className="flex flex-col gap-3">
           <Spinner label={t('revisions.analyzing')} />
@@ -176,10 +174,7 @@ export function Revisions() {
         <EmptyState icon={<Sparkles className="size-5" />} title={t('revisions.empty_title')} body={t('revisions.empty_body')} className="mx-auto w-full max-w-xl sm:py-8" />
       ) : (
         <section aria-label={t('revisions.list_label')}>
-          <h2 className="mb-2 flex items-center gap-2 text-sm font-medium">
-            <GitCompareArrows className="size-4 text-muted-foreground" aria-hidden="true" />
-            {list.length > 1 ? t('revisions.count_plural', { count: list.length }) : t('revisions.count', { count: list.length })}
-          </h2>
+          <MemListCount label={list.length > 1 ? t('revisions.count_plural', { count: list.length }) : t('revisions.count', { count: list.length })} />
           {/* Colonne bornée : une décision se lit comme un bloc, pas comme une
               bande de 1000 px pour deux lignes. */}
           <ul className="flex max-w-3xl flex-col gap-3">

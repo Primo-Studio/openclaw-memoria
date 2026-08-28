@@ -9,9 +9,10 @@
  * voir UI-GUIDE.md.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Bot, ChevronDown, ListOrdered } from 'lucide-react'
+import { ChevronDown, ListOrdered } from 'lucide-react'
 import { ApiError, getProcedures, type Procedure } from '../api'
-import { CogAgentSelect, useAnalyzableAgents } from '../components/CogAgentSelect'
+import { useAnalyzableAgents } from '../components/CogAgentSelect'
+import { MemAgentPicker, MemNoAgentState } from '../components/MemAgentSelect'
 import { EmptyState, ErrorBanner, PageHeader, SectionCard, formatNumber, humanError, listPhase } from '../components/ui'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
@@ -62,13 +63,17 @@ export function Procedures() {
       <PageHeader
         title={t('procedures.title')}
         description={t('procedures.lead')}
-        actions={<CogAgentSelect agents={ag.agents} value={ag.instance} onChange={ag.setInstance} />}
-      />
+      >
+        {/* Le sélecteur d'agent vit ICI sur les six écrans par agent : sous la
+            phrase d'intro, jamais dans la barre supérieure (à 390 px il y
+            écrasait le titre de l'écran). */}
+        <MemAgentPicker id="procedures-agent" agents={ag.agents} value={ag.instance} onChange={ag.setInstance} />
+      </PageHeader>
 
       {bannerError && <ErrorBanner message={bannerError} onRetry={ag.retry} />}
 
       {ag.noAgent ? (
-        <EmptyState icon={<Bot className="size-5" />} title={t('memory.no_agent_title')} body={t('memory.no_agent_body')} className="mx-auto w-full max-w-xl sm:py-8" />
+        <MemNoAgentState className="mx-auto w-full max-w-xl sm:py-8" />
       ) : phase === 'loading' ? (
         <ProceduresSkeleton />
       ) : phase === 'failed' || procedures === null ? null : procedures.length === 0 ? (

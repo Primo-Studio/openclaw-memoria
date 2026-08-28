@@ -15,7 +15,7 @@
  * colonne « écriture » mentirait. Elle attend une évolution du daemon.
  */
 import { useCallback, useEffect, useState } from 'react'
-import { ChevronDown, ChevronRight, RefreshCw, Share2, Users, X } from 'lucide-react'
+import { ChevronDown, ChevronRight, Share2, Users, X } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   ApiError,
@@ -38,12 +38,13 @@ import {
   PageHeader,
   SectionCard,
   Spinner,
-  agentTypeLabel,
   formatNumber,
   humanError,
   listPhase,
   type DataColumn,
 } from '../components/ui'
+import { MemRefreshButton } from '../components/MemRefreshButton'
+import { agentFullName } from '../lib/agent-name'
 import { scopeLabel } from '../components/memory-names'
 import {
   AlertDialog,
@@ -106,7 +107,7 @@ export function Sharing() {
     const { assistant, scope, next } = pending
     setPending(null)
     setBusy(true)
-    const vars = { agent: assistant.display_name, scope: scopeLabel(t, scope) }
+    const vars = { agent: agentFullName(assistant.display_name, assistant.type), scope: scopeLabel(t, scope) }
     try {
       await setPolicy(assistant.id, scope.id, { can_read: next })
       await refresh()
@@ -141,19 +142,15 @@ export function Sharing() {
     ...assistants.map<DataColumn<ScopeAccess>>(a => ({
       id: `assistant:${a.id}`,
       align: 'center',
-      // Le type sous le nom seulement s'il apporte quelque chose (« Koda » → OpenClaw),
-      // pas « Claude Code » sous « Claude Code ».
-      header: (
-        <span className="inline-flex flex-col items-center leading-tight">
-          <span>{a.display_name}</span>
-          {agentTypeLabel(a.type) !== a.display_name && <span className="text-xs font-normal text-muted-foreground">{agentTypeLabel(a.type)}</span>}
-        </span>
-      ),
+      // UNE seule chaîne d'identité, la même que partout ailleurs dans l'app :
+      // « Koda (OpenClaw) ». Sur deux lignes, « Koda » se lisait comme un
+      // quatrième agent que l'utilisateur ne retrouvait sur aucun autre écran.
+      header: <span className="leading-tight">{agentFullName(a.display_name, a.type)}</span>,
       cell: scope => (
         <Switch
           checked={scope.readers.includes(a.id)}
           disabled={busy}
-          aria-label={t('sharing.reader_aria', { agent: a.display_name, scope: scopeLabel(t, scope) })}
+          aria-label={t('sharing.reader_aria', { agent: agentFullName(a.display_name, a.type), scope: scopeLabel(t, scope) })}
           onCheckedChange={next => setPending({ assistant: a, scope, next })}
         />
       ),
@@ -169,10 +166,7 @@ export function Sharing() {
         title={t('sharing.title')}
         description={t('sharing.lead')}
         actions={
-          <Button variant="outline" size="sm" onClick={() => void refresh()} disabled={busy}>
-            <RefreshCw aria-hidden="true" />
-            {t('common.refresh')}
-          </Button>
+          <MemRefreshButton label={t('common.refresh')} onClick={() => void refresh()} disabled={busy} spinning={phase === 'loading'} />
         }
       />
 
@@ -210,14 +204,11 @@ export function Sharing() {
                   <ul className="divide-y">
                     {assistants.map(a => (
                       <li key={a.id} className="flex items-center justify-between gap-3 px-3 py-2.5">
-                        <span className="min-w-0">
-                          <span className="block truncate text-sm font-medium">{a.display_name}</span>
-                          {agentTypeLabel(a.type) !== a.display_name && <span className="block truncate text-xs text-muted-foreground">{agentTypeLabel(a.type)}</span>}
-                        </span>
+                        <span className="min-w-0 truncate text-sm font-medium">{agentFullName(a.display_name, a.type)}</span>
                         <Switch
                           checked={scope.readers.includes(a.id)}
                           disabled={busy}
-                          aria-label={t('sharing.reader_aria', { agent: a.display_name, scope: scopeLabel(t, scope) })}
+                          aria-label={t('sharing.reader_aria', { agent: agentFullName(a.display_name, a.type), scope: scopeLabel(t, scope) })}
                           onCheckedChange={next => setPending({ assistant: a, scope, next })}
                         />
                       </li>
@@ -243,7 +234,12 @@ export function Sharing() {
         {phase !== 'loading' && identityAgents.length > 0 && (
           <div className="flex flex-col gap-2">
             {identityAgents.map(a => (
-              <IdentityPanel key={a.instance.id} agent={a} onShared={() => void refresh()} />
+              <IdentityPanel
+                key={a.instance.id}
+                agent={a}
+                name={agentFullName(assistants.find(x => x.id === a.instance.assistant_id)?.display_name, a.assistant_type)}
+                onShared={() => void refresh()}
+              />
             ))}
           </div>
         )}
@@ -261,7 +257,7 @@ export function Sharing() {
             <AlertDialogHeader>
               <AlertDialogTitle>
                 {t(pending.next ? 'sharing.grant_confirm' : 'sharing.revoke_confirm', {
-                  agent: pending.assistant.display_name,
+                  agent: agentFullName(pending.assistant.display_name, pending.assistant.type),
                   scope: scopeLabel(t, pending.scope),
                 })}
               </AlertDialogTitle>
@@ -337,7 +333,7 @@ function ScopeContent({ scope, onClose }: { scope: ScopeAccess; onClose: () => v
  * daemon (suggestIdentityFacts = lecture SQLite + score de mots-clés, aucun
  * appel au moteur d'IA) ; une ligne sans candidat ne s'ouvre plus.
  */
-function IdentityPanel({ agent, onShared }: { agent: AgentEntry; onShared: () => void }) {
+function IdentityPanel({ agent, name, onShared }: { agent: AgentEntry; name: string; onShared: () => void }) {
   const { t } = useT()
   const [candidates, setCandidates] = useState<IdentityCandidate[] | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -377,7 +373,7 @@ function IdentityPanel({ agent, onShared }: { agent: AgentEntry; onShared: () =>
   }, [load])
 
   const phase = listPhase(candidates, error)
-  const label = t('sharing.identity_panel_label', { agent: agentTypeLabel(agent.assistant_type) })
+  const label = t('sharing.identity_panel_label', { agent: name })
   const count = candidates?.length ?? null
   const counter =
     error !== null ? null : count === null ? (

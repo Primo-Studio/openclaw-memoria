@@ -60,6 +60,8 @@ import {
   humanError,
   useLoad,
 } from '../components/ui'
+import { MemRefreshButton } from '../components/MemRefreshButton'
+import { useAgentNamer } from '../lib/agent-name'
 import { CommandBlock, StatusBadge } from '../components/SetupBits'
 import { Alert, AlertDescription, AlertTitle } from '../components/ui/alert'
 import { Badge } from '../components/ui/badge'
@@ -145,13 +147,18 @@ export function Agents({ onOpenReview }: { onOpenReview?: () => void }) {
     <>
       <PageHeader
         title={t('agents.title')}
+        description={t('agents.lead')}
         actions={
           <>
-            {/* Sous 640 px, deux boutons texte cachaient le titre de la barre : Actualiser passe en icône seule. */}
-            <Button variant="outline" size="sm" onClick={reload} disabled={state.status === 'loading'} aria-label={t('common.refresh')}>
-              <RefreshCw className={cn(state.status === 'loading' && 'animate-spin')} aria-hidden="true" />
-              <span className="hidden sm:inline">{t('common.refresh')}</span>
-            </Button>
+            {/* Seul écran à porter AUSSI un bouton principal : à 390 px, les deux
+                libellés réduisaient le titre de la barre à « A… ». */}
+            <MemRefreshButton
+              label={t('common.refresh')}
+              compact
+              onClick={reload}
+              disabled={state.status === 'loading'}
+              spinning={state.status === 'loading'}
+            />
             {/* Le bouton principal n'apparaît qu'avec des agents : sinon l'état vide porte l'appel à l'action. */}
             {hasAgents && (
               <Button size="sm" onClick={openChooser}>
@@ -862,16 +869,18 @@ function ImportDone({
 
 function AgentList({ agents, onRevoke, onDelete }: { agents: AgentEntry[]; onRevoke: (id: string) => void; onDelete: (id: string) => void }) {
   const { t } = useT()
+  const nameOf = useAgentNamer()
   return (
     <ul className="-my-3 divide-y">
-      {agents.map(({ instance, assistant_type }) => {
+      {agents.map(entry => {
+        const { instance, assistant_type } = entry
         const revoked = instance.revoked_at !== null
         const pending = !revoked && instance.last_seen_at === null
         return (
           <li key={instance.id} className={cn('flex flex-col gap-3 py-3 md:flex-row md:items-start md:justify-between', revoked && 'opacity-60')}>
             <div className="flex min-w-0 flex-col gap-1.5">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="font-medium">{agentTypeLabel(assistant_type)}</span>
+                <span className="font-medium">{nameOf(entry)}</span>
                 {revoked ? (
                   <StatusBadge tone="muted">{t('agents.list.revoked')}</StatusBadge>
                 ) : pending ? (

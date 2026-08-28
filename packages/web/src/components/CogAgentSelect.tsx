@@ -1,20 +1,20 @@
 /**
- * Sélecteur d'agent des écrans « cognition » (Thèmes, Récurrences, Procédures)
- * + le hook qui charge la liste des agents analysables.
+ * Chargement des agents ANALYSABLES, partagé par les écrans « cognition »
+ * (Thèmes, Récurrences, Procédures).
  *
- * POURQUOI un composant partagé : les trois écrans faisaient chacun le même
- * enchaînement (GET agents → filtrer les analysables → choisir le premier →
- * état « aucun agent »), avec un <select> natif nu dans l'en-tête. Ici, un
- * seul Select shadcn (clavier, lecteur d'écran) projeté dans la barre
- * supérieure via PageHeader, et une seule logique de chargement.
+ * POURQUOI ce hook : les trois écrans faisaient chacun le même enchaînement
+ * (GET agents → filtrer les analysables → choisir le premier → état « aucun
+ * agent »).
+ *
+ * Le SÉLECTEUR, lui, n'est plus ici : les six écrans par agent affichent le
+ * même `MemAgentPicker` (components/MemAgentSelect) au même endroit et sous le
+ * même libellé. Deux composants pour une seule question, c'est exactement ce
+ * qui faisait chercher des yeux le contrôle à chaque changement d'onglet.
  */
 import { useCallback, useEffect, useState } from 'react'
-import { Bot } from 'lucide-react'
 import { ApiError, getAgents, type AgentEntry } from '../api'
-import { useT } from '../i18n'
 import { analyzableAgents } from '../lib/agents'
-import { agentTypeLabel, humanError } from './ui'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select'
+import { humanError } from './ui'
 
 export interface AnalyzableAgents {
   agents: AgentEntry[]
@@ -71,37 +71,4 @@ export function useAnalyzableAgents(): AnalyzableAgents {
   }, [])
 
   return { agents, instance, setInstance, noAgent, error, retry, tick }
-}
-
-/** Select shadcn des agents ; masqué tant que la liste est vide. */
-export function CogAgentSelect({
-  agents,
-  value,
-  onChange,
-  disabled = false,
-}: {
-  agents: readonly AgentEntry[]
-  value: string
-  onChange: (id: string) => void
-  disabled?: boolean
-}) {
-  const { t } = useT()
-  if (agents.length === 0) return null
-  return (
-    <Select value={value} onValueChange={onChange} disabled={disabled}>
-      {/* Sous 640 px la barre supérieure est pleine (menu, marque, titre, actions) :
-          l'icône disparaît pour laisser le titre de l'écran lisible. */}
-      <SelectTrigger size="sm" aria-label={t('cog.agent_select_aria')} className="max-w-32 sm:max-w-40">
-        <Bot className="hidden text-muted-foreground sm:block" aria-hidden="true" />
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent align="end">
-        {agents.map(a => (
-          <SelectItem key={a.instance.id} value={a.instance.id}>
-            {agentTypeLabel(a.assistant_type)}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  )
 }

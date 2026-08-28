@@ -24,9 +24,11 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { Bot, CheckSquare, Lock, RotateCcw, Search, Square, Users } from 'lucide-react'
 import { toast } from 'sonner'
 import { forgetFacts, getAgents, searchAll, searchFacts, type AdminFact, type AgentEntry } from '../api'
-import { ALL_AGENTS, MemAgentSelect } from '../components/MemAgentSelect'
+import { ALL_AGENTS, MemAgentPicker, MemNoAgentState } from '../components/MemAgentSelect'
 import { MemBadgeButton, MemFactCard, MemMetaText, MemSensitivityBadge } from '../components/MemFactCard'
 import { MemSearchInput } from '../components/MemSearchInput'
+import { MemListCount } from '../components/MemListCount'
+import { MemScreenLink } from '../components/MemScreenLink'
 import { MemSelectionBar } from '../components/MemSelectionBar'
 import { ConfirmButton, EmptyState, ErrorBanner, PageHeader, SectionCard, agentTypeLabel, formatDate, humanError, useLoad } from '../components/ui'
 import { Badge } from '../components/ui/badge'
@@ -64,7 +66,7 @@ export function Memory() {
       {agentsState.status === 'error' && <ErrorBanner message={agentsState.message} onRetry={reloadAgents} />}
       {agentsState.status === 'ready' &&
         (agentsState.data.length === 0 ? (
-          <EmptyState icon={<Bot className="size-5" />} title={t('memory.no_agent_title')} body={t('memory.no_agent_body')} />
+          <MemNoAgentState />
         ) : (
           <MemoryBrowser agents={agentsState.data} />
         ))}
@@ -217,13 +219,14 @@ function MemoryBrowser({ agents }: { agents: AgentEntry[] }) {
 
   return (
     <>
+      {/* Le sélecteur d'agent vit hors de la carte, juste sous la phrase
+          d'intro : le MÊME emplacement que sur les cinq autres écrans par
+          agent. Dans la carte, il se cherchait des yeux à chaque onglet. */}
+      <MemAgentPicker id="memory-agent" agents={agents} value={instanceId} onChange={setInstanceId} allOption />
+
       <SectionCard title={t('memory.search.title')}>
-        {/* Une colonne sous 640 px (rien ne déborde), agent + champ côte à côte ensuite, boutons sur la même ligne à partir de lg. */}
-        <form onSubmit={submit} className="grid gap-3 sm:grid-cols-[minmax(0,15rem)_minmax(0,1fr)] lg:grid-cols-[minmax(0,15rem)_minmax(0,1fr)_auto]">
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="memory-agent">{t('memory.field_agent')}</Label>
-            <MemAgentSelect id="memory-agent" agents={agents} value={instanceId} onChange={setInstanceId} allOption />
-          </div>
+        {/* Une colonne sous 640 px (rien ne déborde), le champ et les boutons sur la même ligne à partir de lg. */}
+        <form onSubmit={submit} className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto]">
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="memory-query">{instanceId === ALL_AGENTS ? t('memory.search_all_label') : t('memory.search_one_label')}</Label>
             <MemSearchInput id="memory-query" value={query} placeholder={t('memory.search_placeholder')} onChange={e => setQuery(e.target.value)} />
@@ -240,6 +243,13 @@ function MemoryBrowser({ agents }: { agents: AgentEntry[] }) {
           </div>
         </form>
         <p className="mt-3 text-xs text-muted-foreground">{t('memory.hint')}</p>
+        {/* Mémoire sert à relire et à oublier ; la correction d'une phrase vit
+            dans Maintenance. Sans ce renvoi, l'utilisateur qui voulait réparer
+            un souvenir ne trouvait ici que le bouton qui l'efface. */}
+        <p className="mt-1 flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
+          {t('memory.repair_hint')}
+          <MemScreenLink screen="maintenance" label={t('common.open_screen', { screen: t('nav.maintenance') })} />
+        </p>
       </SectionCard>
 
       <MemSelectionBar count={selected.size} onClear={() => setSelected(new Set())}>
@@ -274,20 +284,15 @@ function MemoryBrowser({ agents }: { agents: AgentEntry[] }) {
           />
         ) : (
           <section aria-label={t('memory.results_label')}>
-            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-              <div className="min-w-0">
-                <h2 className="text-sm font-medium">
-                  {facts.length > 1 ? t('memory.count_plural', { count: facts.length }) : t('memory.count', { count: facts.length })}
-                </h2>
-                <p className="truncate text-xs text-muted-foreground">
-                  {search.query === '' ? t('memory.results_latest') : t('memory.results_for', { query: search.query })}
-                </p>
-              </div>
+            <MemListCount
+              label={facts.length > 1 ? t('fact.count_plural', { count: facts.length }) : t('fact.count', { count: facts.length })}
+              hint={search.query === '' ? undefined : t('memory.results_for', { query: search.query })}
+            >
               <Button type="button" variant="ghost" size="sm" className={TOUCH_ROW_ACTION} onClick={toggleAll} disabled={busy}>
                 {allSelected ? <Square aria-hidden="true" /> : <CheckSquare aria-hidden="true" />}
                 {allSelected ? t('selection.unselect_all') : t('selection.select_all')}
               </Button>
-            </div>
+            </MemListCount>
             <ul className="flex flex-col gap-3">
               {facts.map(fact => {
                 const topics = splitTopics(fact.topics)

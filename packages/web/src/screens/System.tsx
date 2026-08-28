@@ -9,8 +9,9 @@
  * Même source de données qu'avant (GET /v1/admin/cognitive_stats) — la santé
  * du stockage vit sur le Tableau de bord, la consommation dans Réglages.
  */
-import { RefreshCw } from 'lucide-react'
 import { getCognitiveStats } from '../api'
+import { Activity, CircleCheck, Layers } from 'lucide-react'
+import { MemRefreshButton } from '../components/MemRefreshButton'
 import { ErrorBanner, PageHeader, SectionCard, StatCard, formatNumber, useLoad } from '../components/ui'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
@@ -89,10 +90,7 @@ export function System() {
         title={t('system.title')}
         description={t('system.lead')}
         actions={
-          <Button variant="outline" size="sm" onClick={reload} disabled={state.status === 'loading'}>
-            <RefreshCw className={cn(state.status === 'loading' && 'animate-spin')} aria-hidden="true" />
-            {t('common.refresh')}
-          </Button>
+          <MemRefreshButton label={t('common.refresh')} onClick={reload} disabled={state.status === 'loading'} spinning={state.status === 'loading'} />
         }
       />
 
@@ -131,13 +129,16 @@ function SystemBody({ stats }: { stats: Record<string, number> }) {
           tiers de l'écran avant la première couche. La 3e carte prend toute la
           largeur pour laisser respirer son libellé. */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-        <StatCard value={LAYER_COUNT} label={t('system.stat.layers')} />
-        <StatCard value={tracked.length} label={t('system.stat.tracked')} hint={t('system.stat.trackedHint')} />
+        {/* Mêmes cartes que le Tableau de bord : icône encadrée en haut à droite,
+            chiffre en couleur de texte normale. Le vert d'avant ne disait rien —
+            la couleur est réservée à un vrai statut. */}
+        <StatCard value={LAYER_COUNT} label={t('system.stat.layers')} icon={<Layers className="size-4" />} />
+        <StatCard value={tracked.length} label={t('system.stat.tracked')} hint={t('system.stat.trackedHint')} icon={<Activity className="size-4" />} />
         <StatCard
           value={live}
           label={t('system.stat.live')}
-          tone={live > 0 ? 'ok' : 'default'}
           hint={live === 0 ? t('system.stat.liveHintEmpty') : undefined}
+          icon={<CircleCheck className="size-4" />}
           className="col-span-2 sm:col-span-1"
         />
       </div>

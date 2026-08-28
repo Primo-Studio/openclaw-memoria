@@ -22,13 +22,14 @@
  * anti-course (lib/sequence) sont conservées.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Bot, CheckSquare, Merge, Pencil, Save, Search, Sparkles, Square, X } from 'lucide-react'
+import { CheckSquare, Merge, Pencil, Save, Search, Sparkles, Square, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { correctFact, forgetFacts, getAgents, mergeFacts, neverUsedFacts, searchFacts, type AdminFact, type AgentEntry } from '../api'
-import { MemAgentSelect } from '../components/MemAgentSelect'
+import { MemAgentPicker, MemNoAgentState } from '../components/MemAgentSelect'
 import { MemFactCard, MemMetaText, MemSensitivityBadge } from '../components/MemFactCard'
 import { MemRefreshButton } from '../components/MemRefreshButton'
 import { MemSearchInput } from '../components/MemSearchInput'
+import { MemListCount } from '../components/MemListCount'
 import { MemSelectionBar } from '../components/MemSelectionBar'
 import { ConfirmButton, EmptyState, ErrorBanner, PageHeader, SectionCard, formatDay, humanError, listPhase } from '../components/ui'
 import {
@@ -49,6 +50,7 @@ import { Skeleton } from '../components/ui/skeleton'
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { Textarea } from '../components/ui/textarea'
 import { useT } from '../i18n'
+import { categoryLabel } from '../lib/labels'
 import { createSequence } from '../lib/sequence'
 
 /** Délai avant de lancer la recherche après la dernière frappe. */
@@ -56,25 +58,15 @@ const SEARCH_DEBOUNCE_MS = 300
 
 type Source = 'search' | 'never-used'
 
-type Translate = (key: string, vars?: Record<string, string | number>) => string
-
-/**
- * Libellé lisible d'une catégorie de souvenir. Les catégories arrivent du
- * moteur en anglais (« preference », « general »…) ; on les traduit, et on
- * retombe sur la valeur brute pour une catégorie inconnue — `t()` renvoyant la
- * clé quand elle manque, la comparaison suffit à le détecter.
- */
-function categoryLabel(t: Translate, category: string): string {
-  const key = `fact.category.${category.toLowerCase()}`
-  const label = t(key)
-  return label === key ? category : label
-}
-
 export function Maintenance() {
   const { t } = useT()
   const [agents, setAgents] = useState<AgentEntry[]>([])
   const [instance, setInstance] = useState<string>('')
-  const [source, setSource] = useState<Source>('search')
+  // POURQUOI « jamais utilisés » par défaut : ouvert sur « recherche », cet
+  // écran affichait EXACTEMENT la même liste des mêmes souvenirs que Mémoire,
+  // sous une deuxième entrée de menu. Il s'ouvre donc sur ce que Mémoire ne
+  // montre pas — les souvenirs dormants — et la recherche reste à un clic.
+  const [source, setSource] = useState<Source>('never-used')
   const [query, setQuery] = useState('')
   // Valeur réellement recherchée : `query` suit la frappe, `debouncedQuery`
   // ne bouge qu'après SEARCH_DEBOUNCE_MS de silence — un GET par mot, pas
@@ -217,7 +209,6 @@ export function Maintenance() {
         actions={
           <MemRefreshButton
             label={t('common.refresh')}
-            shortLabel={t('common.refresh_short')}
             onClick={retry}
             disabled={!instance || phase === 'loading'}
             spinning={phase === 'loading'}
@@ -225,14 +216,13 @@ export function Maintenance() {
         }
       />
 
+      {/* Même emplacement et même libellé que sur les cinq autres écrans par agent. */}
+      <MemAgentPicker id="maintenance-agent" agents={agents} value={instance} onChange={setInstance} disabled={busy} />
+
       {!noAgent && (
-        <SectionCard title={t('memory.search.title')}>
-          {/* Une colonne sous 640 px, puis agent + source côte à côte, le champ prend le reste à partir de lg. */}
-          <div className="grid gap-3 sm:grid-cols-[minmax(0,15rem)_auto] lg:grid-cols-[minmax(0,15rem)_auto_minmax(0,1fr)]">
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="maintenance-agent">{t('maintenance.agent')}</Label>
-              <MemAgentSelect id="maintenance-agent" agents={agents} value={instance} onChange={setInstance} disabled={busy} />
-            </div>
+        <SectionCard title={t('maintenance.search.title')}>
+          {/* Une colonne sous 640 px, puis source + champ côte à côte à partir de lg. */}
+          <div className="grid gap-3 lg:grid-cols-[auto_minmax(0,1fr)]">
             <div className="flex flex-col gap-1.5">
               <Label id="maintenance-source-label">{t('maintenance.source')}</Label>
               <Tabs value={source} onValueChange={v => setSource(v as Source)}>
@@ -248,7 +238,7 @@ export function Maintenance() {
                 </TabsList>
               </Tabs>
             </div>
-            <div className="flex flex-col gap-1.5 sm:col-span-2 lg:col-span-1">
+            <div className="flex flex-col gap-1.5">
               {source === 'search' ? (
                 <>
                   <Label htmlFor="maintenance-query">{t('memory.search_one_label')}</Label>
@@ -307,7 +297,7 @@ export function Maintenance() {
       {error && <ErrorBanner message={error} onRetry={retry} />}
 
       {noAgent ? (
-        <EmptyState icon={<Bot className="size-5" />} title={t('memory.no_agent_title')} body={t('memory.no_agent_body')} />
+        <MemNoAgentState />
       ) : phase === 'loading' ? (
         <div className="flex flex-col gap-3" role="status" aria-label={t('common.loading')}>
           {[0, 1, 2].map(i => (
@@ -318,18 +308,25 @@ export function Maintenance() {
         <EmptyState
           icon={source === 'never-used' ? <Sparkles className="size-5" /> : <Search className="size-5" />}
           title={t(source === 'never-used' ? 'maintenance.empty_never_used' : 'maintenance.empty_search')}
+          action={
+            // Aucun souvenir dormant : l'écran ne reste pas vide et muet, il
+            // propose l'autre entrée de l'atelier.
+            source === 'never-used' ? (
+              <Button variant="outline" onClick={() => setSource('search')}>
+                <Search aria-hidden="true" />
+                {t('maintenance.empty_never_used_action')}
+              </Button>
+            ) : undefined
+          }
         />
       ) : (
         <section aria-label={t('maintenance.list_label')}>
-          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-sm font-medium">
-              {list.length > 1 ? t('maintenance.count_plural', { count: list.length }) : t('maintenance.count', { count: list.length })}
-            </h2>
+          <MemListCount label={list.length > 1 ? t('fact.count_plural', { count: list.length }) : t('fact.count', { count: list.length })}>
             <Button type="button" variant="ghost" size="sm" onClick={toggleAll} disabled={busy}>
               {allSelected ? <Square aria-hidden="true" /> : <CheckSquare aria-hidden="true" />}
               {allSelected ? t('selection.unselect_all') : t('selection.select_all')}
             </Button>
-          </div>
+          </MemListCount>
           <ul className="flex flex-col gap-3">
             {list.map(f => {
               const isEditing = editing?.id === f.id
@@ -350,7 +347,7 @@ export function Maintenance() {
                         <Badge variant="secondary">{categoryLabel(t, f.category)}</Badge>
                         {f.id === keepId && selected.size >= 2 && <Badge>{t('maintenance.badge_keep')}</Badge>}
                         <MemSensitivityBadge sensitivity={f.sensitivity} />
-                        <MemMetaText className="w-full sm:w-auto">{formatDay(f.created_at)}</MemMetaText>
+                        <MemMetaText>{formatDay(f.created_at)}</MemMetaText>
                       </>
                     }
                     actions={

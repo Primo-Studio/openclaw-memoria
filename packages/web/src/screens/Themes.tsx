@@ -10,10 +10,11 @@
  * squelette au chargement, toasts pour l'affinage — voir UI-GUIDE.md.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Bot, LayoutGrid, Loader2, Sparkles, Tags, Waypoints, X } from 'lucide-react'
+import { LayoutGrid, Loader2, Sparkles, Tags, Waypoints, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { ApiError, getTopics, getTopicFacts, getTopicRelations, refineTopics, type AdminFact, type Topic, type TopicGraph } from '../api'
-import { CogAgentSelect, useAnalyzableAgents } from '../components/CogAgentSelect'
+import { useAnalyzableAgents } from '../components/CogAgentSelect'
+import { MemAgentPicker, MemNoAgentState } from '../components/MemAgentSelect'
 import { EmptyState, ErrorBanner, PageHeader, SectionCard, Spinner, formatNumber, humanError, listPhase } from '../components/ui'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
@@ -21,6 +22,7 @@ import { Skeleton } from '../components/ui/skeleton'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { Tooltip, TooltipContent, TooltipTrigger } from '../components/ui/tooltip'
 import { useT } from '../i18n'
+import { categoryLabel } from '../lib/labels'
 import { cn } from '../lib/utils'
 
 type View = 'list' | 'graph'
@@ -106,9 +108,8 @@ export function Themes() {
         description={t('themes.lead')}
         actions={
           <>
-            <CogAgentSelect agents={ag.agents} value={ag.instance} onChange={ag.setInstance} />
             {/* POURQUOI caché sous 640 px : la barre supérieure mobile (menu, marque,
-                titre, sélecteur d'agent, préférences) n'a plus la place d'un libellé,
+                titre, préférences) n'a pas la place d'un libellé,
                 et une icône « étincelle » seule ne dit pas qu'elle réécrit TOUS les
                 libellés de l'agent. Sur mobile, le même bouton est rendu LIBELLÉ dans
                 la carte « Thèmes de l'agent » (voir ThemeGrid). */}
@@ -123,12 +124,17 @@ export function Themes() {
             </Tooltip>
           </>
         }
-      />
+      >
+        {/* Le sélecteur d'agent vit ICI sur les six écrans par agent : sous la
+            phrase d'intro, jamais dans la barre supérieure (à 390 px il y
+            écrasait le titre de l'écran). */}
+        <MemAgentPicker id="themes-agent" agents={ag.agents} value={ag.instance} onChange={ag.setInstance} />
+      </PageHeader>
 
       {bannerError && <ErrorBanner message={bannerError} onRetry={ag.retry} />}
 
       {ag.noAgent ? (
-        <EmptyState icon={<Bot className="size-5" />} title={t('memory.no_agent_title')} body={t('memory.no_agent_body')} className="mx-auto w-full max-w-xl sm:py-8" />
+        <MemNoAgentState className="mx-auto w-full max-w-xl sm:py-8" />
       ) : phase === 'loading' ? (
         <ThemesSkeleton />
       ) : phase === 'failed' || topics === null ? null : topics.length === 0 ? (
@@ -317,7 +323,7 @@ function ThemeDetail({
             <li key={f.id} className="rounded-lg bg-muted/40 p-3">
               <p className="text-sm leading-relaxed">{f.fact}</p>
               <div className="mt-1.5 flex flex-wrap gap-1">
-                <Badge variant="outline">{f.category}</Badge>
+                <Badge variant="outline">{categoryLabel(t, f.category)}</Badge>
               </div>
             </li>
           ))}
