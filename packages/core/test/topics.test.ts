@@ -105,7 +105,7 @@ describe('TopicEngine — consolidation (anti-fragmentation)', () => {
     'Hélène Rey est le contact pour le devis GIREM de la plénière',
     'Le build 17 de JamBoard est bloqué en WAITING_FOR_REVIEW chez Apple',
     'Le build 18 de JamBoard corrige le rejet Apple sur Sign in with Apple',
-    'JamBoard utilise Firebase eur3 et un compte démo appreview@primo-studio.fr',
+    'JamBoard utilise Firebase eur3 et un compte démo appreview@example.com',
     'Néto prend son café sans sucre le matin',
     'Le NAS QNAP héberge environ 12 GB de sauvegardes vidéo',
     'La télécommande Clim-Haier passe par le cloud hOn, pas d’API locale',
