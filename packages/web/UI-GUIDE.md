@@ -30,7 +30,12 @@ technicien — chaque décision ci-dessous sert la lisibilité, pas la technique
    ```
    Le titre est **projeté dans la barre supérieure** (portail,
    `app/shell-context.ts`) : ne pas rendre de `<h1>` ailleurs. Les actions y
-   vont aussi sur bureau, et descendent en tête de page sous 768 px.
+   vont aussi sur bureau, et descendent en tête de page sous 768 px — **après**
+   la description, jamais avant : au téléphone, l'écran doit s'ouvrir sur la
+   phrase qui dit à quoi il sert, pas sur un bouton seul dans une bande vide.
+   L'intro passe donc TOUJOURS par `description` (qui accepte un `ReactNode`,
+   pour mettre un mot en gras) et jamais par `children` : rendue en `children`,
+   elle repasserait sous les actions.
 2. **Structurer en `SectionCard`** (un bloc titré par sujet) :
    ```tsx
    <SectionCard title={t('agents.list.title')} description={…} actions={…}>
@@ -91,7 +96,19 @@ technicien — chaque décision ci-dessous sert la lisibilité, pas la technique
 - **Feuille de style maison** : il n'y en a plus (l'ancien `styles.css` a été
   supprimé une fois les 16 écrans réécrits). Tout passe par Tailwind + `ui/*`.
 - **Cible tactile sous 44 px** au téléphone : `size="sm"` porte déjà le plancher
-  (`max-sm:h-11`), ne le neutralise pas avec une hauteur en dur.
+  (`max-sm:h-11`), ne le neutralise pas avec une hauteur en dur. La taille par
+  défaut (`h-8`) ne l'a PAS : sur un bouton d'action au téléphone, ajoute
+  `className="max-sm:h-11"` (et non `size="sm"`, qui vaut 28 px sur bureau et
+  désaligne le bouton du champ voisin). Connu et non traité : `Input` et
+  `Select` sont à 32 px au doigt sur tous les écrans.
+- **Pastille cliquable seule** dans une liste dense : c'est la LIGNE (ou le
+  texte de la carte) qui prend le clic, pas la case ou l'interrupteur de 16-18 px
+  — voir `Sharing.tsx` et `MemFactCard.tsx`. Un `<label>` ne suffit pas : les
+  contrôles Radix sont des `<button role="switch">`, on passe donc par un
+  `onClick` sur le conteneur, avec `stopPropagation` sur le contrôle. **Aucune
+  capture ne prouve qu'une zone est cliquable** : ça se vérifie dans le
+  navigateur. Et n'agrandis pas le pseudo-élément `after` d'un interrupteur dans
+  une liste de lignes de 41 px : il déborderait sur les lignes voisines.
 - **Largeur qui déborde** : un contenu large (tableau, chemin, JSON) défile dans
   son conteneur (`overflow-x-auto`), jamais la page.
 - **Styles inline** pour la couleur ou l'espacement.
