@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { Memoria } from '@memoria/core'
+import { Memoria, setEnabled } from '@memoria/core'
 import { writeDaemonState } from '@memoria/daemon'
 import {
   AgentsCommand,
@@ -108,6 +108,16 @@ describe('doctor', () => {
     expect(out).toContain('garde réseau')
     expect(out).toContain('État')
     expect(io.err()).toBe('')
+  })
+
+  it('Memoria en pause (memoria disable) : « État : ⏸ en pause », jamais « ✓ OK »', async () => {
+    setEnabled(false, cfg)
+    const io = makeIo()
+    const code = await buildCli().run(args('doctor'), io.context)
+    expect(code).toBe(0)
+    expect(io.out()).toContain('État : ⏸ en pause')
+    expect(io.out()).toContain('memoria enable')
+    expect(io.out()).not.toContain('✓ OK')
   })
 
   it('avec daemon vivant : passe par HTTP admin (fetch mocké), sans note locale', async () => {

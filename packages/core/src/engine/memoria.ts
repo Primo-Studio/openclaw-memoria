@@ -3315,6 +3315,14 @@ export class Memoria {
 
     // Les avertissements sont ce que l'utilisateur doit ACTION­NER — pas une
     // reformulation des compteurs. On ne signale que l'anormal.
+    // La PAUSE d'abord : c'est la cause n°1 de « mes agents ne se souviennent
+    // de rien », et le doctor concluait « ✓ OK » sans un mot.
+    const enabled = this.isEnabled()
+    if (!enabled) {
+      warnings.push(
+        'Memoria est en PAUSE (« memoria disable » ou l’interrupteur de l’app) : capture et recall sont refusés pour tous les agents — « memoria enable » pour reprendre.',
+      )
+    }
     if (memory.wal_stuck > 0) {
       warnings.push(
         `${memory.wal_stuck} message(s) bloqué(s) en extraction (plusieurs tentatives échouées) — vérifier le provider LLM.`,
@@ -3331,6 +3339,7 @@ export class Memoria {
 
     return {
       ok: warnings.length === 0,
+      enabled,
       storage_root: this.paths.root,
       config_path: this.resolved.configPath,
       registry_path: this.paths.registry,
