@@ -1206,4 +1206,11 @@ export const de: Messages = {
   'themes.relations_hint': 'Zwei Themen sind verbunden, wenn sie Erinnerungen oder Entitäten teilen (eine Person, ein Kunde, ein Projekt). Je dicker die Linie, desto stärker die Verbindung. Klicke ein Thema an, um seine Erinnerungen zu öffnen.',
   'themes.keywords': 'Schlüsselwörter',
   'themes.loading_facts': 'Erinnerungen werden geladen…',
+  'patterns.list_title': 'Was Memoria aufgefallen ist',
+  'patterns.list_hint': 'Nichts wird ohne deine Zustimmung angewendet: Konsolidieren fasst die Wiederholungen zu einer Erinnerung zusammen, Verwerfen löscht nichts.',
+  'patterns.confidence': 'Sicherheit {percent} %',
+  'patterns.dismiss_title': 'Dieses Muster verwerfen?',
+  'patterns.dismiss_body': 'Memoria schlägt es nicht mehr vor. Die betroffenen Erinnerungen bleiben unverändert.',
+  'patterns.consolidated_toast': 'Muster zu einer einzigen Erinnerung zusammengeführt.',
+  'patterns.dismissed_toast': 'Muster verworfen.',
 }

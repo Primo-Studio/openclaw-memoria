@@ -1206,4 +1206,11 @@ export const pt: Messages = {
   'themes.relations_hint': 'Dois temas estão ligados quando partilham memórias ou entidades (uma pessoa, um cliente, um projeto). Quanto mais grosso o traço, mais forte o elo. Clica num tema para abrir as suas memórias.',
   'themes.keywords': 'Palavras-chave',
   'themes.loading_facts': 'A carregar as memórias…',
+  'patterns.list_title': 'O que a Memoria reparou',
+  'patterns.list_hint': 'Nada é aplicado sem o teu acordo: consolidar reúne as repetições numa única memória, descartar não apaga nada.',
+  'patterns.confidence': 'confiança {percent} %',
+  'patterns.dismiss_title': 'Descartar esta recorrência?',
+  'patterns.dismiss_body': 'A Memoria não voltará a propô-la. As memórias envolvidas ficam intactas.',
+  'patterns.consolidated_toast': 'Recorrência consolidada numa única memória.',
+  'patterns.dismissed_toast': 'Recorrência descartada.',
 }

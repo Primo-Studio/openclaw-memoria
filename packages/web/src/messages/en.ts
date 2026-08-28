@@ -1206,4 +1206,11 @@ export const en: Messages = {
   'themes.relations_hint': 'Two themes are linked when they share memories or entities (a person, a client, a project). The thicker the line, the stronger the link. Click a theme to open its memories.',
   'themes.keywords': 'Keywords',
   'themes.loading_facts': 'Loading memories…',
+  'patterns.list_title': 'What Memoria noticed',
+  'patterns.list_hint': 'Nothing is applied without your say-so: consolidating merges the repeats into a single memory, dismissing deletes nothing.',
+  'patterns.confidence': 'confidence {percent}%',
+  'patterns.dismiss_title': 'Dismiss this pattern?',
+  'patterns.dismiss_body': 'Memoria won’t suggest it again. The memories involved stay untouched.',
+  'patterns.consolidated_toast': 'Pattern consolidated into a single memory.',
+  'patterns.dismissed_toast': 'Pattern dismissed.',
 }

@@ -1208,4 +1208,11 @@ export const fr: Messages = {
   'themes.relations_hint': 'Deux thèmes sont reliés quand ils partagent des souvenirs ou des entités (une personne, un client, un projet). Plus le trait est épais, plus le lien est fort. Clique un thème pour ouvrir ses souvenirs.',
   'themes.keywords': 'Mots-clés',
   'themes.loading_facts': 'Chargement des souvenirs…',
+  'patterns.list_title': 'Ce que Memoria a remarqué',
+  'patterns.list_hint': 'Rien n’est appliqué sans ton accord : consolider réunit les répétitions en un seul souvenir, écarter n’efface rien.',
+  'patterns.confidence': 'confiance {percent} %',
+  'patterns.dismiss_title': 'Écarter cette récurrence ?',
+  'patterns.dismiss_body': 'Memoria ne la proposera plus. Les souvenirs concernés restent intacts.',
+  'patterns.consolidated_toast': 'Récurrence consolidée en un seul souvenir.',
+  'patterns.dismissed_toast': 'Récurrence écartée.',
 }
