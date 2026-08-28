@@ -1114,8 +1114,8 @@ export const de: Messages = {
   'vault.empty.body': 'Das ist normal: Der Tresor füllt sich, sobald ein Agent auf einen Schlüssel oder ein Passwort trifft.',
   'vault.empty.title': 'Bisher kein Geheimnis im Tresor.',
   'vault.explainer.after': ' im Gedächtnis, in den Exporten oder in den Logs.',
-  'vault.explainer.before': 'Wenn ein Agent auf einen API-Schlüssel oder ein Passwort trifft, ersetzt Memoria es durch eine Referenz ',
-  'vault.explainer.mid': ' bevor es gespeichert wird. Der echte Wert geht in den Tresor des Systems.',
+  'vault.explainer.before': 'Wenn ein Agent auf einen API-Schlüssel oder ein Passwort trifft, ersetzt Memoria es durch eine Referenz',
+  'vault.explainer.mid': 'bevor es gespeichert wird. Der echte Wert geht in den Tresor des Systems.',
   'vault.explainer.never': 'Er erscheint nie',
   'vault.lead': 'Schlüssel und Passwörter automatisch erkannt und in Sicherheit gebracht — der Wert bleibt verschlüsselt.',
   'vault.title': 'Tresor',
@@ -1380,7 +1380,8 @@ export const de: Messages = {
   // — Coffre (écran shadcn) — titre de l'explication, emplacements lisibles, compteur —
   'vault.explainer.title': 'Geheimnisse werden nie zu Erinnerungen',
   'vault.list_title': 'Referenzen im Tresor',
-  'vault.count': '{count} Referenz(en) — der Wert selbst bleibt im Tresor des Systems.',
+  'vault.count': '{count} Referenz — der Wert selbst bleibt im Tresor des Systems.',
+  'vault.count_plural': '{count} Referenzen — der Wert selbst bleibt im Tresor des Systems.',
   'vault.location.keychain': 'macOS-Schlüsselbund',
   'vault.location.vault': 'Verschlüsselter Tresor',
 

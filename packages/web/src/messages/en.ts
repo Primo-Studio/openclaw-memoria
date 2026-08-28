@@ -1114,8 +1114,8 @@ export const en: Messages = {
   'vault.empty.body': 'That\'s normal: the vault fills up as soon as an agent comes across a key or a password.',
   'vault.empty.title': 'No secrets in the vault yet.',
   'vault.explainer.after': ' in the memory, the exports or the logs.',
-  'vault.explainer.before': 'When an agent encounters an API key or a password, Memoria replaces it with a reference ',
-  'vault.explainer.mid': ' before saving it. The real value goes into the system\'s vault.',
+  'vault.explainer.before': 'When an agent encounters an API key or a password, Memoria replaces it with a reference',
+  'vault.explainer.mid': 'before saving it. The real value goes into the system’s vault.',
   'vault.explainer.never': 'It never appears',
   'vault.lead': 'Keys and passwords detected and safeguarded automatically — the value stays encrypted.',
   'vault.title': 'Vault',
@@ -1380,7 +1380,8 @@ export const en: Messages = {
   // — Coffre (écran shadcn) — titre de l'explication, emplacements lisibles, compteur —
   'vault.explainer.title': 'Secrets never become memories',
   'vault.list_title': 'Vault references',
-  'vault.count': '{count} reference(s) — the value itself stays in the system vault.',
+  'vault.count': '{count} reference — the value itself stays in the system vault.',
+  'vault.count_plural': '{count} references — the value itself stays in the system vault.',
   'vault.location.keychain': 'macOS Keychain',
   'vault.location.vault': 'Encrypted vault',
 

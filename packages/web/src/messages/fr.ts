@@ -1116,8 +1116,8 @@ export const fr: Messages = {
   'vault.empty.body': 'C’est normal : le coffre se remplit dès qu’un agent croise une clé ou un mot de passe.',
   'vault.empty.title': 'Aucun secret au coffre pour l’instant.',
   'vault.explainer.after': ' dans la mémoire, les exports ou les logs.',
-  'vault.explainer.before': 'Quand un agent rencontre une clé API ou un mot de passe, Memoria le remplace par une référence ',
-  'vault.explainer.mid': ' avant de l’enregistrer. La vraie valeur part dans le coffre du système.',
+  'vault.explainer.before': 'Quand un agent rencontre une clé API ou un mot de passe, Memoria le remplace par une référence',
+  'vault.explainer.mid': 'avant de l’enregistrer. La vraie valeur part dans le coffre du système.',
   'vault.explainer.never': 'Elle n’apparaît jamais',
   'vault.lead': 'Clés et mots de passe détectés et mis à l’abri automatiquement — la valeur reste chiffrée.',
   'vault.title': 'Coffre',
@@ -1382,7 +1382,8 @@ export const fr: Messages = {
   // — Coffre (écran shadcn) — titre de l'explication, emplacements lisibles, compteur —
   'vault.explainer.title': 'Les secrets ne deviennent jamais des souvenirs',
   'vault.list_title': 'Références au coffre',
-  'vault.count': '{count} référence(s) — la valeur, elle, reste dans le coffre du système.',
+  'vault.count': '{count} référence — la valeur, elle, reste dans le coffre du système.',
+  'vault.count_plural': '{count} références — la valeur, elle, reste dans le coffre du système.',
   'vault.location.keychain': 'Trousseau macOS',
   'vault.location.vault': 'Coffre chiffré',
 

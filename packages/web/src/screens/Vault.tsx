@@ -12,6 +12,7 @@ import { useState } from 'react'
 import { Lock, RefreshCw, ShieldCheck } from 'lucide-react'
 import { getSecrets, type SecretRef } from '../api'
 import { DataTable, EmptyState, ErrorBanner, PageHeader, SectionCard, formatDay, formatNumber, useLoad, type DataColumn } from '../components/ui'
+import { DataCards } from '../components/DataCards'
 import { Alert, AlertDescription, AlertTitle } from '../components/ui/alert'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
@@ -69,7 +70,7 @@ export function Vault() {
         <AlertDescription>
           <p>
             {t('vault.explainer.before')}
-            <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs text-foreground">[secret:…]</code>
+            <code className="mx-0.5 rounded bg-muted px-1 py-0.5 font-mono text-xs text-foreground">[secret:…]</code>
             {t('vault.explainer.mid')} <strong className="text-foreground">{t('vault.explainer.never')}</strong>
             {t('vault.explainer.after')}
           </p>
@@ -116,14 +117,31 @@ function SecretsTable({ secrets }: { secrets: SecretRef[] }) {
   ]
 
   return (
-    <SectionCard title={t('vault.list_title')} description={t('vault.count', { count: formatNumber(secrets.length) })}>
-      <DataTable
-        columns={columns}
-        rows={sorted}
-        rowKey={s => s.name}
-        sort={{ by: sort.key, dir: sort.dir }}
-        onSort={next => setSort(s => nextSort(s, next.by as SortKey, DATE_KEYS))}
-      />
+    <SectionCard title={t('vault.list_title')} description={t(secrets.length > 1 ? 'vault.count_plural' : 'vault.count', { count: formatNumber(secrets.length) })}>
+      {/* Sous 640 px : une fiche par référence. Une référence de coffre est une
+          chaîne technique longue — dans un tableau à 4 colonnes, elle sortait
+          de la carte sans le moindre indice de défilement. */}
+      <div className="sm:hidden">
+        <DataCards
+          rows={sorted}
+          rowKey={s => s.name}
+          title={s => <code className="font-mono text-xs break-all">{s.name}</code>}
+          fields={s => [
+            { label: t('vault.col.type'), value: s.service ?? '—' },
+            { label: t('vault.col.location'), value: <Badge variant="secondary">{locationLabel(t, s.location)}</Badge> },
+            { label: t('vault.col.added'), value: <span className="text-muted-foreground">{formatDay(s.created_at)}</span> },
+          ]}
+        />
+      </div>
+      <div className="hidden sm:block">
+        <DataTable
+          columns={columns}
+          rows={sorted}
+          rowKey={s => s.name}
+          sort={{ by: sort.key, dir: sort.dir }}
+          onSort={next => setSort(s => nextSort(s, next.by as SortKey, DATE_KEYS))}
+        />
+      </div>
     </SectionCard>
   )
 }
