@@ -12,7 +12,7 @@
  * confirmations, AlertDialog (ConfirmButton) pour ce qui coupe ou révoque.
  */
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
-import { CircleCheck, CircleX, Cloud, Cpu, Download, Laptop, Loader2, Lock, Monitor, Power, RefreshCw, SlidersHorizontal, Star, TriangleAlert, Usb } from 'lucide-react'
+import { Check, CircleCheck, CircleX, Cloud, Cpu, Download, Laptop, Loader2, Lock, Monitor, Power, RefreshCw, SlidersHorizontal, Star, TriangleAlert, Usb } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   ConfirmButton,
@@ -29,6 +29,7 @@ import {
   type DataColumn,
 } from '../components/ui'
 import { Chip, CommandBlock, StatusBadge, SwitchRow } from '../components/SetupBits'
+import { DataCards } from '../components/DataCards'
 import { EmbeddingsChooser } from '../components/EmbeddingsChooser'
 import { Alert, AlertDescription, AlertTitle } from '../components/ui/alert'
 import { Badge } from '../components/ui/badge'
@@ -202,7 +203,12 @@ export function Settings() {
     [keyInput, refresh, t, onError],
   )
 
-  const current = config?.extraction
+  // Le moteur qui TOURNE. `config.extraction` n'existe que si l'utilisateur a
+  // choisi explicitement ; sinon le daemon résout le profil et l'annonce dans
+  // llm_health. Sans ce repli, aucune carte n'était marquée « Actif » alors
+  // qu'un moteur était bien en service (et le bandeau du haut le disait).
+  const currentProvider = config?.extraction?.provider ?? health?.extraction.provider
+  const currentModel = config?.extraction?.model ?? health?.extraction.model
   const availabilityOf = (id: LlmProviderName): boolean | undefined => {
     if (!providers) return undefined
     return id === 'ollama' ? providers.ollama.available : providers[id]?.available
@@ -244,35 +250,55 @@ export function Settings() {
             }
             className="mb-0"
           >
+            {/* En TÊTE, en texte normal : c'est la première question qu'on se
+                pose ici (« lequel tourne ? »). En bas de grille, en 12 px gris,
+                elle était hors écran. */}
+            {!unavailable && currentProvider && (
+              <p className="mb-3 flex flex-wrap items-baseline gap-x-1.5 text-sm">
+                <span className="text-muted-foreground">{t('settings.engine.current')}</span>
+                <strong className="text-foreground">{providerLabel(currentProvider)}</strong>
+                <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">{currentModel ?? t('settings.engine.defaultModel')}</code>
+              </p>
+            )}
             {unavailable ? (
               <p className="text-sm text-muted-foreground">{t('settings.engine.unavailable')}</p>
             ) : !providers || !config ? (
               <Spinner />
             ) : (
-              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                {PROVIDERS.map(p => (
-                  <ProviderCard
-                    key={p.id}
-                    choice={p}
-                    available={availabilityOf(p.id)}
-                    isCurrent={current?.provider === p.id}
-                    currentModel={current?.model}
-                    // LM Studio : on propose les modèles réellement chargés
-                    models={p.id === 'lmstudio' ? (health?.options.lmstudio.models ?? providers.lmstudio.models ?? []) : p.models}
-                    busy={busy}
-                    keyValue={keyInput[p.id] ?? ''}
-                    onKeyChange={v => setKeyInput(prev => ({ ...prev, [p.id]: v }))}
-                    onSaveKey={() => void saveKey(p.id)}
-                    onChoose={model => void choose(p.id, model)}
-                  />
-                ))}
-              </div>
-            )}
-            {config?.extraction && (
-              <p className="mt-3 text-xs text-muted-foreground">
-                {t('settings.engine.current')} <strong className="text-foreground">{providerLabel(config.extraction.provider ?? '')}</strong> /{' '}
-                {config.extraction.model ?? t('settings.engine.defaultModel')}
-              </p>
+              <>
+                {/* Deux colonnes : en trois, la 2e rangée laissait un trou et
+                    les colonnes étroites écrasaient le champ « Clé API ». */}
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {PROVIDERS.map(p => (
+                    <ProviderCard
+                      key={p.id}
+                      choice={p}
+                      available={availabilityOf(p.id)}
+                      isCurrent={currentProvider === p.id}
+                      currentModel={currentModel}
+                      // LM Studio : on propose les modèles réellement chargés
+                      models={p.id === 'lmstudio' ? (health?.options.lmstudio.models ?? providers.lmstudio.models ?? []) : p.models}
+                      busy={busy}
+                      keyValue={keyInput[p.id] ?? ''}
+                      onKeyChange={v => setKeyInput(prev => ({ ...prev, [p.id]: v }))}
+                      onSaveKey={() => void saveKey(p.id)}
+                      onChoose={model => void choose(p.id, model)}
+                    />
+                  ))}
+                </div>
+                {/* Légende écrite : l'étoile n'était expliquée que dans un
+                    title= au survol — invisible sur mobile. */}
+                <p className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                  <span className="inline-flex items-center gap-1">
+                    <Star className="size-3 fill-current" aria-hidden="true" />
+                    {t('settings.engine.legendRecommended')}
+                  </span>
+                  <span className="inline-flex items-center gap-1">
+                    <Check className="size-3" aria-hidden="true" />
+                    {t('settings.engine.legendActive')}
+                  </span>
+                </p>
+              </>
             )}
           </SectionCard>
 
@@ -353,13 +379,19 @@ function ProviderCard({
     onSaveKey()
   }
   return (
-    <Card size="sm" className={cn('bg-muted/40 ring-0', isCurrent && 'bg-primary/5 ring-1 ring-primary/40')}>
+    <Card size="sm" className={cn('bg-muted/40 ring-0', isCurrent && 'bg-primary/5 ring-2 ring-primary')}>
       <CardContent className="flex h-full flex-col gap-2">
         <div className="flex flex-wrap items-center gap-1.5">
-          <Icon className="size-4 text-muted-foreground" aria-hidden="true" />
+          <Icon className={cn('size-4', isCurrent ? 'text-primary' : 'text-muted-foreground')} aria-hidden="true" />
           <span className="font-medium">{t(`settings.provider.${p.id}.label`)}</span>
-          {p.id === 'openai' && <Badge>{t('settings.engine.badgeRecommended')}</Badge>}
-          {isCurrent && <Badge variant="secondary">{t('settings.engine.badgeActive')}</Badge>}
+          {/* « Actif » est le badge qui compte : plein, jamais discret. */}
+          {isCurrent && (
+            <Badge>
+              <Check aria-hidden="true" />
+              {t('settings.engine.badgeActive')}
+            </Badge>
+          )}
+          {p.id === 'openai' && !isCurrent && <Badge variant="secondary">{t('settings.engine.badgeRecommended')}</Badge>}
           {available !== undefined && (
             <StatusBadge tone={available ? 'ok' : 'warn'} className="ml-auto">
               {available ? t('settings.engine.detected') : t('settings.engine.missingKeyServer')}
@@ -367,49 +399,53 @@ function ProviderCard({
           )}
         </div>
         <p className="text-xs text-muted-foreground">{t(`settings.provider.${p.id}.hint`)}</p>
+        {/* text-sm et pas text-xs : c'est le message qui explique POURQUOI le
+            moteur ne marche pas, en ambre sur fond clair — le plus dur à lire. */}
         {available === false && (
-          <p className="text-xs text-warning">
-            {p.id === 'ollama'
-              ? t('settings.engine.missing.ollama')
-              : p.id === 'lmstudio'
-                ? t('settings.engine.missing.lmstudio')
-                : t('settings.engine.missing.key', { provider: p.id })}
+          <p className="text-sm text-warning">
+            {p.id === 'ollama' ? t('settings.engine.missing.ollama') : p.id === 'lmstudio' ? t('settings.engine.missing.lmstudio') : t('settings.engine.missing.key')}
           </p>
         )}
+        {/* Champ pleine largeur sur son propre fond, bouton EN DESSOUS et en
+            style principal : côte à côte et tous deux gris, on lisait « deux
+            boutons » et on ne savait plus où coller sa clé. */}
         {isCloud && (
-          <form onSubmit={submitKey} className="flex flex-col gap-1.5">
+          <form onSubmit={submitKey} className="flex flex-col items-start gap-1.5">
             <Label htmlFor={`key-${p.id}`}>{t('settings.engine.keyLabel')}</Label>
-            <div className="flex gap-2">
-              <Input
-                id={`key-${p.id}`}
-                type="password"
-                autoComplete="off"
-                placeholder={available ? t('settings.engine.keyPlaceholderReplace') : t('settings.engine.keyPlaceholderPaste')}
-                value={keyValue}
-                onChange={e => onKeyChange(e.target.value)}
-              />
-              <Button type="submit" size="sm" variant="outline" className="h-8 shrink-0" disabled={busy || !keyValue.trim()}>
-                {t('settings.engine.saveKey')}
-              </Button>
-            </div>
+            <Input
+              id={`key-${p.id}`}
+              type="password"
+              autoComplete="off"
+              className="bg-background"
+              placeholder={available ? t('settings.engine.keyPlaceholderReplace') : t('settings.engine.keyPlaceholderPaste')}
+              value={keyValue}
+              onChange={e => onKeyChange(e.target.value)}
+            />
+            <Button type="submit" size="sm" disabled={busy || !keyValue.trim()}>
+              {t('settings.engine.saveKey')}
+            </Button>
           </form>
         )}
-        {p.id === 'lmstudio' && available === true && models.length === 0 && <p className="text-xs text-warning">{t('settings.engine.lmstudioNoModels')}</p>}
+        {p.id === 'lmstudio' && available === true && models.length === 0 && <p className="text-sm text-warning">{t('settings.engine.lmstudioNoModels')}</p>}
         {models.length > 0 && (
           <div className="flex flex-col gap-1.5 pt-1">
             <span className="text-xs text-muted-foreground">{t('settings.engine.modelLabel')}</span>
             <div role="radiogroup" aria-label={t('settings.engine.modelLabel')} className="flex flex-wrap gap-1.5">
               {models.map(model => {
                 const recommended = model === p.recommended
+                const active = isCurrent && currentModel === model
                 return (
                   <Chip
                     key={model}
-                    active={isCurrent && currentModel === model}
+                    active={active}
                     disabled={busy}
                     onClick={() => onChoose(model)}
-                    title={recommended ? t('settings.engine.modelRecommendedTitle') : undefined}
-                    className="font-mono"
+                    title={active ? t('settings.engine.modelActiveTitle') : recommended ? t('settings.engine.modelRecommendedTitle') : undefined}
+                    // Plein (et pas juste teinté) : l'étoile « conseillé » se
+                    // voyait sur 4 cartes, on croyait 4 modèles sélectionnés.
+                    className={cn('font-mono', active && 'border-primary bg-primary text-primary-foreground')}
                   >
+                    {active && <Check className="size-3" aria-hidden="true" />}
                     {model}
                     {recommended && <Star className="size-3 fill-current" aria-hidden="true" />}
                   </Chip>
@@ -1174,7 +1210,47 @@ function UsagePanel() {
     body = (
       <>
         <CloudSends rows={report.rows} />
-        <DataTable columns={columns} rows={report.rows} rowKey={r => `${r.provider}|${r.model}|${r.purpose}`} dense />
+        {/* Six colonnes chiffrées ne tiennent pas sur 390 px : la carte les
+            rognait sans indice de défilement. Sous sm, une fiche par modèle. */}
+        <div className="sm:hidden">
+          <DataCards
+            rows={report.rows}
+            rowKey={r => `${r.provider}|${r.model}|${r.purpose}`}
+            title={r => (
+              <span className="inline-flex flex-wrap items-center gap-1.5">
+                <code className="text-xs break-all">
+                  {r.provider}/{r.model}
+                </code>
+                {r.local && <Badge variant="outline">{t('settings.usage.local')}</Badge>}
+              </span>
+            )}
+            subtitle={r => t(`settings.usage.purpose.${r.purpose}`)}
+            fields={r => [
+              {
+                label: t('settings.usage.col.calls'),
+                value: (
+                  <span className="inline-flex items-center gap-1.5 tabular-nums">
+                    {formatNumber(r.calls)}
+                    {r.failures > 0 && <StatusBadge tone="warn">{t('settings.usage.failures', { count: r.failures })}</StatusBadge>}
+                  </span>
+                ),
+              },
+              { label: t('settings.usage.col.in'), value: <span className="tabular-nums">{fmtTokens(r.input_tokens)}</span> },
+              { label: t('settings.usage.col.out'), value: <span className="tabular-nums">{fmtTokens(r.output_tokens)}</span> },
+              {
+                label: t('settings.usage.col.cost'),
+                value: (
+                  <span className="tabular-nums">
+                    {r.local ? t('settings.usage.free') : r.estimated_cost_usd === null ? t('settings.usage.unknownCost') : `≈ ${fmtUsd(r.estimated_cost_usd)}`}
+                  </span>
+                ),
+              },
+            ]}
+          />
+        </div>
+        <div className="hidden sm:block">
+          <DataTable columns={columns} rows={report.rows} rowKey={r => `${r.provider}|${r.model}|${r.purpose}`} dense />
+        </div>
         {totals && (
           <p className="text-sm tabular-nums">
             <strong>{t('settings.usage.total')}</strong> — {t('settings.usage.col.calls')} : {formatNumber(totals.calls)} · {t('settings.usage.col.in')} :{' '}

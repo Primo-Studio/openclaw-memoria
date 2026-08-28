@@ -127,11 +127,19 @@ function SystemBody({ stats }: { stats: Record<string, number> }) {
 
   return (
     <div className="flex flex-col gap-4">
-      {/* Une colonne sous 640 px : trois cartes côte à côte y coupaient les libellés sur 3 lignes. */}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+      {/* Deux colonnes sous 640 px : empilées, ces trois nombres mangeaient un
+          tiers de l'écran avant la première couche. La 3e carte prend toute la
+          largeur pour laisser respirer son libellé. */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         <StatCard value={LAYER_COUNT} label={t('system.stat.layers')} />
         <StatCard value={tracked.length} label={t('system.stat.tracked')} hint={t('system.stat.trackedHint')} />
-        <StatCard value={live} label={t('system.stat.live')} tone={live > 0 ? 'ok' : 'default'} hint={live === 0 ? t('system.stat.liveHintEmpty') : undefined} />
+        <StatCard
+          value={live}
+          label={t('system.stat.live')}
+          tone={live > 0 ? 'ok' : 'default'}
+          hint={live === 0 ? t('system.stat.liveHintEmpty') : undefined}
+          className="col-span-2 sm:col-span-1"
+        />
       </div>
 
       {BUCKETS.map(bucket => (
@@ -149,8 +157,14 @@ function SystemBody({ stats }: { stats: Record<string, number> }) {
                       <span className="sr-only">{t('system.layer_number', { n: l.n })} </span>
                       {t(l.nameKey)}
                     </span>
-                    {value !== undefined && value > 0 && (
-                      <Badge variant="secondary" className="tabular-nums" title={t('system.live_count')}>
+                    {/* Un badge même à 0 : sans lui, « suivie mais vide » et
+                        « sans compteur » se ressemblaient exactement. */}
+                    {value !== undefined && (
+                      <Badge
+                        variant={value > 0 ? 'secondary' : 'outline'}
+                        className={cn('tabular-nums', value === 0 && 'text-muted-foreground')}
+                        title={t('system.live_count')}
+                      >
                         {formatNumber(value)}
                       </Badge>
                     )}
