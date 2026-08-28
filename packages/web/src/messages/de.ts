@@ -1368,7 +1368,7 @@ export const de: Messages = {
   'revisions.action_accept_alone': 'Diese Erinnerung aufräumen',
   'revisions.fact_kept': 'Bleibt',
   'revisions.fact_archived': 'Wird aufgeräumt',
-  'revisions.fact_missing': 'Diese Erinnerung gehört nicht zu den neuesten des Agenten: Ihr Text konnte nicht angezeigt werden.',
+  'revisions.fact_missing': 'Text nicht angezeigt: Diese Erinnerung ist älter als die letzten {count}.',
   'revisions.reanalyze_short': 'Analysieren',
   // — Écrans mémoire (G2) : Maintenance —
   'maintenance.never_used_hint': 'Erinnerungen, die nie in einer Antwort verwendet wurden — das Material zum Aufräumen.',

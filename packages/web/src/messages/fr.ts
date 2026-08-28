@@ -1370,7 +1370,7 @@ export const fr: Messages = {
   'revisions.action_accept_alone': 'Ranger ce souvenir',
   'revisions.fact_kept': 'Gardé',
   'revisions.fact_archived': 'Sera rangé',
-  'revisions.fact_missing': 'Ce souvenir ne fait pas partie des derniers souvenirs de l’agent : son texte n’a pas pu être affiché.',
+  'revisions.fact_missing': 'Texte non affiché : ce souvenir est plus ancien que les {count} derniers.',
   'revisions.reanalyze_short': 'Analyser',
   // — Écrans mémoire (G2) : Maintenance —
   'maintenance.never_used_hint': 'Les souvenirs jamais utilisés dans une réponse — la matière du ménage.',

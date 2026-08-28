@@ -1368,7 +1368,7 @@ export const es: Messages = {
   'revisions.action_accept_alone': 'Ordenar este recuerdo',
   'revisions.fact_kept': 'Conservado',
   'revisions.fact_archived': 'Se ordenará',
-  'revisions.fact_missing': 'Este recuerdo no está entre los últimos del agente: no se pudo mostrar su texto.',
+  'revisions.fact_missing': 'Texto no mostrado: este recuerdo es anterior a los últimos {count}.',
   'revisions.reanalyze_short': 'Analizar',
   // — Écrans mémoire (G2) : Maintenance —
   'maintenance.never_used_hint': 'Recuerdos nunca usados en una respuesta: la materia prima de la limpieza.',

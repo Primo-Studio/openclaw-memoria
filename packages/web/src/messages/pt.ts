@@ -1368,7 +1368,7 @@ export const pt: Messages = {
   'revisions.action_accept_alone': 'Arrumar esta memória',
   'revisions.fact_kept': 'Mantida',
   'revisions.fact_archived': 'Será arrumada',
-  'revisions.fact_missing': 'Esta memória não está entre as últimas do agente: não foi possível mostrar o texto.',
+  'revisions.fact_missing': 'Texto não exibido: esta memória é anterior às últimas {count}.',
   'revisions.reanalyze_short': 'Analisar',
   // — Écrans mémoire (G2) : Maintenance —
   'maintenance.never_used_hint': 'Memórias nunca usadas numa resposta — a matéria-prima da arrumação.',

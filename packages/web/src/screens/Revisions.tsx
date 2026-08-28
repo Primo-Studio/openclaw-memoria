@@ -268,8 +268,8 @@ function RevisionFact({ fact, kept }: { fact: AdminFact | undefined; kept: boole
         </Badge>
         {fact && <span className="text-xs text-muted-foreground tabular-nums">{formatDay(fact.created_at)}</span>}
       </div>
-      <p className={cn('text-sm leading-relaxed break-words', kept ? 'text-foreground' : 'text-muted-foreground')}>
-        {fact ? fact.fact : t('revisions.fact_missing')}
+      <p className={cn('text-sm leading-relaxed break-words', fact ? (kept ? 'text-foreground' : 'text-muted-foreground') : 'text-xs text-muted-foreground italic')}>
+        {fact ? fact.fact : t('revisions.fact_missing', { count: FACT_WINDOW })}
       </p>
     </li>
   )

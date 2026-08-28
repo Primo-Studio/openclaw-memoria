@@ -1368,7 +1368,7 @@ export const en: Messages = {
   'revisions.action_accept_alone': 'Tidy this memory',
   'revisions.fact_kept': 'Kept',
   'revisions.fact_archived': 'Will be tidied away',
-  'revisions.fact_missing': 'This memory is not among the agent’s latest ones: its text could not be shown.',
+  'revisions.fact_missing': 'Text not shown: this memory is older than the last {count}.',
   'revisions.reanalyze_short': 'Analyse',
   // — Écrans mémoire (G2) : Maintenance —
   'maintenance.never_used_hint': 'Memories never used in an answer — the raw material for tidying up.',
