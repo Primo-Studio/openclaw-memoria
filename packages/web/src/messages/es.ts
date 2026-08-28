@@ -104,7 +104,7 @@ export const es: Messages = {
   'common.loading': 'Cargando…',
 
   // — Registro (Auditoría) —
-  'audit.title': 'Registro',
+  'audit.title': 'Registro de actividad',
   'audit.lead': 'Quién hizo qué, y cuándo — sin guardar jamás el contenido de tus recuerdos.',
   'audit.empty.title': 'Nada que reportar',
   'audit.empty.body': 'Ninguna actividad registrada por ahora.',
@@ -1430,6 +1430,9 @@ export const es: Messages = {
   // — Journal (écran shadcn) — filtres, compteur, état « aucun résultat » —
   'audit.list_title': 'Últimas acciones',
   'audit.window': 'El servicio conserva las 200 últimas entradas.',
+  'audit.count_filtered': '{shown} / {total}',
+  'audit.count_aria': '{n} entradas',
+  'audit.count_filtered_aria': '{shown} entradas mostradas de {total}',
   'audit.filter.search': 'Buscar (agente, acción, motivo…)',
   'audit.filter.all_actors': 'Todos los actores',
   'audit.filter.all_actions': 'Todas las acciones',

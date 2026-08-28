@@ -106,7 +106,7 @@ export const fr: Messages = {
   'common.loading': 'Chargement…',
 
   // — Journal (Audit) —
-  'audit.title': 'Journal',
+  'audit.title': 'Journal d’activité',
   'audit.lead': 'Qui a fait quoi, et quand — sans jamais enregistrer le contenu de tes souvenirs.',
   'audit.empty.title': 'Rien à signaler',
   'audit.empty.body': 'Aucune activité enregistrée pour l’instant.',
@@ -1432,6 +1432,9 @@ export const fr: Messages = {
   // — Journal (écran shadcn) — filtres, compteur, état « aucun résultat » —
   'audit.list_title': 'Dernières actions',
   'audit.window': 'Le service garde les 200 dernières entrées.',
+  'audit.count_filtered': '{shown} / {total}',
+  'audit.count_aria': '{n} entrées',
+  'audit.count_filtered_aria': '{shown} entrées affichées sur {total}',
   'audit.filter.search': 'Rechercher (agent, action, raison…)',
   'audit.filter.all_actors': 'Tous les acteurs',
   'audit.filter.all_actions': 'Toutes les actions',

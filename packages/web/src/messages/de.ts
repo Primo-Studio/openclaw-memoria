@@ -104,7 +104,7 @@ export const de: Messages = {
   'common.loading': 'Lädt…',
 
   // — Protokoll (Audit) —
-  'audit.title': 'Protokoll',
+  'audit.title': 'Aktivitätsprotokoll',
   'audit.lead': 'Wer hat was getan und wann — ohne jemals den Inhalt deiner Erinnerungen zu speichern.',
   'audit.empty.title': 'Nichts zu melden',
   'audit.empty.body': 'Bisher keine Aktivität aufgezeichnet.',
@@ -1430,6 +1430,9 @@ export const de: Messages = {
   // — Journal (écran shadcn) — filtres, compteur, état « aucun résultat » —
   'audit.list_title': 'Letzte Aktionen',
   'audit.window': 'Der Dienst behält die letzten 200 Einträge.',
+  'audit.count_filtered': '{shown} / {total}',
+  'audit.count_aria': '{n} Einträge',
+  'audit.count_filtered_aria': '{shown} von {total} Einträgen angezeigt',
   'audit.filter.search': 'Suchen (Agent, Aktion, Grund…)',
   'audit.filter.all_actors': 'Alle Akteure',
   'audit.filter.all_actions': 'Alle Aktionen',

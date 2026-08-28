@@ -104,7 +104,7 @@ export const en: Messages = {
   'common.loading': 'Loading…',
 
   // — Log (Audit) —
-  'audit.title': 'Log',
+  'audit.title': 'Activity log',
   'audit.lead': 'Who did what, and when — without ever recording the content of your memories.',
   'audit.empty.title': 'Nothing to report',
   'audit.empty.body': 'No activity recorded yet.',
@@ -1430,6 +1430,9 @@ export const en: Messages = {
   // — Journal (écran shadcn) — filtres, compteur, état « aucun résultat » —
   'audit.list_title': 'Latest actions',
   'audit.window': 'The service keeps the last 200 entries.',
+  'audit.count_filtered': '{shown} / {total}',
+  'audit.count_aria': '{n} entries',
+  'audit.count_filtered_aria': '{shown} entries shown out of {total}',
   'audit.filter.search': 'Search (agent, action, reason…)',
   'audit.filter.all_actors': 'All actors',
   'audit.filter.all_actions': 'All actions',
