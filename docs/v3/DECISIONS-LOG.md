@@ -56,3 +56,37 @@
   = {provider:'openai', model:'gpt-4o-mini'}`.
 - gpt-5*/o-series : API exige `max_completion_tokens` (pas `max_tokens`) + pas de `temperature`
   custom — géré dans `OpenAiProvider`.
+
+## 2026-08-24 — Consolidation avant features (Néto)
+
+- **Moteur recommandé par défaut = OpenAI** (clé API, le plus simple : `gpt-4o-mini` extraction +
+  `text-embedding-3-small` embeddings 1536 d). **Ollama = avancé** (le parc n'est pas assez puissant ;
+  l'onboarding scanne la machine — `machine_caps` — et ne propose l'install 1-clic que si pertinent).
+  Badges « recommandé » / « avancé » dans Réglages et Onboarding (`EmbeddingsChooser`, `Settings.tsx`).
+- **Pas de nouvelles features avant la distribution** : ⛔ carte 3D UMAP, clusters en écran,
+  continuous-learning OpenClaw (`llm_output`), relais NAS. Priorité = dernier kilomètre (tests
+  install/update/launchd, quarantaine, partage des faits sur Néto, npm, signature/notarisation).
+- Indicateur d'activité = icône dans la barre de menus de **Memoria.app** (pas OpenClaw).
+
+## 2026-08-27 — Décisions produit de l'audit multi-agents (implémentées, **à confirmer par Néto**)
+
+- **Les agents écrivent dans la mémoire partagée `user`** : `memoria_store_fact` accepte
+  `scope: 'private' | 'user'` ; policy `can_write=1` sur `user` posée au pairing et par migration douce
+  (seules les policies jamais réglées à la main sont relevées — `grantDefaultUserWrite`). Motif : avant,
+  10 faits partagés pour ~4 000 privés, aucun agent ne pouvait y écrire, chaque modèle re-découvrait
+  les mêmes préférences.
+- **Exception sécurité** : un agent de type `openclaw` (bot de canal WhatsApp/Telegram, exposé à des
+  tiers) reste en **lecture seule** sur `user` (surface d'injection inter-agents) → `403` ; son
+  partage passe par la Revue.
+- **Le passage privé → partagé reste manuel** (écran Partage, `shareFacts`). Partager un fait dormant
+  le valide et clôt son item de revue.
+- **Modes de capture unifiés** : `Revue d'abord` et `Pause` s'appliquent aussi aux faits déclarés par
+  un agent (`store_fact`), pas seulement à la capture (Pause → « ignoré : en pause »).
+- Un fait **déclaré** n'est dédoublonné qu'en **exact** (le near-dup Jaccard > 0,85 avalait
+  « 13 octobre » vs « 14 octobre ») ; le near-dup reste réservé à la capture.
+- `forget({query})` = ET sémantique + `confirm_bulk` obligatoire sans ids + `dry_run`.
+- `identifyInterlocutor` : `known` borné aux scopes lisibles de l'agent appelant.
+- Index vectoriel nommé par **(dimensions, modèle)**.
+- **Consommation par modèle** visible (table `llm_usage`, Réglages, `memoria doctor`) — le compteur a
+  révélé une boucle LLM (231 appels après une capture) corrigée par `fact_cognition`.
+- **launchd d'abord** : `memoria start` fait `launchctl kickstart` si le service cible ce stockage.

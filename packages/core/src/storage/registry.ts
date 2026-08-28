@@ -519,6 +519,19 @@ export class RegistryStore {
     return this.db.prepare('SELECT * FROM db_registry').all() as DbRegistryEntry[]
   }
 
+  /**
+   * Réécrit le chemin d'une base enregistrée (racine déplacée). Une entrée
+   * déjà posée sur ce chemin par un boot antérieur (re-registerDb du registre
+   * lui-même) est retirée : un chemin = une entrée.
+   */
+  rebaseDb(id: string, path: string): void {
+    const tx = this.db.transaction(() => {
+      this.db.prepare('DELETE FROM db_registry WHERE path = ? AND id != ?').run(path, id)
+      this.db.prepare('UPDATE db_registry SET path = ? WHERE id = ?').run(path, id)
+    })
+    tx()
+  }
+
   dbForScope(scopeId: string): DbRegistryEntry | null {
     return (
       (this.db.prepare("SELECT * FROM db_registry WHERE scope_id = ? AND kind = 'shared'").get(scopeId) as

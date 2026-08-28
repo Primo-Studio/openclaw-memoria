@@ -1,5 +1,8 @@
 # Memoria — Audit de consolidation (2026-08-24)
 
+> ⚠️ **Snapshot du 24/08.** État courant mesuré : `STATUS.md` ; dernière session : `JOURNAL-2026-08-27.md`.
+> Les encarts « 27/08 » ci-dessous datent ce qui a bougé depuis.
+
 > **Demande de Néto** : analyser ce que Memoria fait et ce qui manque pour qu'elle soit
 > **déjà très bien fonctionnelle**, AVANT de se lancer sur de nouvelles features.
 > Conclusion en une phrase : **le code est mûr (~90 % du plan, 682 tests verts au 04/08) ;
@@ -16,7 +19,7 @@ Mémoire long terme partagée pour agents IA (Claude Code, Codex, OpenClaw), loc
   hard-delete, audit neutre, pause/incognito.
 - **Multi-machines** : synchro hub-and-spoke, coffre partagé chiffré, jamais en clair sur le réseau.
 - **Interlocuteur** : `person_identifiers` (tel/mail/**Telegram/WhatsApp**/handle) → `identifyInterlocutor`.
-- **Desktop** : Memoria.app + DMG. **UI web 14 écrans**. Connexion d'un agent en **1 commande**.
+- **Desktop** : Memoria.app + DMG. **UI web 16 écrans**. Connexion d'un agent en **1 commande**.
 
 > ⭐ Lien avec le projet « assistant pour l'ami » : la brique **mémoire** existe déjà, et elle sait
 > déjà rattacher un **identifiant Telegram/WhatsApp à une personne**. C'est exactement le socle visé.
@@ -75,14 +78,23 @@ système) **n'apparaissent jamais en CI**. Deux bugs consécutifs sont passés c
 **aucun test** ; `autostart.ts` a refait la même démonstration le lendemain. À couvrir en priorité :
 `update.ts`, `control/autostart.ts`, `daemon/src/static.ts`, `core/src/engine/scoring.ts`,
 `core/src/sync/{peer-auth,secrets-sync,clock}.ts`, `mcp/src/bin.ts`, `cli/commands/export.ts`.
+> État 27/08 : `update.ts`, `autostart.ts`, `scoring.ts` et `sync/*` sont couverts (`update*.test.ts`, `autostart*.test.ts`,
+> `launchd-status`, `ensure-daemon-launchd`, `scoring-context`, `sync-crypto`…). **Restent sans test** : `daemon/src/static.ts`,
+> `mcp/src/bin.ts`, `cli/commands/export.ts`.
+
 Règle : **le code de sortie de launchctl/npm ne prouve rien** — vérifier l'état réel après action.
 
 ### P1 — Activer la mémoire déjà capturée (elle est là mais dormante)
 - **Trier la quarantaine** : **2266 faits dormants confirmés live aujourd'hui** (Claude Code 1021 +
   Codex 1245 ; rien trié depuis août). Décision Néto : « Tout approuver » par agent (rapide, un peu de
   bruit mais ranké) vs tri sélectif.
+  > ✅ Fait le 24/08 (23 lots → 0 dormant, `JOURNAL-CONSOLIDATION` §3). ⚠️ **27/08 : l'auto-import launchd (toutes les 6 h)
+  > re-remplit la Revue à chaque passage** (1 523 fichiers le 27/08 → des milliers de dormants) → tri récurrent à prévoir :
+  > bouton « Tout approuver » par agent et compteur `review_pending` dans `/stats` (TODO).
 - **Partager les faits sur Néto** : écran Partage → `suggestIdentityFacts` (≈50 candidats/agent) →
   cocher → `shareFacts` vers `user`. Sans ça, chaque agent re-découvre les mêmes préférences.
+  > ✅ 24/08 : 10 faits semés dans `user`. Depuis le 27/08, les agents (sauf bots OpenClaw) **écrivent aussi directement**
+  > dans `user` via `memoria_store_fact scope:'user'` (décision à confirmer par Néto, `TODO.md`).
 
 ### P2 — Enlever les pièges structurels (temps perdu récurrent)
 - **Deux copies du dépôt par machine** (dev `~/Documents/…` vs runtime `~/openclaw-memoria`) :
@@ -90,17 +102,20 @@ Règle : **le code de sortie de launchctl/npm ne prouve rien** — vérifier l'�
 - **Isolation client/projet non réellement configurée** : `projectId/clientOrgId/orgId` absents (A)
   ou nuls (B, 0 projet/0 client) → l'isolation annoncée **ne fait rien**. La configurer pour de vrai
   OU ne pas la compter comme acquise.
+  > État 27/08 : identifiants projet/client/org **slugifiés** côté MCP/adaptateur (`4934ba3`) ; mapping contre le registre ⚪,
+  > isolation projet→client ⚪ (`passesClientIsolation` ne regarde que `client_org_id`), configuration des 3 machines ⚪.
 - **Sync flaky** (préexistant) : `sync-engine`/`sync-http` se disputent le Keychain réel + port LAN
-  fixe 47733 → passer ces tests sur `aes-vault` + port 0.
+  fixe 47733 → passer ces tests sur `aes-vault` + port 0. **Toujours ouvert au 27/08** (`sync-http.test.ts` : `LAN_PORT = 47733`).
 
 ### P2 — Distribution (condition pour installer ailleurs, ex. chez l'ami)
 - **Publier npm** (`@primo-studio/memoria`) : tant que non publié, tout passe par des chemins locaux
   `node ~/openclaw-memoria/...` → install fragile et non distribuable à un tiers.
 - **Signer/notariser `Memoria.app`** (process Igara) + Node embarqué → app installable proprement.
+  > 27/08 : **signée** Developer ID (`tauri.conf.json` `signingIdentity`), installée dans `/Applications` — reste la **notarisation**.
 
 ### P3 — Finitions du plan initial encore ⚪ (petits blocs, pas des features neuves)
 - **Backup/restore** général (Phase 5 : seul le backup de migration existe).
-- **Cron `decayCognition`** quotidien (méthode prête, il manque juste le scheduler).
+- **Cron `decayCognition`** quotidien (méthode prête, il manque juste le scheduler). Toujours aucun appelant au 27/08.
 - **`getSecretRef` / `secret_access: value_on_request`** de bout en bout (engine→daemon→MCP).
 
 ## D. Ce que je NE ferais PAS maintenant (ce sont des features, pas de la consolidation)

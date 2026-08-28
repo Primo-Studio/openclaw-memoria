@@ -1,6 +1,11 @@
 # Synchronisation inter-machines de Memoria — Spec d'exécution
 
-> Statut : spec retenue, prête à implémenter. Ancrée dans le code réel de `memoria-v1`.
+> Statut (vérifié 2026-08-27) : **incréments 1-5 IMPLÉMENTÉS** (juin 2026) — `packages/core/src/sync/{clock,engine,merge,peer-auth,secrets-sync}.ts`,
+> migrations registry v4 / contenu v2, routes `/v1/sync/{pairing/complete,snapshot,pull,push,secrets}` (LAN, HMAC)
+> + `/v1/admin/sync/{status,init_hub,invite,join,now,peers,revoke,leave}`, CLI `memoria sync status|init-hub|invite|join|now|revoke|leave`,
+> écran Réglages → Synchro, tests `sync-crypto` / `sync-merge` / `sync-engine` / `sync-http` (2 daemons réels) verts.
+> **Incrément 6 (relais NAS) non fait.** Écarts spec ↔ code : ⚪ ci-dessous = décrit mais absent du code.
+> Spec d'origine ancrée dans le code réel de `memoria-v1`.
 > Cible : Koda (Mac Studio), Luna (iMac), Claude Code (MacBook Pro), même LAN, NAS QNAP dispo.
 
 Faits de code vérifiés (ancrage) :
@@ -353,11 +358,13 @@ POST /v1/admin/sync/invite     → { code, expires_at, hub_lan }
 POST /v1/admin/sync/now        → tick() à la demande
 GET  /v1/admin/sync/peers      → liste sync_peers
 POST /v1/admin/sync/revoke     → revoked_at sur un peer
-POST /v1/admin/sync/rotate-key → régénère GVK, re-scelle shared_secret_envelopes, force re-pairing
-POST /v1/admin/sync/verify     → checksums de scope hub vs spoke
+POST /v1/admin/sync/rotate-key → régénère GVK, re-scelle shared_secret_envelopes, force re-pairing   ⚪ NON IMPLÉMENTÉE
+POST /v1/admin/sync/verify     → checksums de scope hub vs spoke                                   ⚪ NON IMPLÉMENTÉE
 ```
 
-`DaemonClient` (`client.ts`) gagne : `syncPull`, `syncPush`, `syncSnapshot`, `syncSecrets`, `syncPairingComplete`, `syncInvite`, `syncNow`, `syncJoin` (injection auto Bearer + headers HMAC).
+(Existent aussi, non listées ci-dessus : `GET /v1/admin/sync/status`, `POST /v1/admin/sync/init_hub`, `POST /v1/admin/sync/join`, `POST /v1/admin/sync/leave`.)
+
+`DaemonClient` (`client.ts`) — **réalisé** : `syncStatus`, `syncInitHub`, `syncInvite`, `syncJoin`, `syncNow`, `syncRevoke`, `syncLeave` (routes admin loopback). Les appels machine-à-machine (`pull`/`push`/`snapshot`/`secrets`/`pairing/complete`, Bearer + HMAC) vivent dans `SyncEngine` côté core, pas dans `DaemonClient` (⚪ `syncPull`/`syncPush`/`syncSnapshot`/`syncSecrets`/`syncPairingComplete` jamais créés).
 
 Timer interne : `setInterval(() => syncEngine.tick().catch(warn), interval)` lancé **après** le bloc `replayWal()` au boot (L528), en `catch → warn`, jamais bloquant.
 
@@ -366,8 +373,8 @@ Timer interne : `setInterval(() => syncEngine.tick().catch(warn), interval)` lan
 - `registry-schema.ts` : **migration v4** (`sync_peers`, `sync_cursor`, `shared_secret_envelopes`, `sync_nonces`, `settings['sync.machine_id']`).
 - `content-schema.ts` : **migration v2** (`origin_machine_id`, `origin_rev`, `content_hash`, `deleted_at` + index).
 - `secrets/index.ts` : helper `groupVaultKey()` (lit/crée `memoria/__group_vault_key` dans le `SecretProvider` local) + `clusterPairingKey()`. **Aucune** modification du gate de redaction.
-- `packages/mcp/src/sync-join.ts` (miroir de `connect.ts`) + entrée bin.
-- CLI : `memoria sync init-hub | invite | join | leave | now | status | peers | revoke <peer> | verify | rotate-key`.
+- ⚪ `packages/mcp/src/sync-join.ts` jamais créé — remplacé par `memoria sync join` (CLI).
+- CLI **réalisée** : `memoria sync init-hub | invite | join | leave | now | status | revoke <machine_id>`. ⚪ `peers` (la route `GET /v1/admin/sync/peers` existe, sans sous-commande — `sync status` liste les pairs), ⚪ `verify`, ⚪ `rotate-key`, ⚪ `promote-to-hub`.
 
 ---
 
@@ -383,7 +390,7 @@ Chaque incrément est testable et apporte de la valeur seul.
 
 ### Incrément 2 — Auth machine-à-machine + listener LAN ciblé
 
-**Valeur seule** : un spoke peut s'appairer au hub et appeler une route `/v1/sync/ping` authentifiée, sans encore synchroniser — la sécurité réseau est validée en isolation.
+**Valeur seule** : un spoke peut s'appairer au hub et appeler une route `/v1/sync/ping` authentifiée (⚪ jamais créée telle quelle — l'auth est éprouvée sur `/v1/sync/snapshot`), sans encore synchroniser — la sécurité réseau est validée en isolation.
 **Fichiers** : `registry-schema.ts` (migration v4 : `sync_peers`, `sync_nonces`), `sync/peer-auth.ts`, `server.ts` (branche `/v1/sync/*` sur IP LAN + HMAC, `/v1/sync/pairing/complete`), `client.ts` (`syncPairingComplete`, headers HMAC), `config.ts` (`[sync]`).
 **Tests** : pairing type machine (code one-shot, TTL, single-use) ; HMAC accepté/refusé (sig fausse, ts hors fenêtre, nonce rejoué) ; `/v1/admin/*` et `/v1/memory/*` **toujours refusés** sur IP LAN (régression anti-DNS-rebinding) ; `peer_token` `timingSafeEqual`.
 

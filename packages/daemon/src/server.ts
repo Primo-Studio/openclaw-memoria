@@ -13,16 +13,18 @@
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { existsSync, mkdirSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { timingSafeEqual } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import {
   AUTOSTART_LABEL,
   Memoria,
+  RegexRedactor,
   autoRegister,
   autostartStatus,
   collectTranscriptFiles,
   copyOpenClawKey,
+  defaultStorageRoot,
   writeProviderKey,
   detectAgents,
   disableAutostart,
@@ -72,6 +74,8 @@ export interface DaemonOptions {
   credentialsDir?: string
   /** Override LLM transmis au moteur (tests : extraction mockée, zéro réseau). */
   llm?: MemoriaInitOptions['llm']
+  /** Coffre à secrets injecté (tests : simuler un Trousseau qui refuse — jamais le vrai). */
+  secretProvider?: MemoriaInitOptions['secretProvider']
   /** Lancement auto / superviseur (tests : launchd simulé — jamais de launchctl réel). */
   control?: Partial<DaemonControlHooks>
   /** Mise à jour (tests : ni git pull, ni npm, ni redémarrage réels). */
@@ -136,7 +140,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   if (!release) throw new DaemonLockHeldError(storageRoot, lockHolderPid(storageRoot))
   let memoria: Memoria
   try {
-    memoria = Memoria.init({ storageRoot, configPath: opts.configPath, llm: opts.llm })
+    memoria = Memoria.init({ storageRoot, configPath: opts.configPath, llm: opts.llm, secretProvider: opts.secretProvider })
   } catch (err) {
     release()
     throw err
@@ -254,7 +258,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         const body = await readJson(req)
         const instanceId = String(body['instance'] ?? '')
         if (!instanceId) throw new HttpError(400, 'instance requise')
-        sendJson(res, 200, memoria.adoptLegacyInto(instanceId, { reindex: body['reindex'] !== false }))
+        sendJson(res, 200, mapEngineErrors(() => memoria.adoptLegacyInto(instanceId, { reindex: body['reindex'] !== false })))
         return
       }
       case 'GET /v1/admin/scopes': {
@@ -263,10 +267,11 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       }
       case 'POST /v1/admin/share': {
         const body = await readJson(req)
-        const factIds = (body['fact_ids'] as string[]) ?? []
+        const factIds = stringArray(body['fact_ids'], 'fact_ids')
         const targetScope = String(body['target_scope'] ?? '')
         if (!targetScope) throw new HttpError(400, 'target_scope requis')
-        sendJson(res, 200, memoria.shareFacts(factIds, targetScope))
+        // « scope cible inconnu » → 404, « partage interdit vers un scope privé » → 400.
+        sendJson(res, 200, mapEngineErrors(() => memoria.shareFacts(factIds, targetScope)))
         return
       }
       case 'POST /v1/admin/policy': {
@@ -274,6 +279,10 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         const assistantId = String(body['assistant_id'] ?? '')
         const scopeId = String(body['scope_id'] ?? '')
         if (!assistantId || !scopeId) throw new HttpError(400, 'assistant_id et scope_id requis')
+        // Existence vérifiée ICI : sinon la clé étrangère SQLite répondait
+        // « FOREIGN KEY constraint failed » en 500, sans dire lequel manque.
+        if (!memoria.registry.getAssistant(assistantId)) throw new HttpError(404, `assistant inconnu : ${assistantId}`)
+        if (!memoria.registry.getScope(scopeId)) throw new HttpError(404, `scope inconnu : ${scopeId}`)
         memoria.setScopeAccess(assistantId, scopeId, body as Record<string, never>)
         sendJson(res, 200, { ok: true })
         return
@@ -418,12 +427,12 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       }
       case 'POST /v1/admin/review/approve': {
         const body = await readJson(req)
-        sendJson(res, 200, memoria.reviewDecision((body['ids'] as string[]) ?? [], 'accepted'))
+        sendJson(res, 200, memoria.reviewDecision(stringArray(body['ids'], 'ids'), 'accepted'))
         return
       }
       case 'POST /v1/admin/review/reject': {
         const body = await readJson(req)
-        sendJson(res, 200, memoria.reviewDecision((body['ids'] as string[]) ?? [], 'rejected'))
+        sendJson(res, 200, memoria.reviewDecision(stringArray(body['ids'], 'ids'), 'rejected'))
         return
       }
       case 'GET /v1/admin/providers': {
@@ -462,11 +471,23 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         if (!['ollama', 'openai'].includes(provider)) {
           throw new HttpError(400, `provider d'embeddings inconnu : ${provider} (attendu : ollama|openai)`)
         }
+        // `dimensions` : entier plausible ou rien. Les dimensions sont gravées
+        // avec chaque vecteur — une chaîne « abc » était persistée telle quelle
+        // dans config.toml puis envoyée à l'API (« une valeur fausse corrompt
+        // la base », config.ts).
+        let dimensions: number | undefined
+        const rawDims = body['dimensions']
+        if (rawDims !== undefined && rawDims !== null) {
+          if (typeof rawDims !== 'number' || !Number.isInteger(rawDims) || rawDims < 64 || rawDims > 8192) {
+            throw new HttpError(400, `dimensions doit être un entier entre 64 et 8192 (reçu : ${JSON.stringify(rawDims)}) — omets-le pour un modèle connu`)
+          }
+          dimensions = rawDims
+        }
         memoria.setEmbeddingsProvider(
           provider,
-          body['model'] as string | undefined,
-          body['dimensions'] as number | undefined,
-          body['base_url'] as string | undefined,
+          optionalString(body, 'model'),
+          dimensions,
+          optionalString(body, 'base_url'),
         )
         // Réindexation incrémentale en tâche de fond (ne bloque pas la réponse) :
         // seuls les faits sans vecteur pour le nouveau modèle sont ré-embqués.
@@ -520,7 +541,12 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         if (!['openai', 'anthropic', 'openrouter'].includes(provider)) {
           throw new HttpError(400, `provider invalide : ${provider}`)
         }
-        const copied = copyOpenClawKey(provider as ReusableProvider)
+        // Pas de clé en clair (OpenClaw en OAuth, ou pas d'OpenClaw) = cas
+        // NOMINAL → 404 lisible par l'Onboarding, pas un 500. Le HOME inspecté
+        // suit `agentsHome` (tests : jamais la vraie config OpenClaw).
+        const copied = mapEngineErrors(() =>
+          copyOpenClawKey(provider as ReusableProvider, opts.agentsHome ? { openclawDir: join(opts.agentsHome, '.openclaw') } : {}),
+        )
         memoria.registry.audit({
           actor_type: 'user',
           actor_id: 'local',
@@ -590,14 +616,24 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
           profile: (body['profile'] as string | undefined) ?? null,
         })
         // Tant que @memoria/mcp n'est pas publié sur npm, la commande npx ne
-        // marche pas : on la remplace par le binaire LOCAL s'il existe.
-        sendJson(res, 200, { ...result, command: localConnectCommand(result.pairing_code) ?? result.command })
+        // marche pas : on la remplace par le binaire LOCAL s'il existe. Et la
+        // commande vise CE stockage (--storage-root) quand il n'est pas celui
+        // par défaut : sans lui, memoria-mcp résolvait ~/.memoria/config.toml →
+        // autre daemon (ou un daemon neuf dans ~/.memoria/data) → « code de
+        // pairing invalide ou expiré » alors que le code était bon ici.
+        sendJson(res, 200, { ...result, command: connectCommand(result.pairing_code, storageRoot, result.command), storage_root: storageRoot })
         return
       }
       case 'POST /v1/admin/revoke': {
+        // Avant : `ok:true` même pour un id vide ou inconnu (UPDATE sur 0 ligne)
+        // — un client croyait avoir coupé un agent qui gardait son token.
+        // `instance_id` accepté en alias : c'est le nom des autres routes admin.
         const body = await readJson(req)
-        memoria.revokeInstance(String(body['assistant_instance_id'] ?? ''))
-        sendJson(res, 200, { ok: true })
+        const instanceId = String(body['assistant_instance_id'] ?? body['instance_id'] ?? '')
+        if (!instanceId) throw new HttpError(400, 'assistant_instance_id requis')
+        if (!memoria.registry.getInstance(instanceId)) throw new HttpError(404, `instance inconnue : ${instanceId}`)
+        memoria.revokeInstance(instanceId)
+        sendJson(res, 200, { ok: true, revoked: true })
         return
       }
       case 'GET /v1/admin/agents': {
@@ -643,7 +679,10 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         const value = String(body['value'] ?? '')
         if (!personId || !kind || !value) throw new HttpError(400, 'person_id, kind et value requis')
         if (!['phone', 'email', 'telegram', 'whatsapp', 'handle', 'other'].includes(kind)) throw new HttpError(400, `kind inconnu : ${kind}`)
-        sendJson(res, 200, { identifier: memoria.addPersonIdentifier(personId, kind, value, (body['label'] as string | null) ?? null) })
+        if (!memoria.getPerson(personId)) throw new HttpError(404, `personne inconnue : ${personId}`)
+        sendJson(res, 200, {
+          identifier: mapEngineErrors(() => memoria.addPersonIdentifier(personId, kind, value, (body['label'] as string | null) ?? null)),
+        })
         return
       }
       case 'POST /v1/admin/person_identifier_delete': {
@@ -694,8 +733,12 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         return
       }
       case 'POST /v1/admin/forget': {
+        // Corps validé (ids tableau de chaînes, booléens) puis gardes du moteur
+        // (« filtre vide », « confirm_bulk requis ») en 400 lisibles par l'UI
+        // Maintenance — plus de « erreur interne » ni de `ids.map is not a function`.
         const body = await readJson(req)
-        sendJson(res, 200, memoria.forget(body as ForgetFilter))
+        const filter = forgetFilterFromBody(body)
+        sendJson(res, 200, mapEngineErrors(() => memoria.forget(filter)))
         return
       }
       case 'GET /v1/admin/audit': {
@@ -906,10 +949,30 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       }
       case 'POST /v1/admin/sync/join': {
         const body = await readJson(req)
-        const hub = String(body['hub'] ?? '')
-        const code = String(body['code'] ?? '')
+        const hub = String(body['hub'] ?? '').trim()
+        const code = String(body['code'] ?? '').trim()
         if (!hub || !code) throw new HttpError(400, 'hub et code requis')
-        sendJson(res, 200, await memoria.sync.join({ hub, code }))
+        if (!isHostPort(hub)) throw new HttpError(400, `hub invalide : « ${hub} » (hôte:port attendu, ex. 192.168.1.20:47600)`)
+        // Le cas le plus courant (mauvaise IP/port, hub pas démarré, pare-feu)
+        // remontait « fetch failed » en 500 avec une stack : ici 502 avec
+        // l'adresse essayée et la piste ; code refusé → 400 (pas une panne).
+        try {
+          sendJson(res, 200, await memoria.sync.join({ hub, code }))
+        } catch (err) {
+          const message = (err as Error)?.message ?? String(err)
+          if (isNetworkFailure(err)) {
+            const cause = describeNetworkFailure(err)
+            throw new HttpError(
+              502,
+              `hub injoignable à ${hub}${cause ? ` (${cause})` : ''} — vérifie l'adresse hôte:port du hub, qu'il est démarré en mode hub (« memoria sync init-hub ») et joignable sur le LAN (pare-feu)`,
+            )
+          }
+          if (message.startsWith('pairing refusé par le hub')) {
+            throw new HttpError(400, `${message} : code expiré, déjà utilisé ou erroné — génère-en un nouveau sur le hub (« memoria sync invite »)`)
+          }
+          if (message.startsWith('échec du descellement')) throw new HttpError(400, message)
+          throw err
+        }
         return
       }
       case 'POST /v1/admin/sync/now': {
@@ -980,10 +1043,20 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     switch (route) {
       case 'POST /v1/memory/store_fact': {
         const body = await readJson(req)
-        // `scope` (partage cross-modèle : 'user', id de scope…) est relayé tel
-        // quel ; les refus du moteur deviennent des codes HTTP parlants.
-        const fact = mapScopeErrors(() => memoria.storeFact({ ...(body as Omit<StoreFactInput, 'instance'>), instance: instanceId }))
-        sendJson(res, 200, { fact })
+        // Corps VALIDÉ champ par champ (400 explicite) — avant, `{}` faisait un
+        // TypeError, une sensibilité hors enum cassait sur la contrainte CHECK
+        // SQLite, `confidence: 42` était persisté tel quel : 500 « erreur
+        // interne » pour des refus attendus. Les refus du moteur (policy, scope
+        // inconnu) deviennent des codes HTTP parlants.
+        // declareFact (pas storeFact) : le mode de capture s'applique — en
+        // « Pause » rien n'est écrit et la réponse le DIT (skipped/paused).
+        const input = storeFactInputFromBody(body)
+        const result = mapEngineErrors(() => memoria.declareFact({ ...input, instance: instanceId }))
+        if (result.skipped) {
+          sendJson(res, 200, { fact: null, skipped: true, reason: result.reason, mode: result.mode })
+          return
+        }
+        sendJson(res, 200, { fact: result.fact, mode: result.mode })
         return
       }
       case 'POST /v1/memory/recall': {
@@ -996,13 +1069,9 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       }
       case 'POST /v1/memory/capture_turn': {
         const body = await readJson(req)
-        const messages = body['messages']
-        if (!Array.isArray(messages) || messages.length === 0) {
-          throw new HttpError(400, 'messages requis (tableau {role, content})')
-        }
         const result = await memoria.captureTurn({
           instance: instanceId,
-          messages: messages as CaptureTurnInput['messages'],
+          messages: captureMessagesFromBody(body['messages']),
           active_context: body['active_context'] as CaptureTurnInput['active_context'],
         })
         sendJson(res, 200, result)
@@ -1014,7 +1083,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         const content = String(body['content'] ?? '')
         if (!factId || !content.trim()) throw new HttpError(400, 'fact_id et content requis')
         // Refus de policy sur un fait PARTAGÉ → 403 (pas un 500 avec stack).
-        sendJson(res, 200, mapScopeErrors(() => memoria.correctFact(instanceId, factId, content)))
+        sendJson(res, 200, mapEngineErrors(() => memoria.correctFact(instanceId, factId, content)))
         return
       }
       case 'POST /v1/memory/merge': {
@@ -1022,7 +1091,8 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         const keep = String(body['keep_fact_id'] ?? '')
         const ids = body['merge_fact_ids']
         if (!keep || !Array.isArray(ids)) throw new HttpError(400, 'keep_fact_id et merge_fact_ids requis')
-        sendJson(res, 200, mapScopeErrors(() => memoria.mergeFacts(instanceId, keep, ids.filter((v): v is string => typeof v === 'string'))))
+        // « fusion impossible : le fait conservé … est absent » → 404 (mapEngineErrors).
+        sendJson(res, 200, mapEngineErrors(() => memoria.mergeFacts(instanceId, keep, ids.filter((v): v is string => typeof v === 'string'))))
         return
       }
       case 'POST /v1/memory/pin': {
@@ -1031,7 +1101,11 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         if (!factId) throw new HttpError(400, 'fact_id requis')
         if (typeof body['pinned'] !== 'boolean') throw new HttpError(400, 'pinned requis (booléen)')
         const pinned = body['pinned']
-        sendJson(res, 200, { updated: mapScopeErrors(() => memoria.setPinned(instanceId, factId, pinned)) })
+        const updated = mapEngineErrors(() => memoria.setPinned(instanceId, factId, pinned))
+        // false = fait introuvable dans les scopes de cet agent : 404, pas un
+        // « updated:false » que l'agent prenait pour un succès sans effet.
+        if (!updated) throw new HttpError(404, `fait inconnu dans les scopes de cet agent : ${factId}`)
+        sendJson(res, 200, { updated })
         return
       }
       case 'POST /v1/memory/expiry': {
@@ -1040,7 +1114,15 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         if (!factId) throw new HttpError(400, 'fact_id requis')
         const raw = body['expires_at']
         const expires = raw === null || raw === undefined || raw === '' ? null : String(raw)
-        sendJson(res, 200, { updated: mapScopeErrors(() => memoria.setExpiry(instanceId, factId, expires)) })
+        // Validé ICI (400) : le moteur lève une Error plate qui finissait en
+        // 500, et l'outil MCP envoyait le LLM vers « memoria doctor » pour une
+        // simple faute d'argument.
+        if (expires !== null && Number.isNaN(Date.parse(expires))) {
+          throw new HttpError(400, `expires_at invalide : « ${expires} » (date ISO 8601 attendue, ex. 2026-12-31T00:00:00Z, ou null pour lever l'expiration)`)
+        }
+        const updated = mapEngineErrors(() => memoria.setExpiry(instanceId, factId, expires))
+        if (!updated) throw new HttpError(404, `fait inconnu dans les scopes de cet agent : ${factId}`)
+        sendJson(res, 200, { updated })
         return
       }
       case 'POST /v1/memory/capture_status': {
@@ -1256,6 +1338,30 @@ function headerStr(req: IncomingMessage, name: string): string | undefined {
   return Array.isArray(v) ? v[0] : v
 }
 
+/** « hôte:port » plausible : hôte sans espace, port 1..65535 (IPv6 entre crochets accepté). */
+function isHostPort(addr: string): boolean {
+  const i = addr.lastIndexOf(':')
+  if (i <= 0) return false
+  const host = addr.slice(0, i)
+  const port = Number(addr.slice(i + 1))
+  return /^[^\s/]+$/.test(host) && Number.isInteger(port) && port >= 1 && port <= 65535
+}
+
+/** Erreur RÉSEAU de fetch (connexion refusée, hôte introuvable, délai) — pas une réponse HTTP. */
+function isNetworkFailure(err: unknown): boolean {
+  if (!(err instanceof Error)) return false
+  if (err.name === 'AbortError' || err.name === 'TimeoutError') return true
+  if (err instanceof TypeError && /fetch failed/i.test(err.message)) return true
+  const code = (err as { cause?: { code?: string } }).cause?.code ?? (err as { code?: string }).code
+  return typeof code === 'string' && /^(ECONNREFUSED|ENOTFOUND|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|ECONNRESET|EAI_AGAIN)$/.test(code)
+}
+
+/** Cause lisible d'une panne réseau (code système ou message de la cause). */
+function describeNetworkFailure(err: unknown): string {
+  const cause = (err as { cause?: { code?: string; message?: string } }).cause
+  return cause?.code ?? cause?.message ?? (err as Error)?.name ?? ''
+}
+
 /** « host:port » → [host, port]. host vide → 0.0.0.0. */
 function parseHostPort(addr: string): [string, number] {
   const i = addr.lastIndexOf(':')
@@ -1266,18 +1372,27 @@ function parseHostPort(addr: string): [string, number] {
 }
 
 /**
- * Commande de connexion LOCALE : `node <repo>/packages/mcp/dist/bin.js connect
- * --code XXXX`. Le bin MCP est voisin du daemon dans le monorepo. Retourne null
- * si introuvable (paquet publié npm → on garde la forme npx).
+ * Commande de connexion à coller dans le chat de l'agent : binaire LOCAL
+ * (`node <repo>/packages/mcp/dist/bin.js connect --code XXXX`, voisin du
+ * daemon dans le monorepo) sinon la forme npx ; plus ` --storage-root <racine>`
+ * dès que le stockage n'est pas ~/.memoria/data, pour que memoria-mcp parle
+ * au BON daemon.
  */
-function localConnectCommand(code: string): string | null {
+function connectCommand(code: string, storageRoot: string, npxCommand: string): string {
+  let base = npxCommand
   try {
     const binPath = fileURLToPath(new URL('../../mcp/dist/bin.js', import.meta.url))
-    if (existsSync(binPath)) return `${process.execPath} ${binPath} connect --code ${code}`
+    if (existsSync(binPath)) base = `${process.execPath} ${binPath} connect --code ${code}`
   } catch {
-    /* ignore */
+    /* paquet publié npm : forme npx conservée */
   }
-  return null
+  if (resolve(storageRoot) === resolve(defaultStorageRoot())) return base
+  return `${base} --storage-root ${shellQuote(storageRoot)}`
+}
+
+/** Chemin cité pour un shell si nécessaire (espaces, caractères spéciaux). */
+function shellQuote(p: string): string {
+  return /^[A-Za-z0-9_./~:@+-]+$/.test(p) ? p : `'${p.replace(/'/g, `'\\''`)}'`
 }
 
 /** Hôte loopback uniquement (anti-DNS-rebinding). Absent = client non-HTTP/1.0 toléré. */
@@ -1366,21 +1481,154 @@ function recallInputFromBody(body: Record<string, unknown>): Omit<RecallInput, '
 }
 
 /**
- * Refus du moteur sur le scope d'une écriture → HTTP parlant : 403 quand la
- * policy interdit (`can_write`), 404 quand le scope n'existe pas. Sans ce
- * mapping l'agent recevait un 500 indiscernable d'une panne — et le journal
- * s'emplissait de stacks pour un refus attendu. Le moteur signale ces cas par
- * message (pas de classe d'erreur dédiée côté core) : on reconnaît ses préfixes.
+ * Refus du MOTEUR → HTTP parlant. Le core lève des Error plates (pas de classe
+ * dédiée) : on reconnaît ses préfixes. 403 quand la policy interdit, 404 quand
+ * l'identifiant n'existe pas (scope, instance, personne, fait conservé d'une
+ * fusion, clé OpenClaw absente), 400 quand l'argument est mauvais (date,
+ * contenu vide, gardes de forget, partage vers un scope privé). Sans ce
+ * mapping, un refus attendu devenait un 500 indiscernable d'une panne, avec sa
+ * stack dans le journal — et l'outil MCP envoyait le LLM vers « memoria
+ * doctor », qui répondait que tout allait bien.
  */
-function mapScopeErrors<T>(fn: () => T): T {
+const ENGINE_ERROR_STATUS: ReadonlyArray<readonly [prefix: string, status: number]> = [
+  ['écriture refusée', 403],
+  ['scope inconnu', 404],
+  ['scope cible inconnu', 404],
+  ['instance inconnue', 404],
+  ['instance révoquée', 400],
+  ['personne inconnue', 404],
+  ['fusion impossible', 404],
+  ["date d'expiration invalide", 400],
+  ['storeFact : contenu vide', 400],
+  ['contenu de correction vide', 400],
+  ['forget : ', 400],
+  ['partage interdit', 400],
+  ['identifiant vide', 400],
+  ['aucune clé API', 404],
+  ["OpenClaw n'a qu'un compte OAuth", 404],
+]
+
+function mapEngineErrors<T>(fn: () => T): T {
   try {
     return fn()
   } catch (err) {
+    if (err instanceof HttpError) throw err
     const message = (err as Error)?.message ?? ''
-    if (message.startsWith('écriture refusée')) throw new HttpError(403, message)
-    if (message.startsWith('scope inconnu')) throw new HttpError(404, message)
+    for (const [prefix, status] of ENGINE_ERROR_STATUS) {
+      if (message.startsWith(prefix)) throw new HttpError(status, message)
+    }
     throw err
   }
+}
+
+/** Tableau de chaînes obligatoire (400 sinon) — `ids: 'x'` faisait un `ids.map is not a function` en 500. */
+function stringArray(value: unknown, name: string): string[] {
+  if (!Array.isArray(value) || !value.every((v): v is string => typeof v === 'string')) {
+    throw new HttpError(400, `${name} doit être un tableau de chaînes`)
+  }
+  return value
+}
+
+/** Chaîne optionnelle (400 si présente mais d'un autre type). */
+function optionalString(body: Record<string, unknown>, name: string): string | undefined {
+  const v = body[name]
+  if (v === undefined || v === null) return undefined
+  if (typeof v !== 'string') throw new HttpError(400, `${name} doit être une chaîne`)
+  return v
+}
+
+/** Booléen optionnel (400 si présent mais d'un autre type). */
+function optionalBoolean(body: Record<string, unknown>, name: string): boolean | undefined {
+  const v = body[name]
+  if (v === undefined || v === null) return undefined
+  if (typeof v !== 'boolean') throw new HttpError(400, `${name} doit être un booléen`)
+  return v
+}
+
+const SENSITIVITIES = ['normal', 'sensitive', 'critical'] as const
+
+/**
+ * Corps de store_fact → StoreFactInput, sur LISTE BLANCHE et typé : `content`
+ * chaîne non vide, `sensitivity` dans l'enum (la contrainte CHECK SQLite
+ * répondait 500), `confidence` nombre dans [0,1] (42 était persisté tel quel),
+ * `tags` tableau de chaînes.
+ */
+function storeFactInputFromBody(body: Record<string, unknown>): Omit<StoreFactInput, 'instance'> {
+  const content = body['content']
+  if (typeof content !== 'string' || content.trim() === '') {
+    throw new HttpError(400, 'content requis (chaîne non vide) : le fait à mémoriser, en une phrase')
+  }
+  const input: Omit<StoreFactInput, 'instance'> = { content }
+  const scope = optionalString(body, 'scope')
+  if (scope !== undefined) input.scope = scope
+  const category = optionalString(body, 'category')
+  if (category !== undefined) input.category = category
+  const factType = optionalString(body, 'fact_type')
+  if (factType !== undefined) input.fact_type = factType
+  const source = optionalString(body, 'source')
+  if (source !== undefined) input.source = source
+  if (body['confidence'] !== undefined && body['confidence'] !== null) {
+    const c = body['confidence']
+    if (typeof c !== 'number' || !Number.isFinite(c) || c < 0 || c > 1) {
+      throw new HttpError(400, `confidence doit être un nombre entre 0 et 1 (reçu : ${JSON.stringify(c)})`)
+    }
+    input.confidence = c
+  }
+  if (body['sensitivity'] !== undefined && body['sensitivity'] !== null) {
+    const s = body['sensitivity']
+    if (typeof s !== 'string' || !(SENSITIVITIES as readonly string[]).includes(s)) {
+      throw new HttpError(400, `sensitivity invalide : ${JSON.stringify(s)} (attendu : ${SENSITIVITIES.join(' | ')})`)
+    }
+    input.sensitivity = s as (typeof SENSITIVITIES)[number]
+  }
+  if (body['tags'] !== undefined && body['tags'] !== null) input.tags = stringArray(body['tags'], 'tags')
+  for (const key of ['org_id', 'client_org_id', 'project_id'] as const) {
+    const v = body[key]
+    if (v === undefined) continue
+    if (v !== null && typeof v !== 'string') throw new HttpError(400, `${key} doit être une chaîne ou null`)
+    input[key] = v
+  }
+  return input
+}
+
+const CAPTURE_ROLES = ['user', 'assistant', 'tool'] as const
+
+/**
+ * Messages de capture_turn validés UN PAR UN : un rôle hors user|assistant|tool
+ * ou absent cassait sur la contrainte CHECK / NOT NULL du WAL (500). L'index
+ * fautif est nommé pour que l'appelant sache quoi corriger.
+ */
+function captureMessagesFromBody(raw: unknown): CaptureTurnInput['messages'] {
+  if (!Array.isArray(raw) || raw.length === 0) throw new HttpError(400, 'messages requis (tableau {role, content})')
+  return raw.map((m, i) => {
+    const msg = (m && typeof m === 'object' ? m : {}) as Record<string, unknown>
+    const role = msg['role']
+    if (typeof role !== 'string' || !(CAPTURE_ROLES as readonly string[]).includes(role)) {
+      throw new HttpError(400, `messages[${i}].role invalide (attendu : ${CAPTURE_ROLES.join('|')}, reçu : ${JSON.stringify(role ?? null)})`)
+    }
+    const content = msg['content']
+    if (typeof content !== 'string' || content.trim() === '') {
+      throw new HttpError(400, `messages[${i}].content requis (chaîne non vide)`)
+    }
+    return { role: role as (typeof CAPTURE_ROLES)[number], content }
+  })
+}
+
+/** Corps de forget → ForgetFilter typé (les gardes métier restent au moteur, mappées en 400). */
+function forgetFilterFromBody(body: Record<string, unknown>): ForgetFilter {
+  const filter: ForgetFilter = {}
+  if (body['ids'] !== undefined && body['ids'] !== null) filter.ids = stringArray(body['ids'], 'ids')
+  const scopeId = optionalString(body, 'scope_id')
+  if (scopeId !== undefined) filter.scope_id = scopeId
+  const query = optionalString(body, 'query')
+  if (query !== undefined) filter.query = query
+  const category = optionalString(body, 'category')
+  if (category !== undefined) filter.category = category
+  const confirmBulk = optionalBoolean(body, 'confirm_bulk')
+  if (confirmBulk !== undefined) filter.confirm_bulk = confirmBulk
+  const dryRun = optionalBoolean(body, 'dry_run')
+  if (dryRun !== undefined) filter.dry_run = dryRun
+  return filter
 }
 
 /** Champ booléen obligatoire du corps — `{}` ne vaut ni true ni false. */
@@ -1413,9 +1661,16 @@ function intParam<D extends number | undefined>(url: URL, name: string, opts: { 
  */
 function reportAndSend(req: IncomingMessage, res: ServerResponse, err: unknown): void {
   const status = err instanceof HttpError ? err.status : 500
-  const message = (err as Error)?.message ?? 'erreur interne'
-  if (status >= 500) {
-    const detail = (err as Error)?.stack ?? message
+  // DÉFENSE EN PROFONDEUR : une erreur interne peut citer une commande, un
+  // corps de requête, une réponse de provider… Tout ce qui ressemble à un
+  // secret est masqué AVANT le journal et AVANT le client — la valeur d'un
+  // secret ne sort jamais du daemon, quelle que soit la panne.
+  const message = errorRedactor.redact((err as Error)?.message ?? 'erreur interne').text
+  // Journalisé : toute exception NON attendue, et les HttpError 500 posées
+  // sciemment (« voir le journal du daemon »). Un 502 expliqué (hub
+  // injoignable) est une réponse, pas une panne : pas de stack pour ça.
+  if (!(err instanceof HttpError) || status === 500) {
+    const detail = errorRedactor.redact((err as Error)?.stack ?? message).text
     console.error(`[memoria-daemon] ${req.method ?? '?'} ${req.url ?? '?'} → ${status} : ${detail}`)
   }
   // Exception APRÈS l'envoi de la réponse (effet de bord post-réponse) :
@@ -1428,6 +1683,9 @@ function reportAndSend(req: IncomingMessage, res: ServerResponse, err: unknown):
   }
   sendJson(res, status, { error: message })
 }
+
+/** Redacteur des messages d'erreur (mêmes motifs que le gate secrets du moteur). */
+const errorRedactor = new RegexRedactor()
 
 /** Corps BRUT (string) — nécessaire au HMAC de synchro (sha256 du corps exact). */
 async function readRawBody(req: IncomingMessage): Promise<string> {

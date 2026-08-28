@@ -499,6 +499,12 @@ export interface CaptureStatusResult {
 
 export interface DoctorReport {
   ok: boolean
+  /**
+   * Kill-switch (config.enabled). false = Memoria en PAUSE : capture et recall
+   * refusés pour tous les agents — LA cause n°1 de « mes agents ne se
+   * souviennent de rien », que le doctor doit dire en premier.
+   */
+  enabled: boolean
   storage_root: string
   config_path: string
   registry_path: string

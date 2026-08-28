@@ -4,7 +4,7 @@
  *   memoria sync init-hub [--listen 0.0.0.0:47600]   désigne CETTE machine comme hub
  *   memoria sync invite [--name "Luna (iMac)"]        code one-shot à donner au spoke
  *   memoria sync join --hub <ip:port> --code XXXX      relie CETTE machine au hub (+ bootstrap)
- *   memoria sync now | status | peers | revoke <id> | leave
+ *   memoria sync now | status | revoke <id> | leave
  *
  * Toutes passent par le daemon (il détient les DB). Le join/bootstrap réel
  * tourne DANS le daemon (accès réseau + écriture registry/scopes).

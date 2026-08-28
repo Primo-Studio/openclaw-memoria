@@ -11,7 +11,7 @@ import { fail, findAliveDaemon, formatBytes, withLocalMemoria } from '../index.j
 export class DoctorCommand extends Command {
   static override paths = [['doctor']]
   static override usage = Command.Usage({
-    description: 'Vérifie la santé du stockage Memoria (DB, garde réseau, WAL).',
+    description: 'Bilan de santé complet : stockage, moteur d’IA, activité, consommation des modèles, avertissements.',
   })
 
   storageRoot = Option.String('--storage-root', { description: 'Racine du stockage (défaut : résolution standard)' })
@@ -42,6 +42,9 @@ function renderDoctor(out: Writable, report: DoctorReport, note: string | null):
   out.write(`Memoria doctor — ${report.storage_root}\n`)
   if (note) out.write(`⚠ note : ${note}\n`)
   out.write('\n')
+  // En tête : un daemon plus ancien n'envoie pas `enabled` (undefined = actif).
+  const paused = report.enabled === false
+  if (paused) out.write('⏸ état : Memoria en PAUSE — capture et recall refusés (« memoria enable » pour reprendre)\n')
   out.write(`✓ config : ${report.config_path}\n`)
 
   for (const db of report.databases) {
@@ -137,7 +140,12 @@ function renderDoctor(out: Writable, report: DoctorReport, note: string | null):
     for (const warning of report.warnings) out.write(`  ⚠ ${warning}\n`)
   }
   out.write('\n')
-  out.write(report.ok ? 'État : ✓ OK\n' : `État : ⚠ ${report.warnings.length} avertissement(s)\n`)
+  if (paused) {
+    // Jamais « ✓ OK » en pause : les agents ne lisent ni n'écrivent rien.
+    out.write(`État : ⏸ en pause (${report.warnings.length} avertissement(s)) — « memoria enable » pour reprendre\n`)
+  } else {
+    out.write(report.ok ? 'État : ✓ OK\n' : `État : ⚠ ${report.warnings.length} avertissement(s)\n`)
+  }
 }
 
 /** `2026-07-28T14:31:02.123Z` → `28/07 14:31` (lisible en une ligne de terminal). */

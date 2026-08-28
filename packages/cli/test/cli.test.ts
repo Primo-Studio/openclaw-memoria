@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { Memoria } from '@memoria/core'
+import { Memoria, setEnabled } from '@memoria/core'
 import { writeDaemonState } from '@memoria/daemon'
 import {
   AgentsCommand,
@@ -110,6 +110,16 @@ describe('doctor', () => {
     expect(io.err()).toBe('')
   })
 
+  it('Memoria en pause (memoria disable) : « État : ⏸ en pause », jamais « ✓ OK »', async () => {
+    setEnabled(false, cfg)
+    const io = makeIo()
+    const code = await buildCli().run(args('doctor'), io.context)
+    expect(code).toBe(0)
+    expect(io.out()).toContain('État : ⏸ en pause')
+    expect(io.out()).toContain('memoria enable')
+    expect(io.out()).not.toContain('✓ OK')
+  })
+
   it('avec daemon vivant : passe par HTTP admin (fetch mocké), sans note locale', async () => {
     mkdirSync(root, { recursive: true })
     writeDaemonState(root, {
@@ -191,6 +201,38 @@ describe('forget — gardes', () => {
   })
 })
 
+describe('move — après déplacement, tout suit (registre, stats, doctor, forget)', () => {
+  it('memoria move puis stats/doctor/forget sur le nouvel emplacement', async () => {
+    const memoria = Memoria.init({ storageRoot: root, configPath: cfg, llm: { extraction: null } })
+    const paired = memoria.pairAssistant({ type: 'claude-code' })
+    const fact = memoria.storeFact({ instance: paired.assistant_instance_id, content: 'Fait test numéro 3 sur Acme' })
+    memoria.storeFact({ instance: paired.assistant_instance_id, scope: 'user', content: 'Le studio déploie sur Vercel' })
+    memoria.close()
+
+    const usb = join(root, '..', `memoria-cli-usb-${Date.now()}`)
+    try {
+      const mv = makeIo()
+      expect(await buildCli().run(args('move', '--to', usb), mv.context)).toBe(0)
+      expect(mv.out()).toContain('Mémoire déplacée')
+
+      // Après le move, config.toml pointe sur la destination : plus de --storage-root.
+      const stats = makeIo()
+      expect(await buildCli().run(['stats', '--config', cfg], stats.context)).toBe(0)
+      expect(stats.out()).toContain('Souvenirs : 2')
+
+      const doctor = makeIo()
+      expect(await buildCli().run(['doctor', '--config', cfg], doctor.context)).toBe(0)
+      expect(doctor.out()).not.toContain('absente du disque')
+
+      const forget = makeIo()
+      expect(await buildCli().run(['forget', '--id', fact.id, '--config', cfg], forget.context)).toBe(0)
+      expect(forget.out()).toContain('1 souvenir(s) supprimé(s)')
+    } finally {
+      rmSync(usb, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('commandes locales (daemon arrêté)', () => {
   it('stats : compteurs à zéro sur une racine neuve, code 0', async () => {
     const io = makeIo()
@@ -235,6 +277,39 @@ describe('commandes locales (daemon arrêté)', () => {
     expect(io.err()).toContain('claude-code')
     // la validation précède ensureDaemon : aucun fetch, aucun spawn
     expect(vi.mocked(fetch)).not.toHaveBeenCalled()
+  })
+
+  it('pair via un daemon vivant (fetch mocké) : affiche la commande ET le stockage ciblé', async () => {
+    mkdirSync(root, { recursive: true })
+    writeDaemonState(root, { daemon_id: 'd-test', port: 4242, admin_token: 'token-admin-test', pid: process.pid, started_at: new Date().toISOString() })
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request) => {
+      const u = String(url)
+      if (u.endsWith('/v1/health')) return jsonResponse({ ok: true, version: 'test', daemon_id: 'd-test' })
+      if (u.endsWith('/v1/admin/pair')) {
+        return jsonResponse({ assistant_instance_id: 'inst-1', pairing_code: 'ABCD-EFGH', command: `node bin.js connect --code ABCD-EFGH --storage-root ${root}` })
+      }
+      throw new Error(`URL inattendue : ${u}`)
+    }))
+    const io = makeIo()
+    const code = await buildCli().run(args('pair', 'codex'), io.context)
+    expect(code).toBe(0)
+    expect(io.out()).toContain('ABCD-EFGH')
+    expect(io.out()).toContain(`--storage-root ${root}`)
+    expect(io.out()).toContain(`Stockage : ${root}`)
+  })
+
+  it('export : les faits partagés « user » sont exportés et comptés', async () => {
+    const memoria = Memoria.init({ storageRoot: root, configPath: cfg, llm: { extraction: null } })
+    const paired = memoria.pairAssistant({ type: 'claude-code' })
+    memoria.storeFact({ instance: paired.assistant_instance_id, content: 'Fait privé' })
+    memoria.storeFact({ instance: paired.assistant_instance_id, scope: 'user', content: 'Le studio déploie sur Vercel' })
+    memoria.close()
+
+    const io = makeIo()
+    const code = await buildCli().run(args('export', '--flat'), io.context)
+    expect(code).toBe(0)
+    expect(io.out()).toMatch(/claude-code : 1 souvenir.*1 partagé/)
+    expect(io.out()).toContain('user')
   })
 
   it('revoke sur une instance inconnue : erreur propre, code 1', async () => {

@@ -1,5 +1,7 @@
 # Memoria — État des lieux UX/UI (2026-08-24)
 
+> ⚠️ **Snapshot du 24/08** — les P0/P1 sont faits ; l'état des P2 est re-daté au 27/08 en § 9. État courant : `STATUS.md`.
+
 > **Cible : utilisateur NON-TECHNIQUE.** Audit de l'app web (les 16 écrans + coquille +
 > design system + composants), pour préparer des tests et prioriser les améliorations.
 > Méthode : 3 explorations parallèles (écrans cœur / connexions-onboarding / gouvernance-design)
@@ -200,7 +202,8 @@ Deux chemins coexistent, et le débutant subit le pire en premier.
 > compteur + badges cliquables (filtres) · confidentialité reformulée + contradiction clé API levée ·
 > confirmations sécurité (Revue/Partage/Personnes) · exemples perso neutralisés + « Faits »→« Souvenirs »
 > + libellés en dur traduits (Wizard/ui.tsx) · **thème clair + bascule** + focus clavier + skip-link +
-> reduced-motion. Reste : `humanError` (fonction pure) encore en FR en dur → petit refactor P2.
+> reduced-motion. `humanError` traduit le 25/08 (`translate('error.*')`). L'exemple perso restant
+> (« le Mac Studio de Koda » dans `settings.sync.makeHubDesc`, 5 langues) a été neutralisé le 27/08.
 
 7. **Regrouper la nav** (Essentiel / Avancé, 5 familles) + **badge « en attente » sur Revue**.
 8. **Routeur / URL par écran** (bouton Précédent, rafraîchissement stable, liens).
@@ -213,15 +216,14 @@ Deux chemins coexistent, et le débutant subit le pire en premier.
     **traduire les libellés en dur** (Wizard/ui.tsx).
 13. **Thème clair + bascule** (et `prefers-color-scheme`) ; **focus-visible global** + skip-link.
 
-### P2 — finition
-14. Uniformiser tous les écrans sur `Spinner`/`ErrorBanner(+Réessayer)`/`EmptyState`/`humanError`.
-15. Recherche au frappé (debounce) + surlignage + garde anti-course ; ne pas effacer les résultats
-    au changement d'agent.
-16. Libellé d'agent unifié via `agentTypeLabel()` partout ; masquer joliment `machine_id`.
-17. Tableaux responsive (`overflow-x:auto`) ; nav mobile repliable ; `<th onClick>` → `<button>`.
-18. « Étape X sur 4 » ; feedback après enregistrement ; reset des états « Copié ✓ ».
-19. Vulgariser `doctor.warnings` et tout repli qui montre un identifiant brut.
-20. `prefers-reduced-motion` ; unifier les variables CSS ; augmenter la taille plancher du texte.
+### P2 — finition (état re-daté 27/08)
+14. ⚪ Uniformiser tous les écrans sur `Spinner`/`ErrorBanner(+Réessayer)`/`EmptyState`/`humanError` (Settings sans ErrorBanner ; Dashboard/Audit/System/Review/Vault sans humanError).
+15. 🟡 Recherche au frappé (debounce) + garde anti-course : ✅ Maintenance (27/08, `a963083`) ; ⚪ Mémoire (formulaire à soumission) ; ⚪ surlignage.
+16. ✅ Libellé d'agent unifié via `agentTypeLabel()` (25/08).
+17. ✅ Tableaux responsive (25/08) ; ✅ menu hamburger mobile (27/08, `1854b4a`) ; ✅ en-têtes de tri au clavier (27/08, `7c913ef`). Reste : focus trap / retour de focus du hamburger.
+18. ✅ « Étape X sur 4 » (`wizard.progress`) ; ✅ « Copié » honnête + reset (27/08, `4ef55b4`).
+19. ⚪ Vulgariser `doctor.warnings` et tout repli qui montre un identifiant brut.
+20. ✅ `prefers-reduced-motion` ; 🟡 variables CSS fantômes aliasées (`f163b6d`, thème clair) ; ⚪ taille plancher du texte.
 
 ---
 

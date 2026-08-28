@@ -1,5 +1,9 @@
 # Passation — sessions des 3 et 4 août 2026
 
+> ⚠️ **État au 27/08 : voir `JOURNAL-2026-08-27.md`** (980 tests / 105 fichiers, tip `0da12f7`, build `f5109a3`, daemon launchd sur le
+> MacBook Pro). Les § 3 « remarques non appliquées » (#16 `workspaceDir` — l'adaptateur envoie `ctx.cwd` ; #17 `listEmbeddingModels`
+> sans appelant ; `readdirSync(assistantsDir)` ignore `shared/*`) et § 4 « pièges » restent **vrais**.
+
 > **But** : reprendre sans contexte oral. Point de départ d'une session déclenchée par un
 > `spawn npm ENOENT` sur le bouton « Mise à jour » de l'UI, qui a fait remonter cinq défauts
 > distincts. Cinq PR fusionnées (#14 → #18), `memoria-v1` passée de `a5d18c2` à `e365733`.
@@ -170,7 +174,7 @@ Sur **chaque machine**, une fois, depuis le Terminal :
 cd ~/openclaw-memoria && git pull && npm install && npm run build
 ```
 
-Fait sur A. **À faire sur B**, où le daemon rattrapera au boot les 1256 faits nomic en les
+Fait sur A. **À faire sur B** (état A/B **inconnu au 27/08** — seul le poste C, MacBook Pro, est aligné), où le daemon rattrapera au boot les 1256 faits nomic en les
 réindexant sur le modèle actif (`server.ts` appelle `indexEmbeddings()` à chaque démarrage).
 
 ### Gateway OpenClaw jamais redémarré
@@ -222,9 +226,10 @@ démonstration du même problème le lendemain. Priorité aux modules qui touche
 l'installation, la mise à jour, le démarrage de service et les chemins système : leurs pannes
 se produisent chez l'utilisateur et jamais en CI.
 
-Restent sans test dédié : `packages/mcp/src/bin.ts`, `packages/cli/src/commands/export.ts`,
-`core/src/engine/scoring.ts`, `core/src/sync/{peer-auth,secrets-sync,clock}.ts`,
-`daemon/src/static.ts`.
+Restent sans test dédié (re-daté 27/08) : `packages/mcp/src/bin.ts`, `packages/cli/src/commands/export.ts`,
+`daemon/src/static.ts`. Couverts depuis : `update.ts` (`update.test.ts`, `update-command.test.ts`), `autostart.ts`
+(`autostart*.test.ts`, `launchd-status`, `ensure-daemon-launchd`), `scoring.ts` (`scoring-context`, `contract`),
+`sync/*` (`sync-crypto`, `sync-engine`, `sync-merge`, `sync-http`).
 
 ## 4. Pièges de diagnostic rencontrés
 
@@ -234,7 +239,8 @@ plusieurs semaines tout en paraissant courant. Vérifier le `mtime` avant de cit
 
 **`/v1/admin/version` lit le SHA du dépôt, pas du code chargé.** Après un rebuild sans
 redémarrage, il annonce le nouveau SHA alors que le process tourne encore sur l'ancien. Croiser
-avec l'heure de démarrage du process (`ps -o lstart`).
+avec l'heure de démarrage du process (`ps -o lstart`). **Depuis le 27/08** : `GET /v1/health` expose
+`built_sha` (le vrai build, lu dans `.memoria-built-sha`), `pid` et `supervisor` — c'est lui qu'il faut lire.
 
 **`better-sqlite3` compilé pour une autre version de Node** fait échouer massivement `npm test`
 sans que ce soit lié aux modifications en cours (ABI 127 = Node 22, 137 = Node 24).

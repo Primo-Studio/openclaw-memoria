@@ -4,7 +4,7 @@
  * déterministes quel que soit l'environnement (vrai Ollama installé ou non).
  */
 import { createServer, type Server } from 'node:http'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -188,6 +188,51 @@ describe('POST /v1/admin/llm_embeddings (choix du moteur de recherche sémantiqu
     for (const provider of ['lmstudio', 'anthropic', 'gpt-embed-9000']) {
       const res = await admin('POST', '/v1/admin/llm_embeddings', { provider })
       expect(res.status).toBe(400)
+    }
+  })
+
+  it('dimensions non entières ou hors [64, 8192] → 400 (rien de persisté) ; entier accepté et persisté', async () => {
+    // « une valeur fausse corrompt la base » (config.ts) : une chaîne "abc"
+    // était écrite telle quelle dans config.toml et envoyée à l'API OpenAI.
+    for (const dimensions of ['abc', 1.5, 12, 100_000, true]) {
+      const res = await admin('POST', '/v1/admin/llm_embeddings', { provider: 'openai', model: 'maison-v1', dimensions })
+      expect(res.status).toBe(400)
+      expect(((await res.json()) as { error: string }).error).toContain('dimensions')
+    }
+    const cfg = join(root, 'config.toml')
+    expect(existsSync(cfg) ? readFileSync(cfg, 'utf8') : '').not.toContain('dimensions')
+
+    const ok = await admin('POST', '/v1/admin/llm_embeddings', { provider: 'openai', model: 'maison-v1', dimensions: 512 })
+    expect(ok.status).toBe(200)
+    expect(readFileSync(join(root, 'config.toml'), 'utf8')).toContain('dimensions = 512')
+  })
+})
+
+describe('GET /v1/admin/llm_health — choix explicite indisponible : pas de repli silencieux', () => {
+  it('extraction et embeddings épinglés sur openai SANS clé → available:false + raison, même si Ollama répond', async () => {
+    // HOME isolé : la vraie ~/.openai/api_key de la machine ne doit pas entrer en jeu.
+    const savedHome = process.env['HOME']
+    const savedKey = process.env['OPENAI_API_KEY']
+    process.env['HOME'] = join(root, 'home-sans-cle')
+    delete process.env['OPENAI_API_KEY']
+    try {
+      expect((await admin('POST', '/v1/admin/llm_extraction', { provider: 'openai', model: 'gpt-4o-mini' })).status).toBe(200)
+      expect((await admin('POST', '/v1/admin/llm_embeddings', { provider: 'openai', model: 'text-embedding-3-small' })).status).toBe(200)
+
+      const res = await admin('GET', '/v1/admin/llm_health')
+      const health = (await res.json()) as {
+        extraction: { provider: string; model: string; available: boolean; reason?: string }
+        embeddings: { provider: string; model: string; available: boolean; reason?: string }
+      }
+      // Avant : extraction ollama/qwen2.5:3b available:true, embeddings
+      // ollama/nomic available:true — l'utilisateur croyait tourner sur OpenAI.
+      expect(health.extraction).toMatchObject({ provider: 'openai', model: 'gpt-4o-mini', available: false })
+      expect(health.extraction.reason).toMatch(/clé/i)
+      expect(health.embeddings).toMatchObject({ provider: 'openai', model: 'text-embedding-3-small', available: false })
+      expect(health.embeddings.reason).toMatch(/clé/i)
+    } finally {
+      process.env['HOME'] = savedHome
+      if (savedKey !== undefined) process.env['OPENAI_API_KEY'] = savedKey
     }
   })
 })
