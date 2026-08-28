@@ -106,7 +106,7 @@ export const fr: Messages = {
   'common.loading': 'Chargement…',
 
   // — Journal (Audit) —
-  'audit.title': 'Journal',
+  'audit.title': 'Journal d’activité',
   'audit.lead': 'Qui a fait quoi, et quand — sans jamais enregistrer le contenu de tes souvenirs.',
   'audit.empty.title': 'Rien à signaler',
   'audit.empty.body': 'Aucune activité enregistrée pour l’instant.',
@@ -1135,6 +1135,7 @@ export const fr: Messages = {
   'maintenance.search.title': 'Choisir les souvenirs à réparer',
   'maintenance.empty_never_used_action': 'Chercher un souvenir',
   'maintenance.lead': 'L’atelier de réparation : corriger une phrase inexacte, fusionner des doublons, retrouver les souvenirs jamais utilisés. Pour simplement relire ou oublier, va dans Mémoire.',
+  'maintenance.edit_safe': 'La version précédente n’est pas effacée : elle est seulement marquée « remplacée ».',
   'maintenance.source': 'Source',
   'maintenance.source_search': 'Recherche',
   'maintenance.source_never_used': 'Jamais utilisés',
@@ -1253,6 +1254,7 @@ export const fr: Messages = {
   'settings.engine.keyLabel': 'Clé API',
   'settings.engine.modelLabel': 'Modèle',
   'settings.engine.badgeActive': 'Actif',
+  'settings.engine.badgeSelected': 'Sélectionné',
   'settings.toast.engineChanged': 'Moteur enregistré : {provider} / {model}.',
   'settings.toast.keySaved': 'Clé {provider} enregistrée.',
   'settings.toast.resumed': 'Memoria est actif.',
@@ -1436,6 +1438,9 @@ export const fr: Messages = {
   // — Journal (écran shadcn) — filtres, compteur, état « aucun résultat » —
   'audit.list_title': 'Dernières actions',
   'audit.window': 'Le service garde les 200 dernières entrées.',
+  'audit.count_filtered': '{shown} / {total}',
+  'audit.count_aria': '{n} entrées',
+  'audit.count_filtered_aria': '{shown} entrées affichées sur {total}',
   'audit.filter.search': 'Rechercher (agent, action, raison…)',
   'audit.filter.all_actors': 'Tous les acteurs',
   'audit.filter.all_actions': 'Toutes les actions',

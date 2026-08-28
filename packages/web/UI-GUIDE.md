@@ -30,7 +30,12 @@ technicien — chaque décision ci-dessous sert la lisibilité, pas la technique
    ```
    Le titre est **projeté dans la barre supérieure** (portail,
    `app/shell-context.ts`) : ne pas rendre de `<h1>` ailleurs. Les actions y
-   vont aussi sur bureau, et descendent en tête de page sous 768 px.
+   vont aussi sur bureau, et descendent en tête de page sous 768 px — **après**
+   la description, jamais avant : au téléphone, l'écran doit s'ouvrir sur la
+   phrase qui dit à quoi il sert, pas sur un bouton seul dans une bande vide.
+   L'intro passe donc TOUJOURS par `description` (qui accepte un `ReactNode`,
+   pour mettre un mot en gras) et jamais par `children` : rendue en `children`,
+   elle repasserait sous les actions.
 2. **Structurer en `SectionCard`** (un bloc titré par sujet) :
    ```tsx
    <SectionCard title={t('agents.list.title')} description={…} actions={…}>
@@ -91,7 +96,19 @@ technicien — chaque décision ci-dessous sert la lisibilité, pas la technique
 - **Feuille de style maison** : il n'y en a plus (l'ancien `styles.css` a été
   supprimé une fois les 16 écrans réécrits). Tout passe par Tailwind + `ui/*`.
 - **Cible tactile sous 44 px** au téléphone : `size="sm"` porte déjà le plancher
-  (`max-sm:h-11`), ne le neutralise pas avec une hauteur en dur.
+  (`max-sm:h-11`), ne le neutralise pas avec une hauteur en dur. La taille par
+  défaut (`h-8`) ne l'a PAS : sur un bouton d'action au téléphone, ajoute
+  `className="max-sm:h-11"` (et non `size="sm"`, qui vaut 28 px sur bureau et
+  désaligne le bouton du champ voisin). Connu et non traité : `Input` et
+  `Select` sont à 32 px au doigt sur tous les écrans.
+- **Pastille cliquable seule** dans une liste dense : c'est la LIGNE (ou le
+  texte de la carte) qui prend le clic, pas la case ou l'interrupteur de 16-18 px
+  — voir `Sharing.tsx` et `MemFactCard.tsx`. Un `<label>` ne suffit pas : les
+  contrôles Radix sont des `<button role="switch">`, on passe donc par un
+  `onClick` sur le conteneur, avec `stopPropagation` sur le contrôle. **Aucune
+  capture ne prouve qu'une zone est cliquable** : ça se vérifie dans le
+  navigateur. Et n'agrandis pas le pseudo-élément `after` d'un interrupteur dans
+  une liste de lignes de 41 px : il déborderait sur les lignes voisines.
 - **Largeur qui déborde** : un contenu large (tableau, chemin, JSON) défile dans
   son conteneur (`overflow-x-auto`), jamais la page.
 - **Styles inline** pour la couleur ou l'espacement.
@@ -103,7 +120,7 @@ technicien — chaque décision ci-dessous sert la lisibilité, pas la technique
 | `--background` / `--foreground` | fond et texte de page | `bg-background`, `text-foreground` |
 | `--card` / `--card-foreground` | cartes | `bg-card` |
 | `--popover` | menus, dialogues, tiroirs | `bg-popover` |
-| `--primary` / `--primary-foreground` | **accent orange Primo** (`#e85a1f` sombre, `#d64f16` clair) : action principale, actif, marque | `bg-primary`, `text-primary`, `bg-primary/10` |
+| `--primary` / `--primary-foreground` | **accent orange Primo** (`#e85a1f` sombre, `#c04410` clair) : action principale, actif, marque | `bg-primary`, `text-primary`, `bg-primary/10` |
 | `--secondary`, `--muted`, `--accent` | fonds neutres (boutons secondaires, zones atténuées, survol) | `bg-muted`, `hover:bg-accent` |
 | `--muted-foreground` | texte secondaire | `text-muted-foreground` |
 | `--destructive` | suppression, erreur | `text-destructive`, `bg-destructive/10` |
@@ -117,11 +134,16 @@ technicien — chaque décision ci-dessous sert la lisibilité, pas la technique
 Les deux palettes sont complètes ; en ajouter un jeton = l'ajouter dans `:root`,
 `:root[data-theme='dark']` **et** `@theme inline`.
 
-**Contraste** : `--success`, `--warning` et `--destructive` servent de couleur de
-TEXTE sur un fond teinté à 10-12 % de la même couleur (badges, bouton
-« Supprimer ») — c'est le pire cas, et c'est lui qui fixe la valeur. Les mesures
-en cours sont en tête de `tokens.css` ; toute retouche se re-mesure (seuil AA
-= 4,5:1), elle ne se juge pas à l'œil.
+**Contraste** : deux pires cas, tous deux mesurés en tête de `tokens.css`.
+(1) `--success`, `--warning` et `--destructive` servent de couleur de TEXTE sur
+un fond teinté à 10-12 % de la même couleur (badges, bouton « Supprimer »).
+(2) La paire pleine `--primary` / `--primary-foreground` porte le bouton
+principal, le badge par défaut et la pastille de modèle en mono 12 px — en
+thème sombre l'encre est SOMBRE sur l'orange vif (même motif que
+`--success-foreground`), ne la repasse pas en blanc sans re-mesurer. Le survol
+du bouton plein mélange vers `--foreground` au lieu de diluer l'orange
+(`bg-primary/80` faisait tomber le libellé sous le seuil). Toute retouche se
+re-mesure (seuil AA = 4,5:1), elle ne se juge pas à l'œil.
 
 ## 5. Coquille
 

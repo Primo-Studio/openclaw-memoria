@@ -384,13 +384,24 @@ function ProviderCard({
         <div className="flex flex-wrap items-center gap-1.5">
           <Icon className={cn('size-4', isCurrent ? 'text-primary' : 'text-muted-foreground')} aria-hidden="true" />
           <span className="font-medium">{t(`settings.provider.${p.id}.label`)}</span>
-          {/* « Actif » est le badge qui compte : plein, jamais discret. */}
-          {isCurrent && (
-            <Badge>
-              <Check aria-hidden="true" />
-              {t('settings.engine.badgeActive')}
-            </Badge>
-          )}
+          {/* « Actif » est le badge qui compte : plein, jamais discret. Mais il ne
+              se dit QUE si le moteur répond : sur un Ollama éteint, la carte
+              affichait « Actif » à côté de « clé/serveur absent » et d'un bandeau
+              « Extraction indisponible » — trois messages contradictoires. Pour
+              un non-technicien, « Actif » veut dire « ça marche ». Quand le
+              moteur est bien celui choisi mais ne répond pas, on dit
+              « Sélectionné », en neutre : la carte reste mise en avant (c'est le
+              moteur courant) et l'état de joignabilité est porté par le badge de
+              droite et le message qui suit. */}
+          {isCurrent &&
+            (available === false ? (
+              <Badge variant="secondary">{t('settings.engine.badgeSelected')}</Badge>
+            ) : (
+              <Badge>
+                <Check aria-hidden="true" />
+                {t('settings.engine.badgeActive')}
+              </Badge>
+            ))}
           {p.id === 'openai' && !isCurrent && <Badge variant="secondary">{t('settings.engine.badgeRecommended')}</Badge>}
           {available !== undefined && (
             <StatusBadge tone={available ? 'ok' : 'warn'} className="ml-auto">

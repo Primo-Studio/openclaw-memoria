@@ -125,10 +125,15 @@ function SystemBody({ stats }: { stats: Record<string, number> }) {
 
   return (
     <div className="flex flex-col gap-4">
-      {/* Deux colonnes sous 640 px : empilées, ces trois nombres mangeaient un
-          tiers de l'écran avant la première couche. La 3e carte prend toute la
-          largeur pour laisser respirer son libellé. */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+      {/* POURQUOI une seule colonne sous 640 px et non deux : à deux colonnes,
+          chaque cellule fait ~175 px, trop étroit pour la variante compacte de
+          StatCard (chiffre et libellé sur la même ligne de base). Les deux
+          premières tuiles repassaient donc en version haute et à moitié vide
+          pendant que la troisième, seule sur sa ligne, obtenait bien la version
+          compacte : trois objets de même nature, trois dessins différents côte
+          à côte. En pleine largeur les trois sont compactes et identiques —
+          ~55 px chacune, soit MOINS de hauteur qu'en deux colonnes. */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         {/* Mêmes cartes que le Tableau de bord : icône encadrée en haut à droite,
             chiffre en couleur de texte normale. Le vert d'avant ne disait rien —
             la couleur est réservée à un vrai statut. */}
@@ -139,7 +144,6 @@ function SystemBody({ stats }: { stats: Record<string, number> }) {
           label={t('system.stat.live')}
           hint={live === 0 ? t('system.stat.liveHintEmpty') : undefined}
           icon={<CircleCheck className="size-4" />}
-          className="col-span-2 sm:col-span-1"
         />
       </div>
 

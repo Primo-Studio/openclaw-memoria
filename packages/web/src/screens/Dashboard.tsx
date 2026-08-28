@@ -277,15 +277,22 @@ function HealthCard({ doctor }: { doctor: DoctorReport }) {
  * deux blocs mangeaient la moitié de l'écran d'accueil et le premier chiffre
  * de l'application passait sous la ligne de flottaison.
  *
- * Ouvert d'emblée sur bureau (la place ne manque pas), fermé sur mobile où il
- * ne reste qu'une ligne « À vérifier (1) ». La gravité est ainsi lisible :
- * l'alerte moteur, elle, est dépliée et porte un bouton.
+ * Ouvert d'emblée sur bureau (la place ne manque pas). Au téléphone, replié
+ * seulement quand la liste est longue : à une ou deux lignes, ce qu'on cachait
+ * était justement la phrase qui dit quoi faire et son renvoi cliquable, alors
+ * que le compteur est déjà dans le titre — on économisait 40 px en masquant la
+ * seule chose actionnable de l'écran. La gravité reste lisible : l'alerte
+ * moteur, elle, est toujours dépliée et porte un bouton.
  */
 function HealthWarnings({ warnings }: { warnings: string[] }) {
   const { t } = useT()
   // Décidé une seule fois au montage : c'est un état par défaut, pas une
   // mise en page — l'utilisateur peut toujours l'ouvrir ou le fermer.
-  const [open, setOpen] = useState(() => (typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? window.matchMedia('(min-width: 640px)').matches : true))
+  const [open, setOpen] = useState(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return true
+    if (window.matchMedia('(min-width: 640px)').matches) return true
+    return warnings.length <= 2
+  })
   return (
     <Alert className="text-warning">
       <TriangleAlert />

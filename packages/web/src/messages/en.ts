@@ -104,7 +104,7 @@ export const en: Messages = {
   'common.loading': 'Loading…',
 
   // — Log (Audit) —
-  'audit.title': 'Log',
+  'audit.title': 'Activity log',
   'audit.lead': 'Who did what, and when — without ever recording the content of your memories.',
   'audit.empty.title': 'Nothing to report',
   'audit.empty.body': 'No activity recorded yet.',
@@ -1133,6 +1133,7 @@ export const en: Messages = {
   'maintenance.search.title': 'Pick the memories to repair',
   'maintenance.empty_never_used_action': 'Search a memory',
   'maintenance.lead': 'The repair shop: correct an inaccurate sentence, merge duplicates, find memories that have never been used. To simply read or forget, go to Memory.',
+  'maintenance.edit_safe': 'The previous version is not erased: it is only marked “replaced”.',
   'maintenance.source': 'Source',
   'maintenance.source_search': 'Search',
   'maintenance.source_never_used': 'Never used',
@@ -1251,6 +1252,7 @@ export const en: Messages = {
   'settings.engine.keyLabel': 'API key',
   'settings.engine.modelLabel': 'Model',
   'settings.engine.badgeActive': 'Active',
+  'settings.engine.badgeSelected': 'Selected',
   'settings.toast.engineChanged': 'Engine saved: {provider} / {model}.',
   'settings.toast.keySaved': '{provider} key saved.',
   'settings.toast.resumed': 'Memoria is active.',
@@ -1434,6 +1436,9 @@ export const en: Messages = {
   // — Journal (écran shadcn) — filtres, compteur, état « aucun résultat » —
   'audit.list_title': 'Latest actions',
   'audit.window': 'The service keeps the last 200 entries.',
+  'audit.count_filtered': '{shown} / {total}',
+  'audit.count_aria': '{n} entries',
+  'audit.count_filtered_aria': '{shown} entries shown out of {total}',
   'audit.filter.search': 'Search (agent, action, reason…)',
   'audit.filter.all_actors': 'All actors',
   'audit.filter.all_actions': 'All actions',

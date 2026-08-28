@@ -245,7 +245,12 @@ export function Maintenance() {
                   <MemSearchInput id="maintenance-query" value={query} placeholder={t('maintenance.search_placeholder')} onChange={e => setQuery(e.target.value)} />
                 </>
               ) : (
-                <p className="text-sm text-muted-foreground lg:self-end lg:pb-1.5">{t('maintenance.never_used_hint')}</p>
+                /* `mt-auto` et non `self-end` : dans une colonne flex, `self-end`
+                   aligne sur l'axe TRANSVERSAL, donc à droite — la phrase partait
+                   se poser au bout de la ligne du label « Source », loin des
+                   onglets qu'elle explique. `mt-auto` la pousse vraiment en bas
+                   de la colonne, à hauteur des onglets. */
+                <p className="text-sm text-muted-foreground lg:mt-auto lg:pb-1.5">{t('maintenance.never_used_hint')}</p>
               )}
             </div>
           </div>
@@ -371,13 +376,25 @@ export function Maintenance() {
                     }
                   >
                     {isEditing ? (
-                      <Textarea
-                        value={editing.text}
-                        rows={3}
-                        autoFocus
-                        aria-label={t('maintenance.edit_label')}
-                        onChange={e => setEditing({ id: f.id, text: e.target.value })}
-                      />
+                      // `data-no-select` : tant que l'édition est ouverte, aucun
+                      // clic dans ce bloc ne coche la fiche — pas même sur la
+                      // phrase d'aide, qui n'est pas un élément interactif et
+                      // passait donc à travers le garde-fou de MemFactCard.
+                      <div data-no-select>
+                        <Textarea
+                          value={editing.text}
+                          rows={3}
+                          autoFocus
+                          aria-label={t('maintenance.edit_label')}
+                          onChange={e => setEditing({ id: f.id, text: e.target.value })}
+                        />
+                        {/* La garantie s'affiche ICI, au moment où l'on hésite à
+                            corriger, et non seulement dans le toast qui arrive
+                            APRÈS. « Corriger » est le geste le plus fréquent de
+                            l'écran et le seul où l'on cliquait sans savoir si on
+                            détruisait quelque chose. */}
+                        <p className="mt-1.5 text-xs text-muted-foreground">{t('maintenance.edit_safe')}</p>
+                      </div>
                     ) : (
                       f.fact
                     )}

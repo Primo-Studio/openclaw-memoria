@@ -372,7 +372,10 @@ export function PageHeader({
   children,
 }: {
   title: string
-  description?: string
+  /** Phrase d'introduction. `ReactNode` et non `string` : certaines intros
+   *  mettent un mot en gras — sans quoi l'écran est obligé de rendre son
+   *  paragraphe lui-même en `children`, et il repasse APRÈS les actions. */
+  description?: ReactNode
   actions?: ReactNode
   children?: ReactNode
 }) {
@@ -393,8 +396,15 @@ export function PageHeader({
       {slots?.titleEl && createPortal(titleNode, slots.titleEl)}
       {slots?.actionsEl && actionsNode && !compact && createPortal(actionsNode, slots.actionsEl)}
       {inline && <div className="mb-4">{titleNode}</div>}
-      {actionsInPage && <div className="mb-4">{actionsNode}</div>}
+      {/*
+        POURQUOI la description AVANT les actions : quand les actions descendent
+        en page (téléphone), les mettre en premier ouvrait chaque écran sur un
+        bouton seul, calé à droite dans une bande à moitié vide, et repoussait
+        sous la ligne de flottaison la phrase qui explique à quoi sert l'écran.
+        On dit d'abord de quoi il s'agit, on propose d'agir ensuite.
+      */}
       {description && <p className="mb-4 text-sm text-muted-foreground">{description}</p>}
+      {actionsInPage && <div className="mb-4">{actionsNode}</div>}
       {children}
     </>
   )

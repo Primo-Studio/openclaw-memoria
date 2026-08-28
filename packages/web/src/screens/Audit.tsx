@@ -228,8 +228,23 @@ function AuditTable({ entries, directory }: { entries: AuditEntry[]; directory: 
       title={t('audit.list_title')}
       description={t('audit.window')}
       actions={
-        <Badge variant="secondary" className="tabular-nums">
-          {formatNumber(filtered.length)}
+        // POURQUOI « 12 / 83 » et pas « 12 » quand on filtre : la pastille seule
+        // changeait de valeur au gré des deux menus sans jamais dire par rapport
+        // à quoi — on ne savait pas si on regardait 12 lignes sur 83 ou 12 sur
+        // 12. Et un `aria-label` dans tous les cas : au lecteur d'écran, la
+        // pastille n'annonçait qu'un nombre nu, sans unité.
+        <Badge
+          variant="secondary"
+          className="tabular-nums"
+          aria-label={
+            filtering
+              ? t('audit.count_filtered_aria', { shown: formatNumber(filtered.length), total: formatNumber(entries.length) })
+              : t('audit.count_aria', { n: formatNumber(entries.length) })
+          }
+        >
+          {filtering
+            ? t('audit.count_filtered', { shown: formatNumber(filtered.length), total: formatNumber(entries.length) })
+            : formatNumber(entries.length)}
         </Badge>
       }
     >

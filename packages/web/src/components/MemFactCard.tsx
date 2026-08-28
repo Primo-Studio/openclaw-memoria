@@ -54,7 +54,29 @@ export function MemFactCard({
           />
         )}
         <div className="flex min-w-0 flex-1 flex-col gap-2">
-          <div className="text-sm leading-relaxed break-words whitespace-pre-wrap">{children}</div>
+          {/* POURQUOI le texte du souvenir coche la case : la case fait 16 px,
+              sa zone tactile ~32 px — sous les 44 px visés — alors qu'on demande
+              justement d'en cocher plusieurs pour fusionner. Le texte, lui, fait
+              toute la largeur de la carte. Deux gardes pour ne pas cocher par
+              accident : on ignore le clic parti d'un élément interactif (un badge
+              cliquable) ou d'une zone marquée `data-no-select` (le bloc d'édition
+              ouvert par « Corriger », dont la phrase d'aide n'est PAS un élément
+              interactif et passait donc à travers), et celui qui termine une
+              sélection de texte. Le clavier passe par la case, inchangée. */}
+          <div
+            className={cn('text-sm leading-relaxed break-words whitespace-pre-wrap', onSelectedChange && !disabled && 'cursor-pointer')}
+            onClick={
+              onSelectedChange && !disabled
+                ? e => {
+                    if ((e.target as HTMLElement).closest('button, a, input, textarea, select, label, [role="button"], [data-no-select]')) return
+                    if (window.getSelection()?.toString()) return
+                    onSelectedChange(!selected)
+                  }
+                : undefined
+            }
+          >
+            {children}
+          </div>
           {(meta || actions) && (
             <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
               {meta && <div className="flex min-w-0 flex-wrap items-center gap-1.5">{meta}</div>}
