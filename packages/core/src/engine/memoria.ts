@@ -45,8 +45,8 @@ import {
   type DialecticResult,
 } from '../cognition/index.js'
 import { estimateTokens, newId, nowISO, sha256Hex } from '../util.js'
-import { createSecretProvider, RegexRedactor } from '../secrets/index.js'
-import type { SecretProvider } from '../secrets/types.js'
+import { AesVaultProvider, createSecretProvider, RegexRedactor } from '../secrets/index.js'
+import type { DetectedSecret, SecretProvider } from '../secrets/types.js'
 import { EXPERTISE_MAX } from '../cognition/feedback.js'
 import { factOrigin } from './origin.js'
 import { findDuplicate, normalizeFact, type DuplicateMatch } from './selective.js'
@@ -75,6 +75,7 @@ import type {
   AssistantInstance,
   AssistantType,
   CaptureMode,
+  DbRegistryEntry,
   DoctorReport,
   LlmUsagePeriod,
   LlmUsageReport,
@@ -141,7 +142,18 @@ export interface MemoriaInitOptions extends ResolveOptions {
   llm?: { extraction: LlmProvider | null; embeddings?: EmbeddingProvider | null }
   /** Coffre forcé (tests : 'aes-vault' pour ne jamais toucher le Keychain réel). */
   secretsVault?: 'keychain-macos' | 'aes-vault'
+  /** Coffre INJECTÉ (tests : simuler un Trousseau qui refuse) — prime sur secretsVault. */
+  secretProvider?: SecretProvider
 }
+
+/**
+ * Résultat d'une déclaration de fait PAR UN AGENT (`declareFact`) : soit un
+ * fait (actif, ou dormant en mode « Revue d'abord »), soit un refus ANNONCÉ
+ * en mode « Pause » — jamais une écriture muette, jamais un non-écrit muet.
+ */
+export type DeclareFactResult =
+  | { fact: Fact; skipped: false; mode: CaptureMode }
+  | { fact: null; skipped: true; reason: 'paused'; mode: CaptureMode }
 
 const DEFAULT_TOKEN_BUDGET = 1500
 const DEFAULT_RECALL_LIMIT = 12
@@ -158,6 +170,8 @@ export class Memoria {
   private closed = false
 
   private readonly secretProvider: SecretProvider
+  /** Coffre AES local de REPLI quand le coffre principal (Trousseau) refuse d'écrire — ouvert à la demande. */
+  private fallbackVault: AesVaultProvider | null = null
   private readonly redactor = new RegexRedactor()
   private syncEngine?: SyncEngine
   private readonly llmOverride: MemoriaInitOptions['llm']
@@ -193,8 +207,11 @@ export class Memoria {
     ensureStorageTree(resolved.storageRoot)
     this.registry = new RegistryStore(this.paths.registry)
     this.registry.bootstrap(opts.userDisplayName)
+    // AVANT registerDb : sinon le registre déplacé se ré-enregistrait sous son
+    // nouveau chemin à côté de l'ancienne entrée (deux « registres »).
+    this.rebaseDbRegistry()
     this.registry.registerDb({ kind: 'registry', path: this.paths.registry, assistant_instance_id: null, scope_id: null })
-    this.secretProvider = createSecretProvider(this.paths.secretsDir, { force: opts.secretsVault })
+    this.secretProvider = opts.secretProvider ?? createSecretProvider(this.paths.secretsDir, { force: opts.secretsVault })
     this.llmOverride = opts.llm
     this.grantDefaultUserWrite()
   }
@@ -230,6 +247,46 @@ export class Memoria {
         scope_id: userScope.id,
         reason: null,
       })
+    }
+  }
+
+  /**
+   * Réaligne db_registry sur la racine COURANTE. Les chemins y sont absolus :
+   * après `memoria move` (clé USB, autre dossier) ils pointaient sur l'ancien
+   * emplacement et rien ne les recalculait — tout ce qui passe par
+   * listDbs/dbForInstance (stats, doctor, forget, revue, thèmes, options…)
+   * voyait des bases « absentes du disque » : 0 souvenir, `forget` « 0
+   * supprimé » alors que le recall (chemins recalculés) marchait encore.
+   * Chaque chemin se dérive de racine + kind + instance/scope : on le
+   * recalcule à chaque boot — idempotent, silencieux quand rien ne bouge.
+   */
+  private rebaseDbRegistry(): void {
+    for (const entry of this.registry.listDbs()) {
+      const expected = this.expectedDbPath(entry)
+      if (expected === null || expected === entry.path) continue
+      this.registry.rebaseDb(entry.id, expected)
+      console.log(`[memoria] base ${entry.kind} réalignée sur la racine courante : ${entry.path} → ${expected}`)
+    }
+  }
+
+  /** Chemin canonique d'une entrée du registre sous la racine courante (null si indérivable). */
+  private expectedDbPath(entry: DbRegistryEntry): string | null {
+    switch (entry.kind) {
+      case 'registry':
+        return this.paths.registry
+      case 'assistant':
+        return entry.assistant_instance_id ? this.paths.assistantDb(entry.assistant_instance_id) : null
+      case 'shared': {
+        const scope = entry.scope_id ? this.registry.getScope(entry.scope_id) : null
+        if (!scope) return null
+        try {
+          return this.sharedDbPath(scope)
+        } catch {
+          return null // type de scope sans DB partagée : on ne touche pas
+        }
+      }
+      default:
+        return null
     }
   }
 
@@ -592,6 +649,28 @@ export class Memoria {
   }
 
   /**
+   * Déclaration d'un fait PAR UN AGENT (POST /v1/memory/store_fact, outil MCP
+   * memoria_store_fact) : soumise au MODE DE CAPTURE global, exactement comme
+   * la capture. `auto-private` → fait actif ; `review-first` → fait DORMANT +
+   * item de revue (aucun agent ne le voit avant validation) ; `incognito`
+   * (« Pause ») → rien n'est écrit, et c'est dit (`skipped: 'paused'`).
+   * Avant, seul captureTurn consultait le mode : un utilisateur passé en Pause
+   * pour une conversation sensible voyait quand même ses faits mémorisés.
+   * `storeFact` reste la primitive sans mode (import, partage, tests).
+   */
+  declareFact(input: StoreFactInput): DeclareFactResult {
+    this.assertOpen()
+    const mode = this.getCaptureMode()
+    if (mode === 'incognito') {
+      // Une instance inconnue/révoquée reste une erreur, pause ou pas.
+      this.mustInstance(input.instance)
+      return { fact: null, skipped: true, reason: 'paused', mode }
+    }
+    const { fact } = this.storeFactInternal(input, { nearDup: false, quarantine: mode === 'review-first' })
+    return { fact, skipped: false, mode }
+  }
+
+  /**
    * Écriture gouvernée + HYGIÈNE (audit 27/08) : contenu vide refusé,
    * catégorie normalisée (« Preference » ≠ « preference » donnait deux
    * domaines d'expertise), et dédoublonnage PAR SCOPE (findDuplicate). Le
@@ -600,8 +679,16 @@ export class Memoria {
    * attente) redéclaré explicitement à l'IDENTIQUE est validé : déclarer =
    * confirmer — jamais sur un simple rapprochement, qui validerait un fait
    * que l'agent n'a pas énoncé. `created=false` = l'existant a été renvoyé.
+   *
+   * `opts.quarantine` (mode « Revue d'abord ») : le fait naît DORMANT + item
+   * de revue, dans la même transaction que l'INSERT (un crash entre les deux
+   * publiait un fait jamais revu) ; et un doublon dormant redéclaré RESTE
+   * dormant — la validation appartient à l'utilisateur, pas à la répétition.
    */
-  private storeFactInternal(input: StoreFactInput, opts: { nearDup?: boolean } = {}): { fact: Fact; created: boolean } {
+  private storeFactInternal(
+    input: StoreFactInput,
+    opts: { nearDup?: boolean; quarantine?: boolean } = {},
+  ): { fact: Fact; created: boolean } {
     this.assertOpen()
     const instance = this.mustInstance(input.instance)
     const scope = this.resolveTargetScope(instance, input.scope)
@@ -643,7 +730,9 @@ export class Memoria {
     const dup = rawDup && rawDup.kind === 'exact' && !sameContext(rawDup.existing) ? null : rawDup
     if (dup) {
       const now = nowISO()
-      if (dup.kind === 'exact' && dup.existing.lifecycle_state === 'dormant') this.activateFact(store, dup.existing.id)
+      if (dup.kind === 'exact' && dup.existing.lifecycle_state === 'dormant' && !opts.quarantine) {
+        this.activateFact(store, dup.existing.id)
+      }
       const expiresAt = dup.existing.expires_at ?? null
       const expired = dup.kind === 'exact' && expiresAt !== null && expiresAt <= now
       if (expired) {
@@ -673,22 +762,26 @@ export class Memoria {
         }
       : {}
 
-    const fact = store.insertFact({
-      fact: content,
-      category,
-      fact_type: input.fact_type,
-      confidence: input.confidence,
-      source: input.source ?? 'manual',
-      assistant_instance_id: instance.id,
-      org_id: input.org_id ?? scope.org_id,
-      client_org_id: input.client_org_id ?? scope.client_org_id,
-      project_id: input.project_id ?? scope.project_id,
-      scope_id: scope.id,
-      sensitivity: input.sensitivity,
-      tags: input.tags,
-      visibility: scope.type === 'private' ? 'private' : 'shared',
-      ...provenance,
-    })
+    const insert = (): Fact => {
+      const inserted = store.insertFact({
+        fact: content,
+        category,
+        fact_type: input.fact_type,
+        confidence: input.confidence,
+        source: input.source ?? 'manual',
+        assistant_instance_id: instance.id,
+        org_id: input.org_id ?? scope.org_id,
+        client_org_id: input.client_org_id ?? scope.client_org_id,
+        project_id: input.project_id ?? scope.project_id,
+        scope_id: scope.id,
+        sensitivity: input.sensitivity,
+        tags: input.tags,
+        visibility: scope.type === 'private' ? 'private' : 'shared',
+        ...provenance,
+      })
+      return opts.quarantine ? this.quarantineForReview(store, inserted, instance.id) : inserted
+    }
+    const fact = opts.quarantine ? store.db.transaction(insert)() : insert()
     this.registry.audit({
       actor_type: 'assistant',
       actor_id: instance.id,
@@ -1300,12 +1393,50 @@ export class Memoria {
     return proposals.map(p => ({ label: p.label, steps: p.steps, source: p.source }))
   }
 
-  /** Markdown sync (couche 20, opt-in) : exporte la mémoire d'une instance en .md lisibles. */
-  exportMarkdown(instanceId: string, outDir: string, byTopic = true): { files: string[]; facts: number } {
+  /**
+   * Markdown sync (couche 20, opt-in) : exporte la mémoire d'une instance en
+   * .md lisibles — sa DB privée à la racine de `outDir`, ET chaque scope
+   * PARTAGÉ qu'elle peut lire sous `outDir/shared/<scope>/` (`user` compris :
+   * c'est la destination nominale de « ce qu'un agent apprend SUR
+   * l'utilisateur »). Avant, seule la DB privée partait : un utilisateur qui
+   * exportait « sa mémoire » perdait la partie partagée sans avertissement.
+   */
+  exportMarkdown(instanceId: string, outDir: string, byTopic = true): { files: string[]; facts: number; shared_facts: number; scopes: string[] } {
     this.assertOpen()
-    const db = this.registry.dbForInstance(instanceId)
-    if (!db || !existsSync(db.path)) return { files: [], facts: 0 }
-    return new MarkdownSync({ store: this.openContent(db.path), outDir }).export({ byTopic })
+    const instance = this.registry.getInstance(instanceId)
+    const privateDb = this.paths.assistantDb(instanceId)
+    if (!instance || !existsSync(privateDb)) return { files: [], facts: 0, shared_facts: 0, scopes: [] }
+
+    const files: string[] = []
+    let facts = 0
+    let sharedFacts = 0
+    const scopes: string[] = []
+    for (const target of this.resolveReadTargets(instance)) {
+      if (!existsSync(target.dbPath)) continue
+      const store = this.openContent(target.dbPath)
+      if (target.dbPath === privateDb) {
+        const r = new MarkdownSync({ store, outDir }).export({ byTopic })
+        files.push(...r.files)
+        facts += r.facts
+        continue
+      }
+      target.scopeIds.forEach((scopeId, i) => {
+        // Un scope sans fait actif ne produit pas de dossier vide.
+        const n = store.db
+          .prepare("SELECT COUNT(*) AS n FROM facts WHERE superseded = 0 AND lifecycle_state = 'active' AND scope_id = ?")
+          .get(scopeId) as { n: number }
+        if (n.n === 0) return
+        const name = target.scopeNames[i] ?? scopeId
+        const r = new MarkdownSync({ store, outDir: join(outDir, 'shared', name.replace(/[^A-Za-z0-9._-]+/g, '-')) }).export({
+          byTopic,
+          scopeFilter: [scopeId],
+        })
+        files.push(...r.files)
+        sharedFacts += r.facts
+        scopes.push(name)
+      })
+    }
+    return { files, facts, shared_facts: sharedFacts, scopes }
   }
 
   // ---------------------------------------------------------- procédures (couche 6)
@@ -1989,10 +2120,7 @@ export class Memoria {
         knownElsewhere: (id, text) => this.findKnownDuplicate(id, text, { includePrivate: false }) !== null,
         audit: entry => this.registry.audit(entry),
         redactor: this.redactor,
-        secretSink: s => {
-          this.secretProvider.set(s.name, s.value)
-          this.registry.upsertSecretRef(s.name, this.secretProvider.locationFor(s.name), s.kind)
-        },
+        secretSink: s => this.vaultSecret(s),
         extraction,
       })
     })()
@@ -2004,27 +2132,30 @@ export class Memoria {
    * (invisible au recall) + entre en file de revue ; l'approbation l'active.
    */
   private storeCaptured(input: StoreFactInput): Fact {
-    const store = this.openContent(this.paths.assistantDb(input.instance))
-    // Transaction : INSERT actif → dormant → item de revue. Un crash entre les
-    // deux publiait un fait jamais revu.
-    const tx = store.db.transaction((): Fact => {
-      // near-dup ASSUMÉ ici : la capture voit des redites bruitées d'un même
-      // souvenir ; une déclaration explicite (storeFact) ne l'a pas.
-      const { fact, created } = this.storeFactInternal({ ...input, source: input.source ?? 'capture' }, { nearDup: true })
-      // Un fait DÉJÀ connu (dédup) n'a rien à faire en revue : le mettre dormant
-      // ferait disparaître du recall un souvenir validé.
-      if (!created || this.getCaptureMode() !== 'review-first') return fact
-      store.db.prepare("UPDATE facts SET lifecycle_state = 'dormant' WHERE id = ?").run(fact.id)
-      const sourceId = this.ensureReviewSource(store, input.instance)
-      store.db
-        .prepare(
-          `INSERT INTO memory_import_items (id, source_id, target_memory_id, target_type, proposed_scope_id, status, confidence)
-           VALUES (?, ?, ?, 'fact', ?, 'pending', ?)`,
-        )
-        .run(newId(), sourceId, fact.id, fact.scope_id, fact.confidence)
-      return { ...fact, lifecycle_state: 'dormant' }
-    })
-    return tx()
+    // near-dup ASSUMÉ ici : la capture voit des redites bruitées d'un même
+    // souvenir ; une déclaration explicite (storeFact) ne l'a pas.
+    return this.storeFactInternal(
+      { ...input, source: input.source ?? 'capture' },
+      { nearDup: true, quarantine: this.getCaptureMode() === 'review-first' },
+    ).fact
+  }
+
+  /**
+   * Met un fait FRAÎCHEMENT inséré en quarantaine de revue : dormant + item
+   * `pending` (source « capture-review »). Appelé DANS la transaction de
+   * l'INSERT. Un fait déjà connu (dédup) ne passe jamais ici : le rendre
+   * dormant ferait disparaître du recall un souvenir validé.
+   */
+  private quarantineForReview(store: ContentStore, fact: Fact, instanceId: string): Fact {
+    store.db.prepare("UPDATE facts SET lifecycle_state = 'dormant' WHERE id = ?").run(fact.id)
+    const sourceId = this.ensureReviewSource(store, instanceId)
+    store.db
+      .prepare(
+        `INSERT INTO memory_import_items (id, source_id, target_memory_id, target_type, proposed_scope_id, status, confidence)
+         VALUES (?, ?, ?, 'fact', ?, 'pending', ?)`,
+      )
+      .run(newId(), sourceId, fact.id, fact.scope_id, fact.confidence)
+    return { ...fact, lifecycle_state: 'dormant' }
   }
 
   /** Source unique « capture-review » par instance (provenance des items en revue). */
@@ -2736,6 +2867,7 @@ export class Memoria {
     // (clé API, le plus simple) ou Ollama local. Quand rien n'est résolu, on
     // recommande selon ce qui est détecté au lieu d'imposer Ollama.
     let embeddings: LlmEngineHealth
+    const pinnedEmbeddings = this.resolved.config.llm?.embeddings
     if (profile.embeddings) {
       embeddings = {
         provider: profile.embeddings.name,
@@ -2743,6 +2875,32 @@ export class Memoria {
         available: true,
         pending: await this.embeddingsPending(),
       }
+    } else if (pinnedEmbeddings?.provider) {
+      // Choix EXPLICITE indisponible : on le dit tel quel (provider/modèle
+      // choisis + raison) — jamais un autre moteur annoncé « disponible » à
+      // sa place. Avant, Ollama prenait le relais en silence.
+      const provider = pinnedEmbeddings.provider
+      let model: string
+      let reason: string
+      switch (provider) {
+        case 'openai':
+          model = pinnedEmbeddings.model ?? DEFAULT_OPENAI_EMBEDDING_MODEL
+          reason = `clé API absente — place-la dans ~/.openai/api_key (chmod 600), ou choisis Ollama dans Réglages`
+          break
+        case 'ollama': {
+          model = pinnedEmbeddings.model ?? DEFAULT_OLLAMA_EMBEDDING_MODEL
+          reason = !options.ollama.serverUp
+            ? 'serveur Ollama injoignable — lance l’application Ollama (ou « ollama serve »)'
+            : options.ollama.models.some(m => modelMatches(m, model))
+              ? `modèle « ${model} » présent mais provider indisponible — vérifie les logs du service`
+              : `modèle « ${model} » non téléchargé — « ollama pull ${model} »`
+          break
+        }
+        default:
+          model = pinnedEmbeddings.model ?? '(inconnu)'
+          reason = `provider d'embeddings inconnu : ${provider} (attendu : ollama|openai)`
+      }
+      embeddings = { provider, model, available: false, reason }
     } else if (options.openai.available) {
       embeddings = {
         provider: 'openai',
@@ -2854,6 +3012,11 @@ export class Memoria {
     this.assertOpen()
     if (provider !== 'ollama' && provider !== 'openai') {
       throw new Error(`provider d'embeddings non supporté : ${provider} (attendu : ollama|openai)`)
+    }
+    // Gravées avec chaque vecteur : une valeur fausse corrompt la base. On
+    // refuse tout ce qui n'est pas un entier plausible plutôt que de l'écrire.
+    if (dimensions !== undefined && (!Number.isInteger(dimensions) || dimensions < 64 || dimensions > 8192)) {
+      throw new Error(`dimensions invalides : ${JSON.stringify(dimensions)} (entier entre 64 et 8192 attendu)`)
     }
     this.resolved.config.llm = {
       ...this.resolved.config.llm,
@@ -3190,6 +3353,14 @@ export class Memoria {
 
     // Les avertissements sont ce que l'utilisateur doit ACTION­NER — pas une
     // reformulation des compteurs. On ne signale que l'anormal.
+    // La PAUSE d'abord : c'est la cause n°1 de « mes agents ne se souviennent
+    // de rien », et le doctor concluait « ✓ OK » sans un mot.
+    const enabled = this.isEnabled()
+    if (!enabled) {
+      warnings.push(
+        'Memoria est en PAUSE (« memoria disable » ou l’interrupteur de l’app) : capture et recall sont refusés pour tous les agents — « memoria enable » pour reprendre.',
+      )
+    }
     if (memory.wal_stuck > 0) {
       warnings.push(
         `${memory.wal_stuck} message(s) bloqué(s) en extraction (plusieurs tentatives échouées) — vérifier le provider LLM.`,
@@ -3206,6 +3377,7 @@ export class Memoria {
 
     return {
       ok: warnings.length === 0,
+      enabled,
       storage_root: this.paths.root,
       config_path: this.resolved.configPath,
       registry_path: this.paths.registry,
@@ -3398,15 +3570,45 @@ export class Memoria {
   /** Redaction des secrets avant tout stockage de fait → valeur au coffre, jamais en clair. */
   private redactBeforeStore(text: string): string {
     const result = this.redactor.redact(text)
-    for (const secret of result.found) {
-      try {
-        this.secretProvider.set(secret.name, secret.value)
-        this.registry.upsertSecretRef(secret.name, this.secretProvider.locationFor(secret.name), secret.kind)
-      } catch (err) {
-        console.warn(`[memoria] mise au coffre du secret « ${secret.name} » en échec :`, (err as Error).message)
-      }
-    }
+    for (const secret of result.found) this.vaultSecret(secret)
     return result.text
+  }
+
+  /**
+   * Met un secret détecté au coffre — JAMAIS silencieux, JAMAIS la valeur dans
+   * un message. Le Trousseau peut refuser l'écriture (verrouillé, autorisation
+   * annulée sous launchd/sandbox) : on replie alors sur le coffre AES local
+   * avec un avertissement clair (nom + raison, sans valeur), et la référence
+   * enregistrée pointe sur le coffre qui a RÉELLEMENT reçu la valeur. Si le
+   * repli échoue aussi (ou si le coffre principal EST déjà l'AES), échec
+   * bruyant : le fait n'est pas écrit — mieux qu'un secret perdu sans bruit.
+   * Avant, l'échec était avalé par un warn qui contenait `-w <valeur>`.
+   */
+  private vaultSecret(secret: DetectedSecret): void {
+    const candidates: SecretProvider[] = [this.secretProvider]
+    if (this.secretProvider.kind !== 'aes-vault') {
+      this.fallbackVault ??= new AesVaultProvider(this.paths.secretsDir)
+      candidates.push(this.fallbackVault)
+    }
+    let lastFailure = ''
+    for (const provider of candidates) {
+      try {
+        provider.set(secret.name, secret.value)
+      } catch (err) {
+        // Défense : quelle que soit l'origine de l'erreur, la valeur n'en sort pas.
+        lastFailure = hideValue((err as Error)?.message ?? String(err), secret.value)
+        continue
+      }
+      this.registry.upsertSecretRef(secret.name, provider.locationFor(secret.name), secret.kind)
+      if (provider !== this.secretProvider) {
+        console.warn(
+          `[memoria] coffre « ${this.secretProvider.kind} » indisponible (${lastFailure}) — ` +
+            `secret « ${secret.name} » mis au coffre AES local (${provider.locationFor(secret.name)})`,
+        )
+      }
+      return
+    }
+    throw new Error(`mise au coffre du secret « ${secret.name} » impossible (${this.secretProvider.kind}) : ${lastFailure}`)
   }
 
   private mustInstance(instanceId: string): AssistantInstance {
@@ -3528,6 +3730,11 @@ function pendingRevisionsFor(store: ContentStore, ids: string[]): Map<string, Pe
   }
   return out
 }
+/** Masque toute occurrence d'une valeur de secret dans un message d'erreur. */
+function hideValue(message: string, value: string): string {
+  return value.length > 0 ? message.split(value).join('[secret]') : message
+}
+
 /** Lit `clé=mot` dans une raison d'audit (`provider=openai purpose=extraction`). */
 function field(reason: string, key: string): string | undefined {
   const m = new RegExp(`\\b${key}=([^\\s]+)`).exec(reason)

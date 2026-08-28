@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 /**
- * `memoria-mcp connect | serve` — point d'entrée CLI.
+ * `memoria-mcp connect | disconnect | serve` — point d'entrée CLI.
  * `serve` parle MCP (JSON-RPC) sur stdout : tout message humain part sur stderr.
+ * Les arguments sont analysés par cli-args.ts : une option inconnue donne un
+ * message d'usage (exit 2), jamais une stack Node.
  */
-import { parseArgs } from 'node:util'
+import { parseCliArgs } from './cli-args.js'
 import { connect } from './connect.js'
 import { disconnect } from './disconnect.js'
 import { serve } from './serve.js'
@@ -35,24 +37,21 @@ Options :
   -h, --help                cette aide
 `
 
-const [command, ...rest] = process.argv.slice(2)
+const parsed = parseCliArgs(process.argv.slice(2))
 
-switch (command) {
+switch (parsed.kind) {
+  case 'help':
+    console.log(HELP)
+    break
+
+  case 'error':
+    console.error(parsed.message)
+    process.exit(parsed.exitCode)
+    break
+
   case 'connect': {
-    const { values } = parseArgs({
-      args: rest,
-      options: {
-        code: { type: 'string' },
-        register: { type: 'boolean', default: true },
-        'storage-root': { type: 'string' },
-      },
-    })
-    if (!values.code) {
-      console.error('memoria-mcp connect : --code XXXX-XXXX requis (affiché par l’UI Memoria)')
-      process.exit(2)
-    }
     try {
-      const result = await connect({ code: values.code, register: values.register, storageRoot: values['storage-root'] })
+      const result = await connect({ code: parsed.code, register: parsed.register, storageRoot: parsed.storageRoot })
       console.log(result.message)
     } catch (err) {
       console.error(`memoria-mcp connect : ${(err as Error).message}`)
@@ -62,15 +61,8 @@ switch (command) {
   }
 
   case 'disconnect': {
-    const { values } = parseArgs({
-      args: rest,
-      options: {
-        instance: { type: 'string' },
-        'storage-root': { type: 'string' },
-      },
-    })
     try {
-      const result = await disconnect({ instanceId: values.instance, storageRoot: values['storage-root'] })
+      const result = await disconnect({ instanceId: parsed.instanceId, storageRoot: parsed.storageRoot })
       console.log(result.message)
     } catch (err) {
       console.error(`memoria-mcp disconnect : ${(err as Error).message}`)
@@ -80,35 +72,12 @@ switch (command) {
   }
 
   case 'serve': {
-    const { values } = parseArgs({
-      args: rest,
-      options: {
-        instance: { type: 'string' },
-        'storage-root': { type: 'string' },
-      },
-    })
-    if (!values.instance) {
-      console.error('memoria-mcp serve : --instance <id> requis (voir memoria-mcp connect)')
-      process.exit(2)
-    }
     try {
-      await serve({ instanceId: values.instance, storageRoot: values['storage-root'] })
+      await serve({ instanceId: parsed.instanceId!, storageRoot: parsed.storageRoot })
     } catch (err) {
       console.error(`memoria-mcp serve : ${(err as Error).message}`)
       process.exit(1)
     }
     break
   }
-
-  case undefined:
-  case 'help':
-  case '--help':
-  case '-h':
-    console.log(HELP)
-    break
-
-  default:
-    console.error(`memoria-mcp : commande inconnue « ${command} »\n`)
-    console.error(HELP)
-    process.exit(2)
 }

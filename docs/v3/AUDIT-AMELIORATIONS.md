@@ -1,5 +1,17 @@
 # Memoria V3 — Audit & plan d'amélioration (2026-06-10)
 
+> **Bilan au 2026-08-27 (vérifié contre le code)** — le doc ci-dessous est le plan de juin, sans marqueurs d'état.
+> ✅ **QW1** redaction dans `storeFact` (`redactBeforeStore`, patterns Stripe/whsec/ya29/Bearer/connection-string) ·
+> ✅ **QW2** `timingSafeEqual` + `isLoopbackHost`/`isAllowedOrigin` + `daemon.json` tmp+rename mode 600 ·
+> ✅ **QW3** `isContentWord` (topics/clusters) · ✅ **QW4** boost plafonné ×2 + `RELEVANCE_EXPONENT` ·
+> ✅ **QW5** tokens courts gardés si chiffre/majuscule + `forget` bulk gardé par `confirm_bulk` (27/08) ·
+> ✅ **CF2** recherche globale (`GET /v1/admin/search`), graphe SVG Thèmes, nav 2 groupes + badge Revue + hamburger, `ConfirmButton` en Revue, onboarding qui attend l'agent.
+> ⚪ **CF1** seuils thèmes (Jaccard toujours 0,4, pas d'index inversé / union-find, pas de `mergeTopics` générique) — traité autrement :
+> consolidation par **entité ancre** (27/08, `cfa8c6f`, topics v21) ; détection de doublons en révision toujours en égalité exacte (pas de seuil 0,85) ; recompute d'importance non planifié.
+> ⚪ **CF3 / gouvernance** : `hardDeleteFacts` laisse des orphelins `fact_entities`/`revision_proposals` ; isolation projet→client absente
+> (`passesClientIsolation` = `client_org_id` seul) ; `shareFacts` copie via `pragma table_info` ; rate-limit pairing, `kdf_version` du coffre, `quick_check`, HMAC salé : non faits.
+> ⚪ **UX** : toast après action, bouton « Exporter maintenant », empty-states actionnables (Thèmes/Récurrences) — ni faits ni écartés (→ `TODO.md`).
+
 > Audit adversarial à 4 auditeurs (cognition, recall, UX, gouvernance) + synthèse priorisée.
 
 ## Synthèse priorisée

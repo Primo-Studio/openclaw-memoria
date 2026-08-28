@@ -6,7 +6,7 @@
 import { Command, Option } from 'clipanion/lib/advanced/index.js'
 import type { AssistantType } from '@memoria/core'
 import { DaemonClient, ensureDaemon } from '@memoria/daemon'
-import { fail } from '../index.js'
+import { fail, resolveCommon } from '../index.js'
 
 const ASSISTANT_TYPES: readonly AssistantType[] = ['claude-code', 'codex', 'openclaw', 'cursor', 'robot', 'generic']
 
@@ -46,6 +46,9 @@ export class PairCommand extends Command {
       out.write('\nColle cette commande dans le chat de l’agent :\n\n')
       out.write(`  ${paired.command}\n\n`)
       out.write(`Instance créée : ${paired.assistant_instance_id}\n`)
+      // Le stockage ciblé, dit explicitement : avec un --storage-root non
+      // standard, c'est LUI que la commande ci-dessus vise (et pas ~/.memoria).
+      out.write(`Stockage : ${resolveCommon({ storageRoot: this.storageRoot, configPath: this.config }).storageRoot}\n`)
       out.write('Une fois le code échangé, l’agent apparaît dans « memoria agents ».\n')
       return 0
     } catch (err) {

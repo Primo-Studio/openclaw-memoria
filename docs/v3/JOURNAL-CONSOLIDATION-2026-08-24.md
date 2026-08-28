@@ -27,6 +27,9 @@
   - Codex (`0b5322e1`) : **1245** (était 1245 dormants)
   - Koda / OpenClaw (`405290ba`) : **3515** (déjà actifs)
   - 3 bases vides. **Total = 5787 faits actifs.**
+  > ⚠️ **27/08** : l'auto-import launchd (toutes les 6 h, 1 523 fichiers Claude Code le 27/08 14:12) a **recréé des milliers
+  > de dormants** (4 238 des 5 286 vecteurs de la base Claude Code sont des faits en quarantaine). Lu seul, ce § ferait croire
+  > que la Revue est vide : elle se re-remplit à chaque passage → tri récurrent (TODO).
 
 ## 4. Lecture par sujet et par thème (livrable Néto)
 - **Fichier** : `/Users/primostudio/Memoria-Lecture-Par-Theme.html` (~1,3 Mo, autonome, hors-ligne,
@@ -38,8 +41,9 @@
   > Note honnête : la majorité des faits sont des one-offs → le bloc « Autres » est volumineux
   > (c'est la vraie longue traîne, pas une troncature). Baisser le seuil créerait des centaines de
   > micro-thèmes illisibles ; ≥3 est le bon compromis.
-- **Régénérer** : `node <scratchpad>/gen-lecture.js "$(date '+%d/%m/%Y %H:%M')"` (script conservé).
-  Idée d'évolution : en faire une commande `memoria export --by-theme` ou un écran UI dédié.
+- **Régénérer** : ⚠️ le script `gen-lecture.js` vivait dans le scratchpad d'une session Claude Code et **n'est pas dans le
+  dépôt** — la régénération n'est plus disponible ; le fichier HTML existant reste consultable. Alternative versionnée :
+  `memoria export` (Markdown par thème, `--agent`, `--flat`). Idée d'évolution : `memoria export --by-theme` (⚪) ou un écran UI.
 
 ## 5. Scope commun « user » semé (fait)
 - Constat : `suggestIdentityFacts` renvoyait **150 candidats mais ~90 % de bruit de tâche** (« souhaite
@@ -92,6 +96,10 @@ machine, proposer le local si assez puissant, sinon dire que ce n'est pas recomm
   le verdict vise le local « en général » (extraction comprise), la RAM étant le facteur clé.
 
 ## 8. Barre d'état Memoria (menu bar macOS / tray Windows) — fait
+> ⚠️ **Remplacé le 27/08** (`JOURNAL-2026-08-27.md` sessions 2-3) : icône **M** (`m-green/m-red/m-gray.png`, gris = démarrage/inconnu),
+> « Ouvrir Memoria » **ré-affiche la fenêtre Tauri** (plus le navigateur), fermer la fenêtre cache l'app, **19 tests Rust**,
+> app **signée Developer ID** installée dans `/Applications`. Le texte ci-dessous décrit la première version du 24/08.
+
 Demande Néto : voir d'un coup d'œil si Memoria est active, via une icône de barre.
 - **App Tauri v2** (`apps/desktop/src-tauri`) : ajout features Cargo `tray-icon` + `image-png` ;
   icônes générées `icons/dot-green.png` / `dot-red.png` (pastilles 32×32, générées via encodeur PNG maison).

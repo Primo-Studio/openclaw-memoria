@@ -349,18 +349,37 @@ describe('resolveLlmProfile — embeddings épinglés (llm.embeddings)', () => {
     expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('dimensions inconnues'))
   })
 
-  it('provider épinglé indisponible (pas de clé) → warn + repli sur la détection, pas de plantage', async () => {
+  it('provider épinglé indisponible (pas de clé) → warn + AUCUN repli : embeddings null, pas de plantage', async () => {
+    // Replier sur Ollama, c'est exactement le mélange de vecteurs que
+    // l'épinglage doit empêcher — et l'utilisateur croyait tourner sur OpenAI.
     fetchMock.mockImplementation(tagsWithAll) // Ollama dispo
     const profile = await resolveLlmProfile({ llm: { embeddings: { provider: 'openai' } } }, noKey())
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("provider d'embeddings « openai » indisponible"))
-    expect(profile.embeddings?.name).toBe('ollama')
+    expect(profile.embeddings).toBeNull()
   })
 
-  it('provider épinglé inconnu → warn + repli, jamais d’embeddings inventés', async () => {
+  it('provider épinglé inconnu → warn + AUCUN repli, jamais d’embeddings inventés', async () => {
     fetchMock.mockImplementation(tagsWithAll)
     const profile = await resolveLlmProfile({ llm: { embeddings: { provider: 'mistral' } } }, noKey())
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("provider d'embeddings inconnu « mistral »"))
-    expect(profile.embeddings?.name).toBe('ollama')
+    expect(profile.embeddings).toBeNull()
+  })
+
+  it('extraction épinglée indisponible (openai sans clé) → extraction null, pas de repli profil vers Ollama', async () => {
+    fetchMock.mockImplementation(tagsWithAll) // Ollama dispo avec qwen
+    const profile = await resolveLlmProfile({ llm: { profile: '100-local', extraction: { provider: 'openai' } } }, noKey())
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("provider d'extraction « openai » indisponible"))
+    expect(profile.extraction).toBeNull()
+  })
+
+  it('dimensions non numériques dans la config → ignorées avec avertissement (jamais gravées)', async () => {
+    fetchMock.mockRejectedValue(new TypeError('fetch failed'))
+    const profile = await resolveLlmProfile(
+      { llm: { embeddings: { provider: 'openai', model: 'text-embedding-3-small', dimensions: 'abc' as unknown as number } } },
+      withOpenAiKey(),
+    )
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('dimensions'))
+    expect(profile.embeddings?.dimensions).toBe(1536) // table connue, pas "abc"
   })
 
   it('sans llm.embeddings, le comportement d’avant est INCHANGÉ (Ollama prioritaire)', async () => {

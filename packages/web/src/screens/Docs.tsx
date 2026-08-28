@@ -4,9 +4,11 @@
  * thème, pour que quelqu'un qui ouvre Memoria comprenne le produit de fond en
  * comble — concepts, onglets, moteur d'IA, partage, multi-machines, CLI, FAQ.
  *
- * Tenir à jour quand on ajoute un écran, une commande CLI ou un provider.
+ * Tenir à jour quand on ajoute un écran, une commande CLI ou un provider
+ * (16 écrans dans App.tsx NAV_IDS, commandes dans cli/src/index.ts buildCli).
  * Le contenu reflète le code réel (cli/commands, core/llm, core/sync,
- * core/cognition, docs/v3). Pas de promesse non tenue.
+ * core/cognition, docs/v3). Pas de promesse non tenue : les modes de capture,
+ * le scope partagé « user » et le journal cloud décrits ici sont ceux du daemon.
  */
 import { useState, type ReactNode } from 'react'
 import { useT } from '../i18n'
@@ -91,6 +93,7 @@ function Demarrage() {
       <Section title={t('docs.start.engine.title')}>
         <p>{t('docs.start.engine.p')}</p>
         <ul>
+          <li><strong>OpenAI</strong> {t('docs.start.engine.openai')}</li>
           <li><strong>Ollama</strong> {t('docs.start.engine.ollama')}</li>
           <li><strong>LM Studio</strong> {t('docs.start.engine.lmstudio')}</li>
           <li><strong>{t('docs.start.engine.apikey.label')}</strong> {t('docs.start.engine.apikey.desc')}</li>
@@ -194,7 +197,8 @@ function Souvenirs() {
           <li><strong>{t('docs.memories.scope.subject.label')}</strong> {t('docs.memories.scope.subject.desc')}</li>
         </ul>
         <p className="muted">
-          {t('docs.memories.spaces.note.p1')}{' '}<strong>{t('docs.memories.spaces.note.sharing')}</strong>).
+          {t('docs.memories.spaces.note.p1')}{' '}<strong>{t('docs.memories.spaces.note.sharing')}</strong>).{' '}
+          {t('docs.memories.spaces.note.p2')}
         </p>
       </Section>
 
@@ -252,9 +256,9 @@ function Moteur() {
             </tr>
           </thead>
           <tbody>
-            <tr><td><strong>Ollama</strong></td><td>{t('docs.engine.type.local')}</td><td><code>qwen2.5:3b</code></td><td>{t('docs.engine.row.ollama.note')}</td></tr>
+            <tr><td><strong>OpenAI</strong></td><td>{t('docs.engine.type.cloud')}</td><td><code>gpt-4o-mini</code></td><td>{t('docs.engine.row.openai.note')}</td></tr>
+            <tr><td>Ollama</td><td>{t('docs.engine.type.local')}</td><td><code>qwen2.5:3b</code></td><td>{t('docs.engine.row.ollama.note')}</td></tr>
             <tr><td>LM Studio</td><td>{t('docs.engine.type.local')}</td><td>{t('docs.engine.row.lmstudio.model')}</td><td>{t('docs.engine.row.lmstudio.note')}</td></tr>
-            <tr><td>OpenAI</td><td>{t('docs.engine.type.cloud')}</td><td><code>gpt-4o-mini</code></td><td>{t('docs.engine.row.openai.note')}</td></tr>
             <tr><td>Anthropic</td><td>{t('docs.engine.type.cloud')}</td><td><code>claude-haiku-4-5</code></td><td>{t('docs.engine.row.anthropic.note')}</td></tr>
             <tr><td>OpenRouter</td><td>{t('docs.engine.type.cloud')}</td><td>{t('docs.engine.row.openrouter.model')}</td><td>{t('docs.engine.row.openrouter.note')}</td></tr>
           </tbody>
@@ -264,9 +268,18 @@ function Moteur() {
 
       <Section title={t('docs.engine.embeddings.title')}>
         <p>
-          {t('docs.engine.embeddings.p1')}{' '}<em>{t('docs.engine.embeddings.sens')}</em>{' '}{t('docs.engine.embeddings.p2')}{' '}
-          <strong>{t('docs.engine.embeddings.ollamaonly')}</strong>{t('docs.engine.embeddings.p3')}{' '}<code>nomic-embed-text</code>{' '}
-          {t('docs.engine.embeddings.p4')}
+          {t('docs.engine.embeddings.p1')}{' '}<em>{t('docs.engine.embeddings.sens')}</em>{' '}{t('docs.engine.embeddings.p2')}
+        </p>
+        <ul>
+          <li><strong>OpenAI</strong> {t('docs.engine.embeddings.openai')}</li>
+          <li><strong>Ollama</strong> {t('docs.engine.embeddings.ollama')}</li>
+        </ul>
+        <p className="muted">{t('docs.engine.embeddings.p4')}</p>
+      </Section>
+
+      <Section title={t('docs.engine.cloud.title')}>
+        <p>
+          {t('docs.engine.cloud.p1')}{' '}<code>memoria doctor</code>.
         </p>
       </Section>
 
@@ -377,6 +390,11 @@ function tabGroups(t: Translate): Array<{ title: string; tabs: Array<{ label: st
           goal: t('docs.tabs.revisions.goal'),
           details: [t('docs.tabs.revisions.detail.1'), t('docs.tabs.revisions.detail.2')],
         },
+        {
+          label: t('docs.tabs.maintenance.label'),
+          goal: t('docs.tabs.maintenance.goal'),
+          details: [t('docs.tabs.maintenance.detail.1'), t('docs.tabs.maintenance.detail.2')],
+        },
       ],
     },
     {
@@ -415,7 +433,12 @@ function tabGroups(t: Translate): Array<{ title: string; tabs: Array<{ label: st
         {
           label: t('docs.tabs.settings.label'),
           goal: t('docs.tabs.settings.goal'),
-          details: [t('docs.tabs.settings.detail.1'), t('docs.tabs.settings.detail.2')],
+          details: [t('docs.tabs.settings.detail.1'), t('docs.tabs.settings.detail.2'), t('docs.tabs.settings.detail.3')],
+        },
+        {
+          label: t('docs.tabs.docs.label'),
+          goal: t('docs.tabs.docs.goal'),
+          details: [t('docs.tabs.docs.detail.1')],
         },
       ],
     },
@@ -463,6 +486,10 @@ function Partage() {
             <strong>{t('docs.sharing.tools.facts.label')}</strong> {t('docs.sharing.tools.facts.desc')}
           </li>
         </ul>
+      </Section>
+
+      <Section title={t('docs.sharing.direct.title')}>
+        <p>{t('docs.sharing.direct.p')}</p>
       </Section>
 
       <Section title={t('docs.sharing.people.title')}>
@@ -527,6 +554,12 @@ function Securite() {
         <p>{t('docs.security.local.body')}</p>
       </Section>
 
+      <Section title={t('docs.security.cloud.title')}>
+        <p>
+          {t('docs.security.cloud.p1')}{' '}<code>memoria doctor</code>.
+        </p>
+      </Section>
+
       <Section title={t('docs.security.secrets.title')}>
         <p>
           {t('docs.security.secrets.p1')}{' '}<strong>{t('docs.security.secrets.vault')}</strong>{' '}{t('docs.security.secrets.p2')}{' '}
@@ -559,6 +592,7 @@ function cliGroups(t: Translate): Array<{ title: string; cmds: Array<[string, st
         ['memoria init', t('docs.cli.init')],
         ['memoria start / stop', t('docs.cli.startstop')],
         ['memoria autostart on|off', t('docs.cli.autostart')],
+        ['memoria daemon', t('docs.cli.daemon')],
         ['memoria update', t('docs.cli.update')],
       ],
     },
@@ -574,8 +608,8 @@ function cliGroups(t: Translate): Array<{ title: string; cmds: Array<[string, st
     {
       title: t('docs.cli.group.memory'),
       cmds: [
-        ['memoria import --instance <id>', t('docs.cli.import')],
-        ['memoria export', t('docs.cli.export')],
+        ['memoria import --instance <id> --transcripts | --legacy <chemin>', t('docs.cli.import')],
+        ['memoria export [--agent <type>] [--flat]', t('docs.cli.export')],
         ['memoria forget --id … / --query …', t('docs.cli.forget')],
         ['memoria stats', t('docs.cli.stats')],
         ['memoria doctor', t('docs.cli.doctor')],
@@ -597,6 +631,7 @@ function cliGroups(t: Translate): Array<{ title: string; cmds: Array<[string, st
         ['memoria sync invite', t('docs.cli.syncinvite')],
         ['memoria sync join --hub … --code …', t('docs.cli.syncjoin')],
         ['memoria sync now', t('docs.cli.syncnow')],
+        ['memoria sync revoke <machine_id>', t('docs.cli.syncrevoke')],
         ['memoria sync leave', t('docs.cli.syncleave')],
       ],
     },
@@ -642,6 +677,10 @@ function faqItems(t: Translate): Array<{ q: string; a: ReactNode }> {
     {
       q: t('docs.faq.cache.q'),
       a: <>{t('docs.faq.cache.a1')}<code>{'memoria stop && memoria start'}</code>{t('docs.faq.cache.a2')}</>,
+    },
+    {
+      q: t('docs.faq.cost.q'),
+      a: <>{t('docs.faq.cost.a')}</>,
     },
     {
       q: t('docs.faq.nomemory.q'),

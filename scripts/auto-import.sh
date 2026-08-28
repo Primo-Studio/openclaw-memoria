@@ -22,7 +22,8 @@ POLL_S="${MEMORIA_AUTO_IMPORT_POLL_S:-10}"
 MAX_WAIT_S="${MEMORIA_AUTO_IMPORT_MAX_WAIT_S:-7200}"
 DAEMON_JSON="$DATA/daemon.json"
 
-# Option : passer --max-windows N en 1er argument pour limiter le coût (test).
+# Option : passer N (fenêtres max par fichier, transmis en --max-windows N) en 1er
+# argument NU pour limiter le coût — ex. « auto-import.sh 1 » (test). Pas « --max-windows ».
 MAXW="${1:-}"
 
 log() { echo "$*" >> "$LOG"; }

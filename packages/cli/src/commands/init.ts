@@ -49,9 +49,9 @@ export class InitCommand extends Command {
       out.write(`✓ daemon actif : 127.0.0.1:${state.port} (pid ${state.pid})\n`)
 
       out.write('\nProchaines étapes :\n')
-      out.write('  1. memoria pair claude-code   — connecter un premier agent (code à coller)\n')
-      out.write('  2. npx @memoria/web           — ouvrir l’interface web\n')
-      out.write('  3. memoria doctor             — vérifier la santé du stockage\n')
+      out.write('  1. memoria ui                 — ouvrir l’interface (ou « memoria » tout court)\n')
+      out.write('  2. memoria pair claude-code   — connecter un premier agent (code à coller)\n')
+      out.write('  3. memoria doctor             — bilan de santé : stockage, file d’extraction, activité, envois cloud, coût\n')
       return 0
     } catch (err) {
       return fail(this.context.stderr, `init : ${(err as Error).message}`)

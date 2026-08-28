@@ -77,16 +77,22 @@ describe('corps JSON non-objet', () => {
 describe('erreurs internes journalisées', () => {
   it('une exception non-HTTP → 500 ET console.error avec la route', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    // Une VRAIE panne interne (le moteur explose) — un identifiant inconnu
+    // n'en est plus une : adopt_legacy d'une instance fantôme répond 404.
+    const original = daemon.memoria.doctor
+    daemon.memoria.doctor = () => {
+      throw new Error('panne simulée du moteur')
+    }
     try {
-      // adopt_legacy d'une instance inconnue : le moteur lève une Error brute
-      const r = await postRaw('/v1/admin/adopt_legacy', JSON.stringify({ instance: 'fantome' }), daemon.state.admin_token)
+      const r = await getAdmin('/v1/admin/doctor')
       expect(r.status).toBe(500)
-      expect(String(r.json['error'])).toContain('instance inconnue')
+      expect(String(r.json['error'])).toContain('panne simulée')
       expect(error).toHaveBeenCalledOnce()
       const line = String(error.mock.calls[0]?.[0])
-      expect(line).toContain('POST /v1/admin/adopt_legacy')
+      expect(line).toContain('GET /v1/admin/doctor')
       expect(line).toContain('500')
     } finally {
+      daemon.memoria.doctor = original
       error.mockRestore()
     }
   })
