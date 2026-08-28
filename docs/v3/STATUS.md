@@ -1,35 +1,57 @@
 # Memoria V3 — État d'avancement
 
-> État **réel, mesuré contre le code** de la branche `memoria-v1`. Journal détaillé de la dernière
-> session : `JOURNAL-2026-08-27.md` (à lire en entier avant de toucher `server.ts`, `memoria.ts`,
-> `mcp/serve.ts` ou `lib.rs`). Passation générale : `TODO.md`. Décisions : `DECISIONS-LOG.md`.
+> État **réel, mesuré contre le code** de la branche `memoria-v1`. Dernière session :
+> `JOURNAL-2026-08-28.md` (refonte de l'interface sur shadcn/ui). Session précédente :
+> `JOURNAL-2026-08-27.md` — à lire en entier avant de toucher `server.ts`, `memoria.ts`,
+> `mcp/serve.ts` ou `lib.rs`. Passation : `TODO.md`. Décisions : `DECISIONS-LOG.md`.
+> Installer / mettre à jour une autre machine : `INSTALLER-ET-METTRE-A-JOUR.md`.
 
-**Dernière mise à jour :** 2026-08-27 (fin de journée — après PR #24 + vérification doc ↔ code)
+**Dernière mise à jour :** 2026-08-28 (compteurs re-mesurés après la refonte UI, PR #26)
+
+**Où en est le dépôt** : `origin/memoria-v1` = `973dedf` (merge de la PR #26). La copie locale de ce
+Mac porte en plus quelques commits d'anonymisation **non poussés** — vérifier
+`git log origin/memoria-v1..HEAD` avant de conclure quoi que ce soit sur « ce qui est publié ».
+La branche par défaut du dépôt, `main`, est figée au **31/03/2026** (`4556c4d`) : 365 commits de
+retard, et **0 commit** qu'elle serait seule à porter (`git rev-list --count memoria-v1..main` = 0) —
+c'est un fast-forward pur, rien à perdre. Tant qu'elle n'est pas alignée, la page publique du dépôt
+décrit l'**ancien** produit (le plugin OpenClaw v3.22.3).
 
 ## 🏁 État global : produit complet, en usage réel, dernier kilomètre = distribution
 
 Fondation V3 (daemon / MCP / UI / secrets / migration / partage / providers / desktop) + **24 couches
-cognitives** (`COUCHES-ETAT.md`) + adaptateur OpenClaw + synchro inter-machines + identification
-d'interlocuteur + install 1 commande + mise à jour depuis l'UI + onboarding moteur + consommation
-par modèle + service launchd + icône M dans la barre de menus.
+cognitives** (`COUCHES-ETAT.md`, `node scripts/verify-layers.mjs` → 24/24 le 28/08) + adaptateur
+OpenClaw + synchro inter-machines + identification d'interlocuteur + install 1 commande + mise à jour
+depuis l'UI + onboarding moteur + consommation par modèle + service launchd + icône M dans la barre
+de menus + **interface refondue sur Tailwind v4 / shadcn/ui**.
 
-| Compteur (mesuré le 27/08 sur ce dépôt) | Valeur |
-|---|---|
-| Tests vitest (`npm test`) | **980 tests / 105 fichiers**, tous verts (`packages/core/test` 61 fichiers, daemon 21, cli 8, mcp 4, web 11, adapter-openclaw 1) |
-| Tests Rust (`cargo test`, app bureau) | 19 |
-| Écrans web (`App.tsx` NAV_IDS) | **16** (+ Onboarding) : 5 « Essentiel » (Tableau de bord, Agents, Mémoire, Thèmes, Revue) + 11 « Avancé » (Récurrences, Procédures, Révisions, Maintenance, Partage, Personnes, Coffre, Système, Journal, Réglages, Docs) |
-| Outils MCP (`packages/mcp/src/serve.ts`) | **12** : recall · store_fact · capture_turn · capture_status · correct · pin · set_expiry · feedback · set_context · get_context · identify_interlocutor · identify_or_create_interlocutor |
-| Commandes CLI (`buildCli()`) | **28** : ui (défaut) · init · daemon · start · stop · doctor · export · pair · agents · revoke · delete-agent · stats · forget · import · audit · enable · disable · autostart · move · update · sync {status, init-hub, invite, join, now, revoke, leave} |
-| Routes HTTP daemon | 93 admin/mémoire loopback + `/v1/health` + `/v1/pairing/complete` + 5 `/v1/sync/*` (LAN, hub) |
-| Schémas | registry v5 (`llm_usage`) · contenu v4 · cognition v11 (`fact_cognition`) · topics v21 (entité ancre) |
-| Langues UI | 5 (fr, en, es, pt, de), parité stricte testée |
+| Compteur (mesuré le 28/08 sur ce dépôt) | Valeur | Comment le reproduire |
+|---|---|---|
+| Tests vitest (`npm test`) | **1 091 tests / 121 fichiers**, tous verts | `npm test` (core 69 · daemon 26 · cli 8 · mcp 5 · web 12 · adapter-openclaw 1 = 121 fichiers). ⚠️ Deux fichiers exigent l'environnement réel du poste : `core/test/secrets.test.ts` (Trousseau macOS de la session ouverte) et `daemon/test/lock-race.test.ts` (course entre processus, sensible à la charge). Sous un `HOME` temporaire ils échouent — ce n'est pas une régression. |
+| Tests Rust (`cargo test`, app bureau) | 19 | non re-mesuré le 28/08 |
+| Écrans web | **16** (+ Onboarding), en **3 groupes** | `packages/web/src/app/nav.ts` → `NAV_GROUPS` : *Essentiel* 5 (Tableau de bord, Agents, Mémoire, Revue, Thèmes) · *Ce qu'elle a compris* 4 (Personnes, Récurrences, Procédures, Révisions) · *Avancé* 7 (Partage, Coffre, Journal, Maintenance, Système, Docs, Réglages) |
+| Outils MCP | **12** | `packages/mcp/src/serve.ts` : recall · store_fact · capture_turn · capture_status · correct · pin · set_expiry · feedback · set_context · get_context · identify_interlocutor · identify_or_create_interlocutor |
+| Commandes CLI | **27** enregistrées dans `buildCli()` (hors `help` / `version`) | 20 de premier niveau — ui (défaut) · init · daemon · start · stop · doctor · export · pair · agents · revoke · delete-agent · stats · forget · import · audit · enable · disable · autostart · move · update — plus `sync` × 7 (status, init-hub, invite, join, now, revoke, leave). *(STATUS annonçait 28 : erreur de comptage, corrigée.)* |
+| Routes HTTP daemon | **93** loopback (82 `/v1/admin/*` + 11 `/v1/memory/*`) + `/v1/health` + `/v1/pairing/complete` + **5** `/v1/sync/*` (listener LAN du hub : pairing/complete, snapshot, pull, push, secrets) | `grep -c "case '\(GET\|POST\|DELETE\)" packages/daemon/src/server.ts` |
+| Schémas | registry v5 (`llm_usage`) · contenu v4 · cognition v11 (`fact_cognition`) · topics v21 (entité ancre) | |
+| Langues UI | 5 (fr, en, es, pt, de), parité stricte testée | `packages/web/src/messages/` |
 
-### Ce qui reste (détail dans `TODO.md`)
-🔴 **scope npm** (`@memoria/*` → `@primo-studio/*`, 18 alertes Dependabot sur `main` à traiter au passage) ·
-🔴 **notarisation** de `Memoria.app` (signée Developer ID, installée dans `/Applications`, feu vert Néto) ·
-mineurs de revue (`JOURNAL-2026-08-27.md` § « Mineurs restants ») · adaptateur **push** pour Claude Code
-(hooks SessionStart/Stop, décision produit) · **5 révisions** à arbitrer dans l'écran Révisions ·
-planificateur `decayCognition` · UI P2 (debounce Mémoire, uniformisation ErrorBanner/humanError).
+### Interface — état au 28/08 (PR #26)
+Tailwind v4 + shadcn/ui (24 composants), jetons dans `src/styles/tokens.css`, coquille
+`src/app/Shell.tsx` (barre latérale à icônes, rail repliable, tiroir mobile), primitives partagées
+dans `src/components/ui.tsx`. **L'ancien `styles.css` (1 406 lignes) est supprimé**, ainsi que
+`.legacy-screen` et `MIGRATED_SCREENS` : il n'y a plus qu'un seul système de style. Contrastes
+**mesurés** (script oklch→sRGB→WCAG), cibles tactiles à 44 px, `DataTable` bascule en fiches sous
+640 px (deux P0 mobiles corrigés). Guide : `packages/web/UI-GUIDE.md`. Aperçu avec données de démo et
+captures clair/sombre × bureau/mobile : `npm run ui:preview`.
+
+### Ce qui reste (inventaire complet et priorisé dans `TODO.md`)
+🔴 **`main` figée** au 31/03 (fast-forward pur, rien à perdre) · 🔴 **aucun tag** ne contient HEAD
+(`git describe` → `v4.0.0-272-g973dedf`) · 🔴 **`Memoria.app` non notarisée** (`spctl` →
+`rejected · source=Unnotarized Developer ID`) · 🔴 **scope npm `@memoria` détenu par un tiers**
+(`npm view @memoria/cli` → paquet existant, 18 versions) ·
+🟠 `memoria doctor` dit « ✓ OK » sans moteur d'IA configuré · 🟠 **mise à jour à distance : rien
+n'existe** (API d'admin verrouillée sur 127.0.0.1, aucun signal de nouvelle version) · 🟠 adaptateur
+**push** pour Claude Code (aujourd'hui pull seul) · 🟠 aucune commande de **sauvegarde**.
 
 | Phase | Contenu | État |
 |---|---|---|
@@ -114,19 +136,47 @@ dormant jamais rappelé, cap tokens. `packages/core/test/benchmark.test.ts`.
 - Identifiants projet/client/org normalisés en slug côté MCP + adaptateur ; `memoria_store_fact`
   hérite du contexte actif.
 
-## 🟢 INSTALLATION RÉELLE (MacBook Pro de Néto, état au 27/08 18:20 — `JOURNAL-2026-08-27.md`)
-- Daemon **sous launchd** sur le build `f5109a3`, `/v1/health` ok ; Claude Code + Codex connectés en MCP,
-  OpenClaw via l'adaptateur (symlink `~/.openclaw/extensions/memoria`).
-- Migrations passées sur les bases réelles : index vectoriels (dims, modèle) réparés, `fact_cognition`,
-  policies `user`.
-- `Memoria.app` signée, installée dans `/Applications`, M vert. Auto-import launchd toutes les 6 h
-  (**remplit la Revue à chaque passage** : tri récurrent à prévoir, cf. TODO).
-- Conso 24 h mesurée : gpt-4o-mini 590 appels · 340 k tokens entrés · 120 k sortis ≈ 0,12 $ (import
-  planifié de 1 523 fichiers compris). Doctor : 5 révisions à arbitrer.
-- ⚠️ Le daemon pointe sur le build du dépôt (`packages/*/dist`) : `memoria stop && memoria start` après
-  un rebuild (ou `memoria update`). Autres machines (Mac Studio, iMac) : état non vérifié depuis le 04/08.
+## 🟢 INSTALLATION RÉELLE (MacBook Pro de Néto, état mesuré le 28/08)
+
+`GET /v1/health` du service de production, relevé aujourd'hui :
+
+```json
+{ "ok": true, "version": "0.1.0", "pid": 27415, "supervisor": "launchd",
+  "built_sha": "973dedf8460c4898472a553bf0c08de87266a2ff",
+  "storage_root": "/Users/primostudio/.memoria/data" }
+```
+
+- Daemon **sous launchd** sur le build `973dedf` (= `origin/memoria-v1`, la refonte UI est donc bien
+  celle qui est servie). Claude Code + Codex connectés en MCP, OpenClaw via l'adaptateur (lien
+  `~/.openclaw/extensions/memoria`) — mais **aucun processus gateway OpenClaw ne tourne depuis le
+  24/08** : la branche WhatsApp/Telegram ne capture plus rien.
+- Migrations passées sur les bases réelles : index vectoriels (dims, modèle) réparés,
+  `fact_cognition`, policies `user`.
+- `Memoria.app` signée, installée dans `/Applications`, M vert — **non notarisée** : elle ne
+  s'ouvrira pas sur une autre machine. Auto-import launchd toutes les 6 h (**remplit la Revue à
+  chaque passage** : tri récurrent à prévoir, cf. `TODO.md`).
+- Conso 24 h mesurée le 27/08 : gpt-4o-mini 590 appels · 340 k tokens entrés · 120 k sortis ≈ 0,12 $
+  (import planifié de 1 523 fichiers compris). Doctor : 5 révisions à arbitrer.
+- ⚠️ **Deux daemons orphelins** tournent depuis le 27/08 09:00 sur des stockages temporaires
+  (`/var/folders/.../memoria-ensure-launchd-*`), laissés par une exécution de `npm test`. Sans
+  conséquence sur la production, mais ils brouillent tout diagnostic « combien de daemons tournent ? ».
+- ⚠️ Le fichier marqueur `.memoria-built-sha` contient la révision **longue** (41 octets) alors que le
+  code écrit et compare la révision **courte** : `needsRebuild()` est donc toujours vrai et chaque
+  `memoria update` reconstruit pour rien. Détail dans `TODO.md`.
+- ⚠️ Le daemon pointe sur le build du dépôt (`packages/*/dist`) : `memoria stop && memoria start`
+  après un rebuild (ou `memoria update`). Autres machines (Mac Studio, iMac) : **état non vérifié
+  depuis le 04/08** — ni la version, ni le moteur, ni le `built_sha`.
 
 ## Journal des sessions
+
+### 2026-08-28 — Refonte de l'interface sur shadcn/ui (PR #26) — **1 091 tests / 121 fichiers**
+Détail dans `JOURNAL-2026-08-28.md`. Fondation Tailwind v4 + shadcn/ui, 16 écrans migrés en 4 lanes
+parallèles, revue visuelle multi-agents sur 64 captures, 2 P0 mobiles corrigés (tableaux illisibles
+sous 640 px), contrastes mesurés, ancien `styles.css` (1 406 lignes) supprimé. Deux correctifs
+serveur : les propositions de Révisions transportent enfin le texte des deux faits ; `cleanTopicLabel()`
+répare les libellés de thèmes sans réintroduire le Title Case. Puis vérification d'installation neuve
+et de mise à jour en bac à sable (→ `INSTALLER-ET-METTRE-A-JOUR.md`) et refonte de ce STATUS et du
+`TODO.md`.
 
 ### 2026-08-27 — Session 1-3 (PR #20 → #24, 80 commits d'audit) — **980 tests**
 Détail complet dans `JOURNAL-2026-08-27.md`. En bref : consolidation 24-25/08 poussée ; daemon
