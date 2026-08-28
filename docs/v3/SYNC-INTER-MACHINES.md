@@ -408,7 +408,7 @@ Chaque incrément est testable et apporte de la valeur seul.
 
 ### Incrément 5 — Bootstrap 1-commande + disconnect (UX non-dev)
 
-**Valeur seule** : Badette installe l'iMac et tape une seule commande ; tout l'historique + le coffre arrivent.
+**Valeur seule** : Un collègue installe le second Mac et tape une seule commande ; tout l'historique + le coffre arrivent.
 **Fichiers** : `packages/mcp/src/sync-join.ts` + bin, `sync/engine.ts` (`bootstrap`, `join`, `leave`), CLI `init-hub|invite|join|leave|peers|revoke`.
 **Tests** : `sync join` de bout en bout (daemon vide → snapshot scopes + secrets + cursors initialisés) ; idempotent si rejoué ; `leave` révoque sans purger les facts reçus ; messages FR prêts-à-coller.
 

@@ -171,7 +171,7 @@ Deux chemins coexistent, et le débutant subit le pire en premier.
 - **Vocabulaire** : « faits » (Partage) vs « souvenirs » (Agents/Onboarding) = le même objet.
   **Choisir un seul mot** (« souvenirs »).
 - **Noms/numéros personnels du dev dans les textes livrés (P1, gênant en prod)** : « l'utilisateur
-  (Néto) » (`fr.ts:720`), « ex. Badette », « Ajoute Néto, Badette, tes stagiaires », numéros
+  (Néto) » (`fr.ts:720`), « ex. un collègue », « Ajoute-toi, tes collègues, tes stagiaires », numéros
   `+594 6xx` (Guyane) en placeholders. → exemples neutres (Alice, +33…).
 - **Libellés codés en français en dur** malgré le sélecteur de langue : Wizard (« Retour / Passer /
   Terminer »), `ui.tsx` (« Réessayer », « Copié ! », « Chargement… », messages `humanError`,

@@ -26,8 +26,8 @@ Mémoire long terme partagée pour agents IA (Claude Code, Codex, OpenClaw), loc
 
 ## B. État réel aujourd'hui (mesuré sur ce poste)
 > **Machine = MacBook Pro « MacBook-Pro-de-Primo.local », 192.168.1.23.** Ce n'est NI la Machine A
-> (Mac Studio Koda, `.98`, dev dans `~/Documents/BADETTER/`) NI la Machine B (iMac, `~/Documents/
-> BADETTE_Robert/`) de la passation : **c'est un 3ᵉ poste**, sans copie dev — seulement le runtime
+> (Mac Studio (poste A), `.98`, dev dans `~/Documents/dev-a/`) NI la Machine B (iMac, `~/Documents/
+> dev-b/`) de la passation : **c'est un 3ᵉ poste**, sans copie dev — seulement le runtime
 > `~/openclaw-memoria`. (Rappel règle projet : toujours nommer la machine quand on rapporte une mesure.)
 > Ce doc est écrit dans la **copie runtime** — à reporter dans la copie dev le cas échéant.
 

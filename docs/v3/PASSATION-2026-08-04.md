@@ -17,7 +17,7 @@ sur l'autre.** Les deux ont un dépôt, un daemon et une base, dans des états d
 
 | | Machine A (Mac Studio) | Machine B |
 |---|---|---|
-| Dossier de dev | `~/Documents/BADETTER/openclaw-memoria` | `~/Documents/BADETTE_Robert/openclaw-memoria` |
+| Dossier de dev | `~/Documents/dev-a/openclaw-memoria` | `~/Documents/dev-b/openclaw-memoria` |
 | Dépôt runtime | `~/openclaw-memoria` | `~/openclaw-memoria` |
 | Vecteurs en base | `text-embedding-3-small` · 1536d · 2424 | `nomic-embed-text` · 768d · 1256 |
 | `orgId` OpenClaw | **non configuré** | `7155dfef-88c4-4687-8307-58bceea0bd38` |
