@@ -377,19 +377,23 @@ export function PageHeader({
   children?: ReactNode
 }) {
   const slots = useShellSlots()
+  // POURQUOI les actions quittent la barre supérieure sous 768 px : à 390 px, la
+  // barre doit déjà porter le menu, la marque, le mode de capture et les
+  // préférences. Avec « Actualiser » en plus, c'est le TITRE qui était rogné —
+  // « Tableau de bord » devenait « T… », et on ne savait plus où on est. Les
+  // actions descendent donc en tête de page, alignées à droite : elles restent
+  // au premier écran, à portée de pouce, et la barre garde le titre entier.
+  const compact = useMatchMedia('(max-width: 767.98px)')
   const titleNode = <h1 className="truncate text-lg font-semibold tracking-tight">{title}</h1>
   const actionsNode = actions ? <div className="flex flex-wrap items-center justify-end gap-2">{actions}</div> : null
   const inline = !slots
+  const actionsInPage = actionsNode && (inline || compact)
   return (
     <>
       {slots?.titleEl && createPortal(titleNode, slots.titleEl)}
-      {slots?.actionsEl && actionsNode && createPortal(actionsNode, slots.actionsEl)}
-      {inline && (
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-          {titleNode}
-          {actionsNode}
-        </div>
-      )}
+      {slots?.actionsEl && actionsNode && !compact && createPortal(actionsNode, slots.actionsEl)}
+      {inline && <div className="mb-4">{titleNode}</div>}
+      {actionsInPage && <div className="mb-4">{actionsNode}</div>}
       {description && <p className="mb-4 text-sm text-muted-foreground">{description}</p>}
       {children}
     </>
@@ -494,22 +498,25 @@ export interface DataSort {
 }
 
 /**
- * Fenêtre étroite (< 640 px) — la borne `sm` de Tailwind. On S'ABONNE au
- * changement plutôt que de mesurer une fois : faire pivoter le téléphone doit
- * suffire à repasser d'une forme à l'autre.
+ * Media query réactive. On S'ABONNE au changement plutôt que de mesurer une
+ * fois : faire pivoter le téléphone doit suffire à repasser d'une forme à
+ * l'autre. (Les bornes reprennent celles de Tailwind : sm = 640, md = 768.)
  */
-const NARROW_QUERY = '(max-width: 639.98px)'
-
-export function useIsNarrow(): boolean {
-  const [narrow, setNarrow] = useState(() => (typeof window === 'undefined' ? false : window.matchMedia(NARROW_QUERY).matches))
+function useMatchMedia(query: string): boolean {
+  const [matches, setMatches] = useState(() => (typeof window === 'undefined' ? false : window.matchMedia(query).matches))
   useEffect(() => {
-    const mq = window.matchMedia(NARROW_QUERY)
-    const sync = () => setNarrow(mq.matches)
+    const mq = window.matchMedia(query)
+    const sync = () => setMatches(mq.matches)
     sync()
     mq.addEventListener('change', sync)
     return () => mq.removeEventListener('change', sync)
-  }, [])
-  return narrow
+  }, [query])
+  return matches
+}
+
+/** Fenêtre étroite : sous la borne `sm` (640 px) — un téléphone, en pratique. */
+export function useIsNarrow(): boolean {
+  return useMatchMedia('(max-width: 639.98px)')
 }
 
 /**

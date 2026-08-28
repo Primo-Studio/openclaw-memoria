@@ -34,14 +34,26 @@ export interface NavItemDef {
 }
 
 export interface NavGroupDef {
-  /** clé i18n : nav.<id> (« Essentiel » / « Avancé »). */
-  id: 'essential' | 'advanced'
+  /** clé i18n : nav.<id> (« Essentiel » / « Ce qu'elle a compris » / « Avancé »). */
+  id: 'essential' | 'insights' | 'advanced'
   items: NavItemDef[]
 }
 
-// « Essentiel » = ce qu'un non-technicien ouvre chaque jour ; « Avancé » =
-// outils d'analyse et d'administration. Réglages ferme le second groupe
-// (c'est là que se choisit le moteur d'extraction — il doit rester à un clic).
+/*
+ * TROIS groupes, et pas deux.
+ *
+ * POURQUOI : « Avancé » comptait onze entrées d'affilée — un mur qu'on ne lit
+ * plus, où « Personnes » (ce que Memoria a retenu de tes interlocuteurs) voisine
+ * avec « Maintenance » (l'entretien de la base). Ce sont deux natures de choses.
+ * Le groupe du milieu réunit ce que Memoria a DÉDUIT tout seul de tes souvenirs
+ * — les personnes, les habitudes repérées, les savoir-faire, les contradictions
+ * à arbitrer : quatre écrans qu'on ouvre par curiosité. « Avancé » ne garde que
+ * le contrôle et le diagnostic, du plus courant (Partage) au plus rare
+ * (Système), et se ferme sur l'aide puis les réglages.
+ *
+ * Aucune route ni aucune clé `nav.<écran>` ne change : seuls le regroupement et
+ * l'ordre bougent.
+ */
 export const NAV_GROUPS: NavGroupDef[] = [
   {
     id: 'essential',
@@ -54,12 +66,17 @@ export const NAV_GROUPS: NavGroupDef[] = [
     ],
   },
   {
-    id: 'advanced',
+    id: 'insights',
     items: [
       { id: 'persons', icon: Users },
       { id: 'patterns', icon: Repeat },
       { id: 'procedures', icon: ListOrdered },
       { id: 'revisions', icon: GitCompareArrows },
+    ],
+  },
+  {
+    id: 'advanced',
+    items: [
       { id: 'sharing', icon: Share2 },
       { id: 'vault', icon: Vault },
       { id: 'audit', icon: ScrollText },

@@ -1,18 +1,36 @@
 /**
- * Mode de capture (Auto / Revue d'abord / Pause) — segmented control TOUJOURS
- * visible en bas de la barre latérale, quel que soit l'écran (spec §13).
- * « Toujours » vaut aussi en cas de panne : un échec de lecture du mode
- * affiche le problème + « Réessayer » (jamais un contrôle qui disparaît sans
- * un mot), un échec de changement remet l'état réel ET le dit.
+ * Mode de capture (Auto / Revue d'abord / Pause) — l'interrupteur principal du
+ * produit : il décide si les agents mémorisent, mémorisent sous validation, ou
+ * ne mémorisent rien. Il doit être visible et compréhensible PARTOUT (spec §13).
+ *
+ * Deux formes, un seul état (voir app/capture-mode.ts) :
+ *  - `CaptureModeSwitch` : segmented control en pied de barre latérale (bureau
+ *    et tiroir mobile) ;
+ *  - `CaptureModeMenu`   : bouton libellé dans la barre supérieure, pour les
+ *    écrans étroits où la barre latérale est repliée dans un tiroir. POURQUOI :
+ *    tant qu'il ne vivait qu'en pied de barre latérale, l'interrupteur le plus
+ *    important du produit était INVISIBLE au téléphone — il fallait ouvrir le
+ *    menu et faire défiler jusqu'en bas pour savoir si Memoria enregistrait.
+ *
+ * « Toujours visible » vaut aussi en panne : une lecture impossible affiche le
+ * problème + « Réessayer » (jamais un contrôle qui disparaît sans un mot), un
+ * changement refusé remet l'état réel ET le dit.
  */
-import { useCallback, useEffect, useState } from 'react'
-import { Eye, Pause, Zap, type LucideIcon } from 'lucide-react'
-import { getCaptureMode, setCaptureMode, type CaptureMode } from '../api'
-import { humanError } from '../components/ui'
+import { ChevronDown, Eye, Pause, Zap, type LucideIcon } from 'lucide-react'
+import type { CaptureMode } from '../api'
 import { Button } from '../components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from '../components/ui/dropdown-menu'
 import { Tooltip, TooltipContent, TooltipTrigger } from '../components/ui/tooltip'
 import { useT } from '../i18n'
 import { cn } from '../lib/utils'
+import { changeCaptureMode, retryCaptureMode, useCaptureModeState } from './capture-mode'
 
 // clés i18n : capture.short.<key> (segment), capture.<key> (long), capture.hint.<key>
 const MODES: Array<{ id: CaptureMode; key: 'auto' | 'review' | 'pause'; icon: LucideIcon }> = [
@@ -23,51 +41,14 @@ const MODES: Array<{ id: CaptureMode; key: 'auto' | 'review' | 'pause'; icon: Lu
 
 export function CaptureModeSwitch({ collapsed = false }: { collapsed?: boolean }) {
   const { t } = useT()
-  const [mode, setMode] = useState<CaptureMode | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  // Message éphémère après un changement refusé (role=status, pas d'alerte bloquante).
-  const [notice, setNotice] = useState<string | null>(null)
-  const [tick, setTick] = useState(0)
-
-  useEffect(() => {
-    let cancelled = false
-    getCaptureMode()
-      .then(m => {
-        if (cancelled) return
-        setMode(m)
-        setError(null)
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return
-        console.warn('memoria-ui : mode de capture illisible', err)
-        setError(humanError(err))
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [tick])
-
-  const change = useCallback(
-    (next: CaptureMode) => {
-      setNotice(null)
-      setMode(next) // optimiste — l'échec remet l'état réel ET le dit
-      setCaptureMode(next).catch((err: unknown) => {
-        console.warn('memoria-ui : changement de mode de capture refusé', err)
-        setNotice(t('capture.change_failed', { message: humanError(err) }))
-        getCaptureMode()
-          .then(setMode)
-          .catch(() => setTick(x => x + 1))
-      })
-    },
-    [t],
-  )
+  const { mode, error, noticeRaw } = useCaptureModeState()
 
   if (mode === null) {
     if (error === null) return null // premier chargement en cours
     return (
       <div className="px-1">
         {!collapsed && <p className="text-xs text-destructive" role="alert">{t('capture.unavailable')}</p>}
-        <Button variant="outline" size="sm" className="mt-1 w-full" onClick={() => setTick(x => x + 1)}>
+        <Button variant="outline" size="sm" className="mt-1 w-full" onClick={retryCaptureMode}>
           {t('common.retry')}
         </Button>
       </div>
@@ -100,7 +81,7 @@ export function CaptureModeSwitch({ collapsed = false }: { collapsed?: boolean }
                   role="radio"
                   aria-checked={active}
                   aria-label={t(`capture.${m.key}`)}
-                  onClick={() => change(m.id)}
+                  onClick={() => changeCaptureMode(m.id)}
                   className={cn(
                     'flex flex-1 items-center justify-center gap-1 rounded-md px-1 py-1.5 text-[11px] font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/60',
                     active
@@ -122,9 +103,73 @@ export function CaptureModeSwitch({ collapsed = false }: { collapsed?: boolean }
       {!collapsed && current && (
         <p className="mt-1.5 px-1 text-[11px] leading-snug text-muted-foreground">{t(`capture.hint.${current.key}`)}</p>
       )}
-      {!collapsed && notice && (
-        <p className="mt-1 px-1 text-[11px] leading-snug text-warning" role="status">{notice}</p>
+      {!collapsed && noticeRaw && (
+        <p className="mt-1 px-1 text-[11px] leading-snug text-warning" role="status">
+          {t('capture.change_failed', { message: noticeRaw })}
+        </p>
       )}
     </div>
+  )
+}
+
+/**
+ * Forme compacte pour la barre supérieure : un bouton qui DIT le mode en cours
+ * (icône + mot), et ouvre la liste des trois modes avec, sous chacun, ce qu'il
+ * fait. Le mode « Pause » se signale en jaune : mémoire à l'arrêt, ça se voit.
+ */
+export function CaptureModeMenu({ className }: { className?: string }) {
+  const { t } = useT()
+  const { mode, error, noticeRaw } = useCaptureModeState()
+
+  if (mode === null) {
+    if (error === null) return null
+    return (
+      <Button variant="outline" size="sm" className={className} onClick={retryCaptureMode} title={t('capture.unavailable')}>
+        {t('common.retry')}
+      </Button>
+    )
+  }
+
+  const current = MODES.find(m => m.id === mode)
+  if (!current) return null
+  const Icon = current.icon
+  const paused = mode === 'incognito'
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="outline"
+          size="sm"
+          className={cn('gap-1.5', paused && 'border-warning/50 text-warning', className)}
+          aria-label={t('capture.current', { mode: t(`capture.${current.key}`) })}
+        >
+          <Icon aria-hidden="true" />
+          <span>{t(`capture.short.${current.key}`)}</span>
+          <ChevronDown className="opacity-60" aria-hidden="true" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-72">
+        <DropdownMenuLabel>{t('capture.title')}</DropdownMenuLabel>
+        <DropdownMenuRadioGroup value={mode} onValueChange={v => changeCaptureMode(v as CaptureMode)}>
+          {MODES.map(m => {
+            const ItemIcon = m.icon
+            return (
+              <DropdownMenuRadioItem key={m.id} value={m.id} className="items-start gap-2 py-1.5">
+                <ItemIcon className="mt-0.5" aria-hidden="true" />
+                <span className="flex min-w-0 flex-col">
+                  <span className="font-medium">{t(`capture.${m.key}`)}</span>
+                  <span className="text-xs text-muted-foreground">{t(`capture.hint.${m.key}`)}</span>
+                </span>
+              </DropdownMenuRadioItem>
+            )
+          })}
+        </DropdownMenuRadioGroup>
+        {noticeRaw && (
+          <p className="px-1.5 py-1 text-xs leading-snug text-warning" role="status">
+            {t('capture.change_failed', { message: noticeRaw })}
+          </p>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
