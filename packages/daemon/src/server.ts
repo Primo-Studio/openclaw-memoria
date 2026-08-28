@@ -19,6 +19,7 @@ import { fileURLToPath } from 'node:url'
 import {
   AUTOSTART_LABEL,
   Memoria,
+  RegexRedactor,
   autoRegister,
   autostartStatus,
   collectTranscriptFiles,
@@ -72,6 +73,8 @@ export interface DaemonOptions {
   credentialsDir?: string
   /** Override LLM transmis au moteur (tests : extraction mockée, zéro réseau). */
   llm?: MemoriaInitOptions['llm']
+  /** Coffre à secrets injecté (tests : simuler un Trousseau qui refuse — jamais le vrai). */
+  secretProvider?: MemoriaInitOptions['secretProvider']
   /** Lancement auto / superviseur (tests : launchd simulé — jamais de launchctl réel). */
   control?: Partial<DaemonControlHooks>
   /** Mise à jour (tests : ni git pull, ni npm, ni redémarrage réels). */
@@ -136,7 +139,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   if (!release) throw new DaemonLockHeldError(storageRoot, lockHolderPid(storageRoot))
   let memoria: Memoria
   try {
-    memoria = Memoria.init({ storageRoot, configPath: opts.configPath, llm: opts.llm })
+    memoria = Memoria.init({ storageRoot, configPath: opts.configPath, llm: opts.llm, secretProvider: opts.secretProvider })
   } catch (err) {
     release()
     throw err
@@ -1413,9 +1416,13 @@ function intParam<D extends number | undefined>(url: URL, name: string, opts: { 
  */
 function reportAndSend(req: IncomingMessage, res: ServerResponse, err: unknown): void {
   const status = err instanceof HttpError ? err.status : 500
-  const message = (err as Error)?.message ?? 'erreur interne'
+  // DÉFENSE EN PROFONDEUR : une erreur interne peut citer une commande, un
+  // corps de requête, une réponse de provider… Tout ce qui ressemble à un
+  // secret est masqué AVANT le journal et AVANT le client — la valeur d'un
+  // secret ne sort jamais du daemon, quelle que soit la panne.
+  const message = errorRedactor.redact((err as Error)?.message ?? 'erreur interne').text
   if (status >= 500) {
-    const detail = (err as Error)?.stack ?? message
+    const detail = errorRedactor.redact((err as Error)?.stack ?? message).text
     console.error(`[memoria-daemon] ${req.method ?? '?'} ${req.url ?? '?'} → ${status} : ${detail}`)
   }
   // Exception APRÈS l'envoi de la réponse (effet de bord post-réponse) :
@@ -1428,6 +1435,9 @@ function reportAndSend(req: IncomingMessage, res: ServerResponse, err: unknown):
   }
   sendJson(res, status, { error: message })
 }
+
+/** Redacteur des messages d'erreur (mêmes motifs que le gate secrets du moteur). */
+const errorRedactor = new RegexRedactor()
 
 /** Corps BRUT (string) — nécessaire au HMAC de synchro (sha256 du corps exact). */
 async function readRawBody(req: IncomingMessage): Promise<string> {

@@ -45,8 +45,8 @@ import {
   type DialecticResult,
 } from '../cognition/index.js'
 import { estimateTokens, newId, nowISO, sha256Hex } from '../util.js'
-import { createSecretProvider, RegexRedactor } from '../secrets/index.js'
-import type { SecretProvider } from '../secrets/types.js'
+import { AesVaultProvider, createSecretProvider, RegexRedactor } from '../secrets/index.js'
+import type { DetectedSecret, SecretProvider } from '../secrets/types.js'
 import { EXPERTISE_MAX } from '../cognition/feedback.js'
 import { factOrigin } from './origin.js'
 import { findDuplicate, normalizeFact, type DuplicateMatch } from './selective.js'
@@ -141,6 +141,8 @@ export interface MemoriaInitOptions extends ResolveOptions {
   llm?: { extraction: LlmProvider | null; embeddings?: EmbeddingProvider | null }
   /** Coffre forcé (tests : 'aes-vault' pour ne jamais toucher le Keychain réel). */
   secretsVault?: 'keychain-macos' | 'aes-vault'
+  /** Coffre INJECTÉ (tests : simuler un Trousseau qui refuse) — prime sur secretsVault. */
+  secretProvider?: SecretProvider
 }
 
 const DEFAULT_TOKEN_BUDGET = 1500
@@ -158,6 +160,8 @@ export class Memoria {
   private closed = false
 
   private readonly secretProvider: SecretProvider
+  /** Coffre AES local de REPLI quand le coffre principal (Trousseau) refuse d'écrire — ouvert à la demande. */
+  private fallbackVault: AesVaultProvider | null = null
   private readonly redactor = new RegexRedactor()
   private syncEngine?: SyncEngine
   private readonly llmOverride: MemoriaInitOptions['llm']
@@ -194,7 +198,7 @@ export class Memoria {
     this.registry = new RegistryStore(this.paths.registry)
     this.registry.bootstrap(opts.userDisplayName)
     this.registry.registerDb({ kind: 'registry', path: this.paths.registry, assistant_instance_id: null, scope_id: null })
-    this.secretProvider = createSecretProvider(this.paths.secretsDir, { force: opts.secretsVault })
+    this.secretProvider = opts.secretProvider ?? createSecretProvider(this.paths.secretsDir, { force: opts.secretsVault })
     this.llmOverride = opts.llm
     this.grantDefaultUserWrite()
   }
@@ -1989,10 +1993,7 @@ export class Memoria {
         knownElsewhere: (id, text) => this.findKnownDuplicate(id, text, { includePrivate: false }) !== null,
         audit: entry => this.registry.audit(entry),
         redactor: this.redactor,
-        secretSink: s => {
-          this.secretProvider.set(s.name, s.value)
-          this.registry.upsertSecretRef(s.name, this.secretProvider.locationFor(s.name), s.kind)
-        },
+        secretSink: s => this.vaultSecret(s),
         extraction,
       })
     })()
@@ -3398,15 +3399,45 @@ export class Memoria {
   /** Redaction des secrets avant tout stockage de fait → valeur au coffre, jamais en clair. */
   private redactBeforeStore(text: string): string {
     const result = this.redactor.redact(text)
-    for (const secret of result.found) {
-      try {
-        this.secretProvider.set(secret.name, secret.value)
-        this.registry.upsertSecretRef(secret.name, this.secretProvider.locationFor(secret.name), secret.kind)
-      } catch (err) {
-        console.warn(`[memoria] mise au coffre du secret « ${secret.name} » en échec :`, (err as Error).message)
-      }
-    }
+    for (const secret of result.found) this.vaultSecret(secret)
     return result.text
+  }
+
+  /**
+   * Met un secret détecté au coffre — JAMAIS silencieux, JAMAIS la valeur dans
+   * un message. Le Trousseau peut refuser l'écriture (verrouillé, autorisation
+   * annulée sous launchd/sandbox) : on replie alors sur le coffre AES local
+   * avec un avertissement clair (nom + raison, sans valeur), et la référence
+   * enregistrée pointe sur le coffre qui a RÉELLEMENT reçu la valeur. Si le
+   * repli échoue aussi (ou si le coffre principal EST déjà l'AES), échec
+   * bruyant : le fait n'est pas écrit — mieux qu'un secret perdu sans bruit.
+   * Avant, l'échec était avalé par un warn qui contenait `-w <valeur>`.
+   */
+  private vaultSecret(secret: DetectedSecret): void {
+    const candidates: SecretProvider[] = [this.secretProvider]
+    if (this.secretProvider.kind !== 'aes-vault') {
+      this.fallbackVault ??= new AesVaultProvider(this.paths.secretsDir)
+      candidates.push(this.fallbackVault)
+    }
+    let lastFailure = ''
+    for (const provider of candidates) {
+      try {
+        provider.set(secret.name, secret.value)
+      } catch (err) {
+        // Défense : quelle que soit l'origine de l'erreur, la valeur n'en sort pas.
+        lastFailure = hideValue((err as Error)?.message ?? String(err), secret.value)
+        continue
+      }
+      this.registry.upsertSecretRef(secret.name, provider.locationFor(secret.name), secret.kind)
+      if (provider !== this.secretProvider) {
+        console.warn(
+          `[memoria] coffre « ${this.secretProvider.kind} » indisponible (${lastFailure}) — ` +
+            `secret « ${secret.name} » mis au coffre AES local (${provider.locationFor(secret.name)})`,
+        )
+      }
+      return
+    }
+    throw new Error(`mise au coffre du secret « ${secret.name} » impossible (${this.secretProvider.kind}) : ${lastFailure}`)
   }
 
   private mustInstance(instanceId: string): AssistantInstance {
@@ -3528,6 +3559,11 @@ function pendingRevisionsFor(store: ContentStore, ids: string[]): Map<string, Pe
   }
   return out
 }
+/** Masque toute occurrence d'une valeur de secret dans un message d'erreur. */
+function hideValue(message: string, value: string): string {
+  return value.length > 0 ? message.split(value).join('[secret]') : message
+}
+
 /** Lit `clé=mot` dans une raison d'audit (`provider=openai purpose=extraction`). */
 function field(reason: string, key: string): string | undefined {
   const m = new RegExp(`\\b${key}=([^\\s]+)`).exec(reason)
