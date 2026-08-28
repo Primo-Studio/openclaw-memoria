@@ -71,6 +71,7 @@ import { Progress } from '../components/ui/progress'
 import { Skeleton } from '../components/ui/skeleton'
 import { useT } from '../i18n'
 import { importPollOutcome, interruptedImport } from '../lib/import-flow'
+import { TOUCH_ROW_ACTION } from '../lib/touch'
 import { cn } from '../lib/utils'
 
 type Translate = (key: string, vars?: Record<string, string | number>) => string
@@ -496,11 +497,23 @@ export function MachineAgents({ onChanged, onOpenReview, embedded = false }: { o
     </Button>
   )
 
+  // « Sur cette machine » = ce qu'il RESTE à brancher. Un agent déjà connecté et
+  // sans souvenirs à reprendre n'offre AUCUNE action (cf. la zone d'actions de
+  // MachineAgentCard) : il répétait à l'identique la liste « Agents connectés »
+  // juste en dessous, soit ~250 px inertes en haut de l'écran mobile.
+  // En onboarding (embedded), on montre tout : c'est là qu'on branche les agents.
+  const actionable = detected === null || embedded ? detected : detected.filter(a => a.already_connected === null || describeData(t, a) !== null)
+  // Tout est déjà branché : on ne cache pas la section (le bouton « Détecter »
+  // doit rester là), on la réduit à la phrase qui répond à la seule question de
+  // l'écran — « est-ce que c'est connecté ? ».
+  const allDone = detected !== null && detected.length > 0 && actionable !== null && actionable.length === 0
+
   const body = (
     <div className="flex flex-col gap-3">
       {/* Le texte d'intro vit dans le contenu, pas dans l'en-tête de carte : à côté du
           bouton Détecter, il se retrouvait compressé sur 3 colonnes sous 640 px. */}
-      {!embedded && <p className="text-sm text-muted-foreground">{t('agents.machine.lead')}</p>}
+      {!embedded && !allDone && <p className="text-sm text-muted-foreground">{t('agents.machine.lead')}</p>}
+      {allDone && <p className="text-sm text-muted-foreground">{t('agents.machine.allConnected')}</p>}
       {error && <ErrorBanner message={error} onRetry={detect} className="my-0" />}
       {interrupted && (
         <Alert variant="destructive">
@@ -525,9 +538,9 @@ export function MachineAgents({ onChanged, onOpenReview, embedded = false }: { o
         </div>
       )}
       {detected !== null && detected.length === 0 && <p className="text-sm text-muted-foreground">{t('agents.machine.none')}</p>}
-      {detected !== null && detected.length > 0 && (
+      {actionable !== null && actionable.length > 0 && (
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          {detected.map(agent => (
+          {actionable.map(agent => (
             <MachineAgentCard
               key={agent.kind}
               agent={agent}
@@ -611,6 +624,9 @@ function MachineAgentCard({
   const { t } = useT()
   const connected = agent.already_connected !== null
   const dataLabel = describeData(t, agent)
+  const details = [connected ? null : agent.installed ? t('agents.card.cliInstalled') : t('agents.card.cliAbsent'), dataLabel].filter(
+    (d): d is string => d !== null,
+  )
   const Icon = KIND_ICONS[agent.kind]
   return (
     <Card size="sm" className={cn('bg-muted/40 ring-0', connected && 'ring-1 ring-success/30')}>
@@ -626,10 +642,11 @@ function MachineAgentCard({
             <StatusBadge tone="muted">{t('agents.card.notConnected')}</StatusBadge>
           )}
         </div>
-        <p className="text-xs text-muted-foreground">
-          {agent.installed ? t('agents.card.cliInstalled') : t('agents.card.cliAbsent')}
-          {dataLabel && <> · {dataLabel}</>}
-        </p>
+        {/* Une fois l'agent connecté, savoir si son application est installée
+            n'apprend plus rien et contredisait le badge vert juste au-dessus
+            (« Déjà connecté » / « CLI absente »). On ne garde alors que ce
+            qu'il reste à faire : « 122 conversations trouvées ». */}
+        {details.length > 0 && <p className="text-xs text-muted-foreground">{details.join(' · ')}</p>}
         {connectResult && (
           <p className={cn('flex items-start gap-1.5 text-xs', connectResult.registered.registered ? 'text-success' : 'text-warning')}>
             {connectResult.registered.registered ? (
@@ -648,17 +665,17 @@ function MachineAgentCard({
         {(!connected || dataLabel) && (
           <div className="flex flex-wrap items-center gap-2 pt-1">
             {!connected && (
-              <Button size="sm" onClick={onConnect} disabled={busy}>
+              <Button size="sm" className={TOUCH_ROW_ACTION} onClick={onConnect} disabled={busy}>
                 {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
                 {busy ? t('agents.card.connecting') : t('agents.card.connect')}
               </Button>
             )}
             {connected && dataLabel && !dismissed && (
               <>
-                <Button size="sm" onClick={onImport}>
+                <Button size="sm" className={TOUCH_ROW_ACTION} onClick={onImport}>
                   {t('agents.card.import')}
                 </Button>
-                <Button size="sm" variant="ghost" onClick={onDismiss}>
+                <Button size="sm" variant="ghost" className={TOUCH_ROW_ACTION} onClick={onDismiss}>
                   {t('agents.card.startFresh')}
                 </Button>
               </>
@@ -870,9 +887,11 @@ function AgentList({ agents, onRevoke, onDelete }: { agents: AgentEntry[]; onRev
               </p>
               {!revoked && !pending && <AgentExpertise instanceId={instance.id} />}
             </div>
-            <div className="flex shrink-0 flex-wrap items-center gap-2">
+            {/* gap-3 : « Supprimer » (définitif) ne doit pas coller à « Révoquer » sous le doigt. */}
+            <div className="flex shrink-0 flex-wrap items-center gap-3">
               {!revoked && (
                 <ConfirmButton
+                  className={TOUCH_ROW_ACTION}
                   label={t('agents.list.revoke')}
                   title={t('agents.list.revokeTitle')}
                   description={t('agents.list.revokeBody')}
@@ -881,6 +900,7 @@ function AgentList({ agents, onRevoke, onDelete }: { agents: AgentEntry[]; onRev
                 />
               )}
               <ConfirmButton
+                className={TOUCH_ROW_ACTION}
                 label={t('agents.list.delete')}
                 title={t('agents.list.deleteTitle')}
                 description={t('agents.list.deleteBody')}
