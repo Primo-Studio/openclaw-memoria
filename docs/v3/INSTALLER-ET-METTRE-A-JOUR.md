@@ -231,23 +231,29 @@ que dans le dossier du programme.
 
 ## 9. Vérifier qu'une mise à jour a bien pris
 
-La méthode fiable aujourd'hui, dans le Terminal de la machine concernée :
+La méthode fiable aujourd'hui : comparer **deux** révisions. Dans le Terminal de la machine
+concernée, coller les deux lignes ensemble :
 
 ```sh
-git -C ~/openclaw-memoria rev-parse --short HEAD
+echo "ici   : $(git -C ~/openclaw-memoria rev-parse HEAD)"
+echo "GitHub: $(git ls-remote https://github.com/Primo-Studio/openclaw-memoria.git memoria-v1 | cut -f1)"
 ```
 
-Comparer avec la dernière version publiée sur GitHub (branche `memoria-v1`). Si les deux
-correspondent, la machine est à jour.
+Si les deux lignes affichent la même suite de caractères, la machine est à jour. La seconde commande
+interroge GitHub **sans aucun identifiant** (le dépôt est public) : elle marche sur la machine d'un
+ami comme ici.
 
-Il existe aussi une adresse qui dit quelle version **tourne réellement** :
+Il existe aussi une adresse qui dit quelle version **tourne réellement** — utile quand on soupçonne
+que le service n'a pas redémarré :
 
 ```sh
 PORT=$(node -p "require(process.env.HOME + '/.memoria/data/daemon.json').port")
 curl -s http://127.0.0.1:$PORT/v1/health
 ```
 
-Elle renvoie notamment `built_sha` — la révision réellement chargée par le service.
+Elle renvoie notamment `built_sha` — la révision réellement chargée par le service. Si cette première
+commande échoue (« Cannot find module »), c'est que le stockage n'est pas à l'emplacement par défaut :
+taper simplement `memoria`, l'adresse complète s'affiche.
 
 > ⚠️ **Deux défauts connus sur cette vérification** :
 > 1. Après une **installation neuve**, `built_sha` vaut **`null`** : le marqueur de build n'est écrit
