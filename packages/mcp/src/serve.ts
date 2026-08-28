@@ -34,11 +34,23 @@ export type StoreScope = 'private' | 'user'
  * soit ~770 caractères pour une phrase de 35 — du contexte brûlé pour rien.
  */
 export function compactStoredFact(payload: unknown): Record<string, unknown> {
-  const p = (payload ?? {}) as { fact?: Record<string, unknown> | null; disabled?: boolean }
-  if (!p.fact) return { stored: false, ...(p.disabled ? { disabled: true } : {}) }
+  const p = (payload ?? {}) as { fact?: Record<string, unknown> | null; disabled?: boolean; skipped?: boolean; reason?: string }
+  if (!p.fact) {
+    // `disabled` = kill-switch ; `skipped/paused` = mode « Pause » de la
+    // capture : dans les deux cas rien n'a été écrit, et le LLM doit le savoir
+    // (pas de « mémorisé » annoncé à l'utilisateur pour un fait jamais stocké).
+    return {
+      stored: false,
+      ...(p.disabled ? { disabled: true } : {}),
+      ...(p.skipped ? { skipped: true, reason: p.reason ?? 'paused' } : {}),
+    }
+  }
   const f = p.fact
   return {
     stored: true,
+    // Mode « Revue d'abord » : le fait existe mais attend la validation de
+    // l'utilisateur dans l'app — aucun agent ne le verra au recall d'ici là.
+    ...(f['lifecycle_state'] === 'dormant' ? { pending_review: true } : {}),
     id: f['id'],
     content: f['fact'],
     category: f['category'],

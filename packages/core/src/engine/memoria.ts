@@ -145,6 +145,15 @@ export interface MemoriaInitOptions extends ResolveOptions {
   secretProvider?: SecretProvider
 }
 
+/**
+ * Résultat d'une déclaration de fait PAR UN AGENT (`declareFact`) : soit un
+ * fait (actif, ou dormant en mode « Revue d'abord »), soit un refus ANNONCÉ
+ * en mode « Pause » — jamais une écriture muette, jamais un non-écrit muet.
+ */
+export type DeclareFactResult =
+  | { fact: Fact; skipped: false; mode: CaptureMode }
+  | { fact: null; skipped: true; reason: 'paused'; mode: CaptureMode }
+
 const DEFAULT_TOKEN_BUDGET = 1500
 const DEFAULT_RECALL_LIMIT = 12
 /** Délai de regroupement des indexations d'embeddings déclenchées par storeFact. */
@@ -596,6 +605,28 @@ export class Memoria {
   }
 
   /**
+   * Déclaration d'un fait PAR UN AGENT (POST /v1/memory/store_fact, outil MCP
+   * memoria_store_fact) : soumise au MODE DE CAPTURE global, exactement comme
+   * la capture. `auto-private` → fait actif ; `review-first` → fait DORMANT +
+   * item de revue (aucun agent ne le voit avant validation) ; `incognito`
+   * (« Pause ») → rien n'est écrit, et c'est dit (`skipped: 'paused'`).
+   * Avant, seul captureTurn consultait le mode : un utilisateur passé en Pause
+   * pour une conversation sensible voyait quand même ses faits mémorisés.
+   * `storeFact` reste la primitive sans mode (import, partage, tests).
+   */
+  declareFact(input: StoreFactInput): DeclareFactResult {
+    this.assertOpen()
+    const mode = this.getCaptureMode()
+    if (mode === 'incognito') {
+      // Une instance inconnue/révoquée reste une erreur, pause ou pas.
+      this.mustInstance(input.instance)
+      return { fact: null, skipped: true, reason: 'paused', mode }
+    }
+    const { fact } = this.storeFactInternal(input, { nearDup: false, quarantine: mode === 'review-first' })
+    return { fact, skipped: false, mode }
+  }
+
+  /**
    * Écriture gouvernée + HYGIÈNE (audit 27/08) : contenu vide refusé,
    * catégorie normalisée (« Preference » ≠ « preference » donnait deux
    * domaines d'expertise), et dédoublonnage PAR SCOPE (findDuplicate). Le
@@ -604,8 +635,16 @@ export class Memoria {
    * attente) redéclaré explicitement à l'IDENTIQUE est validé : déclarer =
    * confirmer — jamais sur un simple rapprochement, qui validerait un fait
    * que l'agent n'a pas énoncé. `created=false` = l'existant a été renvoyé.
+   *
+   * `opts.quarantine` (mode « Revue d'abord ») : le fait naît DORMANT + item
+   * de revue, dans la même transaction que l'INSERT (un crash entre les deux
+   * publiait un fait jamais revu) ; et un doublon dormant redéclaré RESTE
+   * dormant — la validation appartient à l'utilisateur, pas à la répétition.
    */
-  private storeFactInternal(input: StoreFactInput, opts: { nearDup?: boolean } = {}): { fact: Fact; created: boolean } {
+  private storeFactInternal(
+    input: StoreFactInput,
+    opts: { nearDup?: boolean; quarantine?: boolean } = {},
+  ): { fact: Fact; created: boolean } {
     this.assertOpen()
     const instance = this.mustInstance(input.instance)
     const scope = this.resolveTargetScope(instance, input.scope)
@@ -647,7 +686,9 @@ export class Memoria {
     const dup = rawDup && rawDup.kind === 'exact' && !sameContext(rawDup.existing) ? null : rawDup
     if (dup) {
       const now = nowISO()
-      if (dup.kind === 'exact' && dup.existing.lifecycle_state === 'dormant') this.activateFact(store, dup.existing.id)
+      if (dup.kind === 'exact' && dup.existing.lifecycle_state === 'dormant' && !opts.quarantine) {
+        this.activateFact(store, dup.existing.id)
+      }
       const expiresAt = dup.existing.expires_at ?? null
       const expired = dup.kind === 'exact' && expiresAt !== null && expiresAt <= now
       if (expired) {
@@ -677,22 +718,26 @@ export class Memoria {
         }
       : {}
 
-    const fact = store.insertFact({
-      fact: content,
-      category,
-      fact_type: input.fact_type,
-      confidence: input.confidence,
-      source: input.source ?? 'manual',
-      assistant_instance_id: instance.id,
-      org_id: input.org_id ?? scope.org_id,
-      client_org_id: input.client_org_id ?? scope.client_org_id,
-      project_id: input.project_id ?? scope.project_id,
-      scope_id: scope.id,
-      sensitivity: input.sensitivity,
-      tags: input.tags,
-      visibility: scope.type === 'private' ? 'private' : 'shared',
-      ...provenance,
-    })
+    const insert = (): Fact => {
+      const inserted = store.insertFact({
+        fact: content,
+        category,
+        fact_type: input.fact_type,
+        confidence: input.confidence,
+        source: input.source ?? 'manual',
+        assistant_instance_id: instance.id,
+        org_id: input.org_id ?? scope.org_id,
+        client_org_id: input.client_org_id ?? scope.client_org_id,
+        project_id: input.project_id ?? scope.project_id,
+        scope_id: scope.id,
+        sensitivity: input.sensitivity,
+        tags: input.tags,
+        visibility: scope.type === 'private' ? 'private' : 'shared',
+        ...provenance,
+      })
+      return opts.quarantine ? this.quarantineForReview(store, inserted, instance.id) : inserted
+    }
+    const fact = opts.quarantine ? store.db.transaction(insert)() : insert()
     this.registry.audit({
       actor_type: 'assistant',
       actor_id: instance.id,
@@ -2005,27 +2050,30 @@ export class Memoria {
    * (invisible au recall) + entre en file de revue ; l'approbation l'active.
    */
   private storeCaptured(input: StoreFactInput): Fact {
-    const store = this.openContent(this.paths.assistantDb(input.instance))
-    // Transaction : INSERT actif → dormant → item de revue. Un crash entre les
-    // deux publiait un fait jamais revu.
-    const tx = store.db.transaction((): Fact => {
-      // near-dup ASSUMÉ ici : la capture voit des redites bruitées d'un même
-      // souvenir ; une déclaration explicite (storeFact) ne l'a pas.
-      const { fact, created } = this.storeFactInternal({ ...input, source: input.source ?? 'capture' }, { nearDup: true })
-      // Un fait DÉJÀ connu (dédup) n'a rien à faire en revue : le mettre dormant
-      // ferait disparaître du recall un souvenir validé.
-      if (!created || this.getCaptureMode() !== 'review-first') return fact
-      store.db.prepare("UPDATE facts SET lifecycle_state = 'dormant' WHERE id = ?").run(fact.id)
-      const sourceId = this.ensureReviewSource(store, input.instance)
-      store.db
-        .prepare(
-          `INSERT INTO memory_import_items (id, source_id, target_memory_id, target_type, proposed_scope_id, status, confidence)
-           VALUES (?, ?, ?, 'fact', ?, 'pending', ?)`,
-        )
-        .run(newId(), sourceId, fact.id, fact.scope_id, fact.confidence)
-      return { ...fact, lifecycle_state: 'dormant' }
-    })
-    return tx()
+    // near-dup ASSUMÉ ici : la capture voit des redites bruitées d'un même
+    // souvenir ; une déclaration explicite (storeFact) ne l'a pas.
+    return this.storeFactInternal(
+      { ...input, source: input.source ?? 'capture' },
+      { nearDup: true, quarantine: this.getCaptureMode() === 'review-first' },
+    ).fact
+  }
+
+  /**
+   * Met un fait FRAÎCHEMENT inséré en quarantaine de revue : dormant + item
+   * `pending` (source « capture-review »). Appelé DANS la transaction de
+   * l'INSERT. Un fait déjà connu (dédup) ne passe jamais ici : le rendre
+   * dormant ferait disparaître du recall un souvenir validé.
+   */
+  private quarantineForReview(store: ContentStore, fact: Fact, instanceId: string): Fact {
+    store.db.prepare("UPDATE facts SET lifecycle_state = 'dormant' WHERE id = ?").run(fact.id)
+    const sourceId = this.ensureReviewSource(store, instanceId)
+    store.db
+      .prepare(
+        `INSERT INTO memory_import_items (id, source_id, target_memory_id, target_type, proposed_scope_id, status, confidence)
+         VALUES (?, ?, ?, 'fact', ?, 'pending', ?)`,
+      )
+      .run(newId(), sourceId, fact.id, fact.scope_id, fact.confidence)
+    return { ...fact, lifecycle_state: 'dormant' }
   }
 
   /** Source unique « capture-review » par instance (provenance des items en revue). */

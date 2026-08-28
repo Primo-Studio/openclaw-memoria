@@ -985,8 +985,14 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         const body = await readJson(req)
         // `scope` (partage cross-modèle : 'user', id de scope…) est relayé tel
         // quel ; les refus du moteur deviennent des codes HTTP parlants.
-        const fact = mapScopeErrors(() => memoria.storeFact({ ...(body as Omit<StoreFactInput, 'instance'>), instance: instanceId }))
-        sendJson(res, 200, { fact })
+        // declareFact (pas storeFact) : le mode de capture s'applique — en
+        // « Pause » rien n'est écrit et la réponse le DIT (skipped/paused).
+        const result = mapScopeErrors(() => memoria.declareFact({ ...(body as Omit<StoreFactInput, 'instance'>), instance: instanceId }))
+        if (result.skipped) {
+          sendJson(res, 200, { fact: null, skipped: true, reason: result.reason, mode: result.mode })
+          return
+        }
+        sendJson(res, 200, { fact: result.fact, mode: result.mode })
         return
       }
       case 'POST /v1/memory/recall': {

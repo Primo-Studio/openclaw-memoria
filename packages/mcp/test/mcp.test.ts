@@ -405,6 +405,24 @@ describe('buildServer handlers', () => {
     expect(JSON.parse((res.content[0] as { type: 'text'; text: string }).text)).toEqual({ stored: false, disabled: true })
   })
 
+  it('memoria_store_fact en mode « Pause » (capture incognito) → stored:false, skipped:true, reason:paused', async () => {
+    const gateway = fakeGateway()
+    gateway.storeFact = async () => ({ fact: null, skipped: true, reason: 'paused', mode: 'incognito' })
+    const { handlers } = buildServer({ instanceId: 'i', tracker: new ActiveContextTracker(), connect: async () => gateway })
+    const res = await handlers.storeFact({ content: 'x' })
+    expect(res.isError).toBeFalsy()
+    expect(JSON.parse((res.content[0] as { type: 'text'; text: string }).text)).toEqual({ stored: false, skipped: true, reason: 'paused' })
+  })
+
+  it('memoria_store_fact en mode « Revue d’abord » → stored:true + pending_review:true', async () => {
+    const gateway = fakeGateway()
+    gateway.storeFact = async () => ({ fact: { id: 'f-7', fact: 'x', category: 'general', visibility: 'private', lifecycle_state: 'dormant' }, mode: 'review-first' })
+    const { handlers } = buildServer({ instanceId: 'i', tracker: new ActiveContextTracker(), connect: async () => gateway })
+    const res = await handlers.storeFact({ content: 'x' })
+    const payload = JSON.parse((res.content[0] as { type: 'text'; text: string }).text) as Record<string, unknown>
+    expect(payload).toMatchObject({ stored: true, pending_review: true, id: 'f-7' })
+  })
+
   it('daemon mort → UNE re-connexion puis erreur MCP propre (jamais de throw)', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     let attempts = 0
