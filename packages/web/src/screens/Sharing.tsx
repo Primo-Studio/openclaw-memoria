@@ -44,6 +44,7 @@ import {
   listPhase,
   type DataColumn,
 } from '../components/ui'
+import { scopeLabel } from '../components/memory-names'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -54,6 +55,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '../components/ui/alert-dialog'
+import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { Checkbox } from '../components/ui/checkbox'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../components/ui/collapsible'
@@ -62,8 +64,6 @@ import { Skeleton } from '../components/ui/skeleton'
 import { Switch } from '../components/ui/switch'
 import { useT } from '../i18n'
 import { cn } from '../lib/utils'
-
-type Translate = (key: string, vars?: Record<string, string | number>) => string
 
 /** Bascule en attente de confirmation (accorder ou retirer la lecture). */
 interface PendingToggle {
@@ -183,7 +183,53 @@ export function Sharing() {
         {phase === 'empty' && <EmptyState icon={<Share2 className="size-5" />} title={t('sharing.matrix_empty')} body={t('sharing.matrix_empty_body')} />}
         {phase === 'ready' && scopes && (
           <>
-            <DataTable columns={columns} rows={scopes} rowKey={s => s.id} />
+            {/* Sous 640 px, le tableau serait rogné au bord de la carte et les
+                derniers agents deviendraient invisibles : une fiche par mémoire
+                partagée, un interrupteur par ligne, tout en pleine largeur. */}
+            <ul className="flex flex-col gap-3 sm:hidden">
+              {scopes.map(scope => (
+                <li key={scope.id} className="overflow-hidden rounded-lg border">
+                  <div className="flex items-center justify-between gap-2 border-b bg-muted/40 px-3 py-2">
+                    <button
+                      type="button"
+                      className="inline-flex min-w-0 items-center gap-1 rounded-sm text-sm font-medium outline-none hover:text-primary focus-visible:ring-2 focus-visible:ring-ring/60"
+                      aria-expanded={exploring === scope.id}
+                      onClick={() => setExploring(exploring === scope.id ? null : scope.id)}
+                    >
+                      {exploring === scope.id ? (
+                        <ChevronDown className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                      ) : (
+                        <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                      )}
+                      <span className="truncate">{scopeLabel(t, scope)}</span>
+                    </button>
+                    <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+                      {t('sharing.facts_short', { count: formatNumber(scope.facts) })}
+                    </span>
+                  </div>
+                  <ul className="divide-y">
+                    {assistants.map(a => (
+                      <li key={a.id} className="flex items-center justify-between gap-3 px-3 py-2.5">
+                        <span className="min-w-0">
+                          <span className="block truncate text-sm font-medium">{a.display_name}</span>
+                          {agentTypeLabel(a.type) !== a.display_name && <span className="block truncate text-xs text-muted-foreground">{agentTypeLabel(a.type)}</span>}
+                        </span>
+                        <Switch
+                          checked={scope.readers.includes(a.id)}
+                          disabled={busy}
+                          aria-label={t('sharing.reader_aria', { agent: a.display_name, scope: scopeLabel(t, scope) })}
+                          onCheckedChange={next => setPending({ assistant: a, scope, next })}
+                        />
+                      </li>
+                    ))}
+                  </ul>
+                </li>
+              ))}
+            </ul>
+            <div className="hidden sm:block">
+              <DataTable columns={columns} rows={scopes} rowKey={s => s.id} />
+            </div>
+            {/* Rendu UNE fois, hors des deux arbres : sinon deux chargements du contenu. */}
             {exploringScope && <ScopeContent scope={exploringScope} onClose={() => setExploring(null)} />}
           </>
         )}
@@ -283,7 +329,14 @@ function ScopeContent({ scope, onClose }: { scope: ScopeAccess; onClose: () => v
   )
 }
 
-/** Faits d'identité proposés pour UN agent : replié tant qu'on ne l'ouvre pas (l'analyse coûte). */
+/**
+ * Faits d'identité proposés pour UN agent.
+ * Le compteur est chargé DÈS L'AFFICHAGE : trois lignes rigoureusement
+ * identiques n'annonçaient rien, il fallait les ouvrir une par une pour
+ * découvrir que la plupart n'avaient rien à proposer. Le coût est nul côté
+ * daemon (suggestIdentityFacts = lecture SQLite + score de mots-clés, aucun
+ * appel au moteur d'IA) ; une ligne sans candidat ne s'ouvre plus.
+ */
 function IdentityPanel({ agent, onShared }: { agent: AgentEntry; onShared: () => void }) {
   const { t } = useT()
   const [candidates, setCandidates] = useState<IdentityCandidate[] | null>(null)
@@ -310,7 +363,7 @@ function IdentityPanel({ agent, onShared }: { agent: AgentEntry; onShared: () =>
       setSelected(new Set())
       await load()
       onShared()
-      toast.success(t('sharing.toast_shared', { count }))
+      toast.success(t(count > 1 ? 'sharing.toast_shared_plural' : 'sharing.toast_shared', { count }))
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : t('sharing.error_share'))
     } finally {
@@ -318,8 +371,34 @@ function IdentityPanel({ agent, onShared }: { agent: AgentEntry; onShared: () =>
     }
   }, [selected, load, onShared, t])
 
+  // Compteur connu d'emblée : l'œil va droit à l'agent qui a quelque chose.
+  useEffect(() => {
+    void load()
+  }, [load])
+
   const phase = listPhase(candidates, error)
   const label = t('sharing.identity_panel_label', { agent: agentTypeLabel(agent.assistant_type) })
+  const count = candidates?.length ?? null
+  const counter =
+    error !== null ? null : count === null ? (
+      <Skeleton className="h-5 w-10 rounded-full" />
+    ) : count === 0 ? (
+      <span className="text-xs text-muted-foreground">{t('sharing.identity_nothing')}</span>
+    ) : (
+      <Badge variant="secondary" className="tabular-nums" title={t('sharing.identity_count', { count })}>
+        {formatNumber(count)}
+      </Badge>
+    )
+
+  // Rien à proposer : la ligne reste lisible mais n'invite plus au clic.
+  if (count === 0) {
+    return (
+      <div className="flex items-center justify-between gap-2 rounded-lg border px-3 py-2.5 text-sm">
+        <span className="min-w-0 truncate text-muted-foreground">{label}</span>
+        {counter}
+      </div>
+    )
+  }
 
   return (
     <Collapsible
@@ -337,7 +416,8 @@ function IdentityPanel({ agent, onShared }: { agent: AgentEntry; onShared: () =>
           aria-expanded={open}
         >
           <ChevronDown className={cn('size-4 shrink-0 text-muted-foreground transition-transform', !open && '-rotate-90')} aria-hidden="true" />
-          {label}
+          <span className="min-w-0 flex-1 truncate">{label}</span>
+          {counter}
         </button>
       </CollapsibleTrigger>
       <CollapsibleContent>
@@ -384,19 +464,3 @@ function IdentityPanel({ agent, onShared }: { agent: AgentEntry; onShared: () =>
   )
 }
 
-function scopeLabel(t: Translate, scope: ScopeAccess): string {
-  switch (scope.type) {
-    case 'user':
-      return t('sharing.scope_user')
-    case 'org':
-      return t('sharing.scope_org')
-    case 'client':
-      return t('sharing.scope_client', { name: scope.name })
-    case 'project':
-      return t('sharing.scope_project', { name: scope.name })
-    case 'shared_topic':
-      return t('sharing.scope_topic', { name: scope.name })
-    default:
-      return scope.name
-  }
-}
