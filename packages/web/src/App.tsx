@@ -1,17 +1,14 @@
 /**
  * App — authentification (token admin passé par le CLI `memoria`), onboarding
  * quand aucun agent n'est relié, routeur par hash, et coquille de navigation
- * (app/Shell.tsx). Les écrans pas encore migrés sur shadcn sont enveloppés
- * dans `.legacy-screen` pour que l'ancien CSS ne s'applique qu'à eux
- * (voir index.css et UI-GUIDE.md).
+ * (app/Shell.tsx).
  */
 import { useCallback, useEffect, useState } from 'react'
 import { getAgents, getReview, hasToken } from './api'
-import { useT } from './i18n'
 import { Spinner } from './components/ui'
 import { Toaster } from './components/ui/sonner'
 import { hasLiveAgent } from './lib/agents'
-import { MIGRATED_SCREENS, screenFromHash, type ScreenId } from './app/nav'
+import { screenFromHash, type ScreenId } from './app/nav'
 import { Shell } from './app/Shell'
 import { Welcome } from './app/Welcome'
 import { Dashboard } from './screens/Dashboard'
@@ -33,7 +30,6 @@ import { Settings } from './screens/Settings'
 import { Docs } from './screens/Docs'
 
 export function App() {
-  const { t } = useT()
   // Le token est adopté avant le rendu (main.tsx) ; sa présence ne change plus ensuite.
   const [authed] = useState(hasToken)
   const [screen, setScreen] = useState<ScreenId>(() => screenFromHash(window.location.hash))
@@ -87,7 +83,7 @@ export function App() {
     )
   }
   if (onboarding) {
-    // Onboarding migré sur shadcn : rendu hors coquille, sans wrapper legacy.
+    // Onboarding : rendu hors coquille (il n'y a pas encore d'agent à naviguer).
     return (
       <>
         <Onboarding onDone={() => setOnboarding(false)} />
@@ -116,12 +112,10 @@ export function App() {
       {screen === 'docs' && <Docs />}
     </>
   )
-  const migrated = MIGRATED_SCREENS.has(screen)
-
   return (
     <>
-      <Shell screen={screen} onNavigate={go} reviewCount={reviewCount} title={migrated ? undefined : t(`nav.${screen}`)}>
-        {migrated ? content : <div className="legacy-screen">{content}</div>}
+      <Shell screen={screen} onNavigate={go} reviewCount={reviewCount}>
+        {content}
       </Shell>
       <Toaster position="bottom-right" />
     </>

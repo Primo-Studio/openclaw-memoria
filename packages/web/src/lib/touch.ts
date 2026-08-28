@@ -1,14 +1,13 @@
 /**
  * Plancher tactile des boutons d'action d'une ligne / d'une carte.
  *
- * POURQUOI : `size="sm"` fait 28 px de haut. Au doigt, la cible recommandée
- * est de 44 px ; à 28 px, sur l'écran Revue, « Approuver » et « Rejeter »
- * (irréversible) sont deux cibles minuscules côte à côte. Sous 640 px on
- * remonte donc la hauteur à 40 px et on élargit un peu le bouton, sans rien
- * changer sur bureau où la souris est précise et où la densité est utile.
+ * VIDE DEPUIS LA PASSE SOCLE : le plancher vit désormais dans le variant `sm`
+ * de `components/ui/button.tsx` (`max-sm:h-11`, soit 44 px sous 640 px), donc
+ * pour TOUS les écrans — y compris ceux à écrire demain. La constante reste
+ * exportée (chaîne vide) pour ne pas forcer une retouche des écrans qui
+ * l'importent ; elle imposait 40 px, ce qui aurait battu le plancher de 44 px
+ * du variant (tailwind-merge donne raison à la classe de l'appelant).
  *
- * ADAPTATION LOCALE : le vrai correctif est un plancher dans le variant `sm`
- * de `components/ui/button.tsx` (fichier transverse, hors de ce lot) —
- * cette constante fait le même travail écran par écran en attendant.
+ * À supprimer avec ses derniers imports (Agents, Review, Memory).
  */
-export const TOUCH_ROW_ACTION = 'max-sm:h-10 max-sm:px-3'
+export const TOUCH_ROW_ACTION = ''

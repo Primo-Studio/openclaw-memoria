@@ -1,5 +1,5 @@
 /**
- * Coquille d'application : barre latérale (groupes Essentiel / Avancé, icônes,
+ * Coquille d'application : barre latérale (trois groupes, icônes,
  * repliable en rail sur bureau, tiroir sur mobile), barre supérieure (titre
  * de l'écran + actions projetées par PageHeader, préférences langue/thème),
  * mode de capture toujours visible, version.
@@ -7,7 +7,7 @@
  * Aucune couleur en dur : tout passe par les jetons (bg-sidebar, text-primary…).
  */
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
-import { Menu, Monitor, Moon, PanelLeftClose, PanelLeftOpen, SlidersHorizontal, Sun } from 'lucide-react'
+import { Menu, Monitor, Moon, Palette, PanelLeftClose, PanelLeftOpen, Sun } from 'lucide-react'
 import { getVersion } from '../api'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
@@ -27,7 +27,7 @@ import { LANGS, useT, type Lang } from '../i18n'
 import { parseThemePref, useThemePref, type ThemePref } from '../lib/theme'
 import { cn } from '../lib/utils'
 import { BrandMark } from './BrandMark'
-import { CaptureModeSwitch } from './CaptureModeSwitch'
+import { CaptureModeMenu, CaptureModeSwitch } from './CaptureModeSwitch'
 import { NAV_GROUPS, type ScreenId } from './nav'
 import { ShellSlotsContext } from './shell-context'
 
@@ -45,14 +45,11 @@ export function Shell({
   screen,
   onNavigate,
   reviewCount,
-  /** Titre de repli pour les écrans qui n'ont pas encore de PageHeader (legacy). */
-  title,
   children,
 }: {
   screen: ScreenId
   onNavigate: (id: ScreenId) => void
   reviewCount: number
-  title?: string
   children: ReactNode
 }) {
   const { t } = useT()
@@ -134,11 +131,15 @@ export function Shell({
                   <SidebarInner screen={screen} onNavigate={navigate} reviewCount={reviewCount} collapsed={false} />
                 </SheetContent>
               </Sheet>
-              <BrandMark className="size-7 text-primary md:hidden" />
-              <div ref={setTitleEl} className="min-w-0 flex-1">
-                {title && <h1 className="truncate text-lg font-semibold tracking-tight">{title}</h1>}
-              </div>
+              {/* Pas de marque au téléphone : la barre doit d'abord dire OÙ ON EST.
+                  Le logo reste en tête du tiroir de navigation. */}
+              {/* Le titre est projeté ici par le PageHeader de l'écran (portail). */}
+              <div ref={setTitleEl} className="min-w-0 flex-1" />
               <div ref={setActionsEl} className="flex shrink-0 items-center gap-2" />
+              {/* L'interrupteur principal du produit vit en pied de barre latérale ;
+                  sous 768 px cette barre est dans un tiroir, donc invisible. Ici,
+                  au téléphone, il est à portée de pouce et il DIT le mode en cours. */}
+              <CaptureModeMenu className="md:hidden" />
               <PrefsMenu />
             </header>
             <main id="main-content" tabIndex={-1} className="w-full max-w-6xl flex-1 px-4 py-5 outline-none md:px-6 md:py-6">
@@ -295,12 +296,29 @@ function PrefsMenu() {
   ]
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon" aria-label={t('prefs.title')}>
-          <SlidersHorizontal />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-52">
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <DropdownMenuTrigger asChild>
+            {/*
+              POURQUOI ce bouton est libellé : l'icône « curseurs » ne disait rien
+              et se confondait avec l'engrenage « Réglages » de la barre latérale.
+              Ce menu-ci ne règle QUE l'apparence de l'interface (langue, thème) ;
+              les réglages de Memoria (moteur, clés, stockage) sont un écran. Le
+              mot « Affichage » apparaît dès qu'il y a la place, l'infobulle et le
+              libellé accessible le disent dans tous les cas.
+            */}
+            <Button variant="ghost" size="sm" className="gap-1.5" aria-label={t('prefs.title')}>
+              <Palette aria-hidden="true" />
+              <span className="max-sm:sr-only">{t('prefs.display')}</span>
+            </Button>
+          </DropdownMenuTrigger>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">{t('prefs.hint')}</TooltipContent>
+      </Tooltip>
+      <DropdownMenuContent align="end" className="w-60">
+        <DropdownMenuLabel>{t('prefs.display')}</DropdownMenuLabel>
+        <p className="px-1.5 pb-1 text-xs leading-snug text-muted-foreground">{t('prefs.hint')}</p>
+        <DropdownMenuSeparator />
         <DropdownMenuLabel>{t('lang.title')}</DropdownMenuLabel>
         <DropdownMenuRadioGroup value={lang} onValueChange={v => setLang(v as Lang)}>
           {LANGS.map(l => (

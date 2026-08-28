@@ -1,7 +1,7 @@
 # UI-GUIDE — interface web Memoria sur shadcn/ui
 
-Ce guide dit **comment écrire ou migrer un écran** de `packages/web` depuis la
-refonte shadcn (branche `feat/ui-shadcn`). Lecteur : un agent (Claude Code,
+Ce guide dit **comment écrire un écran** de `packages/web` depuis la refonte
+shadcn. Lecteur : un agent (Claude Code,
 Codex…) ou un humain qui touche à l'UI. Utilisateur final : Néto, non
 technicien — chaque décision ci-dessous sert la lisibilité, pas la technique.
 
@@ -11,19 +11,16 @@ technicien — chaque décision ci-dessous sert la lisibilité, pas la technique
 |---|---|
 | Tailwind v4 + jetons de thème | `src/index.css` (entrée), `src/styles/tokens.css` (couleurs, radius, polices) |
 | Composants shadcn générés (radix-nova) | `src/components/ui/*.tsx` — Button, Card, Badge, Alert, AlertDialog, Dialog, Sheet, DropdownMenu, Select, Tabs, Table, Input, Textarea, Checkbox, Switch, Label, Popover, Tooltip, Progress, ScrollArea, Separator, Skeleton, Collapsible, Sonner (toasts) |
-| **Primitives d'écran (point d'entrée unique)** | `src/components/ui.tsx` — `PageHeader`, `SectionCard`, `StatCard`, `DataTable`, `Spinner`, `ErrorBanner`, `EmptyState`, `ConfirmButton`, `CopyButton` + helpers (`useLoad`, `listPhase`, `humanError`, `formatDate/Number/Bytes…`, `agentTypeLabel`) |
-| Coquille (sidebar, barre supérieure, capture, préférences) | `src/app/Shell.tsx`, `src/app/nav.ts` (routes, icônes, groupes, écrans migrés), `src/app/CaptureModeSwitch.tsx`, `src/app/shell-context.ts` |
+| **Primitives d'écran (point d'entrée unique)** | `src/components/ui.tsx` — `PageHeader`, `SectionCard`, `StatCard`, `DataTable`, `DataCards`, `Spinner`, `ErrorBanner`, `EmptyState`, `ConfirmButton`, `CopyButton` + helpers (`useLoad`, `listPhase`, `humanError`, `useIsNarrow`, `formatDate/Number/Bytes…`, `agentTypeLabel`) |
+| Coquille (sidebar, barre supérieure, capture, préférences) | `src/app/Shell.tsx`, `src/app/nav.ts` (routes, icônes, groupes), `src/app/CaptureModeSwitch.tsx` + `src/app/capture-mode.ts` (état partagé), `src/app/shell-context.ts` |
 | Thème | `src/lib/theme.ts` (résolution Système → light/dark, `?theme=`), script inline dans `index.html` (anti-flash) |
-| Ancien CSS (écrans non migrés) | `src/styles.css`, scopé sous `.legacy-screen` — **ne rien y ajouter** |
 | Aperçu + captures | `node scripts/ui-preview.mjs [--screenshot DIR]` (racine du dépôt, `npm run ui:preview`) |
 
 Écran de référence : `src/screens/Dashboard.tsx`.
 
-## 2. Migrer un écran, pas à pas
+## 2. Écrire un écran, pas à pas
 
-1. **Ajouter l'écran à `MIGRATED_SCREENS`** dans `src/app/nav.ts` : App.tsx cesse
-   de l'envelopper dans `.legacy-screen` — l'ancien CSS n'existe plus pour lui.
-2. **Remplacer `screen-head`** par `PageHeader` :
+1. **Titre et actions** → `PageHeader` :
    ```tsx
    <PageHeader
      title={t('agents.title')}
@@ -31,15 +28,16 @@ technicien — chaque décision ci-dessous sert la lisibilité, pas la technique
      actions={<Button variant="outline" size="sm" onClick={reload}><RefreshCw />{t('common.refresh')}</Button>}
    />
    ```
-   Le titre et les actions sont **projetés dans la barre supérieure** (portail,
-   `app/shell-context.ts`) : ne pas rendre de `<h1>` ailleurs.
-3. **Structurer en `SectionCard`** (un bloc titré par sujet) :
+   Le titre est **projeté dans la barre supérieure** (portail,
+   `app/shell-context.ts`) : ne pas rendre de `<h1>` ailleurs. Les actions y
+   vont aussi sur bureau, et descendent en tête de page sous 768 px.
+2. **Structurer en `SectionCard`** (un bloc titré par sujet) :
    ```tsx
    <SectionCard title={t('agents.list.title')} description={…} actions={…}>
      …contenu…
    </SectionCard>
    ```
-4. **Tableaux → `DataTable`** (jamais `<table className="table">`, jamais `<th onClick>`) :
+3. **Tableaux → `DataTable`** (jamais `<table className="table">`, jamais `<th onClick>`) :
    ```tsx
    const columns: DataColumn<AuditEntry>[] = [
      { id: 'ts', header: t('audit.col.date'), sortable: true, cell: e => formatDate(e.ts) },
@@ -49,33 +47,36 @@ technicien — chaque décision ci-dessous sert la lisibilité, pas la technique
    <DataTable columns={columns} rows={sorted} rowKey={e => e.id} sort={sort} onSort={setSort} />
    ```
    Le tri reste à l'appelant (`lib/sort.ts`) ; l'en-tête triable est un **bouton**
-   avec `aria-sort`, le tableau défile horizontalement à l'intérieur de sa carte.
-5. **Chiffres clés → `StatCard`** (`tone="warn"` quand il faut regarder, `ok`, `danger`).
-6. **États** — toujours les trois, jamais un vide muet :
+   avec `aria-sort`. **Sous 640 px, `DataTable` se rend tout seul en FICHES**
+   (une par ligne) : à 390 px, un tableau de cinq colonnes était coupé net au
+   bord de sa carte et des colonnes entières disparaissaient. Ne remets un
+   tableau au téléphone qu'en connaissance de cause (`mobile="table"`) ; sur
+   bureau, le débordement horizontal est signalé par une ombre (`scroll-shadow-x`).
+4. **Chiffres clés → `StatCard`** (`tone="warn"` quand il faut regarder, `ok`, `danger`).
+5. **États** — toujours les trois, jamais un vide muet :
    ```tsx
    {state.status === 'loading' && <Spinner />}            // ou un <Skeleton> à la forme de l'écran
    {state.status === 'error' && <ErrorBanner message={state.message} onRetry={reload} />}
    {state.status === 'ready' && items.length === 0 && <EmptyState title={…} body={…} action={…} />}
    ```
    `useLoad` et `listPhase` sont inchangés.
-7. **Formulaires** : `Label` + `Input`/`Textarea`/`Select`/`Checkbox`/`Switch`
+6. **Formulaires** : `Label` + `Input`/`Textarea`/`Select`/`Checkbox`/`Switch`
    (`src/components/ui/*`), `Button` pour soumettre (`variant="default"` = action
    principale orange, une seule par écran ; `outline`/`ghost` pour le reste ;
    `destructive` pour ce qui supprime). Choix parmi une liste courte → `Select`
    shadcn ; deux ou trois modes → segmented control (voir `CaptureModeSwitch`).
-8. **Confirmations** : `ConfirmButton` ouvre un `AlertDialog` (titre = libellé,
+7. **Confirmations** : `ConfirmButton` ouvre un `AlertDialog` (titre = libellé,
    `description` facultative, action en style destructif). Plus de double-clic armé.
-9. **Retour d'action** : `toast.success(t('…'))` / `toast.error(…)` de `sonner`
+8. **Retour d'action** : `toast.success(t('…'))` / `toast.error(…)` de `sonner`
    (le `Toaster` est monté dans App.tsx). `CopyButton` le fait déjà.
-10. **i18n** : chaque chaîne visible passe par `t('…')` ; nouvelle clé = **dans
+9. **i18n** : chaque chaîne visible passe par `t('…')` ; nouvelle clé = **dans
     les 5 catalogues** (`src/messages/{fr,en,es,pt,de}.ts`, parité stricte
     vérifiée par `test/i18n-parity.test.ts`). Les composants générés qui
     portaient du texte en dur (`Sheet` « Close ») prennent une prop `closeLabel`.
-11. **Vérifier** : `npx tsc -p packages/web/tsconfig.json --noEmit`,
+10. **Vérifier** : `npx tsc -p packages/web/tsconfig.json --noEmit`,
     `npm run build`, `npx vitest run packages/web/test`, puis
     `node scripts/ui-preview.mjs --screenshot /tmp/ui` et **regarder** les 4
     captures de l'écran (clair/sombre × bureau/mobile).
-12. Supprimer du `styles.css` les règles que plus aucun écran n'utilise.
 
 ## 3. Interdits
 
@@ -87,8 +88,10 @@ technicien — chaque décision ci-dessous sert la lisibilité, pas la technique
 - **`<th onClick>`** / en-tête cliquable qui n'est pas un bouton → `DataTable`.
 - **Texte hors `t()`** (y compris `aria-label`, `title`, `sr-only`, placeholders).
 - **`<h1>` dans le corps d'un écran migré** : le titre vit dans `PageHeader`.
-- **Classes de l'ancien CSS** (`btn`, `card`, `badge`, `table`, `muted`, `screen-head`…)
-  dans un écran migré : elles n'existent plus hors `.legacy-screen`.
+- **Feuille de style maison** : il n'y en a plus (l'ancien `styles.css` a été
+  supprimé une fois les 16 écrans réécrits). Tout passe par Tailwind + `ui/*`.
+- **Cible tactile sous 44 px** au téléphone : `size="sm"` porte déjà le plancher
+  (`max-sm:h-11`), ne le neutralise pas avec une hauteur en dur.
 - **Largeur qui déborde** : un contenu large (tableau, chemin, JSON) défile dans
   son conteneur (`overflow-x-auto`), jamais la page.
 - **Styles inline** pour la couleur ou l'espacement.
@@ -114,34 +117,45 @@ technicien — chaque décision ci-dessous sert la lisibilité, pas la technique
 Les deux palettes sont complètes ; en ajouter un jeton = l'ajouter dans `:root`,
 `:root[data-theme='dark']` **et** `@theme inline`.
 
+**Contraste** : `--success`, `--warning` et `--destructive` servent de couleur de
+TEXTE sur un fond teinté à 10-12 % de la même couleur (badges, bouton
+« Supprimer ») — c'est le pire cas, et c'est lui qui fixe la valeur. Les mesures
+en cours sont en tête de `tokens.css` ; toute retouche se re-mesure (seuil AA
+= 4,5:1), elle ne se juge pas à l'œil.
+
 ## 5. Coquille
 
-- Groupes de navigation et icônes : `NAV_GROUPS` dans `src/app/nav.ts`. Une
-  nouvelle route = un `ScreenId`, une entrée dans un groupe, la clé `nav.<id>`
-  dans les 5 catalogues, le rendu dans `App.tsx`.
+- Groupes de navigation et icônes : `NAV_GROUPS` dans `src/app/nav.ts` — trois
+  groupes (l'essentiel du quotidien ; ce que Memoria a déduit seul ; le contrôle
+  et le diagnostic). Une nouvelle route = un `ScreenId`, une entrée dans un
+  groupe, la clé `nav.<id>` dans les 5 catalogues, le rendu dans `App.tsx`.
+  **`nav.<id>` doit dire exactement ce que dit le titre de l'écran** : le menu et
+  la barre supérieure ne peuvent pas se contredire.
 - Badge de la Revue : `reviewCount` passé par App.tsx (rafraîchi toutes les 20 s).
 - Barre latérale repliable (préférence `memoria.sidebar`), tiroir `Sheet` sous 768 px.
-- Mode de capture : `CaptureModeSwitch` — toujours visible (spec §13), gère
-  l'échec de lecture et de changement sans disparaître.
-- Préférences (langue, thème) : `DropdownMenu` à droite de la barre supérieure.
+- Mode de capture : deux formes, un seul état (`app/capture-mode.ts`) —
+  `CaptureModeSwitch` en pied de barre latérale, `CaptureModeMenu` dans la barre
+  supérieure sous 768 px (sinon l'interrupteur principal du produit est invisible
+  au téléphone). Toujours visible (spec §13), y compris en panne.
+- Préférences d'affichage (langue, thème) : `PrefsMenu`, à droite de la barre
+  supérieure, **libellé « Affichage »** — à ne pas confondre avec l'écran
+  « Réglages » (moteur, clés, stockage).
+- Sous 768 px, les actions de `PageHeader` descendent en tête de page : la barre
+  n'a pas la place de porter à la fois le titre, les actions et la capture.
 
-## 6. Transition (état au 27/08/2026)
+## 6. Migration terminée (28/08/2026)
 
-- Migré : **Tableau de bord**.
-- Legacy (sous `.legacy-screen`) : Agents, Mémoire, Revue, Thèmes, Personnes,
-  Récurrences, Procédures, Révisions, Partage, Coffre, Journal, Maintenance,
-  Système, Docs, Réglages, Onboarding, composants `Wizard` et `EmbeddingsChooser`.
-- Mécanisme : `index.css` ordonne les couches `theme < base < legacy < components
-  < utilities`. `styles.css` est importé dans `legacy` (il bat le preflight
-  Tailwind, perd contre toute classe utilitaire) et intégralement imbriqué sous
-  `.legacy-screen`. Ses variables (`--bg`, `--text`, `--brand` ex-`--accent`…)
-  sont des alias des jetons : les écrans legacy suivent déjà le bon thème.
-  Dans un écran legacy, le `<h1>` de `.screen-head` est masqué (le titre est
-  affiché par la coquille) et les primitives de `ui.tsx` (déjà shadcn)
-  fonctionnent telles quelles.
-- Pièges connus des écrans legacy : lignes de recherche/filtres qui débordent
-  sous 400 px (`Mémoire`, `Maintenance`) — se règlent en migrant l'écran (flex-wrap
-  ou `grid`), pas en retouchant `styles.css`.
+Les 16 écrans sont écrits en Tailwind + composants shadcn. `src/styles.css`
+(l'ancien CSS maison, scopé sous `.legacy-screen` pendant la transition), son
+import, le wrapper de `App.tsx`, la liste `MIGRATED_SCREENS` et les alias de
+variables de `tokens.css` ont été **supprimés** : il n'y a plus qu'une façon de
+styler un écran. Les 64 captures ont été régénérées et relues après la
+suppression — aucune régression.
+
+Non couvert par les captures : l'écran **Onboarding**, que `scripts/ui-preview.mjs`
+ne peut pas atteindre (le daemon de démo a toujours trois agents reliés, donc
+l'onboarding ne se déclenche jamais). Il a été vérifié par lecture : aucune
+classe de l'ancien CSS.
 
 ## 7. Captures de référence — Tableau de bord
 
