@@ -9,7 +9,9 @@
 
 > *Human-machine memory is our memory. Local, ours, and it never starts from zero.*
 
-**Status: public beta** — V3 in active development on the `memoria-v1` branch, a ground-up rebuild of the former OpenClaw plugin (now archived in [`legacy/`](legacy/)). See [`docs/v3/STATUS.md`](docs/v3/STATUS.md) for the measured state (tests, screens, tools) and [`docs/v3/TODO.md`](docs/v3/TODO.md) for what is left.
+**Status: public beta** — V3 in active development on the **`memoria-v1`** branch, a ground-up rebuild of the former OpenClaw plugin (now archived in [`legacy/`](legacy/)). See [`docs/v3/STATUS.md`](docs/v3/STATUS.md) for the measured state (tests, screens, tools) and [`docs/v3/TODO.md`](docs/v3/TODO.md) for what is left.
+
+> ⚠️ **Read `memoria-v1`, not `main`.** The default branch is frozen at 2026-03-31 and still describes the *old* OpenClaw plugin — 365 commits behind, with nothing of its own (`git rev-list --count memoria-v1..main` = 0). Realigning it is the first item in [`docs/v3/TODO.md`](docs/v3/TODO.md). A plain `git clone` lands on that stale branch; the install command below pins `memoria-v1` for you.
 
 ## Install (macOS)
 
@@ -19,13 +21,17 @@ One command in the Terminal — requires [Node.js 20 or newer](https://nodejs.or
 curl -fsSL https://raw.githubusercontent.com/Primo-Studio/openclaw-memoria/memoria-v1/scripts/install-memoria.sh | sh
 ```
 
-The script checks prerequisites, installs Memoria, starts the local service as a **launchd** agent (auto-start at login, restarted if it dies) and opens the web UI. From there the onboarding guides you:
+The script checks prerequisites, installs Memoria, starts the local service as a **launchd** agent (auto-start at login, restarted if it dies) and opens the web UI. Measured on a fresh install (28/08/2026): **46 seconds** end to end, 338 packages, **no native compilation** — `better-sqlite3` and `sqlite-vec` ship prebuilt binaries. From there the onboarding guides you:
 
 1. **Pick your intelligence engine.** OpenAI (`gpt-4o-mini`, recommended — an API key, zero installation, usage cost shown in Settings) or, for a 100% local setup, Ollama (advanced — the onboarding detects whether your machine is powerful enough and can install the model in one click), LM Studio, Anthropic or OpenRouter.
 2. **Detect the agents** on your machine and connect them in one click (or paste a pairing code in a remote agent's chat: `memoria pair claude-code`).
 3. Optionally **import their existing memories** (conversation transcripts go through Review; a legacy OpenClaw memory is adopted as is).
 
-Reopen the UI anytime with `memoria ui` (or just `memoria`), update with `memoria update`, get a full health report with `memoria doctor` (storage, extraction queue, 24 h activity, data sent to the cloud, model cost).
+Reopen the UI anytime with `memoria ui` (or just `memoria`), update with `memoria update`, get a health report with `memoria doctor` (storage, extraction queue, 24 h activity, data sent to the cloud, model cost).
+
+> **Step 1 is not optional.** Without an intelligence engine, Memoria records conversations but extracts **no memories at all** — and `memoria doctor` still reports `✓ OK` today, because `DoctorReport` carries no engine field. Until that is fixed ([`TODO.md`](docs/v3/TODO.md) T5), trust the **red banner on the Dashboard**, not `doctor`.
+
+📖 **Installing on another Mac — yours or a friend's — and updating it afterwards:** [`docs/v3/INSTALLER-ET-METTRE-A-JOUR.md`](docs/v3/INSTALLER-ET-METTRE-A-JOUR.md) (in French, written for a non-developer: real prerequisites, measured timings, what to do when it goes wrong, and what "remote update" does **not** do yet).
 
 🌐 **Website:** [primo-studio.fr/app/memoria](https://primo-studio.fr/app/memoria) · 🐛 [Report a bug](https://github.com/Primo-Studio/openclaw-memoria/issues) · 📚 In-app **Docs** tab (5 languages)
 
@@ -38,8 +44,8 @@ The previous Memoria was an OpenClaw plugin, coupled to its host's hooks — and
 - **`@memoria/core`** — the engine. No host hooks, no network. Governed schema (users, organizations, clients, projects, scopes, policies), hybrid recall (FTS5 + sqlite-vec + entity graph) with hard client-isolation, hard-delete, neutral audit log, 24 cognitive layers.
 - **`@memoria/daemon`** — a single local process owns the databases. Serialized writes, HTTP on `127.0.0.1` with token auth, singleton lock, `/v1/health` exposing pid / supervisor / built SHA.
 - **`@memoria/mcp`** — one MCP server per agent (12 tools), relaying to the daemon. Connect any MCP-capable agent with one pasted command.
-- **`@memoria/cli`** — `memoria ui | init | doctor | pair | import | export | forget | sync | …` (28 commands).
-- **`@memoria/web`** — local web UI served by the daemon (16 screens, 5 languages, no terminal needed): connect agents, browse memory, review, share, pause, see what went to the cloud and what it cost.
+- **`@memoria/cli`** — `memoria ui | init | doctor | pair | import | export | forget | sync | …` (27 commands registered in `buildCli()`: 20 top-level plus `sync` × 7).
+- **`@memoria/web`** — local web UI served by the daemon, built on Tailwind v4 + shadcn/ui (16 screens in 3 groups, 5 languages, no terminal needed): connect agents, browse memory, review, share, pause, see what went to the cloud and what it cost.
 - **`packages/adapter-openclaw`** — hosts become thin adapters (OpenClaw is just one of them).
 - **`apps/desktop`** — `Memoria.app` (Tauri): menu-bar **M** icon (green = active, red = down, grey = starting), starts the daemon through launchd.
 
@@ -57,13 +63,15 @@ The previous Memoria was an OpenClaw plugin, coupled to its host's hooks — and
 ```bash
 npm install
 npm run build     # tsc strict — 0 errors tolerated
-npm test          # vitest — 980 tests / 105 files (2026-08-27), includes the recall-quality benchmark
+npm test          # vitest — 1091 tests / 121 files (2026-08-28), includes the recall-quality benchmark
 node scripts/boot-test.mjs
 ```
 
 Node ≥ 20 (`package.json` engines). Native deps: `better-sqlite3`, `sqlite-vec`. The daemon serves the built `packages/*/dist`: after a rebuild, `memoria stop && memoria start` (or `memoria update`).
 
-- Build & contribution docs: [`docs/v3/`](docs/v3/) — [`STATUS.md`](docs/v3/STATUS.md) (measured state), [`TODO.md`](docs/v3/TODO.md) (handoff), [`JOURNAL-2026-08-27.md`](docs/v3/JOURNAL-2026-08-27.md) (latest session), [`DECISIONS-LOG.md`](docs/v3/DECISIONS-LOG.md), [`COUCHES-ETAT.md`](docs/v3/COUCHES-ETAT.md) (24 layers), [`INSTALLATION-RESEAU.md`](docs/v3/INSTALLATION-RESEAU.md) (non-technical install + multi-machine sync), [`SYNC-INTER-MACHINES.md`](docs/v3/SYNC-INTER-MACHINES.md), [`port-map.json`](docs/v3/port-map.json) (legacy port map).
+Two test files need this machine's real environment and will fail under a throwaway `HOME`: `packages/core/test/secrets.test.ts` (macOS Keychain of the logged-in session) and `packages/daemon/test/lock-race.test.ts` (cross-process race, load-sensitive). `node scripts/verify-layers.mjs` checks the 24 cognitive layers end to end (24/24 on 2026-08-28); `npm run ui:preview` renders every screen with demo data and captures light/dark × desktop/mobile.
+
+- Build & contribution docs: [`docs/v3/`](docs/v3/) — [`STATUS.md`](docs/v3/STATUS.md) (measured state), [`TODO.md`](docs/v3/TODO.md) (handoff, prioritised), [`INSTALLER-ET-METTRE-A-JOUR.md`](docs/v3/INSTALLER-ET-METTRE-A-JOUR.md) (install & update another Mac), [`JOURNAL-2026-08-28.md`](docs/v3/JOURNAL-2026-08-28.md) (latest session — UI rebuild), [`JOURNAL-2026-08-27.md`](docs/v3/JOURNAL-2026-08-27.md), [`DECISIONS-LOG.md`](docs/v3/DECISIONS-LOG.md), [`COUCHES-ETAT.md`](docs/v3/COUCHES-ETAT.md) (24 layers), [`INSTALLATION-RESEAU.md`](docs/v3/INSTALLATION-RESEAU.md) (multi-machine sync), [`SYNC-INTER-MACHINES.md`](docs/v3/SYNC-INTER-MACHINES.md), [`port-map.json`](docs/v3/port-map.json) (legacy port map), [`packages/web/UI-GUIDE.md`](packages/web/UI-GUIDE.md) (UI conventions).
 - The frozen build spec lives in the project's dev dossier (`PLAN-Memoria-v3-2026-06-03.md`).
 
 ## License
