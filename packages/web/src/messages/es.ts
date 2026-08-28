@@ -1217,7 +1217,7 @@ export const es: Messages = {
   'vault.location.keychain': 'Llavero de macOS',
   'vault.location.vault': 'Caja fuerte cifrada',
 
-  // — Journal (écran shadcn) — filtres, compteur, état « aucun résultat », action set_capture_mode —
+  // — Journal (écran shadcn) — filtres, compteur, état « aucun résultat » —
   'audit.list_title': 'Últimas acciones',
   'audit.count': '{shown} de {total} entrada(s) mostrada(s) — el servicio conserva las 200 últimas.',
   'audit.filter.search': 'Buscar (agente, acción, motivo…)',
@@ -1226,7 +1226,6 @@ export const es: Messages = {
   'audit.filter.none.title': 'Ninguna entrada coincide',
   'audit.filter.none.body': 'Prueba con otra palabra o restablece los filtros.',
   'audit.filter.clear': 'Borrar filtros',
-  'audit.action.set_capture_mode': 'Modo de captura modificado',
 
   // — Système (écran shadcn) — chiffres clés et accessibilité des tuiles —
   'system.stat.layers': 'capas cognitivas',
@@ -1236,4 +1235,13 @@ export const es: Messages = {
   'system.stat.liveHintEmpty': 'los contadores se llenan con el uso',
   'system.layer_number': 'Capa {n}',
   'system.live_count': 'Contador en directo',
+
+  // — Docs (écran shadcn) — sommaire, tableau des commandes —
+  'docs.toc': 'Índice',
+  'docs.nav.jump': 'Ir a una sección',
+  'docs.cli.col.command': 'Comando',
+  'docs.cli.col.desc': 'Qué hace',
+
+  // — Journal (écran shadcn) — action set_capture_mode —
+  'audit.action.set_capture_mode': 'Modo de captura modificado',
 }

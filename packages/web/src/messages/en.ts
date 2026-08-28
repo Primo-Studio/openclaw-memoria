@@ -1217,7 +1217,7 @@ export const en: Messages = {
   'vault.location.keychain': 'macOS Keychain',
   'vault.location.vault': 'Encrypted vault',
 
-  // — Journal (écran shadcn) — filtres, compteur, état « aucun résultat », action set_capture_mode —
+  // — Journal (écran shadcn) — filtres, compteur, état « aucun résultat » —
   'audit.list_title': 'Latest actions',
   'audit.count': '{shown} of {total} entries shown — the service keeps the last 200.',
   'audit.filter.search': 'Search (agent, action, reason…)',
@@ -1226,7 +1226,6 @@ export const en: Messages = {
   'audit.filter.none.title': 'No entry matches',
   'audit.filter.none.body': 'Try another word, or reset the filters.',
   'audit.filter.clear': 'Clear filters',
-  'audit.action.set_capture_mode': 'Capture mode changed',
 
   // — Système (écran shadcn) — chiffres clés et accessibilité des tuiles —
   'system.stat.layers': 'cognitive layers',
@@ -1236,4 +1235,13 @@ export const en: Messages = {
   'system.stat.liveHintEmpty': 'counters fill up with use',
   'system.layer_number': 'Layer {n}',
   'system.live_count': 'Live counter',
+
+  // — Docs (écran shadcn) — sommaire, tableau des commandes —
+  'docs.toc': 'Contents',
+  'docs.nav.jump': 'Jump to a section',
+  'docs.cli.col.command': 'Command',
+  'docs.cli.col.desc': 'What it does',
+
+  // — Journal (écran shadcn) — action set_capture_mode —
+  'audit.action.set_capture_mode': 'Capture mode changed',
 }

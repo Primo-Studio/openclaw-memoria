@@ -1219,7 +1219,7 @@ export const fr: Messages = {
   'vault.location.keychain': 'Trousseau macOS',
   'vault.location.vault': 'Coffre chiffré',
 
-  // — Journal (écran shadcn) — filtres, compteur, état « aucun résultat », action set_capture_mode —
+  // — Journal (écran shadcn) — filtres, compteur, état « aucun résultat » —
   'audit.list_title': 'Dernières actions',
   'audit.count': '{shown} entrée(s) affichée(s) sur {total} — le service garde les 200 dernières.',
   'audit.filter.search': 'Rechercher (agent, action, raison…)',
@@ -1228,7 +1228,6 @@ export const fr: Messages = {
   'audit.filter.none.title': 'Aucune entrée ne correspond',
   'audit.filter.none.body': 'Essaie un autre mot, ou remets les filtres à zéro.',
   'audit.filter.clear': 'Effacer les filtres',
-  'audit.action.set_capture_mode': 'Mode de capture modifié',
 
   // — Système (écran shadcn) — chiffres clés et accessibilité des tuiles —
   'system.stat.layers': 'couches cognitives',
@@ -1238,4 +1237,13 @@ export const fr: Messages = {
   'system.stat.liveHintEmpty': 'les compteurs se remplissent avec l’usage',
   'system.layer_number': 'Couche {n}',
   'system.live_count': 'Compteur en direct',
+
+  // — Docs (écran shadcn) — sommaire, tableau des commandes —
+  'docs.toc': 'Sommaire',
+  'docs.nav.jump': 'Aller à une section',
+  'docs.cli.col.command': 'Commande',
+  'docs.cli.col.desc': 'Ce qu’elle fait',
+
+  // — Journal (écran shadcn) — action set_capture_mode —
+  'audit.action.set_capture_mode': 'Mode de capture modifié',
 }
