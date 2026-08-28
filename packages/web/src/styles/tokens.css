@@ -1,0 +1,200 @@
+/*
+ * Jetons de thème Memoria — UNE source de vérité pour les couleurs.
+ *
+ * Deux palettes complètes (claire par défaut, sombre sous `[data-theme=dark]`),
+ * pilotées par l'attribut `data-theme` de <html> que main.tsx/lib/theme.ts
+ * RÉSOUT toujours en `light` ou `dark` (le mode « Système » lit la préférence
+ * OS et l'écrit ici, puis suit ses changements). Aucun composant ne doit
+ * coder une couleur en dur : tout passe par ces variables, exposées à
+ * Tailwind via `@theme inline` (bg-primary, text-muted-foreground…).
+ *
+ * CONTRASTE (mesuré, AA = 4,5:1 pour du texte). Deux familles, deux pires cas.
+ *
+ * 1. JETONS D'ÉTAT = couleurs de TEXTE sur un fond teinté à 10-12 % de la même
+ *    couleur (badges « Connecté », bouton « Supprimer ») :
+ *      clair  success 0,52→0,45  : badge 4,36 → 5,70:1
+ *             warning 0,58→0,48  : badge 3,89 → 5,80:1
+ *             destructive 0,55→0,50 : bouton 4,60 → 5,56:1 (survol 3,90 → 4,59)
+ *      sombre destructive 0,68→0,72 + fond /20→/12 : 4,09 → 5,12:1 (survol 4,62)
+ *
+ * 2. PAIRE PLEINE primary / primary-foreground = le bouton principal de chaque
+ *    écran (« Tout approuver », « Rechercher », « Ajouter »), le badge par
+ *    défaut et la pastille de modèle en mono 12 px. Elle avait échappé à la
+ *    mesure ; relevée puis corrigée le 28/08/2026 :
+ *      clair  --primary #d64f16 → #c04410, encre inchangée : 4,09 → 5,01:1
+ *      sombre --primary #e85a1f gardé, encre 0,99 → oklch(0,18 0,02 285) :
+ *             3,45 → 5,31:1
+ *      survol du bouton, `bg-primary/80` → mélange vers --foreground à 10 %
+ *             (button.tsx, badge.tsx) : clair 3,58 → 5,80:1, sombre 3,87 → 5,96:1
+ *
+ * 3. TEXTE SECONDAIRE sur fond teinté. --muted-foreground est INCHANGÉ (0,49
+ *    en clair) : il mesure 6,02:1 sur la page, 6,29:1 sur une carte, 5,51:1 sur
+ *    un fond `--muted` et 5,86:1 sur une carte sélectionnée (`bg-primary/5`) —
+ *    tous conformes. L'onglet inactif qui semblait fautif ne l'utilisait pas :
+ *    il portait `text-foreground/60` (4,45:1), corrigé dans `ui/tabs.tsx`.
+ *
+ * RESTE CONNU, non traité ici : le motif `bg-primary/10 text-primary` (item de
+ * navigation actif, initiales, numéros de couche) monte de 3,69 à 4,47:1 sur
+ * carte et 4,29:1 sur page en clair, mais plafonne à 4,05:1 sur le fond de la
+ * barre latérale — encore sous AA. À traiter par l'agent qui tient la
+ * cohérence transverse (changer le fond de l'item actif, pas l'orange).
+ *
+ * Toute retouche de ces valeurs se re-mesure avant d'être commitée
+ * (oklch → sRGB → luminance → ratio ; seuil AA 4,5:1), elle ne se juge pas à l'œil.
+ *
+ * Identité : accent orange Primo (#e85a1f sombre / #c04410 clair) comme
+ * `--primary`, neutres sobres légèrement froids (héritage de l'ancienne
+ * palette #14141f), radius 0.5rem, police système.
+ */
+
+:root {
+  color-scheme: light;
+  --radius: 0.5rem;
+
+  --background: oklch(0.985 0.003 285);
+  --foreground: oklch(0.21 0.02 285);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.21 0.02 285);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.21 0.02 285);
+  /* Assombri pour l'accessibilité : le texte clair posé dessus (bouton
+     principal, badge par défaut, pastille de modèle en mono 12 px) mesurait
+     4,09:1, sous AA. Voir le tableau en tête de fichier. */
+  --primary: #c04410;
+  --primary-foreground: oklch(0.99 0 0);
+  --secondary: oklch(0.955 0.006 285);
+  --secondary-foreground: oklch(0.25 0.02 285);
+  --muted: oklch(0.955 0.006 285);
+  --muted-foreground: oklch(0.49 0.02 285);
+  --accent: oklch(0.945 0.008 285);
+  --accent-foreground: oklch(0.21 0.02 285);
+  /* Assombris pour l'accessibilité (mesures WCAG en tête de fichier). */
+  --destructive: oklch(0.5 0.2 25);
+  --destructive-foreground: oklch(0.99 0 0);
+  --success: oklch(0.45 0.14 160);
+  --success-foreground: oklch(0.99 0 0);
+  --warning: oklch(0.48 0.13 65);
+  --warning-foreground: oklch(0.99 0 0);
+  --border: oklch(0.9 0.006 285);
+  --input: oklch(0.88 0.008 285);
+  --ring: oklch(0.65 0.19 40);
+
+  --sidebar: oklch(0.965 0.005 285);
+  --sidebar-foreground: oklch(0.25 0.02 285);
+  --sidebar-primary: #c04410;
+  --sidebar-primary-foreground: oklch(0.99 0 0);
+  --sidebar-accent: oklch(0.92 0.008 285);
+  --sidebar-accent-foreground: oklch(0.21 0.02 285);
+  --sidebar-border: oklch(0.9 0.006 285);
+  --sidebar-ring: oklch(0.65 0.19 40);
+
+  --chart-1: #c04410;
+  --chart-2: oklch(0.55 0.15 250);
+  --chart-3: oklch(0.55 0.14 160);
+  --chart-4: oklch(0.62 0.14 70);
+  --chart-5: oklch(0.5 0.14 300);
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --background: oklch(0.19 0.018 285);
+  --foreground: oklch(0.94 0.01 285);
+  --card: oklch(0.23 0.02 285);
+  --card-foreground: oklch(0.94 0.01 285);
+  --popover: oklch(0.245 0.02 285);
+  --popover-foreground: oklch(0.94 0.01 285);
+  /* POURQUOI une encre SOMBRE sur l'orange ici : en sombre, l'orange doit
+     rester vif (c'est la marque) ; l'assombrir pour tenir un texte blanc le
+     ramènerait à la teinte du thème clair, terne sur fond noir. On retourne
+     donc l'encre — exactement le motif déjà en place pour --success-foreground
+     et --warning-foreground plus bas. 3,45 → 5,31:1. */
+  --primary: #e85a1f;
+  --primary-foreground: oklch(0.18 0.02 285);
+  --secondary: oklch(0.29 0.02 285);
+  --secondary-foreground: oklch(0.94 0.01 285);
+  --muted: oklch(0.28 0.02 285);
+  --muted-foreground: oklch(0.73 0.02 285);
+  --accent: oklch(0.3 0.022 285);
+  --accent-foreground: oklch(0.96 0.01 285);
+  /* Éclairci : « Supprimer » (texte destructif sur fond destructive/12) passait
+     sous le seuil AA en sombre. */
+  --destructive: oklch(0.72 0.19 22);
+  --destructive-foreground: oklch(0.99 0 0);
+  --success: oklch(0.76 0.15 160);
+  --success-foreground: oklch(0.15 0.02 160);
+  --warning: oklch(0.8 0.14 80);
+  --warning-foreground: oklch(0.18 0.03 80);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 14%);
+  --ring: oklch(0.7 0.17 40);
+
+  --sidebar: oklch(0.165 0.018 285);
+  --sidebar-foreground: oklch(0.9 0.01 285);
+  --sidebar-primary: #e85a1f;
+  --sidebar-primary-foreground: oklch(0.18 0.02 285);
+  --sidebar-accent: oklch(0.255 0.02 285);
+  --sidebar-accent-foreground: oklch(0.96 0.01 285);
+  --sidebar-border: oklch(1 0 0 / 8%);
+  --sidebar-ring: oklch(0.7 0.17 40);
+
+  --chart-1: #e85a1f;
+  --chart-2: oklch(0.7 0.14 250);
+  --chart-3: oklch(0.72 0.14 160);
+  --chart-4: oklch(0.8 0.14 80);
+  --chart-5: oklch(0.7 0.14 300);
+}
+
+/* Exposition à Tailwind : bg-primary, text-muted-foreground, border-border, rounded-lg… */
+@theme inline {
+  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-heading: var(--font-sans);
+  --font-mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}

@@ -4,14 +4,28 @@
  * connecter un 1er agent. L'étape moteur est LE rempart anti-mort-silencieuse :
  * on ne termine pas sans moteur d'extraction prêt, SAUF choix explicite du
  * mode dégradé (encart rouge qui dit ce que ça implique).
+ *
+ * Rendu HORS coquille (pas de barre latérale tant qu'aucun agent n'est
+ * relié) : carte centrée + Wizard shadcn (stepper, une action principale par
+ * étape). Le titre de l'étape est le <h1> de la page.
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import { ChevronDown, CircleCheck, CircleX, ExternalLink, Download, Loader2, RefreshCw, TriangleAlert, Wand2 } from 'lucide-react'
+import { toast } from 'sonner'
+import { BrandMark } from '../app/BrandMark'
 import { Wizard, type WizardStep } from '../components/Wizard'
 import { EmbeddingsChooser } from '../components/EmbeddingsChooser'
+import { Chip, CommandBlock, StatusBadge, type StatusTone } from '../components/SetupBits'
+import { ErrorBanner, Spinner, humanError } from '../components/ui'
+import { Alert, AlertDescription, AlertTitle } from '../components/ui/alert'
+import { Button } from '../components/ui/button'
+import { Card, CardContent } from '../components/ui/card'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../components/ui/collapsible'
+import { Progress } from '../components/ui/progress'
 import { MachineAgents } from './Agents'
-import { CopyButton, ErrorBanner, humanError } from '../components/ui'
 import { useT } from '../i18n'
 import { hasLiveAgent } from '../lib/agents'
+import { cn } from '../lib/utils'
 import {
   getAgents,
   ApiError,
@@ -34,7 +48,7 @@ const AGENT_TYPES: Array<{ id: AgentType; label: string }> = [
   { id: 'claude-code', label: 'Claude Code' },
   { id: 'codex', label: 'Codex' },
   { id: 'openclaw', label: 'OpenClaw' },
-  { id: 'generic', label: 'Autre (MCP)' },
+  { id: 'generic', label: '' }, // libellé traduit (onboarding.agent.typeGeneric)
 ]
 
 type EngineChoice = LlmProviderName | 'openclaw'
@@ -49,11 +63,11 @@ const DEFAULT_MODELS: Partial<Record<LlmProviderName, string>> = {
 
 type EngineState = 'ready' | 'config' | 'off'
 
-function StateBadge({ state }: { state: EngineState }) {
+function EngineBadge({ state }: { state: EngineState }) {
   const { t } = useT()
-  if (state === 'ready') return <span className="badge badge-ok">{t('onboarding.badge.ready')}</span>
-  if (state === 'config') return <span className="badge badge-warn">{t('onboarding.badge.config')}</span>
-  return <span className="badge badge-muted">{t('onboarding.badge.off')}</span>
+  const tone: StatusTone = state === 'ready' ? 'ok' : state === 'config' ? 'warn' : 'muted'
+  const label = state === 'ready' ? t('onboarding.badge.ready') : state === 'config' ? t('onboarding.badge.config') : t('onboarding.badge.off')
+  return <StatusBadge tone={tone}>{label}</StatusBadge>
 }
 
 export function Onboarding({ onDone }: { onDone: () => void }) {
@@ -119,18 +133,22 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
    * reflète l'ancienne config tant qu'on ne rafraîchit pas — sans ça, « Moteur
    * enregistré » s'affichait en vert avec un bouton Continuer toujours grisé.
    */
-  const persistChoice = useCallback(async (engine: LlmProviderName, h: LlmHealth | null): Promise<void> => {
-    const model = engine === 'lmstudio' ? h?.options.lmstudio.models[0] : DEFAULT_MODELS[engine]
-    try {
-      await setExtractionProvider(engine, model)
-      setChosenNote(t('onboarding.engine.saved', { engine, suffix: model ? ` / ${model}` : '' }))
-      setEngineError(null)
-    } catch (err) {
-      setEngineError(err instanceof ApiError ? err.message : t('onboarding.engine.saveError'))
-      return
-    }
-    await refreshHealth()
-  }, [t, refreshHealth])
+  const persistChoice = useCallback(
+    async (engine: LlmProviderName, h: LlmHealth | null): Promise<void> => {
+      const model = engine === 'lmstudio' ? h?.options.lmstudio.models[0] : DEFAULT_MODELS[engine]
+      try {
+        await setExtractionProvider(engine, model)
+        setChosenNote(t('onboarding.engine.saved', { engine, suffix: model ? ` / ${model}` : '' }))
+        setEngineError(null)
+        toast.success(t('onboarding.engine.saved', { engine, suffix: model ? ` / ${model}` : '' }))
+      } catch (err) {
+        setEngineError(err instanceof ApiError ? err.message : t('onboarding.engine.saveError'))
+        return
+      }
+      await refreshHealth()
+    },
+    [t, refreshHealth],
+  )
 
   // polling du téléchargement Ollama (barres de progression)
   useEffect(() => {
@@ -182,16 +200,19 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     [health, persistChoice, refreshHealth, t],
   )
 
-  const startPull = useCallback((model: string) => {
-    setEngineError(null)
-    setPullStatus({ running: true, model, percent: null, status: t('onboarding.pull.starting'), error: null })
-    startOllamaPull(model)
-      .then(() => setPulling(model))
-      .catch(err => {
-        setPullStatus(null)
-        setEngineError(err instanceof ApiError ? err.message : t('onboarding.pull.error'))
-      })
-  }, [t])
+  const startPull = useCallback(
+    (model: string) => {
+      setEngineError(null)
+      setPullStatus({ running: true, model, percent: null, status: t('onboarding.pull.starting'), error: null })
+      startOllamaPull(model)
+        .then(() => setPulling(model))
+        .catch(err => {
+          setPullStatus(null)
+          setEngineError(err instanceof ApiError ? err.message : t('onboarding.pull.error'))
+        })
+    },
+    [t],
+  )
 
   const reverify = useCallback(async () => {
     setTestResult(null)
@@ -246,30 +267,33 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     {
       id: 'welcome',
       title: t('onboarding.welcome.title'),
+      short: t('onboarding.step.welcome'),
       render: () => (
-        <div className="ob-step">
-          <p className="ob-lead">{t('onboarding.welcome.lead')}</p>
-          <p>
-            {t('onboarding.welcome.body')} <strong>{t('onboarding.welcome.bodyStrong')}</strong>
+        <>
+          <p className="text-base font-medium">{t('onboarding.welcome.lead')}</p>
+          <p className="text-muted-foreground">
+            {t('onboarding.welcome.body')} <strong className="text-foreground">{t('onboarding.welcome.bodyStrong')}</strong>
           </p>
-          <p className="muted">{t('onboarding.welcome.duration')}</p>
-        </div>
+          <p className="text-xs text-muted-foreground">{t('onboarding.welcome.duration')}</p>
+        </>
       ),
     },
     {
       id: 'storage',
       title: t('onboarding.storage.title'),
+      short: t('onboarding.step.storage'),
       render: () => (
-        <div className="ob-step">
+        <>
           <p>{t('onboarding.storage.lead')}</p>
-          <pre className="command">{doctor?.storage_root ?? '~/.memoria/data'}</pre>
-          <p className="muted">{t('onboarding.storage.note')}</p>
-        </div>
+          <CommandBlock text={doctor?.storage_root ?? '~/.memoria/data'} />
+          <p className="text-xs text-muted-foreground">{t('onboarding.storage.note')}</p>
+        </>
       ),
     },
     {
       id: 'engine',
       title: t('onboarding.engine.title'),
+      short: t('onboarding.step.engine'),
       render: () => (
         <EngineStep
           health={health}
@@ -296,64 +320,119 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     {
       id: 'agent',
       title: t('onboarding.agent.title'),
+      short: t('onboarding.step.agent'),
       render: () => (
-        <div className="ob-step">
+        <>
           {degraded && (
-            <p className="provider-missing">
-              {t('onboarding.agent.degraded')}
-            </p>
+            <Alert variant="destructive">
+              <TriangleAlert />
+              <AlertTitle>{t('onboarding.agent.degraded')}</AlertTitle>
+            </Alert>
           )}
-          <p className={agentConnected ? 'ok' : 'muted'}>
-            {agentConnected ? t('onboarding.agent.connected') : t('onboarding.agent.waiting')}
-          </p>
+          <Alert className={cn(agentConnected && 'ring-1 ring-success/30')} role="status">
+            {agentConnected ? <CircleCheck className="text-success" /> : <Loader2 className="animate-spin text-muted-foreground" />}
+            <AlertTitle>{agentConnected ? t('onboarding.agent.connected') : t('onboarding.agent.waiting')}</AlertTitle>
+          </Alert>
           {/* Chemin facile : détection sur cette machine + connexion en 1 clic. */}
-          <MachineAgents onChanged={refreshAgentConnected} />
+          <MachineAgents onChanged={refreshAgentConnected} embedded />
           {/* Repli : connexion manuelle par commande (autre machine / cas avancé). */}
-          <details className="ob-manual">
-            <summary>{t('onboarding.agent.manualToggle')}</summary>
-            {pairError && <ErrorBanner message={pairError} onRetry={() => void startPairing()} />}
-            {!pair ? (
-              <>
-                <p>{t('onboarding.agent.question')}</p>
-                <div className="ob-types">
-                  {AGENT_TYPES.map(at => (
-                    <button key={at.id} type="button" className={`capture-option${type === at.id ? ' capture-active' : ''}`} onClick={() => setType(at.id)}>
-                      {at.id === 'generic' ? t('onboarding.agent.typeGeneric') : at.label}
-                    </button>
-                  ))}
-                </div>
-                <button type="button" className="btn btn-primary" onClick={() => void startPairing()}>{t('onboarding.agent.generate')}</button>
-              </>
-            ) : (
-              <>
-                <p>{t('onboarding.agent.pasteCommand')}</p>
-                <pre className="command">{pair.command}</pre>
-                {/* CopyButton : « Copié » seulement si la copie a réussi, « Échec » sinon, reset 2 s. */}
-                <CopyButton text={pair.command} label={t('onboarding.agent.copy')} />
-                <p className="muted">{t('onboarding.agent.codeLabel')}<strong>{pair.pairing_code}</strong>{t('onboarding.agent.codeValidity')}</p>
-              </>
-            )}
-          </details>
-        </div>
+          <ManualPairing
+            type={type}
+            onType={setType}
+            pair={pair}
+            pairError={pairError}
+            onGenerate={() => void startPairing()}
+          />
+        </>
       ),
     },
   ]
 
   return (
-    <div className="welcome">
-      <div className="welcome-card ob-card">
-        <div className="brand">Memo<span style={{ color: 'var(--accent)' }}>ria</span></div>
-        <Wizard
-          steps={steps}
-          current={step}
-          onBack={() => setStep(s => Math.max(0, s - 1))}
-          onNext={() => setStep(s => Math.min(steps.length - 1, s + 1))}
-          onFinish={onDone}
-          nextLabel={step === steps.length - 1 ? t('onboarding.wizard.finish') : t('onboarding.wizard.continue')}
-          nextDisabled={(step === 2 && !engineGateOpen) || (step === 3 && !agentConnected)}
-        />
-      </div>
+    <div className="flex min-h-screen items-start justify-center bg-background p-3 sm:items-center sm:p-6">
+      <Card className="w-full max-w-2xl">
+        <CardContent className="flex flex-col gap-5">
+          <div className="flex items-center gap-2">
+            <BrandMark className="size-7 text-primary" />
+            <span className="text-lg font-semibold">Memoria</span>
+          </div>
+          <Wizard
+            steps={steps}
+            current={step}
+            onBack={() => setStep(s => Math.max(0, s - 1))}
+            onNext={() => setStep(s => Math.min(steps.length - 1, s + 1))}
+            onFinish={onDone}
+            nextLabel={step === steps.length - 1 ? t('onboarding.wizard.finish') : t('onboarding.wizard.continue')}
+            nextDisabled={(step === 2 && !engineGateOpen) || (step === 3 && !agentConnected)}
+          />
+        </CardContent>
+      </Card>
     </div>
+  )
+}
+
+// ------------------------------------------------------- connexion manuelle
+
+function ManualPairing({
+  type,
+  onType,
+  pair,
+  pairError,
+  onGenerate,
+}: {
+  type: AgentType
+  onType: (t: AgentType) => void
+  pair: PairResult | null
+  pairError: string | null
+  onGenerate: () => void
+}) {
+  const { t } = useT()
+  const [open, setOpen] = useState(false)
+  return (
+    <Collapsible open={open} onOpenChange={setOpen} className="rounded-lg border">
+      <CollapsibleTrigger asChild>
+        <button
+          type="button"
+          className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+          aria-expanded={open}
+        >
+          {t('onboarding.agent.manualToggle')}
+          <ChevronDown className={cn('size-4 shrink-0 text-muted-foreground transition-transform', open && 'rotate-180')} aria-hidden="true" />
+        </button>
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div className="flex flex-col gap-3 border-t px-3 py-3">
+          {pairError && <ErrorBanner message={pairError} onRetry={onGenerate} className="my-0" />}
+          {!pair ? (
+            <>
+              <p>{t('onboarding.agent.question')}</p>
+              <div role="radiogroup" aria-label={t('onboarding.agent.typeLabel')} className="flex flex-wrap gap-1.5">
+                {AGENT_TYPES.map(at => (
+                  <Chip key={at.id} active={type === at.id} onClick={() => onType(at.id)}>
+                    {at.id === 'generic' ? t('onboarding.agent.typeGeneric') : at.label}
+                  </Chip>
+                ))}
+              </div>
+              <Button variant="outline" size="sm" className="self-start" onClick={onGenerate}>
+                <Wand2 aria-hidden="true" />
+                {t('onboarding.agent.generate')}
+              </Button>
+            </>
+          ) : (
+            <>
+              <p>{t('onboarding.agent.pasteCommand')}</p>
+              {/* CopyButton : « Copié » seulement si la copie a réussi, « Échec » sinon, reset 2 s. */}
+              <CommandBlock text={pair.command} copyLabel={t('onboarding.agent.copy')} />
+              <p className="text-xs text-muted-foreground">
+                {t('onboarding.agent.codeLabel')}
+                <strong className="font-mono text-foreground">{pair.pairing_code}</strong>
+                {t('onboarding.agent.codeValidity')}
+              </p>
+            </>
+          )}
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
   )
 }
 
@@ -394,46 +473,33 @@ function EngineStep({
 }) {
   const { t } = useT()
   if (healthUnavailable) {
-    return (
-      <div className="ob-step">
-        <p className="muted">
-          {t('onboarding.engine.unavailable')}
-        </p>
-      </div>
-    )
+    return <p className="text-muted-foreground">{t('onboarding.engine.unavailable')}</p>
   }
   if (!health) {
-    return (
-      <div className="ob-step">
-        <div className="spinner-row"><span className="spinner" aria-hidden /> {t('onboarding.engine.detecting')}</div>
-      </div>
-    )
+    return <Spinner label={t('onboarding.engine.detecting')} />
   }
 
   const o = health.options
-  const cards: Array<{ id: EngineChoice; icon: string; label: string; hint: string; state: EngineState }> = [
+  const cards: Array<{ id: EngineChoice; label: string; hint: string; state: EngineState }> = [
     {
       id: 'ollama',
-      icon: '🦙',
       label: 'Ollama',
       hint: t('onboarding.engine.ollamaHint'),
       state: o.ollama.available ? 'ready' : o.ollama.serverUp || o.ollama.binaryInPath ? 'config' : 'off',
     },
     {
       id: 'lmstudio',
-      icon: '🖥️',
       label: 'LM Studio',
       hint: t('onboarding.engine.lmstudioHint'),
       state: o.lmstudio.available && o.lmstudio.models.length > 0 ? 'ready' : o.lmstudio.available ? 'config' : 'off',
     },
-    { id: 'openai', icon: '🔑', label: 'OpenAI', hint: t('onboarding.engine.apiKeyHint'), state: o.openai.available ? 'ready' : 'config' },
-    { id: 'openrouter', icon: '🔑', label: 'OpenRouter', hint: t('onboarding.engine.apiKeyHint'), state: o.openrouter.available ? 'ready' : 'config' },
-    { id: 'anthropic', icon: '🔑', label: 'Anthropic', hint: t('onboarding.engine.apiKeyHint'), state: o.anthropic.available ? 'ready' : 'config' },
+    { id: 'openai', label: 'OpenAI', hint: t('onboarding.engine.apiKeyHint'), state: o.openai.available ? 'ready' : 'config' },
+    { id: 'openrouter', label: 'OpenRouter', hint: t('onboarding.engine.apiKeyHint'), state: o.openrouter.available ? 'ready' : 'config' },
+    { id: 'anthropic', label: 'Anthropic', hint: t('onboarding.engine.apiKeyHint'), state: o.anthropic.available ? 'ready' : 'config' },
   ]
   if (o.openclaw.available && o.openclaw.reusable && o.openclaw.provider) {
     cards.push({
       id: 'openclaw',
-      icon: '🔁',
       label: t('onboarding.engine.openclawLabel'),
       hint: t('onboarding.engine.openclawHint', { provider: o.openclaw.provider }),
       state: 'ready',
@@ -441,30 +507,43 @@ function EngineStep({
   }
 
   return (
-    <div className="ob-step">
-      <p className="muted">
-        {t('onboarding.engine.lead')} <strong>{t('onboarding.engine.leadStrong')}</strong>.
+    <>
+      <p className="text-muted-foreground">
+        {t('onboarding.engine.lead')} <strong className="text-foreground">{t('onboarding.engine.leadStrong')}</strong>.
       </p>
 
-      <div className="engine-grid">
-        {cards.map(c => (
-          <button
-            key={c.id}
-            type="button"
-            className={`engine-card${selected === c.id ? ' engine-active' : ''}`}
-            onClick={() => onChoose(c.id)}
-          >
-            <span className="engine-head">
-              <span>{c.icon} <strong>{c.label}</strong></span>
-              <StateBadge state={c.state} />
-            </span>
-            <span className="muted engine-hint">{c.hint}</span>
-          </button>
-        ))}
+      <div role="radiogroup" aria-label={t('onboarding.engine.choicesLabel')} className="grid gap-2 sm:grid-cols-2">
+        {cards.map(c => {
+          const active = selected === c.id
+          return (
+            <button
+              key={c.id}
+              type="button"
+              role="radio"
+              aria-checked={active}
+              onClick={() => onChoose(c.id)}
+              className={cn(
+                'flex flex-col gap-1 rounded-lg border p-3 text-left transition-colors outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/60',
+                active && 'border-primary bg-primary/5 ring-1 ring-primary',
+              )}
+            >
+              <span className="flex items-center justify-between gap-2">
+                <span className="font-medium">{c.label}</span>
+                <EngineBadge state={c.state} />
+              </span>
+              <span className="text-xs text-muted-foreground">{c.hint}</span>
+            </button>
+          )
+        })}
       </div>
 
-      {engineError && <div className="error-banner">{engineError}</div>}
-      {chosenNote && <p className="engine-note">{chosenNote}</p>}
+      {engineError && <ErrorBanner message={engineError} className="my-0" />}
+      {chosenNote && (
+        <p className="flex items-center gap-1.5 text-success" role="status">
+          <CircleCheck className="size-4 shrink-0" aria-hidden="true" />
+          {chosenNote}
+        </p>
+      )}
 
       {selected === 'ollama' && <OllamaGuide o={o.ollama} pulling={pulling} pullStatus={pullStatus} onPull={onPull} onReverify={onReverify} checking={checking} />}
       {selected === 'lmstudio' && <LmStudioGuide o={o.lmstudio} onReverify={onReverify} checking={checking} />}
@@ -472,44 +551,79 @@ function EngineStep({
         <ApiKeyGuide provider={selected} available={o[selected].available} onReverify={onReverify} checking={checking} />
       )}
 
-      <EmbeddingsChooser
-        health={health}
-        current={health.embeddings.available ? health.embeddings.provider : undefined}
-        currentModel={health.embeddings.available ? health.embeddings.model : undefined}
-        onChanged={onReverify}
-      />
+      <div className="rounded-lg border p-3">
+        <EmbeddingsChooser
+          health={health}
+          current={health.embeddings.available ? health.embeddings.provider : undefined}
+          currentModel={health.embeddings.available ? health.embeddings.model : undefined}
+          onChanged={onReverify}
+          variant="plain"
+        />
+      </div>
 
-      <div className="engine-test">
-        <button type="button" className="btn btn-ghost" disabled={checking} onClick={onTest}>
+      <div className="flex flex-col gap-2">
+        <Button type="button" variant="outline" size="sm" className="self-start" disabled={checking} onClick={onTest}>
+          {checking ? <Loader2 className="animate-spin" aria-hidden="true" /> : <RefreshCw aria-hidden="true" />}
           {checking ? t('onboarding.engine.checking') : t('onboarding.engine.test')}
-        </button>
+        </Button>
         {testResult && (
-          <ul className="engine-results">
-            <li className={testResult.extraction.available ? 'ok' : 'ko'}>
-              {testResult.extraction.available
-                ? t('onboarding.engine.extractionReady', { provider: testResult.extraction.provider ?? '', model: testResult.extraction.model ?? '' })
-                : t('onboarding.engine.extractionFail', { reason: testResult.extraction.reason ?? t('onboarding.engine.reasonUnknown') })}
+          <ul className="flex flex-col gap-1" role="status">
+            <li className={cn('flex items-start gap-1.5', testResult.extraction.available ? 'text-success' : 'text-destructive')}>
+              {testResult.extraction.available ? <CircleCheck className="mt-0.5 size-4 shrink-0" aria-hidden="true" /> : <CircleX className="mt-0.5 size-4 shrink-0" aria-hidden="true" />}
+              <span>
+                {testResult.extraction.available
+                  ? t('onboarding.engine.extractionReady', { provider: testResult.extraction.provider ?? '', model: testResult.extraction.model ?? '' })
+                  : t('onboarding.engine.extractionFail', { reason: testResult.extraction.reason ?? t('onboarding.engine.reasonUnknown') })}
+              </span>
             </li>
-            <li className={testResult.embeddings.available ? 'ok' : 'ko'}>
-              {testResult.embeddings.available
-                ? t('onboarding.engine.embeddingsReady', { provider: testResult.embeddings.provider ?? '', model: testResult.embeddings.model ?? '' })
-                : t('onboarding.engine.embeddingsWarn', { reason: testResult.embeddings.reason ?? t('onboarding.engine.embeddingsUnavailable') })}
+            <li className={cn('flex items-start gap-1.5', testResult.embeddings.available ? 'text-success' : 'text-warning')}>
+              {testResult.embeddings.available ? <CircleCheck className="mt-0.5 size-4 shrink-0" aria-hidden="true" /> : <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden="true" />}
+              <span>
+                {testResult.embeddings.available
+                  ? t('onboarding.engine.embeddingsReady', { provider: testResult.embeddings.provider ?? '', model: testResult.embeddings.model ?? '' })
+                  : t('onboarding.engine.embeddingsWarn', { reason: testResult.embeddings.reason ?? t('onboarding.engine.embeddingsUnavailable') })}
+              </span>
             </li>
           </ul>
         )}
       </div>
 
       {!health.extraction.available && !degraded && (
-        <div className="degraded-box">
-          <p>
-            <strong>{t('onboarding.engine.degradedWarnStrong')}</strong> {t('onboarding.engine.degradedWarnBody')}
-          </p>
-          <button type="button" className="btn btn-danger" onClick={onDegraded}>
-            {t('onboarding.engine.continueDegraded')}
-          </button>
-        </div>
+        <Alert variant="destructive">
+          <TriangleAlert />
+          <AlertTitle>{t('onboarding.engine.degradedWarnStrong')}</AlertTitle>
+          <AlertDescription>{t('onboarding.engine.degradedWarnBody')}</AlertDescription>
+          <div className="col-start-2 mt-2">
+            <Button type="button" variant="destructive" size="sm" onClick={onDegraded}>
+              {t('onboarding.engine.continueDegraded')}
+            </Button>
+          </div>
+        </Alert>
       )}
-    </div>
+    </>
+  )
+}
+
+/** Boîte de guidage (installation, re-vérification) sous les cartes moteur. */
+function Guide({ children }: { children: ReactNode }) {
+  return <div className="flex flex-col gap-2 rounded-lg bg-muted/60 p-3">{children}</div>
+}
+
+function RecheckButton({ label, checking, onClick }: { label: string; checking: boolean; onClick: () => void }) {
+  return (
+    <Button type="button" variant="outline" size="sm" className="self-start" disabled={checking} onClick={onClick}>
+      {checking ? <Loader2 className="animate-spin" aria-hidden="true" /> : <RefreshCw aria-hidden="true" />}
+      {label}
+    </Button>
+  )
+}
+
+function ExtLink({ href, children }: { href: string; children: ReactNode }) {
+  return (
+    <a href={href} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-medium text-primary underline-offset-4 hover:underline">
+      {children}
+      <ExternalLink className="size-3" aria-hidden="true" />
+    </a>
   )
 }
 
@@ -531,72 +645,80 @@ function OllamaGuide({
   const { t } = useT()
   if (!o.serverUp) {
     return (
-      <div className="engine-guide">
+      <Guide>
         <p>
-          {t('onboarding.ollama.step1')} <a href="https://ollama.com/download" target="_blank" rel="noreferrer">ollama.com/download</a>
+          {t('onboarding.ollama.step1')} <ExtLink href="https://ollama.com/download">ollama.com/download</ExtLink>
         </p>
         <p>{t('onboarding.ollama.step2')}</p>
-        <button type="button" className="btn btn-primary" disabled={checking} onClick={onReverify}>
-          {t('onboarding.ollama.recheck')}
-        </button>
-      </div>
+        <RecheckButton label={t('onboarding.ollama.recheck')} checking={checking} onClick={onReverify} />
+      </Guide>
     )
   }
   const missing: Array<{ model: string; label: string }> = []
   if (!o.hasExtractModel) missing.push({ model: 'qwen2.5:3b', label: t('onboarding.ollama.pullExtract') })
   if (!o.hasEmbedModel) missing.push({ model: 'nomic-embed-text', label: t('onboarding.ollama.pullEmbed') })
   if (missing.length === 0) {
-    return <div className="engine-guide"><p className="engine-note">{t('onboarding.ollama.ready', { count: o.models.length })}</p></div>
+    return (
+      <Guide>
+        <p className="flex items-center gap-1.5 text-success">
+          <CircleCheck className="size-4 shrink-0" aria-hidden="true" />
+          {t('onboarding.ollama.ready', { count: o.models.length })}
+        </p>
+      </Guide>
+    )
   }
   return (
-    <div className="engine-guide">
+    <Guide>
       <p>{t('onboarding.ollama.missingIntro', { what: missing.length === 1 ? t('onboarding.ollama.missingOne') : t('onboarding.ollama.missingTwo') })}</p>
       {missing.map(m => {
         const isPullingThis = pullStatus?.model === m.model && (pullStatus.running || pulling === m.model)
         return (
-          <div key={m.model} className="pull-row">
-            <button
-              type="button"
-              className="btn btn-primary"
-              disabled={pulling !== null || pullStatus?.running === true}
-              onClick={() => onPull(m.model)}
-            >
+          <div key={m.model} className="flex flex-col gap-1.5">
+            <Button type="button" size="sm" className="self-start" disabled={pulling !== null || pullStatus?.running === true} onClick={() => onPull(m.model)}>
+              {isPullingThis ? <Loader2 className="animate-spin" aria-hidden="true" /> : <Download aria-hidden="true" />}
               {m.label}
-            </button>
+            </Button>
             {isPullingThis && (
-              <div className="progress" role="progressbar" aria-valuenow={pullStatus?.percent ?? undefined}>
-                <div className="progress-fill" style={{ width: `${pullStatus?.percent ?? 2}%` }} />
-                <span className="progress-label">
-                  {pullStatus?.percent !== null && pullStatus?.percent !== undefined ? `${pullStatus.percent} %` : pullStatus?.status ?? '…'}
+              <div className="flex items-center gap-2" role="status">
+                <Progress value={pullStatus?.percent ?? 2} className="h-1.5" aria-label={m.label} />
+                <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+                  {pullStatus?.percent !== null && pullStatus?.percent !== undefined ? `${pullStatus.percent} %` : (pullStatus?.status ?? '…')}
                 </span>
               </div>
             )}
           </div>
         )
       })}
-    </div>
+    </Guide>
   )
 }
 
 function LmStudioGuide({ o, onReverify, checking }: { o: LlmHealth['options']['lmstudio']; onReverify: () => void; checking: boolean }) {
   const { t } = useT()
   return (
-    <div className="engine-guide">
+    <Guide>
       {!o.available ? (
         <>
-          <p>{t('onboarding.lmstudio.step1')} <a href="https://lmstudio.ai" target="_blank" rel="noreferrer">lmstudio.ai</a></p>
+          <p>
+            {t('onboarding.lmstudio.step1')} <ExtLink href="https://lmstudio.ai">lmstudio.ai</ExtLink>
+          </p>
           <p>{t('onboarding.lmstudio.step2')}</p>
-          <p>{t('onboarding.lmstudio.step3a')}<strong>Developer</strong>{t('onboarding.lmstudio.step3b')}</p>
+          <p>
+            {t('onboarding.lmstudio.step3a')}
+            <strong>Developer</strong>
+            {t('onboarding.lmstudio.step3b')}
+          </p>
         </>
       ) : o.models.length === 0 ? (
         <p>{t('onboarding.lmstudio.noModel')}</p>
       ) : (
-        <p className="engine-note">{t('onboarding.lmstudio.ready', { model: o.models[0] ?? '' })}</p>
+        <p className="flex items-center gap-1.5 text-success">
+          <CircleCheck className="size-4 shrink-0" aria-hidden="true" />
+          {t('onboarding.lmstudio.ready', { model: o.models[0] ?? '' })}
+        </p>
       )}
-      <button type="button" className="btn btn-primary" disabled={checking} onClick={onReverify}>
-        {t('onboarding.lmstudio.recheck')}
-      </button>
-    </div>
+      <RecheckButton label={t('onboarding.lmstudio.recheck')} checking={checking} onClick={onReverify} />
+    </Guide>
   )
 }
 
@@ -613,24 +735,23 @@ function ApiKeyGuide({
 }) {
   const { t } = useT()
   // Le mot à remplacer suit la langue (TA_CLÉ / YOUR_KEY…), comme la phrase qui l'annonce.
-  const command = `echo '${t('onboarding.apikey.placeholder')}' > ~/.${provider}/api_key && chmod 600 ~/.${provider}/api_key`
+  const command = `mkdir -p ~/.${provider} && echo '${t('onboarding.apikey.placeholder')}' > ~/.${provider}/api_key && chmod 600 ~/.${provider}/api_key`
   const providerName = provider === 'openai' ? 'OpenAI' : provider === 'openrouter' ? 'OpenRouter' : 'Anthropic'
   return (
-    <div className="engine-guide">
+    <Guide>
       {available ? (
-        <p className="engine-note">{t('onboarding.apikey.detected', { provider })}</p>
+        <p className="flex items-center gap-1.5 text-success">
+          <CircleCheck className="size-4 shrink-0" aria-hidden="true" />
+          {t('onboarding.apikey.detected', { provider })}
+        </p>
       ) : (
         <>
-          <p>
-            {t('onboarding.apikey.instructions', { provider: providerName })}
-          </p>
-          <pre className="command">mkdir -p ~/.{provider} && {command}</pre>
-          <p className="muted">{t('onboarding.apikey.note')}</p>
+          <p>{t('onboarding.apikey.instructions', { provider: providerName })}</p>
+          <CommandBlock text={command} copyLabel={t('common.copy')} />
+          <p className="text-xs text-muted-foreground">{t('onboarding.apikey.note')}</p>
         </>
       )}
-      <button type="button" className="btn btn-primary" disabled={checking} onClick={onReverify}>
-        {t('onboarding.apikey.recheck')}
-      </button>
-    </div>
+      <RecheckButton label={t('onboarding.apikey.recheck')} checking={checking} onClick={onReverify} />
+    </Guide>
   )
 }

@@ -12,21 +12,45 @@
  *  2. La sélection sert aux DEUX opérations de masse (fusionner, oublier), donc
  *     l'écran dit toujours combien d'éléments sont sélectionnés et ce qui va
  *     leur arriver — jamais un bouton dont l'effet se devine.
+ *
+ * Écran migré sur shadcn : SectionCard « Recherche » (Select d'agent, source en
+ * segmented control, champ avec loupe — plus de débordement à 390 px), cartes
+ * MemFactCard, barre de sélection collante avec la règle de fusion lisible
+ * AVANT de cliquer, AlertDialog pour fusionner comme pour oublier, toasts.
+ * Mêmes appels : GET /v1/admin/facts | never_used, POST correct_fact,
+ * merge_facts, forget. La recherche pendant la frappe (300 ms) et la garde
+ * anti-course (lib/sequence) sont conservées.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { CheckSquare, Merge, Pencil, Save, Search, Sparkles, Square, X } from 'lucide-react'
+import { toast } from 'sonner'
+import { correctFact, forgetFacts, getAgents, mergeFacts, neverUsedFacts, searchFacts, type AdminFact, type AgentEntry } from '../api'
+import { MemAgentPicker, MemNoAgentState } from '../components/MemAgentSelect'
+import { MemFactCard, MemMetaText, MemSensitivityBadge } from '../components/MemFactCard'
+import { MemRefreshButton } from '../components/MemRefreshButton'
+import { MemSearchInput } from '../components/MemSearchInput'
+import { MemListCount } from '../components/MemListCount'
+import { MemSelectionBar } from '../components/MemSelectionBar'
+import { ConfirmButton, EmptyState, ErrorBanner, PageHeader, SectionCard, formatDay, humanError, listPhase } from '../components/ui'
 import {
-  ApiError,
-  correctFact,
-  forgetFacts,
-  getAgents,
-  mergeFacts,
-  neverUsedFacts,
-  searchFacts,
-  type AdminFact,
-  type AgentEntry,
-} from '../api'
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '../components/ui/alert-dialog'
+import { Badge } from '../components/ui/badge'
+import { Button } from '../components/ui/button'
+import { Label } from '../components/ui/label'
+import { Skeleton } from '../components/ui/skeleton'
+import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs'
+import { Textarea } from '../components/ui/textarea'
 import { useT } from '../i18n'
-import { EmptyState, ErrorBanner, Spinner, humanError, listPhase } from '../components/ui'
+import { categoryLabel } from '../lib/labels'
 import { createSequence } from '../lib/sequence'
 
 /** Délai avant de lancer la recherche après la dernière frappe. */
@@ -38,7 +62,11 @@ export function Maintenance() {
   const { t } = useT()
   const [agents, setAgents] = useState<AgentEntry[]>([])
   const [instance, setInstance] = useState<string>('')
-  const [source, setSource] = useState<Source>('search')
+  // POURQUOI « jamais utilisés » par défaut : ouvert sur « recherche », cet
+  // écran affichait EXACTEMENT la même liste des mêmes souvenirs que Mémoire,
+  // sous une deuxième entrée de menu. Il s'ouvre donc sur ce que Mémoire ne
+  // montre pas — les souvenirs dormants — et la recherche reste à un clic.
+  const [source, setSource] = useState<Source>('never-used')
   const [query, setQuery] = useState('')
   // Valeur réellement recherchée : `query` suit la frappe, `debouncedQuery`
   // ne bouge qu'après SEARCH_DEBOUNCE_MS de silence — un GET par mot, pas
@@ -49,16 +77,10 @@ export function Maintenance() {
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [notice, setNotice] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   // Aucun agent actif → état vide explicite au lieu d'un spinner sans fin.
   const [noAgent, setNoAgent] = useState(false)
   const [tick, setTick] = useState(0)
-
-  const fail = useCallback(
-    (err: unknown, fallback: string) => setError(err instanceof ApiError ? err.message : err instanceof TypeError ? humanError(err) : fallback),
-    [],
-  )
 
   useEffect(() => {
     getAgents()
@@ -66,10 +88,13 @@ export function Maintenance() {
         const active = list.filter(a => a.instance.revoked_at === null)
         setAgents(active)
         setNoAgent(active.length === 0)
-        if (active[0]) setInstance(active[0].instance.id)
+        if (active[0]) setInstance(prev => prev || active[0]!.instance.id)
       })
-      .catch(err => fail(err, t('maintenance.agents_failed')))
-  }, [fail, t, tick])
+      .catch((err: unknown) => {
+        console.warn('memoria-ui : agents illisibles', err)
+        setError(err instanceof TypeError ? humanError(err) : t('maintenance.agents_failed'))
+      })
+  }, [t, tick])
 
   useEffect(() => {
     const id = window.setTimeout(() => setDebouncedQuery(query), SEARCH_DEBOUNCE_MS)
@@ -80,6 +105,7 @@ export function Maintenance() {
   // recherche après avoir coché des doublons ne doit pas tout perdre.
   useEffect(() => {
     setSelected(new Set())
+    setEditing(null)
   }, [instance, source])
 
   const load = useCallback(async () => {
@@ -93,9 +119,10 @@ export function Maintenance() {
     } catch (err) {
       if (!seq.current.isCurrent(id)) return
       // facts reste tel quel : listPhase() affiche l'erreur, pas un faux « vide ».
-      fail(err, t('maintenance.load_failed'))
+      console.warn('memoria-ui : souvenirs illisibles', err)
+      setError(err instanceof TypeError ? humanError(err) : t('maintenance.load_failed'))
     }
-  }, [instance, source, debouncedQuery, fail, t])
+  }, [instance, source, debouncedQuery, t])
 
   useEffect(() => {
     void load()
@@ -107,33 +134,40 @@ export function Maintenance() {
   }, [])
 
   const phase = listPhase(facts, error)
+  const list = facts ?? []
 
-  const toggle = (id: string): void =>
+  const setOne = (id: string, on: boolean): void =>
     setSelected(prev => {
       const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
+      if (on) next.add(id)
+      else next.delete(id)
       return next
     })
+  const allSelected = list.length > 0 && list.every(f => selected.has(f.id))
+  const toggleAll = () =>
+    setSelected(prev => {
+      if (allSelected) return new Set([...prev].filter(id => !list.some(f => f.id === id)))
+      return new Set([...prev, ...list.map(f => f.id)])
+    })
 
-  /** Enveloppe commune : occupe l'UI, remonte l'erreur, recharge à la fin. */
+  /** Enveloppe commune : occupe l'UI, dit le résultat en toast, recharge à la fin. */
   const run = useCallback(
     async (fn: () => Promise<string>, fallback: string) => {
       setBusy(true)
-      setError(null)
-      setNotice(null)
       try {
-        setNotice(await fn())
+        toast.success(await fn())
         // l'opération a consommé la sélection (fusionnés / oubliés) → on repart à zéro
         setSelected(new Set())
         await load()
       } catch (err) {
-        fail(err, fallback)
+        // L'échec d'une action ne cache pas la liste : les souvenirs sont toujours là, on le dit en toast.
+        console.warn('memoria-ui : action de maintenance refusée', err)
+        toast.error(err instanceof TypeError ? humanError(err) : `${fallback} ${humanError(err)}`)
       } finally {
         setBusy(false)
       }
     },
-    [load, fail],
+    [load],
   )
 
   const saveCorrection = (): void => {
@@ -160,128 +194,217 @@ export function Maintenance() {
   const forget = (): void => {
     const ids = [...selected]
     if (ids.length === 0) return
-    if (!confirm(t('maintenance.forget_confirm', { count: ids.length }))) return
     void run(async () => t('maintenance.forgotten', { count: await forgetFacts(ids) }), t('maintenance.forget_failed'))
   }
 
   const keepId = [...selected][0]
+  // Souvenirs cochés mais hors de la liste affichée (autre recherche) : on le dit.
+  const hidden = [...selected].filter(id => !list.some(f => f.id === id)).length
 
   return (
-    <section>
-      <header className="screen-head">
-        <div>
-          <h1>{t('maintenance.title')}</h1>
-          <p className="muted">{t('maintenance.lead')}</p>
-        </div>
-      </header>
-
-      <div className="toolbar">
-        <select value={instance} onChange={e => setInstance(e.target.value)} aria-label={t('maintenance.agent')}>
-          {agents.map(({ instance: inst, assistant_type }) => (
-            <option key={inst.id} value={inst.id}>
-              {assistant_type}
-            </option>
-          ))}
-        </select>
-
-        <select value={source} onChange={e => setSource(e.target.value as Source)} aria-label={t('maintenance.source')}>
-          <option value="search">{t('maintenance.source_search')}</option>
-          <option value="never-used">{t('maintenance.source_never_used')}</option>
-        </select>
-
-        {source === 'search' && (
-          <input
-            type="search"
-            value={query}
-            placeholder={t('maintenance.search_placeholder')}
-            onChange={e => setQuery(e.target.value)}
+    <>
+      <PageHeader
+        title={t('maintenance.title')}
+        description={t('maintenance.lead')}
+        actions={
+          <MemRefreshButton
+            label={t('common.refresh')}
+            onClick={retry}
+            disabled={!instance || phase === 'loading'}
+            spinning={phase === 'loading'}
           />
-        )}
-      </div>
+        }
+      />
+
+      {/* Même emplacement et même libellé que sur les cinq autres écrans par agent. */}
+      <MemAgentPicker id="maintenance-agent" agents={agents} value={instance} onChange={setInstance} disabled={busy} />
+
+      {!noAgent && (
+        <SectionCard title={t('maintenance.search.title')}>
+          {/* Une colonne sous 640 px, puis source + champ côte à côte à partir de lg. */}
+          <div className="grid gap-3 lg:grid-cols-[auto_minmax(0,1fr)]">
+            <div className="flex flex-col gap-1.5">
+              <Label id="maintenance-source-label">{t('maintenance.source')}</Label>
+              <Tabs value={source} onValueChange={v => setSource(v as Source)}>
+                <TabsList aria-labelledby="maintenance-source-label" className="w-full sm:w-auto">
+                  <TabsTrigger value="search">
+                    <Search aria-hidden="true" />
+                    {t('maintenance.source_search')}
+                  </TabsTrigger>
+                  <TabsTrigger value="never-used">
+                    <Sparkles aria-hidden="true" />
+                    {t('maintenance.source_never_used')}
+                  </TabsTrigger>
+                </TabsList>
+              </Tabs>
+            </div>
+            <div className="flex flex-col gap-1.5">
+              {source === 'search' ? (
+                <>
+                  <Label htmlFor="maintenance-query">{t('memory.search_one_label')}</Label>
+                  <MemSearchInput id="maintenance-query" value={query} placeholder={t('maintenance.search_placeholder')} onChange={e => setQuery(e.target.value)} />
+                </>
+              ) : (
+                /* `mt-auto` et non `self-end` : dans une colonne flex, `self-end`
+                   aligne sur l'axe TRANSVERSAL, donc à droite — la phrase partait
+                   se poser au bout de la ligne du label « Source », loin des
+                   onglets qu'elle explique. `mt-auto` la pousse vraiment en bas
+                   de la colonne, à hauteur des onglets. */
+                <p className="text-sm text-muted-foreground lg:mt-auto lg:pb-1.5">{t('maintenance.never_used_hint')}</p>
+              )}
+            </div>
+          </div>
+        </SectionCard>
+      )}
+
+      <MemSelectionBar
+        count={selected.size}
+        onClear={() => setSelected(new Set())}
+        hint={
+          selected.size >= 2
+            ? hidden > 0
+              ? `${t('maintenance.merge_hint')} ${t('maintenance.hidden_selected', { count: hidden })}`
+              : t('maintenance.merge_hint')
+            : hidden > 0
+              ? t('maintenance.hidden_selected', { count: hidden })
+              : undefined
+        }
+      >
+        <AlertDialog>
+          <AlertDialogTrigger asChild>
+            <Button type="button" variant="outline" size="sm" disabled={busy || selected.size < 2}>
+              <Merge aria-hidden="true" />
+              {t('maintenance.merge')}
+            </Button>
+          </AlertDialogTrigger>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>{t('maintenance.merge_title', { count: selected.size })}</AlertDialogTitle>
+              <AlertDialogDescription>{t('maintenance.merge_body')}</AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
+              <AlertDialogAction onClick={merge}>{t('maintenance.merge')}</AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+        <ConfirmButton
+          variant="destructive"
+          label={t('maintenance.forget')}
+          title={selected.size > 1 ? t('memory.forget_selected_title', { count: selected.size }) : t('memory.forget_one_title')}
+          description={selected.size > 1 ? t('memory.forget_selected_body') : t('memory.forget_one_body')}
+          confirmLabel={t('memory.forget_confirm')}
+          disabled={busy}
+          onConfirm={forget}
+        />
+      </MemSelectionBar>
 
       {error && <ErrorBanner message={error} onRetry={retry} />}
-      {notice && <div className="info-banner">{notice}</div>}
-
-      {selected.size > 0 && (
-        <div className="review-bulk">
-          <span className="muted">{t('maintenance.selected', { count: selected.size })}</span>
-          <button type="button" className="btn" disabled={busy || selected.size < 2} onClick={merge}>
-            {t('maintenance.merge')}
-          </button>
-          <button type="button" className="btn btn-danger" disabled={busy} onClick={forget}>
-            {t('maintenance.forget')}
-          </button>
-        </div>
-      )}
-
-      {/* La règle de fusion doit être lisible AVANT de cliquer, pas découverte après. */}
-      {selected.size >= 2 && <p className="muted">{t('maintenance.merge_hint')}</p>}
 
       {noAgent ? (
-        <EmptyState title={t('memory.no_agent_title')} body={t('memory.no_agent_body')} />
+        <MemNoAgentState />
       ) : phase === 'loading' ? (
-        <Spinner />
-      ) : phase === 'failed' || facts === null ? null : facts.length === 0 ? (
-        <div className="empty-state">
-          <p>{t(source === 'never-used' ? 'maintenance.empty_never_used' : 'maintenance.empty_search')}</p>
-        </div>
-      ) : (
-        <ul className="fact-list">
-          {facts.map(f => (
-            <li key={f.id} className="fact-card">
-              <label className="fact-select">
-                <input type="checkbox" checked={selected.has(f.id)} onChange={() => toggle(f.id)} disabled={busy} />
-                {editing?.id === f.id ? (
-                  <textarea
-                    className="fact-edit"
-                    value={editing.text}
-                    rows={3}
-                    autoFocus
-                    onChange={e => setEditing({ id: f.id, text: e.target.value })}
-                  />
-                ) : (
-                  <p className="fact-content">{f.fact}</p>
-                )}
-              </label>
-
-              <div className="fact-meta">
-                {(f.topics ?? []).map(topic => (
-                  <span key={topic} className="badge badge-theme">
-                    {topic}
-                  </span>
-                ))}
-                <span className="badge badge-muted">{f.category}</span>
-                {f.id === keepId && selected.size >= 2 && (
-                  <span className="badge">{t('maintenance.badge_keep')}</span>
-                )}
-                <span className="muted">{f.created_at.slice(0, 10)}</span>
-
-                <span className="fact-actions">
-                  {editing?.id === f.id ? (
-                    <>
-                      <button type="button" className="btn btn-primary" disabled={busy} onClick={saveCorrection}>
-                        {t('maintenance.save')}
-                      </button>
-                      <button type="button" className="btn" disabled={busy} onClick={() => setEditing(null)}>
-                        {t('maintenance.cancel')}
-                      </button>
-                    </>
-                  ) : (
-                    <button
-                      type="button"
-                      className="btn"
-                      disabled={busy}
-                      onClick={() => setEditing({ id: f.id, text: f.fact })}
-                    >
-                      {t('maintenance.correct')}
-                    </button>
-                  )}
-                </span>
-              </div>
-            </li>
+        <div className="flex flex-col gap-3" role="status" aria-label={t('common.loading')}>
+          {[0, 1, 2].map(i => (
+            <Skeleton key={i} className="h-24 w-full rounded-xl" />
           ))}
-        </ul>
+        </div>
+      ) : phase === 'failed' ? null : phase === 'empty' ? (
+        <EmptyState
+          icon={source === 'never-used' ? <Sparkles className="size-5" /> : <Search className="size-5" />}
+          title={t(source === 'never-used' ? 'maintenance.empty_never_used' : 'maintenance.empty_search')}
+          action={
+            // Aucun souvenir dormant : l'écran ne reste pas vide et muet, il
+            // propose l'autre entrée de l'atelier.
+            source === 'never-used' ? (
+              <Button variant="outline" onClick={() => setSource('search')}>
+                <Search aria-hidden="true" />
+                {t('maintenance.empty_never_used_action')}
+              </Button>
+            ) : undefined
+          }
+        />
+      ) : (
+        <section aria-label={t('maintenance.list_label')}>
+          <MemListCount label={list.length > 1 ? t('fact.count_plural', { count: list.length }) : t('fact.count', { count: list.length })}>
+            <Button type="button" variant="ghost" size="sm" onClick={toggleAll} disabled={busy}>
+              {allSelected ? <Square aria-hidden="true" /> : <CheckSquare aria-hidden="true" />}
+              {allSelected ? t('selection.unselect_all') : t('selection.select_all')}
+            </Button>
+          </MemListCount>
+          <ul className="flex flex-col gap-3">
+            {list.map(f => {
+              const isEditing = editing?.id === f.id
+              return (
+                <li key={f.id}>
+                  <MemFactCard
+                    selected={selected.has(f.id)}
+                    onSelectedChange={on => setOne(f.id, on)}
+                    selectLabel={t('selection.select')}
+                    disabled={busy}
+                    meta={
+                      <>
+                        {(f.topics ?? []).map(topic => (
+                          <Badge key={topic} variant="outline">
+                            {topic}
+                          </Badge>
+                        ))}
+                        <Badge variant="secondary">{categoryLabel(t, f.category)}</Badge>
+                        {f.id === keepId && selected.size >= 2 && <Badge>{t('maintenance.badge_keep')}</Badge>}
+                        <MemSensitivityBadge sensitivity={f.sensitivity} />
+                        <MemMetaText>{formatDay(f.created_at)}</MemMetaText>
+                      </>
+                    }
+                    actions={
+                      isEditing ? (
+                        <>
+                          <Button size="sm" disabled={busy || !editing.text.trim()} onClick={saveCorrection}>
+                            <Save aria-hidden="true" />
+                            {t('maintenance.save')}
+                          </Button>
+                          <Button variant="ghost" size="sm" disabled={busy} onClick={() => setEditing(null)}>
+                            <X aria-hidden="true" />
+                            {t('maintenance.cancel')}
+                          </Button>
+                        </>
+                      ) : (
+                        <Button variant="outline" size="sm" disabled={busy} onClick={() => setEditing({ id: f.id, text: f.fact })}>
+                          <Pencil aria-hidden="true" />
+                          {t('maintenance.correct')}
+                        </Button>
+                      )
+                    }
+                  >
+                    {isEditing ? (
+                      // `data-no-select` : tant que l'édition est ouverte, aucun
+                      // clic dans ce bloc ne coche la fiche — pas même sur la
+                      // phrase d'aide, qui n'est pas un élément interactif et
+                      // passait donc à travers le garde-fou de MemFactCard.
+                      <div data-no-select>
+                        <Textarea
+                          value={editing.text}
+                          rows={3}
+                          autoFocus
+                          aria-label={t('maintenance.edit_label')}
+                          onChange={e => setEditing({ id: f.id, text: e.target.value })}
+                        />
+                        {/* La garantie s'affiche ICI, au moment où l'on hésite à
+                            corriger, et non seulement dans le toast qui arrive
+                            APRÈS. « Corriger » est le geste le plus fréquent de
+                            l'écran et le seul où l'on cliquait sans savoir si on
+                            détruisait quelque chose. */}
+                        <p className="mt-1.5 text-xs text-muted-foreground">{t('maintenance.edit_safe')}</p>
+                      </div>
+                    ) : (
+                      f.fact
+                    )}
+                  </MemFactCard>
+                </li>
+              )
+            })}
+          </ul>
+        </section>
       )}
-    </section>
+    </>
   )
 }

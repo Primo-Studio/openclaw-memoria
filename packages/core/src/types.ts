@@ -523,3 +523,54 @@ export interface MemoriaEvent {
   ts: string
   payload: Record<string, unknown>
 }
+
+// ---------------------------------------------------------------------------
+// Révisions : le CONTENU des deux souvenirs en cause (couches 18/24)
+// ---------------------------------------------------------------------------
+
+/**
+ * Un souvenir tel qu'il est MONTRÉ dans une proposition de révision.
+ *
+ * POURQUOI ce type : l'écran Révisions demandait d'arbitrer une contradiction
+ * (« garder l'ancien » / « accepter le nouveau ») en ne transportant que des
+ * IDENTIFIANTS — l'utilisateur devait trancher sans voir les souvenirs. On
+ * n'expose que ce qui sert à DÉCIDER : le texte, sa catégorie, sa date, l'agent
+ * qui l'a écrit, et son état (encore vivant ? déjà remplacé ?).
+ */
+export interface RevisionFactDetail {
+  id: string
+  /** Le texte du souvenir — LA raison d'être de ce type. */
+  fact: string
+  category: string
+  created_at: string
+  /**
+   * Instance de l'assistant d'origine (id brut, ex. `claude-code@macbook-primo`)
+   * ou null pour un fait sans provenance. Le core ne traduit PAS en nom d'agent :
+   * seul l'appelant (daemon/UI) a le registre sous la main.
+   */
+  assistant_instance_id: string | null
+  /** actif | dormant | archivé — un souvenir dormant n'est plus rappelé. */
+  lifecycle_state: LifecycleState
+  /** 1 = déjà supersédé par un fait plus récent (l'UI le dit au lieu de mentir). */
+  superseded: number
+}
+
+/**
+ * Une proposition de révision AVEC les deux souvenirs concernés.
+ *
+ * `fact` = le souvenir qui serait RANGÉ (l'ancien) ; `replacement` = celui qui
+ * le remplace (le plus récent), absent pour un obsolète pur. L'un ou l'autre
+ * vaut null si le fait a été SUPPRIMÉ entre-temps : l'écran doit le dire
+ * (« souvenir introuvable »), jamais planter ni afficher un blanc.
+ */
+export interface RevisionProposalDetailed {
+  id: string
+  fact_id: string
+  kind: 'obsolete' | 'contradicted' | 'duplicate'
+  reason: string
+  replacement_fact_id: string | null
+  status: 'proposed' | 'accepted' | 'dismissed'
+  created_at: string
+  fact: RevisionFactDetail | null
+  replacement: RevisionFactDetail | null
+}

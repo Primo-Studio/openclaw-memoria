@@ -171,14 +171,25 @@ export function extractTokenFromHash(hash: string): string | null {
 }
 
 /**
+ * Écran demandé avec le token (`#token=…&route=memory`) : sert aux captures
+ * automatisées (scripts/ui-preview.mjs) et aux liens profonds ouverts par le
+ * CLI. Pur, testable. Absent ou vide → null (le routeur prend le défaut).
+ */
+export function extractRouteFromHash(hash: string): string | null {
+  const route = new URLSearchParams(hash.replace(/^#/, '')).get('route')
+  return route && /^[a-z-]+$/.test(route) ? route : null
+}
+
+/**
  * À appeler UNE fois avant le premier rendu : adopte le token présent dans
- * l'URL puis réécrit l'URL sans le fragment.
+ * l'URL puis réécrit l'URL sans le fragment (ou avec la route demandée).
  */
 export function adoptTokenFromHash(): void {
   const token = extractTokenFromHash(location.hash)
   if (!token) return
   sessionStorage.setItem(TOKEN_KEY, token)
-  history.replaceState(null, '', location.pathname + location.search)
+  const route = extractRouteFromHash(location.hash)
+  history.replaceState(null, '', location.pathname + location.search + (route ? `#/${route}` : ''))
 }
 
 export function adminToken(): string | null {
@@ -317,9 +328,14 @@ export async function getImportStatus(): Promise<ImportJobStatus> {
   return request<ImportJobStatus>('GET', '/v1/admin/import_status')
 }
 
-/** Recherche dans la mémoire d'un agent. `q` vide = derniers souvenirs. */
-export async function searchFacts(instance: string, q: string): Promise<AdminFact[]> {
+/**
+ * Recherche dans la mémoire d'un agent. `q` vide = derniers souvenirs.
+ * `limit` est facultatif : sans lui, le daemon garde son défaut (50) — les
+ * appelants existants ne changent pas de comportement.
+ */
+export async function searchFacts(instance: string, q: string, limit?: number): Promise<AdminFact[]> {
   const params = new URLSearchParams({ instance, q })
+  if (limit) params.set('limit', String(limit))
   const res = await request<{ facts: AdminFact[] }>('GET', `/v1/admin/facts?${params.toString()}`)
   return res.facts
 }
@@ -683,6 +699,27 @@ export async function getExpertise(instance: string): Promise<ExpertiseDomain[]>
 
 // ------------------------------------------------------------ révisions (couche 18/24)
 
+/**
+ * Un des deux souvenirs cités par une proposition — miroir de
+ * `RevisionFactDetail` (packages/core/src/types.ts).
+ *
+ * POURQUOI : on ne peut pas demander de choisir entre deux souvenirs en
+ * n'affichant que leurs identifiants. Le daemon transporte donc le texte, sa
+ * catégorie, sa date, l'agent qui l'a écrit et son état.
+ */
+export interface RevisionFactDetail {
+  id: string
+  fact: string
+  category: string
+  created_at: string
+  /** Instance d'assistant d'origine (identifiant brut, traduit en nom à l'écran). */
+  assistant_instance_id: string | null
+  /** 'active' | 'dormant' | 'archived'. */
+  lifecycle_state: string
+  /** 1 = déjà remplacé par un souvenir plus récent. */
+  superseded: number
+}
+
 export interface RevisionProposal {
   id: string
   fact_id: string
@@ -690,6 +727,13 @@ export interface RevisionProposal {
   reason: string
   replacement_fact_id: string | null
   status: string
+  /**
+   * Le souvenir qui serait RANGÉ, et celui qui le remplace. `null` = le
+   * souvenir a été supprimé depuis (l'écran le dit, il ne laisse pas un blanc).
+   * Facultatifs : un daemon plus ancien ne les envoie pas encore.
+   */
+  fact?: RevisionFactDetail | null
+  replacement?: RevisionFactDetail | null
 }
 
 export async function getRevisions(instance: string): Promise<RevisionProposal[]> {

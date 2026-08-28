@@ -1,0 +1,86 @@
+/*
+ * Point d'entrée CSS de l'UI Memoria (importé UNE fois par main.tsx).
+ *
+ * Il n'y a plus qu'une seule feuille de style : les 16 écrans sont écrits en
+ * Tailwind + composants shadcn. L'ancien CSS maison (`styles.css`, importé dans
+ * une couche `legacy` et scopé sous `.legacy-screen` pendant la migration) a
+ * été supprimé — plus aucun écran ne l'utilisait, et le garder aurait laissé
+ * deux façons de styler la même chose.
+ */
+@layer theme, base, components, utilities;
+
+@import 'tailwindcss';
+@import 'tw-animate-css';
+/* Variantes/utilitaires shadcn vendorisés (pas de dépendance runtime au CLI). */
+@import './styles/shadcn-variants.css';
+@import './styles/tokens.css';
+
+/* Mode sombre = attribut résolu sur <html>, jamais la media query directement
+   (c'est lib/theme.ts qui traduit « Système » en light/dark). */
+@custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
+
+/*
+ * Indice de défilement horizontal (utilisé par le conteneur de <Table>).
+ *
+ * POURQUOI : un tableau plus large que sa carte était coupé NET au bord, sans
+ * ombre ni barre — rien ne disait qu'il restait des colonnes (sur Partage, deux
+ * agents sur trois devenaient invisibles). Technique des « ombres de
+ * défilement » : deux calques couvercle solidaires du contenu
+ * (background-attachment: local) masquent deux ombres fixes (attachment:
+ * scroll). Conséquence recherchée : l'ombre n'apparaît QUE du côté où il reste
+ * du contenu, et rien ne s'affiche quand le tableau tient en entier — donc
+ * aucune décoration parasite sur les écrans qui ne débordent pas. Zéro JS.
+ *
+ * `--scroll-shadow-surface` = la couleur du couvercle : celle du fond réel
+ * derrière le tableau (une carte, par défaut).
+ */
+@utility scroll-shadow-x {
+  --scroll-shadow-surface: var(--card);
+  background-image:
+    linear-gradient(to right, var(--scroll-shadow-surface) 55%, transparent),
+    linear-gradient(to left, var(--scroll-shadow-surface) 55%, transparent),
+    linear-gradient(to right, color-mix(in oklch, var(--foreground) 22%, transparent), transparent),
+    linear-gradient(to left, color-mix(in oklch, var(--foreground) 22%, transparent), transparent);
+  background-position: left center, right center, left center, right center;
+  background-repeat: no-repeat;
+  background-size: 28px 100%, 28px 100%, 12px 100%, 12px 100%;
+  background-attachment: local, local, scroll, scroll;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    @apply font-sans antialiased;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-size: 0.9375rem;
+    line-height: 1.5;
+  }
+  #root {
+    min-height: 100vh;
+  }
+  /* Un utilisateur non technicien s'attend à une main sur ce qui se clique. */
+  button:not(:disabled),
+  [role='button']:not([aria-disabled='true']) {
+    cursor: pointer;
+  }
+  code,
+  pre,
+  kbd {
+    @apply font-mono;
+    font-size: 0.875em;
+  }
+  /* Respect de « réduire les animations » (préférence système). */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    ::before,
+    ::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001ms !important;
+    }
+  }
+}

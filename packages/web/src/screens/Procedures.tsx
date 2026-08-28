@@ -2,39 +2,47 @@
  * Procédures — « comment faire les choses ». Les savoir-faire de chaque agent
  * (commandes, workflows), avec leur taux de réussite. Memoria apprend de
  * chaque exécution : ce qui marche remonte, ce qui rate est annoté.
+ *
+ * Migré sur shadcn : PageHeader (sélecteur d'agent), SectionCard, une carte
+ * par procédure (badge de réussite teinté, jauge, étapes numérotées avec
+ * repli au-delà de six, déclencheurs), squelette, états vide / erreur —
+ * voir UI-GUIDE.md.
  */
-import { useCallback, useEffect, useState } from 'react'
-import { ApiError, getAgents, getProcedures, type AgentEntry, type Procedure } from '../api'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { ChevronDown, ListOrdered } from 'lucide-react'
+import { ApiError, getProcedures, type Procedure } from '../api'
+import { useAnalyzableAgents } from '../components/CogAgentSelect'
+import { MemAgentPicker, MemNoAgentState } from '../components/MemAgentSelect'
+import { EmptyState, ErrorBanner, PageHeader, SectionCard, formatNumber, humanError, listPhase } from '../components/ui'
+import { Badge } from '../components/ui/badge'
+import { Button } from '../components/ui/button'
+import { Card, CardContent } from '../components/ui/card'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../components/ui/collapsible'
+import { Progress } from '../components/ui/progress'
+import { Skeleton } from '../components/ui/skeleton'
 import { useT } from '../i18n'
-import { EmptyState, ErrorBanner, Spinner, agentTypeLabel, humanError, listPhase } from '../components/ui'
-import { analyzableAgents } from '../lib/agents'
+import { cn } from '../lib/utils'
+
+// Étapes visibles d'emblée ; au-delà, un bouton déplie le reste.
+const STEPS_SHOWN = 6
 
 export function Procedures() {
   const { t } = useT()
-  const [agents, setAgents] = useState<AgentEntry[]>([])
-  const [instance, setInstance] = useState('')
+  const ag = useAnalyzableAgents()
   const [procedures, setProcedures] = useState<Procedure[] | null>(null)
   const [error, setError] = useState<string | null>(null)
-  // Aucun agent analysable (ex. seul « Autre agent (MCP) ») → état vide explicite.
-  const [noAgent, setNoAgent] = useState(false)
-  const [tick, setTick] = useState(0)
-
-  useEffect(() => {
-    getAgents()
-      .then(a => {
-        const real = analyzableAgents(a)
-        setAgents(real)
-        setNoAgent(real.length === 0)
-        if (real[0]) setInstance(real[0].instance.id)
-      })
-      .catch(err => setError(err instanceof ApiError ? err.message : humanError(err)))
-  }, [tick])
+  // Instance dont on attend la liste : un résultat arrivé après un changement
+  // d'agent est ignoré.
+  const wanted = useRef('')
 
   const load = useCallback(async (inst: string) => {
+    wanted.current = inst
     setProcedures(null)
     try {
-      setProcedures(await getProcedures(inst))
+      const list = await getProcedures(inst)
+      if (wanted.current === inst) setProcedures(list)
     } catch (err) {
+      if (wanted.current !== inst) return
       // 404 = vieux service sans la route : état vide, pas une panne.
       if (err instanceof ApiError && err.status === 404) setProcedures([])
       else setError(err instanceof ApiError ? err.message : humanError(err))
@@ -42,67 +50,157 @@ export function Procedures() {
   }, [])
 
   useEffect(() => {
-    if (instance) void load(instance)
-  }, [instance, load, tick])
-
-  const retry = useCallback(() => {
+    if (!ag.instance) return
     setError(null)
-    setTick(n => n + 1)
-  }, [])
+    void load(ag.instance)
+  }, [ag.instance, ag.tick, load])
 
   const phase = listPhase(procedures, error)
+  const bannerError = ag.error ?? error
 
   return (
-    <section>
-      <header className="screen-head">
-        <div>
-          <h1>{t('procedures.title')}</h1>
-          <p className="muted">{t('procedures.lead')}</p>
-        </div>
-        {agents.length > 0 && (
-          <select className="agent-select" value={instance} onChange={e => setInstance(e.target.value)}>
-            {agents.map(a => <option key={a.instance.id} value={a.instance.id}>{agentTypeLabel(a.assistant_type)}</option>)}
-          </select>
-        )}
-      </header>
+    <>
+      <PageHeader
+        title={t('procedures.title')}
+        description={t('procedures.lead')}
+      >
+        {/* Le sélecteur d'agent vit ICI sur les six écrans par agent : sous la
+            phrase d'intro, jamais dans la barre supérieure (à 390 px il y
+            écrasait le titre de l'écran). */}
+        <MemAgentPicker id="procedures-agent" agents={ag.agents} value={ag.instance} onChange={ag.setInstance} />
+      </PageHeader>
 
-      {error && <ErrorBanner message={error} onRetry={retry} />}
+      {bannerError && <ErrorBanner message={bannerError} onRetry={ag.retry} />}
 
-      {noAgent ? (
-        <EmptyState title={t('memory.no_agent_title')} body={t('memory.no_agent_body')} />
+      {ag.noAgent ? (
+        <MemNoAgentState className="mx-auto w-full max-w-xl sm:py-8" />
       ) : phase === 'loading' ? (
-        <Spinner />
+        <ProceduresSkeleton />
       ) : phase === 'failed' || procedures === null ? null : procedures.length === 0 ? (
-        <div className="empty-state">
-          <p>{t('procedures.empty_title')}</p>
-          <p className="muted">{t('procedures.empty_body')}</p>
-        </div>
+        <EmptyState icon={<ListOrdered className="size-5" />} title={t('procedures.empty_title')} body={t('procedures.empty_body')} className="mx-auto w-full max-w-xl sm:py-8" />
       ) : (
-        <ul className="proc-list">
-          {procedures.map(p => {
-            const total = p.success_count + p.failure_count
-            const rate = total > 0 ? Math.round((p.success_count / total) * 100) : null
-            return (
-              <li key={p.id} className="proc-card">
-                <div className="proc-head">
-                  <strong>{p.name}</strong>
-                  {rate !== null && (
-                    <span className={`proc-rate ${rate >= 70 ? 'rate-ok' : rate >= 40 ? 'rate-mid' : 'rate-low'}`}>
-                      {t('procedures.success_rate', { rate, total })}
-                    </span>
-                  )}
-                </div>
-                {p.description && <p className="muted proc-desc">{p.description}</p>}
-                {p.steps.length > 0 && (
-                  <ol className="proc-steps">
-                    {p.steps.slice(0, 6).map((s, i) => <li key={i}>{s}</li>)}
-                  </ol>
-                )}
-              </li>
-            )
-          })}
-        </ul>
+        <SectionCard
+          title={t('procedures.list_title')}
+          description={t('procedures.list_hint')}
+          actions={<Badge variant="secondary" className="tabular-nums">{formatNumber(procedures.length)}</Badge>}
+          className="mb-0"
+          contentClassName="grid gap-3 md:grid-cols-2"
+        >
+          {procedures.map(p => (
+            <ProcedureCard key={p.id} procedure={p} />
+          ))}
+        </SectionCard>
       )}
-    </section>
+    </>
+  )
+}
+
+function ProceduresSkeleton() {
+  const { t } = useT()
+  return (
+    <div className="flex flex-col gap-3" role="status" aria-label={t('common.loading')}>
+      <Skeleton className="h-10 w-full rounded-xl" />
+      <div className="grid gap-3 md:grid-cols-2">
+        {[0, 1, 2, 3].map(i => (
+          <Skeleton key={i} className="h-40 rounded-xl" />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/** Couleur du taux : ≥ 70 % sain, ≥ 40 % à surveiller, sinon en difficulté. */
+function rateTone(rate: number): 'success' | 'warning' | 'destructive' {
+  return rate >= 70 ? 'success' : rate >= 40 ? 'warning' : 'destructive'
+}
+
+const RATE_TEXT = {
+  success: 'text-success',
+  warning: 'text-warning',
+  destructive: 'text-destructive',
+} as const
+
+const RATE_BAR = {
+  success: '[&>[data-slot=progress-indicator]]:bg-success',
+  warning: '[&>[data-slot=progress-indicator]]:bg-warning',
+  destructive: '[&>[data-slot=progress-indicator]]:bg-destructive',
+} as const
+
+function ProcedureCard({ procedure: p }: { procedure: Procedure }) {
+  const { t } = useT()
+  const total = p.success_count + p.failure_count
+  const rate = total > 0 ? Math.round((p.success_count / total) * 100) : null
+  const tone = rate === null ? null : rateTone(rate)
+  return (
+    <Card size="sm" className="bg-muted/40 ring-0">
+      <CardContent className="flex h-full flex-col gap-2">
+        <div className="flex items-start justify-between gap-2">
+          <span className="leading-snug font-medium">{p.name}</span>
+          {rate !== null && tone ? (
+            <Badge variant="outline" className={cn('shrink-0 tabular-nums', RATE_TEXT[tone])}>
+              {t('procedures.success_rate', { rate, total: formatNumber(total) })}
+            </Badge>
+          ) : (
+            <Badge variant="secondary" className="shrink-0">
+              {t('procedures.no_execution')}
+            </Badge>
+          )}
+        </div>
+        {p.description && <p className="text-sm text-muted-foreground">{p.description}</p>}
+        {rate !== null && tone && (
+          <div className="flex flex-col gap-1">
+            <Progress value={rate} aria-label={t('procedures.rate_label')} className={cn('h-1', RATE_BAR[tone])} />
+            <span className="text-xs text-muted-foreground">
+              {t('procedures.executions', { success: formatNumber(p.success_count), failure: formatNumber(p.failure_count) })}
+            </span>
+          </div>
+        )}
+        {p.steps.length > 0 && <Steps steps={p.steps} />}
+        {p.trigger_patterns.length > 0 && (
+          <div className="mt-auto flex flex-wrap items-center gap-1 pt-1">
+            <span className="mr-1 text-xs text-muted-foreground">{t('procedures.triggers')}</span>
+            {p.trigger_patterns.slice(0, 4).map(tp => (
+              <Badge key={tp} variant="secondary" className="font-mono text-[11px]">
+                {tp}
+              </Badge>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+/** Étapes numérotées : les six premières, le reste derrière « N étapes de plus ». */
+function Steps({ steps }: { steps: string[] }) {
+  const { t } = useT()
+  const [open, setOpen] = useState(false)
+  const shown = steps.slice(0, STEPS_SHOWN)
+  const rest = steps.slice(STEPS_SHOWN)
+  const list = (items: string[], start: number) => (
+    <ol className="list-decimal space-y-0.5 pl-5 text-sm marker:text-muted-foreground" start={start}>
+      {items.map((s, i) => (
+        <li key={start + i} className="pl-1">
+          {s}
+        </li>
+      ))}
+    </ol>
+  )
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-xs font-medium text-muted-foreground">{t('procedures.steps')}</span>
+      {list(shown, 1)}
+      {rest.length > 0 && (
+        <Collapsible open={open} onOpenChange={setOpen}>
+          <CollapsibleContent>{list(rest, STEPS_SHOWN + 1)}</CollapsibleContent>
+          <CollapsibleTrigger asChild>
+            <Button variant="ghost" size="xs" className="mt-1 -ml-2 text-muted-foreground" aria-expanded={open} data-testid="proc-more">
+              <ChevronDown className={cn('transition-transform', open && 'rotate-180')} aria-hidden="true" />
+              {open ? t('procedures.less_steps') : t('procedures.more_steps', { count: formatNumber(rest.length) })}
+            </Button>
+          </CollapsibleTrigger>
+        </Collapsible>
+      )}
+    </div>
   )
 }

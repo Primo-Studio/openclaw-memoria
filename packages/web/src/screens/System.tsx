@@ -2,10 +2,22 @@
  * Système — les couches de Memoria, rendues visibles. Les 24 couches cognitives
  * regroupées par rôle, avec leur compteur LIVE (entités, thèmes, procédures…) :
  * on voit la machine tourner. C'est « le cerveau » de Memoria.
+ *
+ * Migré sur shadcn : une SectionCard par famille (socle, enrichissement,
+ * optionnel, sur validation), une tuile par couche avec son numéro, son
+ * compteur en Badge quand il est non nul, et un résumé chiffré en tête.
+ * Même source de données qu'avant (GET /v1/admin/cognitive_stats) — la santé
+ * du stockage vit sur le Tableau de bord, la consommation dans Réglages.
  */
 import { getCognitiveStats } from '../api'
-import { ErrorBanner, Spinner, formatNumber, useLoad } from '../components/ui'
+import { Activity, CircleCheck, Layers } from 'lucide-react'
+import { MemRefreshButton } from '../components/MemRefreshButton'
+import { ErrorBanner, PageHeader, SectionCard, StatCard, formatNumber, useLoad } from '../components/ui'
+import { Badge } from '../components/ui/badge'
+import { Button } from '../components/ui/button'
+import { Skeleton } from '../components/ui/skeleton'
 import { useT } from '../i18n'
+import { cn } from '../lib/utils'
 
 interface Layer {
   n: number
@@ -66,49 +78,109 @@ const BUCKETS: Array<{ titleKey: string; subtitleKey: string; layers: Layer[] }>
   },
 ]
 
+const LAYER_COUNT = BUCKETS.reduce((n, b) => n + b.layers.length, 0)
+
 export function System() {
   const { t } = useT()
   const { state, reload } = useLoad(getCognitiveStats)
 
   return (
-    <section>
-      <header className="screen-head">
-        <div>
-          <h1>{t('system.title')}</h1>
-          <p className="muted">{t('system.lead')}</p>
-        </div>
-        <button type="button" className="btn btn-ghost" onClick={reload}>{t('common.refresh')}</button>
-      </header>
+    <>
+      <PageHeader
+        title={t('system.title')}
+        description={t('system.lead')}
+        actions={
+          <MemRefreshButton label={t('common.refresh')} onClick={reload} disabled={state.status === 'loading'} spinning={state.status === 'loading'} />
+        }
+      />
 
-      {state.status === 'loading' && <Spinner />}
+      {state.status === 'loading' && <SystemSkeleton />}
       {state.status === 'error' && <ErrorBanner message={state.message} onRetry={reload} />}
-      {state.status === 'ready' && (
-        <div className="system-buckets">
-          {BUCKETS.map(bucket => (
-            <div key={bucket.titleKey} className="system-bucket">
-              <div className="system-bucket-head">
-                <h2>{t(bucket.titleKey)}</h2>
-                <span className="muted">{t(bucket.subtitleKey)}</span>
-              </div>
-              <div className="layer-grid">
-                {bucket.layers.map(l => {
-                  const value = l.stat ? state.data[l.stat] : undefined
-                  return (
-                    <div key={l.n} className="layer-card">
-                      <div className="layer-top">
-                        <span className="layer-num">{l.n}</span>
-                        <strong>{t(l.nameKey)}</strong>
-                        {value !== undefined && value > 0 && <span className="layer-stat">{formatNumber(value)}</span>}
-                      </div>
-                      <p className="muted layer-desc">{t(l.descKey)}</p>
-                    </div>
-                  )
-                })}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </section>
+      {state.status === 'ready' && <SystemBody stats={state.data} />}
+    </>
+  )
+}
+
+/** Squelette à la forme de l'écran : 3 chiffres clés puis des grilles de tuiles. */
+function SystemSkeleton() {
+  const { t } = useT()
+  return (
+    <div className="flex flex-col gap-4" role="status" aria-label={t('common.loading')}>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        {[0, 1, 2].map(i => (
+          <Skeleton key={i} className="h-24 rounded-xl" />
+        ))}
+      </div>
+      <Skeleton className="h-64 w-full rounded-xl" />
+      <Skeleton className="h-48 w-full rounded-xl" />
+    </div>
+  )
+}
+
+function SystemBody({ stats }: { stats: Record<string, number> }) {
+  const { t } = useT()
+  // Résumé : couches suivies par un compteur, et combien contiennent déjà quelque chose.
+  const tracked = BUCKETS.flatMap(b => b.layers).filter(l => l.stat !== undefined)
+  const live = tracked.filter(l => (stats[l.stat as string] ?? 0) > 0).length
+
+  return (
+    <div className="flex flex-col gap-4">
+      {/* POURQUOI une seule colonne sous 640 px et non deux : à deux colonnes,
+          chaque cellule fait ~175 px, trop étroit pour la variante compacte de
+          StatCard (chiffre et libellé sur la même ligne de base). Les deux
+          premières tuiles repassaient donc en version haute et à moitié vide
+          pendant que la troisième, seule sur sa ligne, obtenait bien la version
+          compacte : trois objets de même nature, trois dessins différents côte
+          à côte. En pleine largeur les trois sont compactes et identiques —
+          ~55 px chacune, soit MOINS de hauteur qu'en deux colonnes. */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        {/* Mêmes cartes que le Tableau de bord : icône encadrée en haut à droite,
+            chiffre en couleur de texte normale. Le vert d'avant ne disait rien —
+            la couleur est réservée à un vrai statut. */}
+        <StatCard value={LAYER_COUNT} label={t('system.stat.layers')} icon={<Layers className="size-4" />} />
+        <StatCard value={tracked.length} label={t('system.stat.tracked')} hint={t('system.stat.trackedHint')} icon={<Activity className="size-4" />} />
+        <StatCard
+          value={live}
+          label={t('system.stat.live')}
+          hint={live === 0 ? t('system.stat.liveHintEmpty') : undefined}
+          icon={<CircleCheck className="size-4" />}
+        />
+      </div>
+
+      {BUCKETS.map(bucket => (
+        <SectionCard key={bucket.titleKey} title={t(bucket.titleKey)} description={t(bucket.subtitleKey)} className="mb-0">
+          <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {bucket.layers.map(l => {
+              const value = l.stat ? stats[l.stat] : undefined
+              return (
+                <li key={l.n} className="flex flex-col gap-1 rounded-lg border bg-muted/40 px-3 py-2.5">
+                  <div className="flex items-center gap-2">
+                    <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-primary/10 font-mono text-xs font-semibold text-primary tabular-nums" aria-hidden="true">
+                      {l.n}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate font-medium">
+                      <span className="sr-only">{t('system.layer_number', { n: l.n })} </span>
+                      {t(l.nameKey)}
+                    </span>
+                    {/* Un badge même à 0 : sans lui, « suivie mais vide » et
+                        « sans compteur » se ressemblaient exactement. */}
+                    {value !== undefined && (
+                      <Badge
+                        variant={value > 0 ? 'secondary' : 'outline'}
+                        className={cn('tabular-nums', value === 0 && 'text-muted-foreground')}
+                        title={t('system.live_count')}
+                      >
+                        {formatNumber(value)}
+                      </Badge>
+                    )}
+                  </div>
+                  <p className="text-sm text-muted-foreground">{t(l.descKey)}</p>
+                </li>
+              )
+            })}
+          </ul>
+        </SectionCard>
+      ))}
+    </div>
   )
 }

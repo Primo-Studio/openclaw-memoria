@@ -3,13 +3,58 @@
  * santé (doctor), compteurs (stats), souvenirs en attente de traitement (WAL),
  * et ALERTE moteur d'extraction (anti-mort-silencieuse : si aucun moteur n'est
  * disponible, on le dit en rouge, on ne laisse pas la file gonfler en silence).
+ *
+ * Écran de RÉFÉRENCE de la migration shadcn : PageHeader (titre + actions
+ * dans la barre supérieure), StatCard, SectionCard, DataTable, états
+ * chargement / erreur / vide — voir UI-GUIDE.md.
  */
-import { getDoctor, getLlmHealth, getOverview, getStats, type AgentOverview, type DoctorReport, type LlmHealth, type Stats } from '../api'
-import { ErrorBanner, Spinner, agentTypeLabel, formatBytes, formatNumber, useLoad } from '../components/ui'
+import { useState } from 'react'
+import { Bot, Brain, ChevronDown, CircleAlert, CircleCheck, Database, Inbox, TriangleAlert } from 'lucide-react'
+import { getDoctor, getLlmHealth, getOverview, getStats, type AgentOverview, type DoctorDatabase, type DoctorReport, type LlmHealth, type Stats } from '../api'
+import { MemRefreshButton } from '../components/MemRefreshButton'
+import { MemScreenLink } from '../components/MemScreenLink'
+import { useDirectory } from '../components/memory-names'
+import {
+  DataTable,
+  EmptyState,
+  ErrorBanner,
+  PageHeader,
+  SectionCard,
+  StatCard,
+  agentTypeLabel,
+  formatBytes,
+  formatNumber,
+  useLoad,
+  type DataColumn,
+} from '../components/ui'
+import { Alert, AlertAction, AlertDescription, AlertTitle } from '../components/ui/alert'
+import { Badge } from '../components/ui/badge'
+import { Button } from '../components/ui/button'
+import { Card, CardContent } from '../components/ui/card'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../components/ui/collapsible'
+import { Skeleton } from '../components/ui/skeleton'
 import { useT } from '../i18n'
+import type { ScreenId } from '../app/nav'
+import { cn } from '../lib/utils'
 
 // Types de base de données connus → clé i18n dashboard.dbKind.<kind> (repli : le kind brut).
 const KNOWN_DB_KINDS = new Set(['registry', 'assistant', 'shared'])
+
+/**
+ * Avertissement du doctor → écran qui permet d'AGIR dessus. Le service rend
+ * des phrases (packages/core, engine/memoria.ts) qui nomment déjà la
+ * destination — « (écran Révisions) », « vérifier le provider LLM » — mais en
+ * texte mort. On ne mappe que ce dont la destination est certaine : un renvoi
+ * qui se trompe d'onglet est pire que pas de renvoi.
+ */
+const WARNING_TARGETS: Array<{ match: RegExp; screen: ScreenId }> = [
+  { match: /révision/i, screen: 'revisions' },
+  { match: /extraction|provider/i, screen: 'settings' },
+]
+
+function warningTarget(warning: string): ScreenId | null {
+  return WARNING_TARGETS.find(w => w.match.test(warning))?.screen ?? null
+}
 
 export function Dashboard({ onConnect, onConfigure }: { onConnect: () => void; onConfigure?: () => void }) {
   const { t } = useT()
@@ -25,15 +70,20 @@ export function Dashboard({ onConnect, onConfigure }: { onConnect: () => void; o
   })
 
   return (
-    <section>
-      <header className="screen-head">
-        <h1>{t('dashboard.title')}</h1>
-        <button type="button" className="btn btn-ghost" onClick={reload}>
-          {t('common.refresh')}
-        </button>
-      </header>
+    <>
+      {/* PageHeader rend la phrase d'intro AVANT le corps de l'écran, donc avant
+          les bannières : l'écran sur lequel s'ouvre l'application était le seul à
+          ne pas se présenter, et le premier contact avec Memoria était une liste
+          de problèmes. */}
+      <PageHeader
+        title={t('dashboard.title')}
+        description={t('dashboard.lead')}
+        actions={
+          <MemRefreshButton label={t('common.refresh')} onClick={reload} disabled={state.status === 'loading'} spinning={state.status === 'loading'} />
+        }
+      />
 
-      {state.status === 'loading' && <Spinner />}
+      {state.status === 'loading' && <DashboardSkeleton />}
       {state.status === 'error' && <ErrorBanner message={state.message} onRetry={reload} />}
       {state.status === 'ready' && (
         <DashboardBody
@@ -45,7 +95,23 @@ export function Dashboard({ onConnect, onConfigure }: { onConnect: () => void; o
           onConfigure={onConfigure}
         />
       )}
-    </section>
+    </>
+  )
+}
+
+/** Squelette de la mise en page finale : pas de saut visuel au chargement. */
+function DashboardSkeleton() {
+  const { t } = useT()
+  return (
+    <div className="flex flex-col gap-4" role="status" aria-label={t('common.loading')}>
+      <Skeleton className="h-16 w-full rounded-xl" />
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        {[0, 1, 2, 3].map(i => (
+          <Skeleton key={i} className="h-24 rounded-xl" />
+        ))}
+      </div>
+      <Skeleton className="h-40 w-full rounded-xl" />
+    </div>
   )
 }
 
@@ -65,92 +131,92 @@ function DashboardBody({
   onConfigure?: () => void
 }) {
   const { t } = useT()
+  // Même nom d'agent que les sélecteurs, Agents, Partage et le Journal
+  // (« Koda (OpenClaw) ») : le tableau de bord ne doit pas inventer un
+  // quatrième agent en n'affichant que le type.
+  const directory = useDirectory(t)
   const walPending = doctor.databases.reduce((sum, db) => sum + (db.wal_pending ?? 0), 0)
 
   return (
-    <>
+    <div className="flex flex-col gap-4">
       <LlmBanner health={llmHealth} onConfigure={onConfigure} />
 
       <HealthCard doctor={doctor} />
 
-      <div className="stat-grid">
-        <StatCard value={stats.facts} label={t('dashboard.stat.factsLabel')} hint={t('dashboard.stat.factsHint')} />
-        <StatCard value={stats.instances} label={t('dashboard.stat.agentsLabel')} hint={t('dashboard.stat.agentsHint')} />
-        <StatCard value={stats.databases} label={t('dashboard.stat.spacesLabel')} hint={t('dashboard.stat.spacesHint')} />
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <StatCard value={stats.facts} label={t('dashboard.stat.factsLabel')} hint={t('dashboard.stat.factsHint')} icon={<Brain className="size-4" />} />
+        <StatCard value={stats.instances} label={t('dashboard.stat.agentsLabel')} hint={t('dashboard.stat.agentsHint')} icon={<Bot className="size-4" />} />
+        <StatCard value={stats.databases} label={t('dashboard.stat.spacesLabel')} hint={t('dashboard.stat.spacesHint')} icon={<Database className="size-4" />} />
         <StatCard
           value={walPending}
           label={t('dashboard.stat.pendingLabel')}
           hint={walPending === 0 ? t('dashboard.stat.pendingHintEmpty') : t('dashboard.stat.pendingHintSome')}
-          tone={walPending > 0 ? 'warn' : undefined}
+          tone={walPending > 0 ? 'warn' : 'default'}
+          icon={<Inbox className="size-4" />}
         />
       </div>
 
       {stats.instances === 0 && (
-        <div className="empty-state">
-          <h2>{t('dashboard.empty.title')}</h2>
-          <p className="muted">{t('dashboard.empty.body')}</p>
-          <button type="button" className="btn btn-primary btn-big" onClick={onConnect}>
-            {t('dashboard.empty.connect')}
-          </button>
-        </div>
+        <EmptyState
+          icon={<Bot className="size-5" />}
+          title={t('dashboard.empty.title')}
+          body={t('dashboard.empty.body')}
+          action={
+            <Button size="lg" onClick={onConnect}>
+              {t('dashboard.empty.connect')}
+            </Button>
+          }
+        />
       )}
 
       {overview.length > 0 && (
-        <div className="overview-block">
-          <h2>{t('dashboard.overview.title')}</h2>
-          <div className="overview-grid">
+        <SectionCard title={t('dashboard.overview.title')}>
+          {/* items-start : sans lui, les cartes sans ligne « maîtrise » étaient étirées
+              à la hauteur de la plus haute et se terminaient par un grand vide gris,
+              qui se lit comme un chargement inachevé. */}
+          <div className="grid items-start gap-3 sm:grid-cols-2 xl:grid-cols-3">
             {overview.map(a => (
-              <div key={a.instance} className="overview-card">
-                <div className="overview-head">
-                  <strong>{agentTypeLabel(a.type)}</strong>
-                </div>
-                <div className="overview-stats">
-                  <span><b>{a.facts}</b> {t('dashboard.overview.facts')}</span>
-                  <span><b>{a.themes}</b> {t('dashboard.overview.themes')}</span>
-                  {a.procedures > 0 && <span><b>{a.procedures}</b> {t('dashboard.overview.procedures')}</span>}
-                </div>
-                {a.expertise.length > 0 && (
-                  <div className="overview-expertise">
-                    <span className="muted">{t('dashboard.overview.expertise')}</span>
-                    {a.expertise.map(d => <span key={d} className="badge badge-theme">{d}</span>)}
+              <Card key={a.instance} size="sm" className="bg-muted/40 ring-0">
+                <CardContent className="flex flex-col gap-2">
+                  <div className="flex items-center gap-2 font-medium">
+                    <Bot className="size-4 text-muted-foreground" aria-hidden="true" />
+                    {directory.agentName(a.instance) ?? agentTypeLabel(a.type)}
                   </div>
-                )}
-              </div>
+                  <dl className="flex flex-wrap gap-x-4 gap-y-1 text-sm">
+                    <div className="flex gap-1">
+                      <dt className="font-semibold tabular-nums">{formatNumber(a.facts)}</dt>
+                      <dd className="text-muted-foreground">{t('dashboard.overview.facts')}</dd>
+                    </div>
+                    <div className="flex gap-1">
+                      <dt className="font-semibold tabular-nums">{formatNumber(a.themes)}</dt>
+                      <dd className="text-muted-foreground">{t('dashboard.overview.themes')}</dd>
+                    </div>
+                    {a.procedures > 0 && (
+                      <div className="flex gap-1">
+                        <dt className="font-semibold tabular-nums">{formatNumber(a.procedures)}</dt>
+                        <dd className="text-muted-foreground">{t('dashboard.overview.procedures')}</dd>
+                      </div>
+                    )}
+                  </dl>
+                  {a.expertise.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-1">
+                      <span className="mr-1 text-xs text-muted-foreground">{t('dashboard.overview.expertise')}</span>
+                      {a.expertise.map(d => (
+                        <Badge key={d} variant="secondary">
+                          {d}
+                        </Badge>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
             ))}
           </div>
-        </div>
+        </SectionCard>
       )}
 
-      <details className="storage-details">
-        <summary>{t('dashboard.storage.summary')}</summary>
-        <p className="muted">
-          {t('dashboard.storage.locationBefore')}<code>{doctor.storage_root}</code>{t('dashboard.storage.locationAfter')}
-        </p>
-        <table className="table">
-          <thead>
-            <tr>
-              <th>{t('dashboard.storage.colType')}</th>
-              <th>{t('dashboard.storage.colLocation')}</th>
-              <th>{t('dashboard.storage.colSize')}</th>
-              <th>{t('dashboard.storage.colPending')}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {doctor.databases.map(db => (
-              <tr key={db.path}>
-                <td>{KNOWN_DB_KINDS.has(db.kind) ? t(`dashboard.dbKind.${db.kind}`) : db.kind}</td>
-                <td>
-                  <code className="path">{db.path}</code>
-                  {!db.exists && <span className="badge badge-warn">{t('dashboard.storage.missing')}</span>}
-                </td>
-                <td>{db.exists ? formatBytes(db.size_bytes) : '—'}</td>
-                <td>{db.wal_pending ?? '—'}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </details>
-    </>
+      <StorageDetails doctor={doctor} />
+    </div>
   )
 }
 
@@ -163,22 +229,26 @@ function LlmBanner({ health, onConfigure }: { health: LlmHealth | null; onConfig
   const { t } = useT()
   if (!health || health.extraction.available) return null
   const pending = health.wal_pending
+  const critical = pending > 0
   return (
-    <div className={`llm-banner${pending > 0 ? ' llm-banner-critical' : ''}`}>
-      <div>
-        <strong>
-          ⚠️ {pending > 0
-            ? t(pending > 1 ? 'dashboard.banner.pendingCritical.plural' : 'dashboard.banner.pendingCritical.one', { count: formatNumber(pending) })
-            : t('dashboard.banner.noEngine')}
-        </strong>
-        {health.extraction.reason && <p className="muted">{health.extraction.reason}</p>}
-      </div>
+    // Le bouton « Configurer » est à droite sur bureau, sous le texte sur mobile
+    // (en absolu, il recouvrait le titre sous 640 px).
+    <Alert variant={critical ? 'destructive' : 'default'} className={cn(!critical && 'text-warning', onConfigure && 'sm:pr-36')}>
+      {critical ? <CircleAlert /> : <TriangleAlert />}
+      <AlertTitle>
+        {critical
+          ? t(pending > 1 ? 'dashboard.banner.pendingCritical.plural' : 'dashboard.banner.pendingCritical.one', { count: formatNumber(pending) })
+          : t('dashboard.banner.noEngine')}
+      </AlertTitle>
+      {health.extraction.reason && <AlertDescription>{health.extraction.reason}</AlertDescription>}
       {onConfigure && (
-        <button type="button" className="btn btn-primary" onClick={onConfigure}>
-          {t('dashboard.banner.configure')}
-        </button>
+        <AlertAction className="static mt-2 col-start-2 sm:absolute sm:top-2 sm:right-2 sm:mt-0">
+          <Button size="sm" onClick={onConfigure}>
+            {t('dashboard.banner.configure')}
+          </Button>
+        </AlertAction>
       )}
-    </div>
+    </Alert>
   )
 }
 
@@ -186,36 +256,121 @@ function HealthCard({ doctor }: { doctor: DoctorReport }) {
   const { t } = useT()
   if (doctor.ok) {
     return (
-      <div className="health-card health-ok">
-        <span className="dot dot-ok" aria-hidden="true" />
-        <div>
-          <strong>{t('dashboard.health.okTitle')}</strong>
-          <p className="muted">{t('dashboard.health.okBody')}</p>
-        </div>
-      </div>
+      <Card size="sm">
+        <CardContent className="flex items-center gap-3">
+          <CircleCheck className="size-5 shrink-0 text-success" aria-hidden="true" />
+          <div>
+            <div className="font-medium">{t('dashboard.health.okTitle')}</div>
+            <p className="text-sm text-muted-foreground">{t('dashboard.health.okBody')}</p>
+          </div>
+        </CardContent>
+      </Card>
     )
   }
+  return <HealthWarnings warnings={doctor.warnings} />
+}
+
+/**
+ * Avertissements du doctor — MÊME composant Alert que la bannière moteur juste
+ * au-dessus (avant, une Card « presque pareille » : deux pavés ambre jumeaux
+ * mais aux bordures et paddings différents), et REPLIABLE : sur mobile les
+ * deux blocs mangeaient la moitié de l'écran d'accueil et le premier chiffre
+ * de l'application passait sous la ligne de flottaison.
+ *
+ * Ouvert d'emblée sur bureau (la place ne manque pas). Au téléphone, replié
+ * seulement quand la liste est longue : à une ou deux lignes, ce qu'on cachait
+ * était justement la phrase qui dit quoi faire et son renvoi cliquable, alors
+ * que le compteur est déjà dans le titre — on économisait 40 px en masquant la
+ * seule chose actionnable de l'écran. La gravité reste lisible : l'alerte
+ * moteur, elle, est toujours dépliée et porte un bouton.
+ */
+function HealthWarnings({ warnings }: { warnings: string[] }) {
+  const { t } = useT()
+  // Décidé une seule fois au montage : c'est un état par défaut, pas une
+  // mise en page — l'utilisateur peut toujours l'ouvrir ou le fermer.
+  const [open, setOpen] = useState(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return true
+    if (window.matchMedia('(min-width: 640px)').matches) return true
+    return warnings.length <= 2
+  })
   return (
-    <div className="health-card health-warn">
-      <span className="dot dot-warn" aria-hidden="true" />
-      <div>
-        <strong>{t('dashboard.health.warnTitle')}</strong>
-        <ul className="warning-list">
-          {doctor.warnings.map(w => (
-            <li key={w}>{w}</li>
-          ))}
-        </ul>
-      </div>
-    </div>
+    <Alert className="text-warning">
+      <TriangleAlert />
+      <Collapsible open={open} onOpenChange={setOpen} className="col-start-2 min-w-0">
+        <CollapsibleTrigger asChild>
+          <button type="button" className="flex w-full items-center gap-1.5 text-left font-medium" aria-label={t('dashboard.health.warnToggle')}>
+            {t('dashboard.health.warnCountTitle', { count: warnings.length })}
+            <ChevronDown className={cn('size-4 transition-transform', open && 'rotate-180')} aria-hidden="true" />
+          </button>
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <ul className="mt-1 list-disc space-y-0.5 pl-4 text-sm text-muted-foreground">
+            {warnings.map(w => {
+              const target = warningTarget(w)
+              return (
+                <li key={w}>
+                  {w}{' '}
+                  {target && <MemScreenLink screen={target} label={t('common.open_screen', { screen: t(`nav.${target}`) })} />}
+                </li>
+              )
+            })}
+          </ul>
+        </CollapsibleContent>
+      </Collapsible>
+    </Alert>
   )
 }
 
-function StatCard({ value, label, hint, tone }: { value: number; label: string; hint: string; tone?: 'warn' }) {
+/** Détails du stockage, repliés par défaut (info technique, utile en cas de doute). */
+function StorageDetails({ doctor }: { doctor: DoctorReport }) {
+  const { t } = useT()
+  const [open, setOpen] = useState(false)
+  const columns: DataColumn<DoctorDatabase>[] = [
+    {
+      id: 'kind',
+      header: t('dashboard.storage.colType'),
+      cell: db => (KNOWN_DB_KINDS.has(db.kind) ? t(`dashboard.dbKind.${db.kind}`) : db.kind),
+    },
+    {
+      id: 'path',
+      header: t('dashboard.storage.colLocation'),
+      // Chemins longs : on les laisse se couper plutôt que d'envoyer Taille et
+      // En attente hors de la carte.
+      className: 'whitespace-normal break-all',
+      cell: db => (
+        <span className="inline-flex flex-wrap items-center gap-2">
+          <code className="text-xs">{db.path}</code>
+          {!db.exists && <Badge variant="destructive">{t('dashboard.storage.missing')}</Badge>}
+        </span>
+      ),
+    },
+    { id: 'size', header: t('dashboard.storage.colSize'), align: 'right', cell: db => (db.exists ? formatBytes(db.size_bytes) : '—') },
+    { id: 'pending', header: t('dashboard.storage.colPending'), align: 'right', cell: db => db.wal_pending ?? '—' },
+  ]
   return (
-    <div className={`stat-card${tone === 'warn' ? ' stat-warn' : ''}`}>
-      <div className="stat-value">{formatNumber(value)}</div>
-      <div className="stat-label">{label}</div>
-      <div className="stat-hint muted">{hint}</div>
-    </div>
+    <Collapsible open={open} onOpenChange={setOpen}>
+      <Card>
+        <CollapsibleTrigger asChild>
+          <button
+            type="button"
+            className="flex w-full items-center justify-between px-4 text-left text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+            aria-expanded={open}
+          >
+            {t('dashboard.storage.summary')}
+            <ChevronDown className={cn('size-4 text-muted-foreground transition-transform', open && 'rotate-180')} aria-hidden="true" />
+          </button>
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <CardContent className="flex flex-col gap-3 pt-3">
+            <p className="text-sm text-muted-foreground">
+              {t('dashboard.storage.locationBefore')}
+              <code className="text-xs">{doctor.storage_root}</code>
+              {t('dashboard.storage.locationAfter')}
+            </p>
+            <DataTable columns={columns} rows={doctor.databases} rowKey={db => db.path} dense />
+          </CardContent>
+        </CollapsibleContent>
+      </Card>
+    </Collapsible>
   )
 }
