@@ -2,8 +2,29 @@
  * Agents — détection des assistants de la machine + connexion 1 clic + import
  * des souvenirs avec progression (missions B1/B2/B3/B4), connexion par code de
  * pairing (TTL 10 min, voir PAIRING_TTL_MS côté core) et révocation.
+ *
+ * Migré sur shadcn : PageHeader (titre + actions dans la barre supérieure),
+ * SectionCard « Sur cette machine » / « Agents connectés », Dialog pour les
+ * parcours (import, code de connexion), AlertDialog (ConfirmButton) pour
+ * révoquer/supprimer, toasts pour les confirmations — voir UI-GUIDE.md.
  */
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import {
+  Braces,
+  Check,
+  CircleCheck,
+  Loader2,
+  MessageCircle,
+  MousePointerClick,
+  Plus,
+  RefreshCw,
+  ScanSearch,
+  Terminal,
+  TriangleAlert,
+  X,
+  type LucideIcon,
+} from 'lucide-react'
+import { toast } from 'sonner'
 import {
   connectAgent,
   deleteAgent,
@@ -30,6 +51,8 @@ import {
   CopyButton,
   EmptyState,
   ErrorBanner,
+  SectionCard,
+  PageHeader,
   Spinner,
   agentTypeLabel,
   formatDate,
@@ -37,18 +60,28 @@ import {
   humanError,
   useLoad,
 } from '../components/ui'
+import { CommandBlock, StatusBadge } from '../components/SetupBits'
+import { Alert, AlertDescription, AlertTitle } from '../components/ui/alert'
+import { Badge } from '../components/ui/badge'
+import { Button } from '../components/ui/button'
+import { Card, CardContent } from '../components/ui/card'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../components/ui/collapsible'
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/dialog'
+import { Progress } from '../components/ui/progress'
+import { Skeleton } from '../components/ui/skeleton'
 import { useT } from '../i18n'
 import { importPollOutcome, interruptedImport } from '../lib/import-flow'
+import { cn } from '../lib/utils'
 
 type Translate = (key: string, vars?: Record<string, string | number>) => string
 
 const PAIRING_TTL_SECONDS = 10 * 60 // miroir de PAIRING_TTL_MS (registry.ts)
 
-const AGENT_CHOICES: Array<{ type: AgentType; labelKey: string; hintKey: string }> = [
-  { type: 'claude-code', labelKey: 'agents.choice.claudeCode.label', hintKey: 'agents.choice.claudeCode.hint' },
-  { type: 'codex', labelKey: 'agents.choice.codex.label', hintKey: 'agents.choice.codex.hint' },
-  { type: 'openclaw', labelKey: 'agents.choice.openclaw.label', hintKey: 'agents.choice.openclaw.hint' },
-  { type: 'generic', labelKey: 'agents.choice.generic.label', hintKey: 'agents.choice.generic.hint' },
+const AGENT_CHOICES: Array<{ type: AgentType; labelKey: string; hintKey: string; icon: LucideIcon }> = [
+  { type: 'claude-code', labelKey: 'agents.choice.claudeCode.label', hintKey: 'agents.choice.claudeCode.hint', icon: Terminal },
+  { type: 'codex', labelKey: 'agents.choice.codex.label', hintKey: 'agents.choice.codex.hint', icon: Braces },
+  { type: 'openclaw', labelKey: 'agents.choice.openclaw.label', hintKey: 'agents.choice.openclaw.hint', icon: MessageCircle },
+  { type: 'generic', labelKey: 'agents.choice.generic.label', hintKey: 'agents.choice.generic.hint', icon: Plus },
 ]
 
 type PairFlow =
@@ -60,7 +93,8 @@ export function Agents({ onOpenReview }: { onOpenReview?: () => void }) {
   const { t } = useT()
   const { state, reload } = useLoad(getAgents)
   const [flow, setFlow] = useState<PairFlow>({ step: 'closed' })
-  const [actionError, setActionError] = useState<string | null>(null)
+
+  const openChooser = () => setFlow({ step: 'choose', busy: null, error: null })
 
   const startPairing = (type: AgentType) => {
     setFlow({ step: 'choose', busy: type, error: null })
@@ -79,94 +113,216 @@ export function Agents({ onOpenReview }: { onOpenReview?: () => void }) {
   }
 
   const revoke = (instanceId: string) => {
-    setActionError(null)
     revokeAgent(instanceId).then(
-      () => reload(),
+      () => {
+        toast.success(t('agents.toast.revoked'))
+        reload()
+      },
       (err: unknown) => {
         console.warn('memoria-ui : révocation échouée', err)
-        setActionError(humanError(err))
+        toast.error(humanError(err))
       },
     )
   }
 
   const remove = (instanceId: string) => {
-    setActionError(null)
     deleteAgent(instanceId).then(
-      () => reload(),
+      () => {
+        toast.success(t('agents.toast.deleted'))
+        reload()
+      },
       (err: unknown) => {
         console.warn('memoria-ui : suppression échouée', err)
-        setActionError(humanError(err))
+        toast.error(humanError(err))
       },
     )
   }
 
+  const hasAgents = state.status === 'ready' && state.data.length > 0
+
   return (
-    <section>
-      <header className="screen-head">
-        <h1>{t('agents.title')}</h1>
-        {state.status === 'ready' && state.data.length > 0 && (
-          <button type="button" className="btn btn-primary" onClick={() => setFlow({ step: 'choose', busy: null, error: null })}>
-            {t('agents.connect')}
-          </button>
-        )}
-      </header>
+    <>
+      <PageHeader
+        title={t('agents.title')}
+        actions={
+          <>
+            {/* Sous 640 px, deux boutons texte cachaient le titre de la barre : Actualiser passe en icône seule. */}
+            <Button variant="outline" size="sm" onClick={reload} disabled={state.status === 'loading'} aria-label={t('common.refresh')}>
+              <RefreshCw className={cn(state.status === 'loading' && 'animate-spin')} aria-hidden="true" />
+              <span className="hidden sm:inline">{t('common.refresh')}</span>
+            </Button>
+            {/* Le bouton principal n'apparaît qu'avec des agents : sinon l'état vide porte l'appel à l'action. */}
+            {hasAgents && (
+              <Button size="sm" onClick={openChooser}>
+                <Plus aria-hidden="true" />
+                <span className="sm:hidden">{t('agents.connectShort')}</span>
+                <span className="hidden sm:inline">{t('agents.connect')}</span>
+              </Button>
+            )}
+          </>
+        }
+      />
 
-      <MachineAgents onChanged={reload} onOpenReview={onOpenReview} />
+      <div className="flex flex-col gap-4">
+        <MachineAgents onChanged={reload} onOpenReview={onOpenReview} />
 
-      {actionError && <ErrorBanner message={actionError} />}
-
-      {state.status === 'loading' && <Spinner />}
-      {state.status === 'error' && <ErrorBanner message={state.message} onRetry={reload} />}
-      {state.status === 'ready' &&
-        (state.data.length === 0 && flow.step === 'closed' ? (
-          <EmptyState
-            title={t('agents.empty.title')}
-            body={t('agents.empty.body')}
-            action={
-              <button
-                type="button"
-                className="btn btn-primary btn-big"
-                onClick={() => setFlow({ step: 'choose', busy: null, error: null })}
-              >
-                {t('agents.empty.action')}
-              </button>
-            }
-          />
-        ) : (
-          <AgentList agents={state.data} onRevoke={revoke} onDelete={remove} />
-        ))}
-
-      {flow.step === 'choose' && (
-        <Modal title={t('agents.choose.title')} onClose={() => setFlow({ step: 'closed' })}>
-          {flow.error && <ErrorBanner message={flow.error} />}
-          <div className="choice-grid">
-            {AGENT_CHOICES.map(choice => (
-              <button
-                key={choice.type}
-                type="button"
-                className="choice-card"
-                disabled={flow.busy !== null}
-                onClick={() => startPairing(choice.type)}
-              >
-                <strong>{t(choice.labelKey)}</strong>
-                <span className="muted">{flow.busy === choice.type ? t('agents.choose.preparing') : t(choice.hintKey)}</span>
-              </button>
+        <SectionCard title={t('agents.list.title')} description={t('agents.list.lead')} className="mb-0">
+          {state.status === 'loading' && <Spinner />}
+          {state.status === 'error' && <ErrorBanner message={state.message} onRetry={reload} className="my-0" />}
+          {state.status === 'ready' &&
+            (state.data.length === 0 ? (
+              <EmptyState
+                title={t('agents.empty.title')}
+                body={t('agents.empty.body')}
+                action={
+                  <Button size="lg" onClick={openChooser}>
+                    <Plus aria-hidden="true" />
+                    {t('agents.empty.action')}
+                  </Button>
+                }
+              />
+            ) : (
+              <AgentList agents={state.data} onRevoke={revoke} onDelete={remove} />
             ))}
-          </div>
-        </Modal>
-      )}
+        </SectionCard>
+      </div>
 
-      {flow.step === 'code' && (
-        <Modal title={t('agents.code.title', { agent: agentTypeLabel(flow.type) })} onClose={closeFlow}>
-          <PairingCode result={flow.result} onRegenerate={() => startPairing(flow.type)} />
-          <div className="modal-foot">
-            <button type="button" className="btn btn-primary" onClick={closeFlow}>
-              {t('agents.code.done')}
-            </button>
+      <PairingDialog flow={flow} onChoose={startPairing} onCancel={() => setFlow({ step: 'closed' })} onDone={closeFlow} />
+    </>
+  )
+}
+
+// ------------------------------------------------------------ dialogue commun
+
+/** Bouton de fermeture traduit (le composant Dialog généré porte un « Close » en dur). */
+function DialogCloseButton() {
+  const { t } = useT()
+  return (
+    <DialogClose asChild>
+      <Button variant="ghost" size="icon-sm" className="absolute top-2 right-2" aria-label={t('common.close')}>
+        <X aria-hidden="true" />
+      </Button>
+    </DialogClose>
+  )
+}
+
+// ------------------------------------------------------------ code de connexion
+
+function PairingDialog({
+  flow,
+  onChoose,
+  onCancel,
+  onDone,
+}: {
+  flow: PairFlow
+  onChoose: (type: AgentType) => void
+  onCancel: () => void
+  onDone: () => void
+}) {
+  const { t } = useT()
+  const open = flow.step !== 'closed'
+  const close = () => (flow.step === 'code' ? onDone() : onCancel())
+  return (
+    <Dialog open={open} onOpenChange={isOpen => !isOpen && close()}>
+      <DialogContent showCloseButton={false} className="sm:max-w-lg">
+        {flow.step === 'choose' && (
+          <>
+            <DialogHeader>
+              <DialogTitle>{t('agents.choose.title')}</DialogTitle>
+              <DialogDescription>{t('agents.choose.lead')}</DialogDescription>
+            </DialogHeader>
+            {flow.error && <ErrorBanner message={flow.error} className="my-0" />}
+            <div className="grid gap-2 sm:grid-cols-2">
+              {AGENT_CHOICES.map(choice => {
+                const Icon = choice.icon
+                const busy = flow.busy === choice.type
+                return (
+                  <button
+                    key={choice.type}
+                    type="button"
+                    disabled={flow.busy !== null}
+                    onClick={() => onChoose(choice.type)}
+                    className="flex items-start gap-3 rounded-lg border p-3 text-left transition-colors outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-60"
+                  >
+                    <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground" aria-hidden="true">
+                      {busy ? <Loader2 className="size-4 animate-spin" /> : <Icon className="size-4" />}
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block font-medium">{t(choice.labelKey)}</span>
+                      <span className="block text-xs text-muted-foreground">{busy ? t('agents.choose.preparing') : t(choice.hintKey)}</span>
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+          </>
+        )}
+        {flow.step === 'code' && (
+          <>
+            <DialogHeader>
+              <DialogTitle>{t('agents.code.title', { agent: agentTypeLabel(flow.type) })}</DialogTitle>
+              <DialogDescription>{t('agents.pairing.instructions')}</DialogDescription>
+            </DialogHeader>
+            <PairingCode result={flow.result} onRegenerate={() => onChoose(flow.type)} />
+            <DialogFooter>
+              <Button onClick={onDone}>
+                <Check aria-hidden="true" />
+                {t('agents.code.done')}
+              </Button>
+            </DialogFooter>
+          </>
+        )}
+        {/* En dernier dans le DOM : le focus initial va au premier choix, pas à la croix. */}
+        <DialogCloseButton />
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function PairingCode({ result, onRegenerate }: { result: PairResult; onRegenerate: () => void }) {
+  const { t } = useT()
+  const [secondsLeft, setSecondsLeft] = useState(PAIRING_TTL_SECONDS)
+
+  useEffect(() => {
+    setSecondsLeft(PAIRING_TTL_SECONDS)
+    const id = window.setInterval(() => setSecondsLeft(s => Math.max(0, s - 1)), 1000)
+    return () => window.clearInterval(id)
+  }, [result.pairing_code])
+
+  const expired = secondsLeft === 0
+  const mm = Math.floor(secondsLeft / 60)
+  const ss = String(secondsLeft % 60).padStart(2, '0')
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div
+        className="rounded-lg bg-muted px-4 py-3 text-center font-mono text-2xl font-semibold tracking-[0.2em] tabular-nums select-all"
+        aria-label={t('agents.pairing.codeLabel')}
+      >
+        {result.pairing_code}
+      </div>
+      <CommandBlock text={result.command} copyLabel={t('agents.pairing.copy')} />
+      {expired ? (
+        <Alert variant="destructive">
+          <TriangleAlert />
+          <AlertTitle>{t('agents.pairing.expired')}</AlertTitle>
+          <div className="col-start-2 mt-2">
+            <Button size="sm" onClick={onRegenerate}>
+              <RefreshCw aria-hidden="true" />
+              {t('agents.pairing.regenerate')}
+            </Button>
           </div>
-        </Modal>
+        </Alert>
+      ) : (
+        <p className="text-sm text-muted-foreground" role="timer">
+          {t('agents.pairing.expiresBefore')}
+          <strong className="tabular-nums text-foreground">
+            {mm}:{ss}
+          </strong>
+          {t('agents.pairing.expiresAfter')}
+        </p>
       )}
-    </section>
+    </div>
   )
 }
 
@@ -201,8 +357,11 @@ type ImportFlow =
   | { step: 'done'; agent: DetectedAgent; status: ImportJobStatus }
   | { step: 'failed'; agent: DetectedAgent; message: string }
 
-/** Section « Sur cette machine » : détection, connexion 1 clic, import des souvenirs. */
-export function MachineAgents({ onChanged, onOpenReview }: { onChanged: () => void; onOpenReview?: () => void }) {
+/**
+ * Section « Sur cette machine » : détection, connexion 1 clic, import des
+ * souvenirs. `embedded` = rendu sans carte (dans une étape de l'onboarding).
+ */
+export function MachineAgents({ onChanged, onOpenReview, embedded = false }: { onChanged: () => void; onOpenReview?: () => void; embedded?: boolean }) {
   const { t } = useT()
   const [detected, setDetected] = useState<DetectedAgent[] | null>(null)
   const [detecting, setDetecting] = useState(false)
@@ -238,6 +397,7 @@ export function MachineAgents({ onChanged, onOpenReview }: { onChanged: () => vo
       result => {
         setConnectResults(prev => ({ ...prev, [agent.kind]: result }))
         setConnectBusy(null)
+        toast.success(t('agents.toast.connected', { name: agent.name }))
         onChanged()
         detect() // rafraîchit already_connected
       },
@@ -298,7 +458,7 @@ export function MachineAgents({ onChanged, onOpenReview }: { onChanged: () => vo
   // est considéré injoignable → on sort le spinner de son état infini (P0).
   const pollErrors = useRef(0)
 
-  // Polling du job (1 s) tant que la modale est en étape « running ».
+  // Polling du job (1 s) tant que la fenêtre est en étape « running ».
   useEffect(() => {
     if (flow.step !== 'running') return
     pollErrors.current = 0
@@ -329,34 +489,44 @@ export function MachineAgents({ onChanged, onOpenReview }: { onChanged: () => vo
   const interrupted = persisted ? interruptedImport(persisted, detected, t) : null
   const resumeAgent = interrupted?.agent ?? null
 
-  return (
-    <div className="machine-agents">
-      <div className="machine-head">
-        <h2>{t('agents.machine.title')}</h2>
-        <button type="button" className="btn" onClick={detect} disabled={detecting}>
-          {detecting ? t('agents.machine.detecting') : t('agents.machine.detect')}
-        </button>
-      </div>
-      {error && <ErrorBanner message={error} />}
+  const detectButton = (
+    <Button variant="outline" size="sm" onClick={detect} disabled={detecting}>
+      {detecting ? <Loader2 className="animate-spin" aria-hidden="true" /> : <ScanSearch aria-hidden="true" />}
+      {detecting ? t('agents.machine.detecting') : t('agents.machine.detect')}
+    </Button>
+  )
+
+  const body = (
+    <div className="flex flex-col gap-3">
+      {/* Le texte d'intro vit dans le contenu, pas dans l'en-tête de carte : à côté du
+          bouton Détecter, il se retrouvait compressé sur 3 colonnes sous 640 px. */}
+      {!embedded && <p className="text-sm text-muted-foreground">{t('agents.machine.lead')}</p>}
+      {error && <ErrorBanner message={error} onRetry={detect} className="my-0" />}
       {interrupted && (
-        <div className="import-interrupted">
-          <ErrorBanner message={interrupted.message} />
-          <div className="machine-card-actions">
+        <Alert variant="destructive">
+          <TriangleAlert />
+          <AlertTitle>{interrupted.message}</AlertTitle>
+          <div className="col-start-2 mt-2">
             {resumeAgent ? (
-              <button type="button" className="btn btn-primary" onClick={() => launchImport(resumeAgent)}>
+              <Button size="sm" onClick={() => launchImport(resumeAgent)}>
+                <RefreshCw aria-hidden="true" />
                 {t('agents.import.resume')}
-              </button>
+              </Button>
             ) : (
-              <span className="muted">{t('agents.import.resumeUnknownAgent')}</span>
+              <AlertDescription>{t('agents.import.resumeUnknownAgent')}</AlertDescription>
             )}
           </div>
+        </Alert>
+      )}
+      {detected === null && !error && (
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3" role="status" aria-label={t('agents.machine.detecting')}>
+          <Skeleton className="h-28 rounded-xl" />
+          <Skeleton className="h-28 rounded-xl" />
         </div>
       )}
-      {detected !== null && detected.length === 0 && (
-        <p className="muted">{t('agents.machine.none')}</p>
-      )}
+      {detected !== null && detected.length === 0 && <p className="text-sm text-muted-foreground">{t('agents.machine.none')}</p>}
       {detected !== null && detected.length > 0 && (
-        <div className="machine-grid">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {detected.map(agent => (
             <MachineAgentCard
               key={agent.kind}
@@ -372,40 +542,51 @@ export function MachineAgents({ onChanged, onOpenReview }: { onChanged: () => vo
           ))}
         </div>
       )}
-
-      {flow.step !== 'closed' && (
-        <Modal
-          title={t('agents.import.title', { name: flow.agent.name })}
-          onClose={() => {
-            // pendant le run on laisse le job finir côté daemon ; on ferme juste la fenêtre
-            setFlow({ step: 'closed' })
-            if (flow.step === 'done') onChanged()
-          }}
-        >
-          {flow.step === 'confirm' && (
-            <ImportConfirm agent={flow.agent} onConfirm={() => launchImport(flow.agent)} onCancel={() => setFlow({ step: 'closed' })} />
-          )}
-          {flow.step === 'running' && <ImportProgress status={flow.status} />}
-          {flow.step === 'done' && (
-            <ImportDone agent={flow.agent} status={flow.status} onOpenReview={onOpenReview} onClose={() => { setFlow({ step: 'closed' }); onChanged() }} />
-          )}
-          {flow.step === 'failed' && (
-            <>
-              <ErrorBanner message={flow.message} />
-              <div className="modal-foot">
-                <button type="button" className="btn" onClick={() => setFlow({ step: 'closed' })}>
-                  {t('common.close')}
-                </button>
-                <button type="button" className="btn btn-primary" onClick={() => launchImport(flow.agent)}>
-                  {t('common.retry')}
-                </button>
-              </div>
-            </>
-          )}
-        </Modal>
-      )}
     </div>
   )
+
+  const dialog = (
+    <ImportDialog
+      flow={flow}
+      onOpenReview={onOpenReview}
+      onLaunch={launchImport}
+      onClose={() => {
+        // pendant le run on laisse le job finir côté daemon ; on ferme juste la fenêtre
+        const wasDone = flow.step === 'done'
+        setFlow({ step: 'closed' })
+        if (wasDone) onChanged()
+      }}
+    />
+  )
+
+  if (embedded) {
+    return (
+      <div className="flex flex-col gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-sm font-medium">{t('agents.machine.title')}</h2>
+          {detectButton}
+        </div>
+        {body}
+        {dialog}
+      </div>
+    )
+  }
+
+  return (
+    <>
+      <SectionCard title={t('agents.machine.title')} actions={detectButton} className="mb-0">
+        {body}
+      </SectionCard>
+      {dialog}
+    </>
+  )
+}
+
+const KIND_ICONS: Record<DetectedAgent['kind'], LucideIcon> = {
+  'claude-code': Terminal,
+  codex: Braces,
+  openclaw: MessageCircle,
+  cursor: MousePointerClick,
 }
 
 function MachineAgentCard({
@@ -430,57 +611,71 @@ function MachineAgentCard({
   const { t } = useT()
   const connected = agent.already_connected !== null
   const dataLabel = describeData(t, agent)
+  const Icon = KIND_ICONS[agent.kind]
   return (
-    <div className="machine-card">
-      <div className="machine-card-head">
-        <strong>{agentIcon(agent.kind)} {agent.name}</strong>
-        {connected ? <span className="badge badge-ok">{t('agents.card.connected')}</span> : <span className="badge badge-muted">{t('agents.card.notConnected')}</span>}
-      </div>
-      <div className="machine-card-meta muted">
-        {agent.installed ? t('agents.card.cliInstalled') : t('agents.card.cliAbsent')}
-        {dataLabel && <> · {dataLabel}</>}
-      </div>
-      {connectResult && (
-        <p className={connectResult.registered.registered ? 'machine-connect-ok' : 'machine-connect-warn'}>
-          {connectResult.registered.registered
-            ? t('agents.card.connectOk', { hint: connectResult.restart_hint ?? '' })
-            : t('agents.card.connectWarn', { detail: connectResult.registered.detail })}
+    <Card size="sm" className={cn('bg-muted/40 ring-0', connected && 'ring-1 ring-success/30')}>
+      <CardContent className="flex h-full flex-col gap-2">
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-2 font-medium">
+            <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+            <span className="truncate">{agent.name}</span>
+          </div>
+          {connected ? (
+            <StatusBadge tone="ok">{t('agents.card.connected')}</StatusBadge>
+          ) : (
+            <StatusBadge tone="muted">{t('agents.card.notConnected')}</StatusBadge>
+          )}
+        </div>
+        <p className="text-xs text-muted-foreground">
+          {agent.installed ? t('agents.card.cliInstalled') : t('agents.card.cliAbsent')}
+          {dataLabel && <> · {dataLabel}</>}
         </p>
-      )}
-      <div className="machine-card-actions">
-        {!connected && (
-          <button type="button" className="btn btn-primary" onClick={onConnect} disabled={busy}>
-            {busy ? t('agents.card.connecting') : t('agents.card.connect')}
-          </button>
+        {connectResult && (
+          <p className={cn('flex items-start gap-1.5 text-xs', connectResult.registered.registered ? 'text-success' : 'text-warning')}>
+            {connectResult.registered.registered ? (
+              <CircleCheck className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+            ) : (
+              <TriangleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+            )}
+            <span>
+              {connectResult.registered.registered
+                ? t('agents.card.connectOk', { hint: connectResult.restart_hint ?? '' })
+                : t('agents.card.connectWarn', { detail: connectResult.registered.detail })}
+            </span>
+          </p>
         )}
-        {connected && dataLabel && !dismissed && (
-          <>
-            <button type="button" className="btn btn-primary" onClick={onImport}>
-              {t('agents.card.import')}
-            </button>
-            <button type="button" className="btn btn-ghost" onClick={onDismiss}>
-              {t('agents.card.startFresh')}
-            </button>
-          </>
+        {/* Zone d'actions rendue seulement s'il y a quelque chose à faire (sinon un vide inutile en bas de carte). */}
+        {(!connected || dataLabel) && (
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            {!connected && (
+              <Button size="sm" onClick={onConnect} disabled={busy}>
+                {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
+                {busy ? t('agents.card.connecting') : t('agents.card.connect')}
+              </Button>
+            )}
+            {connected && dataLabel && !dismissed && (
+              <>
+                <Button size="sm" onClick={onImport}>
+                  {t('agents.card.import')}
+                </Button>
+                <Button size="sm" variant="ghost" onClick={onDismiss}>
+                  {t('agents.card.startFresh')}
+                </Button>
+              </>
+            )}
+            {connected && dataLabel && dismissed && (
+              <span className="text-xs text-muted-foreground">
+                {t('agents.card.startFreshNote')}{' '}
+                <Button variant="link" size="xs" className="h-auto p-0 text-xs" onClick={onUndoDismiss}>
+                  {t('agents.card.undoDismiss')}
+                </Button>
+              </span>
+            )}
+          </div>
         )}
-        {connected && dataLabel && dismissed && (
-          <span className="muted">
-            {t('agents.card.startFreshNote')}{' '}
-            <button type="button" className="btn-link" onClick={onUndoDismiss}>
-              {t('agents.card.undoDismiss')}
-            </button>
-          </span>
-        )}
-      </div>
-    </div>
+      </CardContent>
+    </Card>
   )
-}
-
-function agentIcon(kind: DetectedAgent['kind']): string {
-  if (kind === 'claude-code') return '🤖'
-  if (kind === 'codex') return '🧠'
-  if (kind === 'openclaw') return '🦞'
-  return '🖱️'
 }
 
 /** « 122 conversations trouvées » / « Mémoire OpenClaw : 3 573 souvenirs ». */
@@ -496,34 +691,80 @@ function describeData(t: Translate, agent: DetectedAgent): string | null {
   return null
 }
 
-function ImportConfirm({ agent, onConfirm, onCancel }: { agent: DetectedAgent; onConfirm: () => void; onCancel: () => void }) {
+// ------------------------------------------------------------ import (dialogue)
+
+function ImportDialog({
+  flow,
+  onOpenReview,
+  onLaunch,
+  onClose,
+}: {
+  flow: ImportFlow
+  onOpenReview?: () => void
+  onLaunch: (agent: DetectedAgent) => void
+  onClose: () => void
+}) {
   const { t } = useT()
+  if (flow.step === 'closed') return null
+  const agent = flow.agent
   const isLegacy = agent.kind === 'openclaw'
   return (
-    <div className="import-confirm">
-      <p>
-        <strong>{t('agents.confirm.source')}</strong>
-        {describeData(t, agent)}
-        {isLegacy && agent.data_found.legacy_db && <span className="muted"> ({agent.data_found.legacy_db.path})</span>}
-      </p>
-      {isLegacy ? (
-        <p className="muted">
-          {t('agents.confirm.legacyBody')}
-        </p>
-      ) : (
-        <p className="muted">
-          {t('agents.confirm.transcriptsBefore')}<strong>{t('agents.confirm.transcriptsDormant')}</strong>{t('agents.confirm.transcriptsAfter')}
-        </p>
-      )}
-      <div className="modal-foot">
-        <button type="button" className="btn btn-ghost" onClick={onCancel}>
-          {t('agents.confirm.cancel')}
-        </button>
-        <button type="button" className="btn btn-primary" onClick={onConfirm}>
-          {t('agents.confirm.launch')}
-        </button>
-      </div>
-    </div>
+    <Dialog open onOpenChange={open => !open && onClose()}>
+      <DialogContent showCloseButton={false} className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>{t('agents.import.title', { name: agent.name })}</DialogTitle>
+          <DialogDescription>
+            {t('agents.confirm.source')}
+            {describeData(t, agent)}
+            {isLegacy && agent.data_found.legacy_db && <span className="break-all"> ({agent.data_found.legacy_db.path})</span>}
+          </DialogDescription>
+        </DialogHeader>
+
+        {flow.step === 'confirm' && (
+          <>
+            <p className="text-sm text-muted-foreground">
+              {isLegacy ? (
+                t('agents.confirm.legacyBody')
+              ) : (
+                <>
+                  {t('agents.confirm.transcriptsBefore')}
+                  <strong className="text-foreground">{t('agents.confirm.transcriptsDormant')}</strong>
+                  {t('agents.confirm.transcriptsAfter')}
+                </>
+              )}
+            </p>
+            <DialogFooter>
+              <Button variant="ghost" onClick={onClose}>
+                {t('agents.confirm.cancel')}
+              </Button>
+              <Button onClick={() => onLaunch(agent)}>{t('agents.confirm.launch')}</Button>
+            </DialogFooter>
+          </>
+        )}
+
+        {flow.step === 'running' && <ImportProgress status={flow.status} />}
+
+        {flow.step === 'done' && (
+          <ImportDone agent={agent} status={flow.status} onOpenReview={onOpenReview} onClose={onClose} />
+        )}
+
+        {flow.step === 'failed' && (
+          <>
+            <ErrorBanner message={flow.message} className="my-0" />
+            <DialogFooter>
+              <Button variant="ghost" onClick={onClose}>
+                {t('common.close')}
+              </Button>
+              <Button onClick={() => onLaunch(agent)}>
+                <RefreshCw aria-hidden="true" />
+                {t('common.retry')}
+              </Button>
+            </DialogFooter>
+          </>
+        )}
+        <DialogCloseButton />
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -534,12 +775,13 @@ function ImportProgress({ status }: { status: ImportJobStatus | null }) {
   const done = p ? Math.min(p.files_done, total) : 0
   const percent = Math.round((done / total) * 100)
   return (
-    <div className="import-progress">
-      <p>{t('agents.progress.running')}</p>
-      <div className="progress-track" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}>
-        <div className="progress-fill" style={{ width: `${percent}%` }} />
-      </div>
-      <p className="muted">
+    <div className="flex flex-col gap-3" role="status">
+      <p className="flex items-center gap-2 text-sm">
+        <Loader2 className="size-4 animate-spin text-primary" aria-hidden="true" />
+        {t('agents.progress.running')}
+      </p>
+      <Progress value={percent} className="h-2" aria-label={t('agents.progress.running')} />
+      <p className="text-sm text-muted-foreground tabular-nums">
         {p ? t('agents.progress.detail', { done: p.files_done, total: p.files_total, facts: formatNumber(p.facts_imported) }) : t('agents.progress.starting')}
       </p>
     </div>
@@ -560,75 +802,90 @@ function ImportDone({
   const { t } = useT()
   const n = status.progress.facts_imported
   const isLegacy = agent.kind === 'openclaw'
+  const [errorsOpen, setErrorsOpen] = useState(false)
   return (
-    <div className="import-done">
-      {isLegacy ? (
-        <p>
-          ✓ <strong>{t('agents.done.legacyStrong', { n: formatNumber(n) })}</strong>{t('agents.done.legacyAfter')}
-        </p>
-      ) : (
-        <p>
-          ✓ <strong>{t(n > 1 ? 'agents.done.transcriptsStrong.plural' : 'agents.done.transcriptsStrong.one', { n: formatNumber(n) })}</strong>{t('agents.done.transcriptsAfter')}
-        </p>
-      )}
+    <>
+      <Alert className="ring-1 ring-success/30">
+        <CircleCheck className="text-success" />
+        <AlertTitle>
+          {isLegacy
+            ? t('agents.done.legacyStrong', { n: formatNumber(n) })
+            : t(n > 1 ? 'agents.done.transcriptsStrong.plural' : 'agents.done.transcriptsStrong.one', { n: formatNumber(n) })}
+        </AlertTitle>
+        <AlertDescription>{isLegacy ? t('agents.done.legacyAfter') : t('agents.done.transcriptsAfter')}</AlertDescription>
+      </Alert>
       {status.errors.length > 0 && (
-        <details className="import-errors">
-          <summary>{t('agents.done.errorsSummary', { n: status.errors.length })}</summary>
-          <ul>
-            {status.errors.slice(0, 10).map((e, i) => (
-              <li key={i} className="muted">{e}</li>
-            ))}
-          </ul>
-        </details>
+        <Collapsible open={errorsOpen} onOpenChange={setErrorsOpen}>
+          <CollapsibleTrigger asChild>
+            <Button variant="ghost" size="sm" className="text-warning" aria-expanded={errorsOpen}>
+              <TriangleAlert aria-hidden="true" />
+              {t('agents.done.errorsSummary', { n: status.errors.length })}
+            </Button>
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <ul className="mt-2 max-h-40 list-disc space-y-1 overflow-y-auto pl-5 text-xs text-muted-foreground">
+              {status.errors.slice(0, 10).map((e, i) => (
+                <li key={i} className="break-words">{e}</li>
+              ))}
+            </ul>
+          </CollapsibleContent>
+        </Collapsible>
       )}
-      <div className="modal-foot">
-        <button type="button" className="btn btn-ghost" onClick={onClose}>
+      <DialogFooter>
+        <Button variant="ghost" onClick={onClose}>
           {t('agents.done.close')}
-        </button>
-        {!isLegacy && onOpenReview && (
-          <button type="button" className="btn btn-primary" onClick={onOpenReview}>
-            {t('agents.done.openReview')}
-          </button>
-        )}
-      </div>
-    </div>
+        </Button>
+        {!isLegacy && onOpenReview && <Button onClick={onOpenReview}>{t('agents.done.openReview')}</Button>}
+      </DialogFooter>
+    </>
   )
 }
 
+// ------------------------------------------------------------ agents connectés
+
 function AgentList({ agents, onRevoke, onDelete }: { agents: AgentEntry[]; onRevoke: (id: string) => void; onDelete: (id: string) => void }) {
   const { t } = useT()
-  if (agents.length === 0) return null
   return (
-    <ul className="agent-list">
+    <ul className="-my-3 divide-y">
       {agents.map(({ instance, assistant_type }) => {
         const revoked = instance.revoked_at !== null
         const pending = !revoked && instance.last_seen_at === null
         return (
-          <li key={instance.id} className={`agent-row${revoked ? ' agent-revoked' : ''}`}>
-            <div className="agent-id">
-              <strong>{agentTypeLabel(assistant_type)}</strong>
-              <span className="muted">{t('agents.list.on', { machine: instance.machine_id })}</span>
-            </div>
-            <div className="agent-meta">
-              {revoked ? (
-                <span className="badge badge-muted">{t('agents.list.revoked')}</span>
-              ) : pending ? (
-                <span className="badge badge-warn">{t('agents.list.pending')}</span>
-              ) : (
-                <span className="badge badge-ok">{t('agents.list.connected')}</span>
-              )}
-              <span className="muted">
+          <li key={instance.id} className={cn('flex flex-col gap-3 py-3 md:flex-row md:items-start md:justify-between', revoked && 'opacity-60')}>
+            <div className="flex min-w-0 flex-col gap-1.5">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-medium">{agentTypeLabel(assistant_type)}</span>
+                {revoked ? (
+                  <StatusBadge tone="muted">{t('agents.list.revoked')}</StatusBadge>
+                ) : pending ? (
+                  <StatusBadge tone="warn">{t('agents.list.pending')}</StatusBadge>
+                ) : (
+                  <StatusBadge tone="ok">{t('agents.list.connected')}</StatusBadge>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {t('agents.list.on', { machine: instance.machine_id })}
+                {' · '}
                 {instance.last_seen_at ? t('agents.list.seenAt', { date: formatDate(instance.last_seen_at) }) : t('agents.list.addedAt', { date: formatDate(instance.created_at) })}
-              </span>
+              </p>
+              {!revoked && !pending && <AgentExpertise instanceId={instance.id} />}
             </div>
-            {!revoked && !pending && <AgentExpertise instanceId={instance.id} />}
-            <div className="agent-actions">
+            <div className="flex shrink-0 flex-wrap items-center gap-2">
               {!revoked && (
-                <ConfirmButton label={t('agents.list.revoke')} confirmLabel={t('agents.list.revokeConfirm')} onConfirm={() => onRevoke(instance.id)} />
+                <ConfirmButton
+                  label={t('agents.list.revoke')}
+                  title={t('agents.list.revokeTitle')}
+                  description={t('agents.list.revokeBody')}
+                  confirmLabel={t('agents.list.revoke')}
+                  onConfirm={() => onRevoke(instance.id)}
+                />
               )}
               <ConfirmButton
                 label={t('agents.list.delete')}
-                confirmLabel={t('agents.list.deleteConfirm')}
+                title={t('agents.list.deleteTitle')}
+                description={t('agents.list.deleteBody')}
+                confirmLabel={t('agents.list.delete')}
+                variant="destructive"
                 onConfirm={() => onDelete(instance.id)}
               />
             </div>
@@ -645,7 +902,7 @@ function AgentExpertise({ instanceId }: { instanceId: string }) {
   const [domains, setDomains] = useState<ExpertiseDomain[]>([])
   const [self, setSelf] = useState<SelfObservation[]>([])
   // Garde `cancelled` : la liste se remonte à chaque reload() (révocation,
-  // modale…) ; sans elle, la réponse d'un ancien instanceId pouvait écraser
+  // dialogue…) ; sans elle, la réponse d'un ancien instanceId pouvait écraser
   // les badges d'un autre agent.
   useEffect(() => {
     let cancelled = false
@@ -672,20 +929,21 @@ function AgentExpertise({ instanceId }: { instanceId: string }) {
   }, [instanceId])
   if (domains.length === 0 && self.length === 0) return null
   return (
-    <div className="agent-insights">
+    <div className="flex flex-col gap-1.5">
       {domains.length > 0 && (
-        <div className="agent-expertise" title={t('agents.expertise.title')}>
-          <span className="muted">{t('agents.expertise.label')}</span>
-          {domains.map(d => <span key={d.domain} className="badge badge-theme">{d.domain}</span>)}
+        <div className="flex flex-wrap items-center gap-1" title={t('agents.expertise.title')}>
+          <span className="mr-1 text-xs text-muted-foreground">{t('agents.expertise.label')}</span>
+          {domains.map(d => (
+            <Badge key={d.domain} variant="secondary">
+              {d.domain}
+            </Badge>
+          ))}
         </div>
       )}
       {self.length > 0 && (
-        <div className="agent-self">
+        <div className="flex flex-wrap items-center gap-1">
           {self.map(o => (
-            <span key={o.id} className={`badge ${o.kind === 'weakness' ? 'badge-warn' : 'badge-muted'}`} title={o.kind}>
-              {o.kind === 'strength' ? '✓ ' : o.kind === 'weakness' ? '⚠ ' : '• '}
-              {o.observation.length > 60 ? o.observation.slice(0, 57) + '…' : o.observation}
-            </span>
+            <SelfObservationBadge key={o.id} observation={o} />
           ))}
         </div>
       )}
@@ -693,95 +951,20 @@ function AgentExpertise({ instanceId }: { instanceId: string }) {
   )
 }
 
-function PairingCode({ result, onRegenerate }: { result: PairResult; onRegenerate: () => void }) {
+function SelfObservationBadge({ observation: o }: { observation: SelfObservation }) {
   const { t } = useT()
-  const [secondsLeft, setSecondsLeft] = useState(PAIRING_TTL_SECONDS)
-
-  useEffect(() => {
-    setSecondsLeft(PAIRING_TTL_SECONDS)
-    const id = window.setInterval(() => setSecondsLeft(s => Math.max(0, s - 1)), 1000)
-    return () => window.clearInterval(id)
-  }, [result.pairing_code])
-
-  const expired = secondsLeft === 0
-  const mm = Math.floor(secondsLeft / 60)
-  const ss = String(secondsLeft % 60).padStart(2, '0')
-
+  const text = o.observation.length > 60 ? o.observation.slice(0, 57) + '…' : o.observation
+  const kindLabel = o.kind === 'strength' ? t('agents.self.strength') : o.kind === 'weakness' ? t('agents.self.weakness') : t('agents.self.other')
+  const icon: ReactNode =
+    o.kind === 'strength' ? <Check aria-hidden="true" /> : o.kind === 'weakness' ? <TriangleAlert aria-hidden="true" /> : null
   return (
-    <div className="pairing">
-      <p>
-        {t('agents.pairing.instructions')}
-      </p>
-      <div className="pairing-code" aria-label={t('agents.pairing.codeLabel')}>
-        {result.pairing_code}
-      </div>
-      <div className="command-row">
-        <code className="command">{result.command}</code>
-        <CopyButton text={result.command} label={t('agents.pairing.copy')} />
-      </div>
-      {expired ? (
-        <div className="pairing-expired">
-          <span>{t('agents.pairing.expired')}</span>
-          <button type="button" className="btn btn-primary" onClick={onRegenerate}>
-            {t('agents.pairing.regenerate')}
-          </button>
-        </div>
-      ) : (
-        <p className="muted">
-          {t('agents.pairing.expiresBefore')}<strong>{mm}:{ss}</strong>{t('agents.pairing.expiresAfter')}
-        </p>
-      )}
-    </div>
-  )
-}
-
-/**
- * Modale accessible : le focus entre dans la boîte à l'ouverture, Échap et le
- * clic sur le fond ferment, le focus revient à l'élément déclencheur à la
- * fermeture (sinon un utilisateur clavier « perdait » sa position).
- */
-function Modal({ title, children, onClose }: { title: string; children: ReactNode; onClose: () => void }) {
-  const { t } = useT()
-  const box = useRef<HTMLDivElement>(null)
-  const onCloseRef = useRef(onClose)
-  onCloseRef.current = onClose
-
-  useEffect(() => {
-    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null
-    const first = box.current?.querySelector<HTMLElement>('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')
-    first?.focus()
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        onCloseRef.current()
-      }
-    }
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('keydown', onKey)
-      opener?.focus()
-    }
-  }, [])
-
-  return (
-    <div
-      className="modal-backdrop"
-      role="dialog"
-      aria-modal="true"
-      aria-label={title}
-      onClick={e => {
-        if (e.target === e.currentTarget) onClose()
-      }}
+    <Badge
+      variant="outline"
+      className={cn('h-auto max-w-full py-0.5 text-left whitespace-normal', o.kind === 'weakness' && 'border-warning/40 text-warning')}
+      title={kindLabel}
     >
-      <div className="modal" ref={box}>
-        <header className="modal-head">
-          <h2>{title}</h2>
-          <button type="button" className="btn btn-ghost" onClick={onClose} aria-label={t('agents.modal.close')}>
-            ✕
-          </button>
-        </header>
-        {children}
-      </div>
-    </div>
+      {icon}
+      {text}
+    </Badge>
   )
 }
