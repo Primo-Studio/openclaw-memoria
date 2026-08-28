@@ -27,6 +27,8 @@ import { forgetFacts, getAgents, searchAll, searchFacts, type AdminFact, type Ag
 import { ALL_AGENTS, MemAgentPicker, MemNoAgentState } from '../components/MemAgentSelect'
 import { MemBadgeButton, MemFactCard, MemMetaText, MemSensitivityBadge } from '../components/MemFactCard'
 import { MemSearchInput } from '../components/MemSearchInput'
+import { MemListCount } from '../components/MemListCount'
+import { MemScreenLink } from '../components/MemScreenLink'
 import { MemSelectionBar } from '../components/MemSelectionBar'
 import { ConfirmButton, EmptyState, ErrorBanner, PageHeader, SectionCard, agentTypeLabel, formatDate, humanError, useLoad } from '../components/ui'
 import { Badge } from '../components/ui/badge'
@@ -241,6 +243,13 @@ function MemoryBrowser({ agents }: { agents: AgentEntry[] }) {
           </div>
         </form>
         <p className="mt-3 text-xs text-muted-foreground">{t('memory.hint')}</p>
+        {/* Mémoire sert à relire et à oublier ; la correction d'une phrase vit
+            dans Maintenance. Sans ce renvoi, l'utilisateur qui voulait réparer
+            un souvenir ne trouvait ici que le bouton qui l'efface. */}
+        <p className="mt-1 flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
+          {t('memory.repair_hint')}
+          <MemScreenLink screen="maintenance" label={t('common.open_screen', { screen: t('nav.maintenance') })} />
+        </p>
       </SectionCard>
 
       <MemSelectionBar count={selected.size} onClear={() => setSelected(new Set())}>
@@ -275,20 +284,15 @@ function MemoryBrowser({ agents }: { agents: AgentEntry[] }) {
           />
         ) : (
           <section aria-label={t('memory.results_label')}>
-            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-              <div className="min-w-0">
-                <h2 className="text-sm font-medium">
-                  {facts.length > 1 ? t('memory.count_plural', { count: facts.length }) : t('memory.count', { count: facts.length })}
-                </h2>
-                <p className="truncate text-xs text-muted-foreground">
-                  {search.query === '' ? t('memory.results_latest') : t('memory.results_for', { query: search.query })}
-                </p>
-              </div>
+            <MemListCount
+              label={facts.length > 1 ? t('fact.count_plural', { count: facts.length }) : t('fact.count', { count: facts.length })}
+              hint={search.query === '' ? undefined : t('memory.results_for', { query: search.query })}
+            >
               <Button type="button" variant="ghost" size="sm" className={TOUCH_ROW_ACTION} onClick={toggleAll} disabled={busy}>
                 {allSelected ? <Square aria-hidden="true" /> : <CheckSquare aria-hidden="true" />}
                 {allSelected ? t('selection.unselect_all') : t('selection.select_all')}
               </Button>
-            </div>
+            </MemListCount>
             <ul className="flex flex-col gap-3">
               {facts.map(fact => {
                 const topics = splitTopics(fact.topics)

@@ -21,6 +21,7 @@ import { Check, CheckSquare, ClipboardCheck, Sparkles, Square } from 'lucide-rea
 import { toast } from 'sonner'
 import { getReview, reviewDecision, type ReviewItem } from '../api'
 import { MemFactCard, MemMetaText } from '../components/MemFactCard'
+import { MemListCount } from '../components/MemListCount'
 import { MemRefreshButton } from '../components/MemRefreshButton'
 import { MemSelectionBar } from '../components/MemSelectionBar'
 import { ConfirmButton, EmptyState, ErrorBanner, PageHeader, formatDate, humanError, listPhase } from '../components/ui'
@@ -143,11 +144,7 @@ export function Review() {
         <section aria-label={t('review.list_label')}>
           {/* Une erreur de rechargement laisse la dernière liste connue visible, avec la bannière au-dessus. */}
           {error && <ErrorBanner message={error} onRetry={() => void refresh()} />}
-          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-            <h2 className="flex items-center gap-2 text-sm font-medium">
-              <ClipboardCheck className="size-4 text-muted-foreground" aria-hidden="true" />
-              {list.length > 1 ? t('review.pending_count_plural', { count: list.length }) : t('review.pending_count', { count: list.length })}
-            </h2>
+          <MemListCount label={list.length > 1 ? t('fact.count_plural', { count: list.length }) : t('fact.count', { count: list.length })}>
             {/* Actions de masse ici, pas dans la barre supérieure : à 390 px elles y écrasaient le titre.
                 `w-full … justify-end sm:w-auto` : au retour à la ligne sous 640 px, le groupe prend
                 toute la largeur et reste aligné sur le MÊME axe droit — sinon « Tout rejeter »
@@ -181,7 +178,7 @@ export function Review() {
                 </>
               )}
             </div>
-          </div>
+          </MemListCount>
           <ul className="flex flex-col gap-3">
             {list.map(item => {
               const topics = splitTopics(item.topics)
@@ -208,8 +205,13 @@ export function Review() {
                           on l'affiche traduite, sans jamais inventer de mot pour une valeur inconnue. */}
                       <Badge variant="secondary">{categoryLabel(t, item.category)}</Badge>
                       <Badge variant="outline">{item.source_type === 'capture-review' ? t('review.source_capture') : t('review.source_import')}</Badge>
-                      <MemMetaText>{t('review.confidence', { percent: (item.confidence * 100).toFixed(0) })}</MemMetaText>
-                      <MemMetaText>{formatDate(item.created_at)}</MemMetaText>
+                      {/* Confiance et date dans UNE seule rangée de métadonnées :
+                          deux MemMetaText pleine largeur feraient deux lignes sous 640 px. */}
+                      <MemMetaText>
+                        {t('review.confidence', { percent: (item.confidence * 100).toFixed(0) })}
+                        {' · '}
+                        {formatDate(item.created_at)}
+                      </MemMetaText>
                     </>
                   }
                   actions={

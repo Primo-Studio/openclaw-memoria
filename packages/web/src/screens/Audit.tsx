@@ -14,6 +14,7 @@ import { DataTable, EmptyState, ErrorBanner, PageHeader, SectionCard, formatDate
 import { DataCards } from '../components/DataCards'
 import { MemRefreshButton } from '../components/MemRefreshButton'
 import { useDirectory, type Directory, type Translate } from '../components/memory-names'
+import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select'
@@ -221,7 +222,17 @@ function AuditTable({ entries, directory }: { entries: AuditEntry[]; directory: 
   ]
 
   return (
-    <SectionCard title={t('audit.list_title')} description={t(filtered.length > 1 ? 'audit.count_plural' : 'audit.count', { shown: formatNumber(filtered.length), total: formatNumber(entries.length) })}>
+    // Pastille chiffrée dans l'en-tête de carte : la MÊME forme de compteur que
+    // Thèmes et Personnes, au lieu d'une phrase en sous-titre.
+    <SectionCard
+      title={t('audit.list_title')}
+      description={t('audit.window')}
+      actions={
+        <Badge variant="secondary" className="tabular-nums">
+          {formatNumber(filtered.length)}
+        </Badge>
+      }
+    >
       <div className="mb-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
         <div className="relative">
           <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />

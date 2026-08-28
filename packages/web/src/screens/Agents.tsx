@@ -147,6 +147,7 @@ export function Agents({ onOpenReview }: { onOpenReview?: () => void }) {
     <>
       <PageHeader
         title={t('agents.title')}
+        description={t('agents.lead')}
         actions={
           <>
             {/* Seul écran à porter AUSSI un bouton principal : à 390 px, les deux

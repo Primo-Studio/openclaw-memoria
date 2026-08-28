@@ -22,6 +22,7 @@ import { Skeleton } from '../components/ui/skeleton'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { Tooltip, TooltipContent, TooltipTrigger } from '../components/ui/tooltip'
 import { useT } from '../i18n'
+import { categoryLabel } from '../lib/labels'
 import { cn } from '../lib/utils'
 
 type View = 'list' | 'graph'
@@ -322,7 +323,7 @@ function ThemeDetail({
             <li key={f.id} className="rounded-lg bg-muted/40 p-3">
               <p className="text-sm leading-relaxed">{f.fact}</p>
               <div className="mt-1.5 flex flex-wrap gap-1">
-                <Badge variant="outline">{f.category}</Badge>
+                <Badge variant="outline">{categoryLabel(t, f.category)}</Badge>
               </div>
             </li>
           ))}

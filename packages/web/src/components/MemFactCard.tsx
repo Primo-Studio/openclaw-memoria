@@ -88,9 +88,17 @@ export function MemBadgeButton({
   )
 }
 
-/** Petite info textuelle dans la ligne de métadonnées (date, confiance…). */
+/**
+ * Petite info textuelle dans la ligne de métadonnées (date, confiance…).
+ *
+ * POURQUOI pleine largeur sous 640 px : glissée dans le flux des pastilles, la
+ * date sautait d'une ligne à l'autre d'une carte à la suivante selon le nombre
+ * de thèmes, et les cartes n'avaient plus la même hauteur. Sur sa propre
+ * rangée, elle se lit toujours au même endroit ; à partir de 640 px elle
+ * reprend sa place à la suite des badges.
+ */
 export function MemMetaText({ className, ...props }: ComponentProps<'span'>) {
-  return <span className={cn('text-xs text-muted-foreground tabular-nums', className)} {...props} />
+  return <span className={cn('w-full text-xs text-muted-foreground tabular-nums sm:w-auto', className)} {...props} />
 }
 
 /** Sensibilité : rien pour « normal », un badge visible pour sensible / critique. */

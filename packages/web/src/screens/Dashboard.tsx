@@ -71,8 +71,13 @@ export function Dashboard({ onConnect, onConfigure }: { onConnect: () => void; o
 
   return (
     <>
+      {/* PageHeader rend la phrase d'intro AVANT le corps de l'écran, donc avant
+          les bannières : l'écran sur lequel s'ouvre l'application était le seul à
+          ne pas se présenter, et le premier contact avec Memoria était une liste
+          de problèmes. */}
       <PageHeader
         title={t('dashboard.title')}
+        description={t('dashboard.lead')}
         actions={
           <MemRefreshButton label={t('common.refresh')} onClick={reload} disabled={state.status === 'loading'} spinning={state.status === 'loading'} />
         }
