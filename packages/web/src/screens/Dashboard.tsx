@@ -202,7 +202,9 @@ function LlmBanner({ health, onConfigure }: { health: LlmHealth | null; onConfig
   const pending = health.wal_pending
   const critical = pending > 0
   return (
-    <Alert variant={critical ? 'destructive' : 'default'} className={cn(!critical && 'text-warning')}>
+    // Le bouton « Configurer » est à droite sur bureau, sous le texte sur mobile
+    // (en absolu, il recouvrait le titre sous 640 px).
+    <Alert variant={critical ? 'destructive' : 'default'} className={cn(!critical && 'text-warning', onConfigure && 'sm:pr-36')}>
       {critical ? <CircleAlert /> : <TriangleAlert />}
       <AlertTitle>
         {critical
@@ -211,7 +213,7 @@ function LlmBanner({ health, onConfigure }: { health: LlmHealth | null; onConfig
       </AlertTitle>
       {health.extraction.reason && <AlertDescription>{health.extraction.reason}</AlertDescription>}
       {onConfigure && (
-        <AlertAction>
+        <AlertAction className="static mt-2 col-start-2 sm:absolute sm:top-2 sm:right-2 sm:mt-0">
           <Button size="sm" onClick={onConfigure}>
             {t('dashboard.banner.configure')}
           </Button>

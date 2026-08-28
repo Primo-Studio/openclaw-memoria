@@ -171,14 +171,25 @@ export function extractTokenFromHash(hash: string): string | null {
 }
 
 /**
+ * Écran demandé avec le token (`#token=…&route=memory`) : sert aux captures
+ * automatisées (scripts/ui-preview.mjs) et aux liens profonds ouverts par le
+ * CLI. Pur, testable. Absent ou vide → null (le routeur prend le défaut).
+ */
+export function extractRouteFromHash(hash: string): string | null {
+  const route = new URLSearchParams(hash.replace(/^#/, '')).get('route')
+  return route && /^[a-z-]+$/.test(route) ? route : null
+}
+
+/**
  * À appeler UNE fois avant le premier rendu : adopte le token présent dans
- * l'URL puis réécrit l'URL sans le fragment.
+ * l'URL puis réécrit l'URL sans le fragment (ou avec la route demandée).
  */
 export function adoptTokenFromHash(): void {
   const token = extractTokenFromHash(location.hash)
   if (!token) return
   sessionStorage.setItem(TOKEN_KEY, token)
-  history.replaceState(null, '', location.pathname + location.search)
+  const route = extractRouteFromHash(location.hash)
+  history.replaceState(null, '', location.pathname + location.search + (route ? `#/${route}` : ''))
 }
 
 export function adminToken(): string | null {

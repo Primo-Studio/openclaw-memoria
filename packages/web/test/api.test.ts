@@ -7,6 +7,7 @@ import {
   ApiError,
   adoptTokenFromHash,
   copyOpenClawKey,
+  extractRouteFromHash,
   extractTokenFromHash,
   forgetFacts,
   getAgents,
@@ -222,5 +223,17 @@ describe('santé LLM (anti-mort-silencieuse)', () => {
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
     expect(url).toBe('/v1/admin/openclaw_copy_key')
     expect(JSON.parse(init.body as string)).toEqual({ provider: 'openrouter' })
+  })
+})
+
+describe('extractRouteFromHash', () => {
+  it('lit la route jointe au token (liens profonds, captures)', () => {
+    expect(extractRouteFromHash('#token=abc&route=memory')).toBe('memory')
+    expect(extractRouteFromHash('#route=review')).toBe('review')
+  })
+  it('ignore une route absente ou suspecte', () => {
+    expect(extractRouteFromHash('#token=abc')).toBeNull()
+    expect(extractRouteFromHash('#route=../x')).toBeNull()
+    expect(extractRouteFromHash('')).toBeNull()
   })
 })

@@ -34,11 +34,6 @@
     border-radius: var(--radius);
     padding: 0.45rem 0.65rem;
   }
-  /* Le titre d'écran vit désormais dans la barre supérieure de la coquille :
-     l'ancien <h1> de .screen-head est masqué, ses actions restent à droite. */
-  .screen-head > h1 { display: none; }
-  .screen-head { justify-content: flex-end; }
-
 
   /* Focus clavier visible partout (accessibilité) : un seul contour cohérent. */
   :focus-visible {
@@ -1401,4 +1396,11 @@
     font-size: 0.9rem;
   }
   .cloud-rows li { margin: 0.2rem 0; }
+
+  /* Le titre d'écran vit désormais dans la barre supérieure de la coquille :
+     l'ancien <h1> de .screen-head est masqué (direct ou dans un bloc avec son
+     sous-titre). Quand il était seul à gauche, les actions restent à droite.
+     EN DERNIER dans ce fichier : même spécificité que .screen-head plus haut. */
+  .screen-head h1 { display: none; }
+  .screen-head:has(> h1:first-child) { justify-content: flex-end; }
 }

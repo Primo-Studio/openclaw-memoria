@@ -17,7 +17,8 @@
     "clean": "tsc -b --clean",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc -b"
+    "typecheck": "tsc -b",
+    "ui:preview": "node scripts/ui-preview.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
