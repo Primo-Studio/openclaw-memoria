@@ -268,8 +268,11 @@ function StorageDetails({ doctor }: { doctor: DoctorReport }) {
     {
       id: 'path',
       header: t('dashboard.storage.colLocation'),
+      // Chemins longs : on les laisse se couper plutôt que d'envoyer Taille et
+      // En attente hors de la carte.
+      className: 'whitespace-normal break-all',
       cell: db => (
-        <span className="inline-flex items-center gap-2">
+        <span className="inline-flex flex-wrap items-center gap-2">
           <code className="text-xs">{db.path}</code>
           {!db.exists && <Badge variant="destructive">{t('dashboard.storage.missing')}</Badge>}
         </span>

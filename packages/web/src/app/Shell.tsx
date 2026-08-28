@@ -118,7 +118,18 @@ export function Shell({
                     <Menu />
                   </Button>
                 </SheetTrigger>
-                <SheetContent side="left" className="w-72 gap-0 p-0" closeLabel={t('common.close')}>
+                <SheetContent
+                  side="left"
+                  className="w-72 gap-0 p-0 outline-none"
+                  closeLabel={t('common.close')}
+                  // Radix donne le focus au premier bouton à l'ouverture → anneau de
+                  // focus sur « Tableau de bord » dès qu'on touche le menu. On garde le
+                  // focus dans le tiroir (Échap, lecteurs d'écran) sans le poser sur un item.
+                  onOpenAutoFocus={e => {
+                    e.preventDefault()
+                    ;(e.currentTarget as HTMLElement | null)?.focus()
+                  }}
+                >
                   <SheetTitle className="sr-only">{t('a11y.nav')}</SheetTitle>
                   <SidebarInner screen={screen} onNavigate={navigate} reviewCount={reviewCount} collapsed={false} />
                 </SheetContent>
@@ -328,18 +339,7 @@ function VersionFoot({ collapsed }: { collapsed: boolean }) {
       cancelled = true
     }
   }, [])
-  if (!label) return null
-  if (collapsed) {
-    return (
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <div className="mt-2 text-center text-[10px] text-muted-foreground tabular-nums" aria-label={label}>
-            v
-          </div>
-        </TooltipTrigger>
-        <TooltipContent side="right">{label}</TooltipContent>
-      </Tooltip>
-    )
-  }
+  // En rail, pas la place : la version reste lisible en dépliant la barre.
+  if (!label || collapsed) return null
   return <div className="mt-2 px-1 text-[11px] text-muted-foreground tabular-nums">{label}</div>
 }
