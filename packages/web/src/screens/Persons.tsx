@@ -117,8 +117,6 @@ export function Persons() {
       </PageHeader>
 
       <div className="flex flex-col gap-4">
-        <IdentifyTester />
-
         {phase === 'loading' && <PersonsSkeleton />}
         {phase === 'failed' && error && <ErrorBanner message={error} onRetry={() => setTick(n => n + 1)} className="my-0" />}
         {phase === 'empty' && (
@@ -151,6 +149,11 @@ export function Persons() {
             ))}
           </SectionCard>
         )}
+
+        {/* POURQUOI en dernier : « Tester l'identification » est un outil de
+            diagnostic. Placé en tête, il repoussait les vraies personnes sous la
+            ligne de flottaison — la page parle d'abord de son contenu. */}
+        <IdentifyTester />
       </div>
     </>
   )
@@ -200,7 +203,9 @@ function AddPersonDialog({ onAdded, trigger }: { onAdded: () => void; trigger?: 
         {trigger ?? (
           <Button size="sm" aria-label={t('persons.add.title')} data-testid="person-add">
             <UserPlus aria-hidden="true" />
-            {/* Sous 640 px la barre supérieure est pleine : icône seule. */}
+            {/* Jamais d'icône muette : sous 640 px la barre est étroite, on met un
+                libellé COURT (« Ajouter ») plutôt que rien. */}
+            <span className="sm:hidden">{t('persons.add.short')}</span>
             <span className="hidden sm:inline">{t('persons.add.title')}</span>
           </Button>
         )}
@@ -417,7 +422,10 @@ function PersonCard({ person, onChange }: { person: PersonProfile; onChange: () 
           </div>
         </div>
 
-        <div className="grid gap-3 sm:grid-cols-[minmax(0,14rem)_minmax(0,1fr)]">
+        {/* POURQUOI deux colonnes égales : « Relation » contient presque toujours un
+            nom d'organisation (« cliente — Mairie de Saint-Laurent-du-Maroni ») que
+            224 px coupaient en plein mot, pendant que « Notes » gardait 700 px inutilisés. */}
+        <div className="grid gap-3 sm:grid-cols-2">
           <div className="flex flex-col gap-1.5">
             <Label htmlFor={`person-${person.id}-relation`}>{t('persons.card.relationLabel')}</Label>
             <Input id={`person-${person.id}-relation`} value={relation} onChange={e => setRelation(e.target.value)} placeholder={t('persons.card.relationPlaceholder')} />
@@ -457,14 +465,16 @@ function PersonCard({ person, onChange }: { person: PersonProfile; onChange: () 
           ) : (
             <ul className="flex flex-wrap gap-1.5">
               {person.identifiers.map(id => (
-                <li key={id.id} className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background py-0.5 pr-0.5 pl-2.5 text-sm">
+                <li key={id.id} className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background py-1 pr-1 pl-2.5 text-sm">
                   <span className="text-xs text-muted-foreground">{kindLabel(t, id.kind)}</span>
                   <span className="font-mono text-xs">{id.value}</span>
                   <CogConfirmButton
                     iconOnly
                     variant="ghost"
-                    size="icon-xs"
-                    className="rounded-full text-muted-foreground hover:text-destructive"
+                    size="icon-sm"
+                    /* Cible tactile : 28 px visibles + une zone invisible autour
+                       (after:-inset-2) pour approcher les 44 px au doigt. */
+                    className="relative rounded-full text-muted-foreground after:absolute after:-inset-2 after:content-[''] hover:text-destructive"
                     icon={<X aria-hidden="true" />}
                     label={t('persons.card.removeIdent')}
                     title={t('persons.card.removeIdentConfirm', { value: id.value })}

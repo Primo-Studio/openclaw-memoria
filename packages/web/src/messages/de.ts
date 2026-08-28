@@ -1281,6 +1281,8 @@ export const de: Messages = {
   'procedures.less_steps': 'Weniger anzeigen',
   'procedures.triggers': 'Ausgelöst durch',
   'persons.add.title': 'Person hinzufügen',
+  // Libellé COURT de la même action, pour la barre supérieure mobile (icône seule interdite).
+  'persons.add.short': 'Hinzufügen',
   'persons.add.lead': 'Ein Name genügt; Kennungen werden danach auf der Karte hinzugefügt.',
   'persons.add.nameLabel': 'Name',
   'persons.add.relationLabel': 'Beziehung (optional)',

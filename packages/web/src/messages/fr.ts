@@ -1283,6 +1283,8 @@ export const fr: Messages = {
   'procedures.less_steps': 'Réduire',
   'procedures.triggers': 'Se déclenche sur',
   'persons.add.title': 'Ajouter une personne',
+  // Libellé COURT de la même action, pour la barre supérieure mobile (icône seule interdite).
+  'persons.add.short': 'Ajouter',
   'persons.add.lead': 'Un nom suffit ; ses identifiants s’ajoutent ensuite sur sa carte.',
   'persons.add.nameLabel': 'Nom',
   'persons.add.relationLabel': 'Relation (facultatif)',

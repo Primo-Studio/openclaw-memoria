@@ -1281,6 +1281,8 @@ export const en: Messages = {
   'procedures.less_steps': 'Show less',
   'procedures.triggers': 'Triggered by',
   'persons.add.title': 'Add a person',
+  // Libellé COURT de la même action, pour la barre supérieure mobile (icône seule interdite).
+  'persons.add.short': 'Add',
   'persons.add.lead': 'A name is enough; identifiers are added afterwards on the person’s card.',
   'persons.add.nameLabel': 'Name',
   'persons.add.relationLabel': 'Relation (optional)',

@@ -1281,6 +1281,8 @@ export const es: Messages = {
   'procedures.less_steps': 'Mostrar menos',
   'procedures.triggers': 'Se activa con',
   'persons.add.title': 'Añadir una persona',
+  // Libellé COURT de la même action, pour la barre supérieure mobile (icône seule interdite).
+  'persons.add.short': 'Añadir',
   'persons.add.lead': 'Con el nombre basta; los identificadores se añaden después en su tarjeta.',
   'persons.add.nameLabel': 'Nombre',
   'persons.add.relationLabel': 'Relación (opcional)',
