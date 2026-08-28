@@ -1229,4 +1229,13 @@ export const fr: Messages = {
   'audit.filter.none.body': 'Essaie un autre mot, ou remets les filtres à zéro.',
   'audit.filter.clear': 'Effacer les filtres',
   'audit.action.set_capture_mode': 'Mode de capture modifié',
+
+  // — Système (écran shadcn) — chiffres clés et accessibilité des tuiles —
+  'system.stat.layers': 'couches cognitives',
+  'system.stat.tracked': 'avec un compteur en direct',
+  'system.stat.trackedHint': 'les autres travaillent sans compteur',
+  'system.stat.live': 'déjà remplies',
+  'system.stat.liveHintEmpty': 'les compteurs se remplissent avec l’usage',
+  'system.layer_number': 'Couche {n}',
+  'system.live_count': 'Compteur en direct',
 }

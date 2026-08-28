@@ -1227,4 +1227,13 @@ export const pt: Messages = {
   'audit.filter.none.body': 'Tenta outra palavra ou repõe os filtros.',
   'audit.filter.clear': 'Limpar filtros',
   'audit.action.set_capture_mode': 'Modo de captura alterado',
+
+  // — Système (écran shadcn) — chiffres clés et accessibilité des tuiles —
+  'system.stat.layers': 'camadas cognitivas',
+  'system.stat.tracked': 'com contador em direto',
+  'system.stat.trackedHint': 'as outras trabalham sem contador',
+  'system.stat.live': 'já preenchidas',
+  'system.stat.liveHintEmpty': 'os contadores enchem-se com o uso',
+  'system.layer_number': 'Camada {n}',
+  'system.live_count': 'Contador em direto',
 }

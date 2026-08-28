@@ -1227,4 +1227,13 @@ export const de: Messages = {
   'audit.filter.none.body': 'Versuche ein anderes Wort oder setze die Filter zurück.',
   'audit.filter.clear': 'Filter zurücksetzen',
   'audit.action.set_capture_mode': 'Erfassungsmodus geändert',
+
+  // — Système (écran shadcn) — chiffres clés et accessibilité des tuiles —
+  'system.stat.layers': 'kognitive Schichten',
+  'system.stat.tracked': 'mit Live-Zähler',
+  'system.stat.trackedHint': 'die anderen arbeiten ohne Zähler',
+  'system.stat.live': 'bereits gefüllt',
+  'system.stat.liveHintEmpty': 'die Zähler füllen sich mit der Nutzung',
+  'system.layer_number': 'Schicht {n}',
+  'system.live_count': 'Live-Zähler',
 }

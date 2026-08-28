@@ -2,10 +2,21 @@
  * Système — les couches de Memoria, rendues visibles. Les 24 couches cognitives
  * regroupées par rôle, avec leur compteur LIVE (entités, thèmes, procédures…) :
  * on voit la machine tourner. C'est « le cerveau » de Memoria.
+ *
+ * Migré sur shadcn : une SectionCard par famille (socle, enrichissement,
+ * optionnel, sur validation), une tuile par couche avec son numéro, son
+ * compteur en Badge quand il est non nul, et un résumé chiffré en tête.
+ * Même source de données qu'avant (GET /v1/admin/cognitive_stats) — la santé
+ * du stockage vit sur le Tableau de bord, la consommation dans Réglages.
  */
+import { RefreshCw } from 'lucide-react'
 import { getCognitiveStats } from '../api'
-import { ErrorBanner, Spinner, formatNumber, useLoad } from '../components/ui'
+import { ErrorBanner, PageHeader, SectionCard, StatCard, formatNumber, useLoad } from '../components/ui'
+import { Badge } from '../components/ui/badge'
+import { Button } from '../components/ui/button'
+import { Skeleton } from '../components/ui/skeleton'
 import { useT } from '../i18n'
+import { cn } from '../lib/utils'
 
 interface Layer {
   n: number
@@ -66,49 +77,91 @@ const BUCKETS: Array<{ titleKey: string; subtitleKey: string; layers: Layer[] }>
   },
 ]
 
+const LAYER_COUNT = BUCKETS.reduce((n, b) => n + b.layers.length, 0)
+
 export function System() {
   const { t } = useT()
   const { state, reload } = useLoad(getCognitiveStats)
 
   return (
-    <section>
-      <header className="screen-head">
-        <div>
-          <h1>{t('system.title')}</h1>
-          <p className="muted">{t('system.lead')}</p>
-        </div>
-        <button type="button" className="btn btn-ghost" onClick={reload}>{t('common.refresh')}</button>
-      </header>
+    <>
+      <PageHeader
+        title={t('system.title')}
+        description={t('system.lead')}
+        actions={
+          <Button variant="outline" size="sm" onClick={reload} disabled={state.status === 'loading'}>
+            <RefreshCw className={cn(state.status === 'loading' && 'animate-spin')} aria-hidden="true" />
+            {t('common.refresh')}
+          </Button>
+        }
+      />
 
-      {state.status === 'loading' && <Spinner />}
+      {state.status === 'loading' && <SystemSkeleton />}
       {state.status === 'error' && <ErrorBanner message={state.message} onRetry={reload} />}
-      {state.status === 'ready' && (
-        <div className="system-buckets">
-          {BUCKETS.map(bucket => (
-            <div key={bucket.titleKey} className="system-bucket">
-              <div className="system-bucket-head">
-                <h2>{t(bucket.titleKey)}</h2>
-                <span className="muted">{t(bucket.subtitleKey)}</span>
-              </div>
-              <div className="layer-grid">
-                {bucket.layers.map(l => {
-                  const value = l.stat ? state.data[l.stat] : undefined
-                  return (
-                    <div key={l.n} className="layer-card">
-                      <div className="layer-top">
-                        <span className="layer-num">{l.n}</span>
-                        <strong>{t(l.nameKey)}</strong>
-                        {value !== undefined && value > 0 && <span className="layer-stat">{formatNumber(value)}</span>}
-                      </div>
-                      <p className="muted layer-desc">{t(l.descKey)}</p>
-                    </div>
-                  )
-                })}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </section>
+      {state.status === 'ready' && <SystemBody stats={state.data} />}
+    </>
+  )
+}
+
+/** Squelette à la forme de l'écran : 3 chiffres clés puis des grilles de tuiles. */
+function SystemSkeleton() {
+  const { t } = useT()
+  return (
+    <div className="flex flex-col gap-4" role="status" aria-label={t('common.loading')}>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        {[0, 1, 2].map(i => (
+          <Skeleton key={i} className="h-24 rounded-xl" />
+        ))}
+      </div>
+      <Skeleton className="h-64 w-full rounded-xl" />
+      <Skeleton className="h-48 w-full rounded-xl" />
+    </div>
+  )
+}
+
+function SystemBody({ stats }: { stats: Record<string, number> }) {
+  const { t } = useT()
+  // Résumé : couches suivies par un compteur, et combien contiennent déjà quelque chose.
+  const tracked = BUCKETS.flatMap(b => b.layers).filter(l => l.stat !== undefined)
+  const live = tracked.filter(l => (stats[l.stat as string] ?? 0) > 0).length
+
+  return (
+    <div className="flex flex-col gap-4">
+      {/* Une colonne sous 640 px : trois cartes côte à côte y coupaient les libellés sur 3 lignes. */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <StatCard value={LAYER_COUNT} label={t('system.stat.layers')} />
+        <StatCard value={tracked.length} label={t('system.stat.tracked')} hint={t('system.stat.trackedHint')} />
+        <StatCard value={live} label={t('system.stat.live')} tone={live > 0 ? 'ok' : 'default'} hint={live === 0 ? t('system.stat.liveHintEmpty') : undefined} />
+      </div>
+
+      {BUCKETS.map(bucket => (
+        <SectionCard key={bucket.titleKey} title={t(bucket.titleKey)} description={t(bucket.subtitleKey)} className="mb-0">
+          <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {bucket.layers.map(l => {
+              const value = l.stat ? stats[l.stat] : undefined
+              return (
+                <li key={l.n} className="flex flex-col gap-1 rounded-lg border bg-muted/40 px-3 py-2.5">
+                  <div className="flex items-center gap-2">
+                    <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-primary/10 font-mono text-xs font-semibold text-primary tabular-nums" aria-hidden="true">
+                      {l.n}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate font-medium">
+                      <span className="sr-only">{t('system.layer_number', { n: l.n })} </span>
+                      {t(l.nameKey)}
+                    </span>
+                    {value !== undefined && value > 0 && (
+                      <Badge variant="secondary" className="tabular-nums" title={t('system.live_count')}>
+                        {formatNumber(value)}
+                      </Badge>
+                    )}
+                  </div>
+                  <p className="text-sm text-muted-foreground">{t(l.descKey)}</p>
+                </li>
+              )
+            })}
+          </ul>
+        </SectionCard>
+      ))}
+    </div>
   )
 }

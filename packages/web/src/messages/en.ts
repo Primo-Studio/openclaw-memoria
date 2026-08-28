@@ -1227,4 +1227,13 @@ export const en: Messages = {
   'audit.filter.none.body': 'Try another word, or reset the filters.',
   'audit.filter.clear': 'Clear filters',
   'audit.action.set_capture_mode': 'Capture mode changed',
+
+  // — Système (écran shadcn) — chiffres clés et accessibilité des tuiles —
+  'system.stat.layers': 'cognitive layers',
+  'system.stat.tracked': 'with a live counter',
+  'system.stat.trackedHint': 'the others work without a counter',
+  'system.stat.live': 'already populated',
+  'system.stat.liveHintEmpty': 'counters fill up with use',
+  'system.layer_number': 'Layer {n}',
+  'system.live_count': 'Live counter',
 }
