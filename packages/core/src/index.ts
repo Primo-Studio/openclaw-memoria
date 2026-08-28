@@ -3,6 +3,7 @@
  */
 export { Memoria } from './engine/memoria.js'
 export type {
+  DeclareFactResult,
   LlmEngineHealth,
   LlmHealthReport,
   MemoriaInitOptions,

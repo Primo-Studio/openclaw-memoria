@@ -152,9 +152,10 @@ export function storagePaths(storageRoot: string) {
  * Déplace TOUTE la mémoire vers un nouvel emplacement (ex. clé USB) et met à
  * jour `config.toml` pour qu'il pointe dessus. Le daemon DOIT être arrêté.
  * Idempotent-safe : refuse si la destination existe déjà non vide.
- * Les chemins de DB en base sont relatifs au root via storagePaths → rien à
- * réécrire dans registry (db_registry stocke des chemins absolus : on les
- * recalcule au prochain boot via re-registerDb ; ici on déplace les fichiers).
+ * db_registry stocke des chemins ABSOLUS : ils sont réalignés sur la nouvelle
+ * racine au prochain boot par `Memoria` (rebaseDbRegistry — chaque chemin se
+ * dérive de racine + kind + instance/scope). Ici on ne fait que déplacer les
+ * fichiers et réécrire le fichier de découverte.
  */
 export function moveStorage(opts: {
   from?: string

@@ -31,6 +31,25 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true })
 })
 
+describe('doctor — kill-switch', () => {
+  it('Memoria en pause → enabled:false, ok:false et un avertissement qui dit comment reprendre', () => {
+    // LA cause n°1 de « mes agents ne se souviennent de rien » : le doctor
+    // concluait « ✓ OK » sans un mot sur la pause.
+    m.setEnabled(false)
+    const r = m.doctor()
+    expect(r.enabled).toBe(false)
+    expect(r.ok).toBe(false)
+    expect(r.warnings.join('\n')).toMatch(/PAUSE/)
+    expect(r.warnings.join('\n')).toContain('memoria enable')
+  })
+
+  it('Memoria active → enabled:true, aucun avertissement de pause', () => {
+    const r = m.doctor()
+    expect(r.enabled).toBe(true)
+    expect(r.warnings.join('\n')).not.toMatch(/PAUSE/)
+  })
+})
+
 describe('doctor — activité', () => {
   it('sans activité : compteurs à zéro, latence NON mesurée (≠ zéro)', () => {
     const r = m.doctor()

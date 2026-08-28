@@ -195,6 +195,16 @@ async function buildExplicitEmbeddings(
   opts: ResolveLlmProfileOptions,
   baseUrl?: string,
 ): Promise<EmbeddingProvider | null> {
+  // Config lue du disque (TOML édité à la main, ancienne version) : une valeur
+  // qui n'est pas un entier plausible est IGNORÉE avec avertissement — jamais
+  // gravée avec les vecteurs.
+  if (dimensions !== undefined && (!Number.isInteger(dimensions) || dimensions < 64 || dimensions > 8192)) {
+    console.warn(
+      `[memoria:llm] llm.embeddings.dimensions = ${JSON.stringify(dimensions)} ignoré : entier entre 64 et 8192 attendu ` +
+        `(les dimensions sont gravées avec chaque vecteur, une valeur fausse corrompt la base)`,
+    )
+    dimensions = undefined
+  }
   // Dimensions : config > table connue > défaut du provider. On n'avertit que
   // si le modèle est nommé ET inconnu ET sans dimensions déclarées : c'est le
   // seul cas où le défaut a des chances d'être faux.
@@ -227,7 +237,7 @@ async function buildExplicitEmbeddings(
       })
       break
     default:
-      console.warn(`[memoria:llm] provider d'embeddings inconnu « ${provider} » — repli sur la détection automatique`)
+      console.warn(`[memoria:llm] provider d'embeddings inconnu « ${provider} » — recherche sémantique désactivée (attendu : ollama|openai)`)
       return null
   }
   return (await p.isAvailable()) ? p : null
@@ -257,16 +267,24 @@ export async function resolveLlmProfile(
   let extraction: LlmProvider | null = null
 
   // 1) Choix EXPLICITE du provider/modèle (prioritaire) — le « l'utilisateur décide ».
+  //    Indisponible (clé absente, modèle non téléchargé) → AUCUN repli : replier
+  //    en silence sur le profil faisait tourner un autre modèle que celui
+  //    affiché dans Réglages, et llm_health annonçait « disponible » sans un
+  //    mot sur le choix ignoré. Le slot reste null, la raison est dite ici et
+  //    dans llm_health ; la capture attend en WAL (visible au doctor).
   const explicit = config.llm?.extraction
   if (explicit?.provider) {
     extraction = await buildExplicitProvider(explicit.provider, explicit.model, opts, explicit.base_url)
     if (extraction === null) {
-      console.warn(`[memoria:llm] provider d'extraction « ${explicit.provider} » indisponible (clé/modèle ?) — repli profil`)
+      console.warn(
+        `[memoria:llm] provider d'extraction « ${explicit.provider} » indisponible (clé/modèle ?) — ` +
+          `aucun repli : corrige le choix dans Réglages, ou la clé/le modèle`,
+      )
     }
   }
 
-  // 2) Sinon, profil raccourci.
-  if (extraction === null) {
+  // 2) Sinon (aucun choix explicite), profil raccourci.
+  if (extraction === null && !explicit?.provider) {
     const profile = normalizeProfileName(config.llm?.profile)
     switch (profile) {
       case '100-local':
@@ -306,9 +324,12 @@ export async function resolveLlmProfile(
       explicitEmbeddings.base_url,
     )
     if (embeddings === null) {
+      // Pas de repli : Ollama à la place d'OpenAI épinglé, c'est exactement le
+      // mélange de vecteurs (deux modèles non comparables) que l'épinglage
+      // doit empêcher. Recherche sémantique désactivée, et c'est dit.
       console.warn(
         `[memoria:llm] provider d'embeddings « ${explicitEmbeddings.provider} » indisponible ` +
-          `(clé/modèle ?) — repli sur la détection automatique`,
+          `(clé/modèle ?) — aucun repli : recherche sémantique désactivée (FTS seul) jusqu'à correction`,
       )
     }
   }
@@ -330,8 +351,8 @@ export async function resolveLlmProfile(
     ...(opts.openaiKeyFile ? { keyFilePath: opts.openaiKeyFile } : {}),
   })
   const cloudAllowed = extraction?.name === 'openai'
-  if (embeddings !== null) {
-    /* choix explicite honoré : ni détection, ni repli */
+  if (embeddings !== null || explicitEmbeddings?.provider) {
+    /* choix explicite : honoré, ou indisponible SANS repli — ni détection, ni cloud subi */
   } else if (await ollamaEmbeddings.isAvailable()) {
     embeddings = ollamaEmbeddings
   } else if (cloudAllowed && (await openaiEmbeddings.isAvailable())) {

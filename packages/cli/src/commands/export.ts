@@ -36,7 +36,9 @@ export class ExportCommand extends Command {
         for (const a of agents) {
           const dir = join(storageRoot, 'exports', a.assistant_type)
           const r = memoria.exportMarkdown(a.instance.id, dir, !this.flat)
-          out.write(`✓ ${a.assistant_type} : ${r.facts} souvenirs → ${r.files.length} fichier(s) dans ${dir}\n`)
+          // Les scopes partagés lisibles (user, …) partent sous shared/<scope>/ et sont comptés à part.
+          const shared = r.shared_facts > 0 ? ` + ${r.shared_facts} partagé(s) (${r.scopes.join(', ')})` : ''
+          out.write(`✓ ${a.assistant_type} : ${r.facts} souvenir(s) privé(s)${shared} → ${r.files.length} fichier(s) dans ${dir}\n`)
         }
         return 0
       })
