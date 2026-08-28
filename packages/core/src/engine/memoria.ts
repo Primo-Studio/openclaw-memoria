@@ -41,7 +41,6 @@ import {
   type ProcedureMatch,
   type ProceduralProcedure,
   type SelfObservation,
-  type RevisionProposal,
   type DialecticResult,
 } from '../cognition/index.js'
 import { estimateTokens, newId, nowISO, sha256Hex } from '../util.js'
@@ -94,6 +93,7 @@ import type {
   DoctorCloud,
   CaptureStatusResult,
   RecallResult,
+  RevisionProposalDetailed,
   StoreFactInput,
 } from '../types.js'
 
@@ -1359,11 +1359,19 @@ export class Memoria {
     return { proposed: r.proposals.length }
   }
 
-  listRevisions(instanceId: string): RevisionProposal[] {
+  /**
+   * Propositions de révision EN ATTENTE, avec le contenu des deux souvenirs.
+   *
+   * Le type est ÉLARGI (RevisionProposalDetailed étend les champs de
+   * RevisionProposal) : les appelants existants continuent de lire `kind`,
+   * `reason` et les identifiants sans rien changer, et ceux qui affichent la
+   * proposition à un humain ont enfin le TEXTE à montrer.
+   */
+  listRevisions(instanceId: string): RevisionProposalDetailed[] {
     this.assertOpen()
     const db = this.registry.dbForInstance(instanceId)
     if (!db || !existsSync(db.path)) return []
-    return this.revisionFor(this.openContent(db.path)).listProposals()
+    return this.revisionFor(this.openContent(db.path)).listProposalsDetailed()
   }
 
   /** Applique (supersède) ou écarte une proposition de révision — SUR VALIDATION explicite. */

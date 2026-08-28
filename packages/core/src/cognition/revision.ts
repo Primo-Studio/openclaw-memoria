@@ -38,6 +38,7 @@ import { runMigrations, type Migration } from '../storage/migrations.js'
 import { newId, nowISO } from '../util.js'
 import { normalizeText } from '../storage/content.js'
 import { detectContradiction } from './contradiction.js'
+import type { LifecycleState, RevisionFactDetail, RevisionProposalDetailed } from '../types.js'
 
 /**
  * Migration ADDITIVE de la table `revision_proposals` (versions 90-99, réservées à
@@ -93,6 +94,19 @@ export interface RevisionProposal {
   replacement_fact_id: string | null
   status: RevisionStatus
   created_at: string
+}
+
+export type { RevisionFactDetail, RevisionProposalDetailed } from '../types.js'
+
+/** Colonnes lues pour UN des deux souvenirs d'une proposition (préfixées par la jointure). */
+interface JoinedFactColumns {
+  id: string | null
+  fact: string | null
+  category: string | null
+  created_at: string | null
+  assistant_instance_id: string | null
+  lifecycle_state: string | null
+  superseded: number | null
 }
 
 export interface ProposeOptions {
@@ -304,6 +318,65 @@ export class RevisionEngine {
     return rows
   }
 
+  /**
+   * Comme `listProposals()`, mais chaque proposition transporte le CONTENU des
+   * deux souvenirs en cause (texte, catégorie, date, agent d'origine, état).
+   *
+   * POURQUOI : on ne peut pas demander à quelqu'un de choisir entre deux
+   * souvenirs en ne lui montrant que deux identifiants. L'écran Révisions
+   * faisait exactement ça — l'utilisateur arbitrait à l'aveugle.
+   *
+   * UNE SEULE requête (deux LEFT JOIN) et pas un SELECT par fait : la liste
+   * peut compter des dizaines de propositions. Le LEFT JOIN règle aussi le cas
+   * « fait supprimé entre-temps » — la ligne revient avec des colonnes NULL, et
+   * on rend `null` que l'écran sait annoncer, au lieu de planter.
+   */
+  listProposalsDetailed(): RevisionProposalDetailed[] {
+    const rows = this.db
+      .prepare(
+        `SELECT p.id, p.fact_id, p.kind, p.reason, p.replacement_fact_id, p.status, p.created_at,
+                o.id AS o_id, o.fact AS o_fact, o.category AS o_category, o.created_at AS o_created_at,
+                o.assistant_instance_id AS o_instance, o.lifecycle_state AS o_lifecycle, o.superseded AS o_superseded,
+                r.id AS r_id, r.fact AS r_fact, r.category AS r_category, r.created_at AS r_created_at,
+                r.assistant_instance_id AS r_instance, r.lifecycle_state AS r_lifecycle, r.superseded AS r_superseded
+         FROM revision_proposals p
+         LEFT JOIN facts o ON o.id = p.fact_id
+         LEFT JOIN facts r ON r.id = p.replacement_fact_id
+         WHERE p.status = 'proposed'
+         ORDER BY p.created_at ASC, p.fact_id ASC`,
+      )
+      .all() as Array<
+        RevisionProposal & Record<string, string | number | null>
+      >
+    return rows.map(row => ({
+      id: row.id,
+      fact_id: row.fact_id,
+      kind: row.kind,
+      reason: row.reason,
+      replacement_fact_id: row.replacement_fact_id,
+      status: row.status,
+      created_at: row.created_at,
+      fact: factDetail({
+        id: row['o_id'] as string | null,
+        fact: row['o_fact'] as string | null,
+        category: row['o_category'] as string | null,
+        created_at: row['o_created_at'] as string | null,
+        assistant_instance_id: row['o_instance'] as string | null,
+        lifecycle_state: row['o_lifecycle'] as string | null,
+        superseded: row['o_superseded'] as number | null,
+      }),
+      replacement: factDetail({
+        id: row['r_id'] as string | null,
+        fact: row['r_fact'] as string | null,
+        category: row['r_category'] as string | null,
+        created_at: row['r_created_at'] as string | null,
+        assistant_instance_id: row['r_instance'] as string | null,
+        lifecycle_state: row['r_lifecycle'] as string | null,
+        superseded: row['r_superseded'] as number | null,
+      }),
+    }))
+  }
+
   /** Lecture d'une proposition par id, ou null. */
   getProposal(proposalId: string): RevisionProposal | null {
     const row = this.db.prepare('SELECT * FROM revision_proposals WHERE id = ?').get(proposalId) as
@@ -369,6 +442,24 @@ export class RevisionEngine {
       accepted: map.get('accepted') ?? 0,
       dismissed: map.get('dismissed') ?? 0,
     }
+  }
+}
+
+/**
+ * Colonnes jointes → souvenir affichable, ou null si le fait n'existe plus
+ * (LEFT JOIN sans correspondance : `id` est NULL). Pas de valeur inventée —
+ * un souvenir introuvable se dit, il ne se devine pas.
+ */
+function factDetail(cols: JoinedFactColumns): RevisionFactDetail | null {
+  if (cols.id === null) return null
+  return {
+    id: cols.id,
+    fact: cols.fact ?? '',
+    category: cols.category ?? '',
+    created_at: cols.created_at ?? '',
+    assistant_instance_id: cols.assistant_instance_id,
+    lifecycle_state: (cols.lifecycle_state ?? 'active') as LifecycleState,
+    superseded: cols.superseded ?? 0,
   }
 }
 
