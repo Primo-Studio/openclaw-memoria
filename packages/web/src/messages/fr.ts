@@ -1218,4 +1218,15 @@ export const fr: Messages = {
   'vault.count': '{count} référence(s) — la valeur, elle, reste dans le coffre du système.',
   'vault.location.keychain': 'Trousseau macOS',
   'vault.location.vault': 'Coffre chiffré',
+
+  // — Journal (écran shadcn) — filtres, compteur, état « aucun résultat », action set_capture_mode —
+  'audit.list_title': 'Dernières actions',
+  'audit.count': '{shown} entrée(s) affichée(s) sur {total} — le service garde les 200 dernières.',
+  'audit.filter.search': 'Rechercher (agent, action, raison…)',
+  'audit.filter.all_actors': 'Tous les acteurs',
+  'audit.filter.all_actions': 'Toutes les actions',
+  'audit.filter.none.title': 'Aucune entrée ne correspond',
+  'audit.filter.none.body': 'Essaie un autre mot, ou remets les filtres à zéro.',
+  'audit.filter.clear': 'Effacer les filtres',
+  'audit.action.set_capture_mode': 'Mode de capture modifié',
 }

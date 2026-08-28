@@ -1216,4 +1216,15 @@ export const en: Messages = {
   'vault.count': '{count} reference(s) — the value itself stays in the system vault.',
   'vault.location.keychain': 'macOS Keychain',
   'vault.location.vault': 'Encrypted vault',
+
+  // — Journal (écran shadcn) — filtres, compteur, état « aucun résultat », action set_capture_mode —
+  'audit.list_title': 'Latest actions',
+  'audit.count': '{shown} of {total} entries shown — the service keeps the last 200.',
+  'audit.filter.search': 'Search (agent, action, reason…)',
+  'audit.filter.all_actors': 'All actors',
+  'audit.filter.all_actions': 'All actions',
+  'audit.filter.none.title': 'No entry matches',
+  'audit.filter.none.body': 'Try another word, or reset the filters.',
+  'audit.filter.clear': 'Clear filters',
+  'audit.action.set_capture_mode': 'Capture mode changed',
 }

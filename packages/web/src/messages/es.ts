@@ -1216,4 +1216,15 @@ export const es: Messages = {
   'vault.count': '{count} referencia(s) — el valor, en cambio, se queda en la caja fuerte del sistema.',
   'vault.location.keychain': 'Llavero de macOS',
   'vault.location.vault': 'Caja fuerte cifrada',
+
+  // — Journal (écran shadcn) — filtres, compteur, état « aucun résultat », action set_capture_mode —
+  'audit.list_title': 'Últimas acciones',
+  'audit.count': '{shown} de {total} entrada(s) mostrada(s) — el servicio conserva las 200 últimas.',
+  'audit.filter.search': 'Buscar (agente, acción, motivo…)',
+  'audit.filter.all_actors': 'Todos los actores',
+  'audit.filter.all_actions': 'Todas las acciones',
+  'audit.filter.none.title': 'Ninguna entrada coincide',
+  'audit.filter.none.body': 'Prueba con otra palabra o restablece los filtros.',
+  'audit.filter.clear': 'Borrar filtros',
+  'audit.action.set_capture_mode': 'Modo de captura modificado',
 }

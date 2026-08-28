@@ -1216,4 +1216,15 @@ export const de: Messages = {
   'vault.count': '{count} Referenz(en) — der Wert selbst bleibt im Tresor des Systems.',
   'vault.location.keychain': 'macOS-Schlüsselbund',
   'vault.location.vault': 'Verschlüsselter Tresor',
+
+  // — Journal (écran shadcn) — filtres, compteur, état « aucun résultat », action set_capture_mode —
+  'audit.list_title': 'Letzte Aktionen',
+  'audit.count': '{shown} von {total} Einträgen angezeigt — der Dienst behält die letzten 200.',
+  'audit.filter.search': 'Suchen (Agent, Aktion, Grund…)',
+  'audit.filter.all_actors': 'Alle Akteure',
+  'audit.filter.all_actions': 'Alle Aktionen',
+  'audit.filter.none.title': 'Kein Eintrag passt',
+  'audit.filter.none.body': 'Versuche ein anderes Wort oder setze die Filter zurück.',
+  'audit.filter.clear': 'Filter zurücksetzen',
+  'audit.action.set_capture_mode': 'Erfassungsmodus geändert',
 }

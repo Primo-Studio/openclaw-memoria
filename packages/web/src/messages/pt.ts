@@ -1216,4 +1216,15 @@ export const pt: Messages = {
   'vault.count': '{count} referência(s) — o valor em si fica no cofre do sistema.',
   'vault.location.keychain': 'Porta-chaves do macOS',
   'vault.location.vault': 'Cofre cifrado',
+
+  // — Journal (écran shadcn) — filtres, compteur, état « aucun résultat », action set_capture_mode —
+  'audit.list_title': 'Últimas ações',
+  'audit.count': '{shown} de {total} entrada(s) apresentada(s) — o serviço guarda as 200 últimas.',
+  'audit.filter.search': 'Pesquisar (agente, ação, motivo…)',
+  'audit.filter.all_actors': 'Todos os atores',
+  'audit.filter.all_actions': 'Todas as ações',
+  'audit.filter.none.title': 'Nenhuma entrada corresponde',
+  'audit.filter.none.body': 'Tenta outra palavra ou repõe os filtros.',
+  'audit.filter.clear': 'Limpar filtros',
+  'audit.action.set_capture_mode': 'Modo de captura alterado',
 }
