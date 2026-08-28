@@ -730,7 +730,7 @@ export const en: Messages = {
   'onboarding.engine.lead': 'It\'s what turns your conversations into memories. Without an engine, Memoria records but',
   'onboarding.engine.leadStrong': 'learns nothing',
   'onboarding.engine.lmstudioHint': 'Local — graphical interface for open-source models',
-  'onboarding.engine.ollamaHint': 'Recommended — 100% local and free',
+  'onboarding.engine.ollamaHint': 'Advanced — 100% local and free, but needs a powerful machine',
   'onboarding.engine.openclawHint': 'Copies your {provider} key already configured in OpenClaw',
   'onboarding.engine.openclawLabel': 'Reuse my OpenClaw config',
   'onboarding.engine.ready': '✓ Engine ready: {provider} / {model}',

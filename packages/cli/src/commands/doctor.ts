@@ -11,7 +11,7 @@ import { fail, findAliveDaemon, formatBytes, withLocalMemoria } from '../index.j
 export class DoctorCommand extends Command {
   static override paths = [['doctor']]
   static override usage = Command.Usage({
-    description: 'Vérifie la santé du stockage Memoria (DB, garde réseau, WAL).',
+    description: 'Bilan de santé complet : stockage, moteur d’IA, activité, consommation des modèles, avertissements.',
   })
 
   storageRoot = Option.String('--storage-root', { description: 'Racine du stockage (défaut : résolution standard)' })

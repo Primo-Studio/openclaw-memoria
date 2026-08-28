@@ -730,7 +730,7 @@ export const pt: Messages = {
   'onboarding.engine.lead': 'É ele que transforma as tuas conversas em memórias. Sem motor, o Memoria regista mas',
   'onboarding.engine.leadStrong': 'não aprende nada',
   'onboarding.engine.lmstudioHint': 'Local — interface gráfica para modelos open source',
-  'onboarding.engine.ollamaHint': 'Recomendado — 100 % local e gratuito',
+  'onboarding.engine.ollamaHint': 'Avançado — 100 % local e grátis, mas exige uma máquina potente',
   'onboarding.engine.openclawHint': 'Copia a tua chave {provider} já configurada no OpenClaw',
   'onboarding.engine.openclawLabel': 'Reutilizar a minha config OpenClaw',
   'onboarding.engine.ready': '✓ Motor pronto: {provider} / {model}',
