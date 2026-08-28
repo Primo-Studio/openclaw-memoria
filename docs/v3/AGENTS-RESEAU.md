@@ -1,5 +1,9 @@
 # Agents Memoria sur le réseau Primo — carte de récupération
 
+> ⚠️ **Snapshot juin 2026** (compteurs de transcripts, commandes `connect`). État courant : `STATUS.md`, `JOURNAL-2026-08-27.md`.
+> La connexion passe aujourd'hui par `memoria pair <type>` ou le bouton « Connecter » de l'écran Agents (`agents_connect`) —
+> `memoria connect` / `disconnect` n'existent pas dans la CLI.
+
 > Memoria est multi-instances : chaque agent IA sur chaque poste = une « personne »
 > numérique avec SA mémoire privée. Cette page recense les mémoires à récupérer/connecter.
 > Source : Néto, 2026-06-10.
@@ -19,8 +23,8 @@
 |---|---|---|---|---|
 | **Koda** | OpenClaw | **Mac Studio** (`192.168.1.98`, user `primostudio`) | `~/.openclaw/workspace/memory/memoria.db` (33 Mo, 3573 faits) | ✅ **Rapatriée + adoptée** dans la mémoire privée Koda (instance `405290ba`), 1917 embeddings réindexés |
 | **Sol** | OpenClaw | **Mac mini** (⚠️ NE PAS confondre avec Koda) | à localiser (`~/.openclaw/workspace/memory/memoria.db` probable) | ⚪ à récupérer |
-| Claude Code | claude-code | ce MacBook (instance `72615d82`) | transcripts `~/.claude/projects/*/*.jsonl` (122 fichiers) | ✅ **connecté MCP** (✔), mémoire en cours ; transcripts à importer |
-| Codex | codex | ce MacBook (instance `0b5322e1`) | `~/.codex/sessions/**/rollout-*.jsonl` (37) + `history.jsonl` | ✅ **connecté MCP** (config.toml auto), transcripts à importer |
+| Claude Code | claude-code | ce MacBook (instance `72615d82`) | transcripts `~/.claude/projects/*/*.jsonl` (122 fichiers en juin) | ✅ **connecté MCP** (✔) ; transcripts **importés** (bulk 06/06, 1 355 fichiers le 25/08, 1 523 le 27/08, auto-import toutes les 6 h → Revue) |
+| Codex | codex | ce MacBook (instance `0b5322e1`) | `~/.codex/sessions/**/rollout-*.jsonl` (37 en juin) + `history.jsonl` | ✅ **connecté MCP** (config.toml auto), transcripts **importés** (bulk 06/06 + auto-import) |
 | Sol | OpenClaw | Mac mini | à localiser | ⚪ à récupérer (pas pour le moment — décision Néto) |
 
 **Connexion / déconnexion (simplifiées 2026-06-10)** : `node <repo>/packages/mcp/dist/bin.js connect --code XXXX`
@@ -53,5 +57,6 @@ Memoria séparées, deux mémoires privées. Ne jamais fusionner sans décision 
 
 Koda a sauvegardé des faits **sur Néto lui-même** (identité, préférences) qui ont vocation à être
 partagés avec tous les agents via le scope `user` — ex. « le nom d'utilisateur de Neto Pompeu est
-primo_frances ». À remonter au scope `user` quand l'UI de partage par référence (P5) sera prête, sur
-sélection de Néto. Les faits spécifiques à Koda (workflows, auto-observations) restent privés.
+primo_frances ». ✅ L'écran **Partage** existe (matrice + « Faits sur toi ») : 10 faits semés dans `user` le 24/08 ; depuis le
+27/08 les agents (sauf bots OpenClaw) écrivent aussi directement dans `user`. Les faits spécifiques à Koda (workflows,
+auto-observations) restent privés.
