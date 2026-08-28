@@ -1253,6 +1253,7 @@ export const fr: Messages = {
   'settings.engine.keyLabel': 'Clé API',
   'settings.engine.modelLabel': 'Modèle',
   'settings.engine.badgeActive': 'Actif',
+  'settings.engine.badgeSelected': 'Sélectionné',
   'settings.toast.engineChanged': 'Moteur enregistré : {provider} / {model}.',
   'settings.toast.keySaved': 'Clé {provider} enregistrée.',
   'settings.toast.resumed': 'Memoria est actif.',

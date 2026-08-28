@@ -1251,6 +1251,7 @@ export const es: Messages = {
   'settings.engine.keyLabel': 'Clave API',
   'settings.engine.modelLabel': 'Modelo',
   'settings.engine.badgeActive': 'Activo',
+  'settings.engine.badgeSelected': 'Seleccionado',
   'settings.toast.engineChanged': 'Motor guardado: {provider} / {model}.',
   'settings.toast.keySaved': 'Clave de {provider} guardada.',
   'settings.toast.resumed': 'Memoria está activo.',

@@ -1251,6 +1251,7 @@ export const en: Messages = {
   'settings.engine.keyLabel': 'API key',
   'settings.engine.modelLabel': 'Model',
   'settings.engine.badgeActive': 'Active',
+  'settings.engine.badgeSelected': 'Selected',
   'settings.toast.engineChanged': 'Engine saved: {provider} / {model}.',
   'settings.toast.keySaved': '{provider} key saved.',
   'settings.toast.resumed': 'Memoria is active.',
