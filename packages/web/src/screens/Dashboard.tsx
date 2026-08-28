@@ -9,8 +9,11 @@
  * chargement / erreur / vide — voir UI-GUIDE.md.
  */
 import { useState } from 'react'
-import { Bot, Brain, ChevronDown, CircleAlert, CircleCheck, Database, Inbox, RefreshCw, TriangleAlert } from 'lucide-react'
+import { Bot, Brain, ChevronDown, CircleAlert, CircleCheck, Database, Inbox, TriangleAlert } from 'lucide-react'
 import { getDoctor, getLlmHealth, getOverview, getStats, type AgentOverview, type DoctorDatabase, type DoctorReport, type LlmHealth, type Stats } from '../api'
+import { MemRefreshButton } from '../components/MemRefreshButton'
+import { MemScreenLink } from '../components/MemScreenLink'
+import { useDirectory } from '../components/memory-names'
 import {
   DataTable,
   EmptyState,
@@ -31,10 +34,27 @@ import { Card, CardContent } from '../components/ui/card'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../components/ui/collapsible'
 import { Skeleton } from '../components/ui/skeleton'
 import { useT } from '../i18n'
+import type { ScreenId } from '../app/nav'
 import { cn } from '../lib/utils'
 
 // Types de base de données connus → clé i18n dashboard.dbKind.<kind> (repli : le kind brut).
 const KNOWN_DB_KINDS = new Set(['registry', 'assistant', 'shared'])
+
+/**
+ * Avertissement du doctor → écran qui permet d'AGIR dessus. Le service rend
+ * des phrases (packages/core, engine/memoria.ts) qui nomment déjà la
+ * destination — « (écran Révisions) », « vérifier le provider LLM » — mais en
+ * texte mort. On ne mappe que ce dont la destination est certaine : un renvoi
+ * qui se trompe d'onglet est pire que pas de renvoi.
+ */
+const WARNING_TARGETS: Array<{ match: RegExp; screen: ScreenId }> = [
+  { match: /révision/i, screen: 'revisions' },
+  { match: /extraction|provider/i, screen: 'settings' },
+]
+
+function warningTarget(warning: string): ScreenId | null {
+  return WARNING_TARGETS.find(w => w.match.test(warning))?.screen ?? null
+}
 
 export function Dashboard({ onConnect, onConfigure }: { onConnect: () => void; onConfigure?: () => void }) {
   const { t } = useT()
@@ -54,10 +74,7 @@ export function Dashboard({ onConnect, onConfigure }: { onConnect: () => void; o
       <PageHeader
         title={t('dashboard.title')}
         actions={
-          <Button variant="outline" size="sm" onClick={reload} disabled={state.status === 'loading'}>
-            <RefreshCw className={cn(state.status === 'loading' && 'animate-spin')} aria-hidden="true" />
-            {t('common.refresh')}
-          </Button>
+          <MemRefreshButton label={t('common.refresh')} onClick={reload} disabled={state.status === 'loading'} spinning={state.status === 'loading'} />
         }
       />
 
@@ -109,6 +126,10 @@ function DashboardBody({
   onConfigure?: () => void
 }) {
   const { t } = useT()
+  // Même nom d'agent que les sélecteurs, Agents, Partage et le Journal
+  // (« Koda (OpenClaw) ») : le tableau de bord ne doit pas inventer un
+  // quatrième agent en n'affichant que le type.
+  const directory = useDirectory(t)
   const walPending = doctor.databases.reduce((sum, db) => sum + (db.wal_pending ?? 0), 0)
 
   return (
@@ -154,7 +175,7 @@ function DashboardBody({
                 <CardContent className="flex flex-col gap-2">
                   <div className="flex items-center gap-2 font-medium">
                     <Bot className="size-4 text-muted-foreground" aria-hidden="true" />
-                    {agentTypeLabel(a.type)}
+                    {directory.agentName(a.instance) ?? agentTypeLabel(a.type)}
                   </div>
                   <dl className="flex flex-wrap gap-x-4 gap-y-1 text-sm">
                     <div className="flex gap-1">
@@ -272,9 +293,15 @@ function HealthWarnings({ warnings }: { warnings: string[] }) {
         </CollapsibleTrigger>
         <CollapsibleContent>
           <ul className="mt-1 list-disc space-y-0.5 pl-4 text-sm text-muted-foreground">
-            {warnings.map(w => (
-              <li key={w}>{w}</li>
-            ))}
+            {warnings.map(w => {
+              const target = warningTarget(w)
+              return (
+                <li key={w}>
+                  {w}{' '}
+                  {target && <MemScreenLink screen={target} label={t('common.open_screen', { screen: t(`nav.${target}`) })} />}
+                </li>
+              )
+            })}
           </ul>
         </CollapsibleContent>
       </Collapsible>
