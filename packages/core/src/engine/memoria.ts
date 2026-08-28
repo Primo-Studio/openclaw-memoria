@@ -77,6 +77,7 @@ import type {
   AssistantType,
   CaptureMode,
   DbRegistryEntry,
+  DoctorEngine,
   DoctorReport,
   LlmUsagePeriod,
   LlmUsageReport,
@@ -3412,6 +3413,31 @@ export class Memoria {
       warnings.push(`recall lent : p95 à ${activity.recall_ms_p95} ms — le plugin coupe à recallTimeoutMs.`)
     }
 
+    // MOTEUR D'IA — sans lui, Memoria journalise les conversations mais
+    // n'en extrait aucun souvenir. Une installation neuve est exactement dans
+    // ce cas : le doctor annonçait « ✓ OK » pendant que rien ne se mémorisait
+    // (constaté sur une installation de test le 28/08). Lecture synchrone de
+    // la config : le doctor ne fait aucun appel réseau.
+    const llm = this.resolved.config.llm
+    const engine: DoctorEngine = {
+      configured: Boolean(llm?.extraction?.provider),
+      extraction_provider: llm?.extraction?.provider ?? null,
+      extraction_model: llm?.extraction?.model ?? null,
+      embeddings_provider: llm?.embeddings?.provider ?? null,
+      embeddings_model: llm?.embeddings?.model ?? null,
+    }
+    if (!engine.configured) {
+      warnings.push(
+        'Aucun moteur d’IA configuré — Memoria enregistre les conversations mais n’en extrait aucun souvenir. ' +
+          'Ouvre « memoria ui » → Réglages → Moteur d’intelligence.',
+      )
+    } else if (!engine.embeddings_provider) {
+      warnings.push(
+        'Aucun moteur d’embeddings — la recherche par le sens est inactive (recherche par mots-clés seule). ' +
+          'Réglages → Recherche sémantique.',
+      )
+    }
+
     return {
       ok: warnings.length === 0,
       enabled,
@@ -3422,6 +3448,7 @@ export class Memoria {
       network_guard: { on_network_volume: onNetwork, journal_mode: journalMode },
       activity,
       memory,
+      engine,
       cloud,
       usage,
       warnings,

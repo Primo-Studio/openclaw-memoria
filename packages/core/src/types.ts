@@ -497,6 +497,20 @@ export interface CaptureStatusResult {
   failed: number
 }
 
+/**
+ * Moteur d'IA déclaré dans la config (lecture SYNCHRONE, aucun appel réseau —
+ * le doctor doit rester instantané). `configured: false` = Memoria capture les
+ * conversations mais n'en extrait AUCUN souvenir : c'est l'état d'une
+ * installation neuve, et la première chose à dire à l'utilisateur.
+ */
+export interface DoctorEngine {
+  configured: boolean
+  extraction_provider: string | null
+  extraction_model: string | null
+  embeddings_provider: string | null
+  embeddings_model: string | null
+}
+
 export interface DoctorReport {
   ok: boolean
   /**
@@ -512,6 +526,8 @@ export interface DoctorReport {
   network_guard: { on_network_volume: boolean; journal_mode: string }
   activity: DoctorActivity
   memory: DoctorMemory
+  /** Moteur d'IA déclaré (sans lequel rien n'est mémorisé). */
+  engine: DoctorEngine
   cloud: DoctorCloud
   /** Consommation des modèles sur 24 h (tous fournisseurs, locaux compris). */
   usage: LlmUsageReport

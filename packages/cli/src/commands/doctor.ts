@@ -93,6 +93,24 @@ function renderDoctor(out: Writable, report: DoctorReport, note: string | null):
     if (a.capture_ms_avg !== undefined) out.write(`  latence capture: ${a.capture_ms_avg} ms en moyenne\n`)
   }
 
+  // MOTEUR D'IA — juste avant les chiffres d'activité : sans moteur, tous les
+  // compteurs qui suivent resteront à zéro, et il faut le dire AVANT, pas après.
+  const engine = report.engine
+  if (engine) {
+    out.write('\nMoteur d’IA\n')
+    if (!engine.configured) {
+      out.write('  ✗ aucun moteur configuré — les conversations sont enregistrées, aucun souvenir n’en est extrait\n')
+      out.write('    → ouvre « memoria ui » puis Réglages → Moteur d’intelligence\n')
+    } else {
+      out.write(`  extraction     : ${engine.extraction_provider}${engine.extraction_model ? ` · ${engine.extraction_model}` : ''}\n`)
+      out.write(
+        engine.embeddings_provider
+          ? `  recherche sens : ${engine.embeddings_provider}${engine.embeddings_model ? ` · ${engine.embeddings_model}` : ''}\n`
+          : '  recherche sens : aucune — recherche par mots-clés seule\n',
+      )
+    }
+  }
+
   const cloud = report.cloud
   if (cloud) {
     out.write('\nDonnées envoyées au cloud (24 h)\n')
