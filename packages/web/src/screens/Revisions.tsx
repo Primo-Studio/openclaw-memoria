@@ -10,14 +10,21 @@
  * toasts, trois états. Mêmes appels : GET /v1/admin/agents,
  * POST /v1/admin/propose_revisions puis GET /v1/admin/revisions,
  * POST /v1/admin/revision_decision.
+ *
+ * Les DEUX souvenirs en cause viennent maintenant de la proposition elle-même
+ * (`proposal.fact` / `proposal.replacement`). Avant, l'écran allait pêcher les
+ * 200 derniers souvenirs de l'agent pour retrouver leur texte : au-delà de
+ * cette fenêtre il ne montrait rien, et il fallait un second appel réseau à
+ * chaque chargement.
  */
 import { useCallback, useEffect, useState } from 'react'
-import { Check, GitCompareArrows, Sparkles, X } from 'lucide-react'
+import { Check, Sparkles, X } from 'lucide-react'
 import { toast } from 'sonner'
-import { ApiError, decideRevision, getAgents, getRevisions, proposeRevisions, searchFacts, type AdminFact, type AgentEntry, type RevisionProposal } from '../api'
+import { ApiError, decideRevision, getAgents, getRevisions, proposeRevisions, type AgentEntry, type RevisionFactDetail, type RevisionProposal } from '../api'
 import { MemAgentPicker, MemNoAgentState } from '../components/MemAgentSelect'
 import { MemListCount } from '../components/MemListCount'
 import { MemRefreshButton } from '../components/MemRefreshButton'
+import { useDirectory } from '../components/memory-names'
 import { EmptyState, ErrorBanner, PageHeader, Spinner, formatDay, humanError, listPhase } from '../components/ui'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
@@ -25,19 +32,12 @@ import { Card, CardContent } from '../components/ui/card'
 import { Skeleton } from '../components/ui/skeleton'
 import { useT } from '../i18n'
 import { analyzableAgents } from '../lib/agents'
+import { categoryLabel } from '../lib/labels'
 import { cn } from '../lib/utils'
 
 type Translate = (key: string, vars?: Record<string, string | number>) => string
 
 const KNOWN_KINDS = new Set(['contradicted', 'duplicate', 'obsolete'])
-
-/**
- * Combien de souvenirs on récupère pour retrouver le TEXTE des deux faits en
- * cause. Le daemon plafonne à 200 et ne sait pas (encore) rendre un fait par
- * son identifiant : au-delà de cette fenêtre, la carte le dit au lieu de
- * laisser un trou (voir `revisions.fact_missing`).
- */
-const FACT_WINDOW = 200
 
 /** Libellé traduit d'un type de révision (repli sur le type brut si inconnu). */
 function kindLabel(t: Translate, kind: string): string {
@@ -56,13 +56,14 @@ export function Revisions() {
   const [agents, setAgents] = useState<AgentEntry[]>([])
   const [instance, setInstance] = useState('')
   const [items, setItems] = useState<RevisionProposal[] | null>(null)
-  // Texte et date des souvenirs cités par les propositions, par identifiant.
-  const [factsById, setFactsById] = useState<Map<string, AdminFact>>(new Map())
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   // Aucun agent analysable (ex. seul « Autre agent (MCP) ») → état vide explicite.
   const [noAgent, setNoAgent] = useState(false)
   const [tick, setTick] = useState(0)
+  // Annuaire des agents : sert à nommer l'agent d'origine d'un souvenir quand
+  // ce n'est PAS celui qu'on est en train de regarder.
+  const directory = useDirectory(t)
 
   useEffect(() => {
     getAgents()
@@ -80,24 +81,10 @@ export function Revisions() {
 
   const load = useCallback(async (inst: string) => {
     setItems(null)
-    setFactsById(new Map())
     try {
       // déclenche une analyse fraîche puis liste
       await proposeRevisions(inst).catch(() => 0)
-      const proposals = await getRevisions(inst)
-      setItems(proposals)
-      // On ne demande d'arbitrage qu'en MONTRANT les souvenirs concernés : on
-      // récupère les derniers souvenirs de l'agent pour retrouver leur texte.
-      // Un échec ici n'est pas une panne d'écran — la carte se replie sur
-      // l'explication du moteur.
-      if (proposals.length > 0) {
-        try {
-          const facts = await searchFacts(inst, '', FACT_WINDOW)
-          setFactsById(new Map(facts.map(f => [f.id, f])))
-        } catch (err) {
-          console.warn('memoria-ui : souvenirs des révisions illisibles', err)
-        }
-      }
+      setItems(await getRevisions(inst))
     } catch (err) {
       // 404 = vieux service sans la route : état vide, pas une panne.
       if (err instanceof ApiError && err.status === 404) setItems([])
@@ -182,8 +169,8 @@ export function Revisions() {
               <li key={r.id}>
                 <RevisionCard
                   proposal={r}
-                  kept={r.replacement_fact_id ? factsById.get(r.replacement_fact_id) : undefined}
-                  archived={factsById.get(r.fact_id)}
+                  viewedInstance={instance}
+                  agentName={directory.agentName}
                   busy={busy}
                   onDecide={decision => void decide(r.id, decision)}
                 />
@@ -200,28 +187,29 @@ export function Revisions() {
  * Une proposition = une décision. POURQUOI ce composant : on demandait
  * d'arbitrer une contradiction en n'en citant qu'un côté, noyé dans une phrase
  * de moteur (« polarité opposée »). Ici les DEUX souvenirs sont affichés avec
- * leur date, et celui qui sera gardé est marqué — la phrase technique ne sert
- * plus que de repli quand un souvenir sort de la fenêtre récupérée.
+ * leur date, leur catégorie et leur état, et celui qui sera gardé est marqué —
+ * la phrase technique ne sert plus que de repli quand un souvenir manque.
  */
 function RevisionCard({
   proposal,
-  kept,
-  archived,
+  viewedInstance,
+  agentName,
   busy,
   onDecide,
 }: {
   proposal: RevisionProposal
-  /** Le souvenir CONSERVÉ (le plus récent), s'il a pu être retrouvé. */
-  kept: AdminFact | undefined
-  /** Le souvenir qui sera RANGÉ (le plus ancien), s'il a pu être retrouvé. */
-  archived: AdminFact | undefined
+  /** Agent en cours de consultation : son nom serait redondant sur chaque souvenir. */
+  viewedInstance: string
+  agentName: (instanceId: string) => string | null
   busy: boolean
   onDecide: (decision: 'accept' | 'dismiss') => void
 }) {
   const { t } = useT()
   const hasReplacement = Boolean(proposal.replacement_fact_id)
-  // Un souvenir manquant (hors fenêtre) : on garde la raison du moteur sous les
-  // yeux plutôt que de laisser un blanc.
+  const kept = proposal.replacement ?? null
+  const archived = proposal.fact ?? null
+  // Souvenir supprimé depuis (ou service trop ancien pour l'envoyer) : on garde
+  // la raison du moteur sous les yeux plutôt que de laisser un blanc.
   const incomplete = !archived || (hasReplacement && !kept)
   return (
     <Card size="sm">
@@ -233,8 +221,8 @@ function RevisionCard({
           {hasReplacement ? t(`revisions.explain_${KNOWN_KINDS.has(proposal.kind) ? proposal.kind : 'contradicted'}`) : t('revisions.explain_alone')}
         </p>
         <ul className="flex flex-col gap-2">
-          {hasReplacement && <RevisionFact fact={kept} kept />}
-          <RevisionFact fact={archived} kept={false} />
+          {hasReplacement && <RevisionFact fact={kept} kept viewedInstance={viewedInstance} agentName={agentName} />}
+          <RevisionFact fact={archived} kept={false} viewedInstance={viewedInstance} agentName={agentName} />
         </ul>
         {incomplete && <p className="text-xs leading-relaxed break-words text-muted-foreground">{proposal.reason}</p>}
         <div className="flex flex-wrap items-center gap-2">
@@ -252,20 +240,59 @@ function RevisionCard({
   )
 }
 
-/** Un des deux souvenirs de la proposition : sort gardé / rangé, texte, date. */
-function RevisionFact({ fact, kept }: { fact: AdminFact | undefined; kept: boolean }) {
+/** Un des deux souvenirs de la proposition : sort gardé / rangé, texte, contexte. */
+function RevisionFact({
+  fact,
+  kept,
+  viewedInstance,
+  agentName,
+}: {
+  fact: RevisionFactDetail | null
+  kept: boolean
+  viewedInstance: string
+  agentName: (instanceId: string) => string | null
+}) {
   const { t } = useT()
+  // L'agent n'est nommé que s'il DIFFÈRE de celui qu'on regarde : sinon c'est
+  // le même nom répété deux fois par carte, pour zéro information.
+  const origin = fact?.assistant_instance_id && fact.assistant_instance_id !== viewedInstance ? agentName(fact.assistant_instance_id) : null
   return (
     <li className={cn('rounded-lg p-2.5 ring-1', kept ? 'bg-success/5 ring-success/30' : 'bg-muted/50 ring-foreground/10')}>
-      <div className="mb-1.5 flex flex-wrap items-center gap-2">
+      <div className="mb-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
         <Badge variant="outline" className={cn('border-transparent', kept ? 'bg-success/15 text-success' : 'bg-background text-muted-foreground')}>
           {kept ? t('revisions.fact_kept') : t('revisions.fact_archived')}
         </Badge>
+        {fact && <RevisionFactState fact={fact} />}
         {fact && <span className="text-xs text-muted-foreground tabular-nums">{formatDay(fact.created_at)}</span>}
+        {fact?.category && <span className="text-xs text-muted-foreground">{categoryLabel(t, fact.category)}</span>}
+        {origin && <span className="text-xs text-muted-foreground">{t('revisions.fact_from', { agent: origin })}</span>}
       </div>
-      <p className={cn('text-sm leading-relaxed break-words', fact ? (kept ? 'text-foreground' : 'text-muted-foreground') : 'text-xs text-muted-foreground italic')}>
-        {fact ? fact.fact : t('revisions.fact_missing', { count: FACT_WINDOW })}
+      <p className={cn('text-sm leading-relaxed break-words whitespace-pre-wrap', fact ? (kept ? 'text-foreground' : 'text-muted-foreground') : 'text-xs text-muted-foreground italic')}>
+        {fact ? fact.fact : t('revisions.fact_missing')}
       </p>
     </li>
   )
+}
+
+/**
+ * État d'un souvenir, seulement quand il n'est PAS ordinaire : déjà remplacé,
+ * en attente de revue, archivé. Sur un souvenir actif, rien — un badge « Actif »
+ * sur chaque ligne serait du bruit.
+ */
+function RevisionFactState({ fact }: { fact: RevisionFactDetail }) {
+  const { t } = useT()
+  if (fact.superseded === 1) {
+    return (
+      <Badge variant="outline" className="border-transparent bg-warning/15 text-warning">
+        {t('revisions.fact_state_superseded')}
+      </Badge>
+    )
+  }
+  if (fact.lifecycle_state === 'dormant') {
+    return <Badge variant="outline">{t('revisions.fact_state_dormant')}</Badge>
+  }
+  if (fact.lifecycle_state === 'archived') {
+    return <Badge variant="outline">{t('revisions.fact_state_archived')}</Badge>
+  }
+  return null
 }

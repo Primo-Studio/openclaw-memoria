@@ -1395,7 +1395,11 @@ export const de: Messages = {
   'revisions.action_accept_alone': 'Diese Erinnerung aufräumen',
   'revisions.fact_kept': 'Bleibt',
   'revisions.fact_archived': 'Wird aufgeräumt',
-  'revisions.fact_missing': 'Text nicht angezeigt: Diese Erinnerung ist älter als die letzten {count}.',
+  'revisions.fact_missing': 'Diese Erinnerung wurde inzwischen gelöscht: Der Text ist nicht mehr verfügbar.',
+  'revisions.fact_from': 'Geschrieben von {agent}',
+  'revisions.fact_state_superseded': 'Bereits ersetzt',
+  'revisions.fact_state_dormant': 'Wartet auf Prüfung',
+  'revisions.fact_state_archived': 'Archiviert',
   'revisions.reanalyze_short': 'Analysieren',
   // — Écrans mémoire (G2) : Maintenance —
   'maintenance.never_used_hint': 'Erinnerungen, die nie in einer Antwort verwendet wurden — das Material zum Aufräumen.',

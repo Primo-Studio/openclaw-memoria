@@ -1395,7 +1395,11 @@ export const pt: Messages = {
   'revisions.action_accept_alone': 'Arrumar esta memória',
   'revisions.fact_kept': 'Mantida',
   'revisions.fact_archived': 'Será arrumada',
-  'revisions.fact_missing': 'Texto não exibido: esta memória é anterior às últimas {count}.',
+  'revisions.fact_missing': 'Esta memória foi excluída desde então: o texto não está mais disponível.',
+  'revisions.fact_from': 'Escrito por {agent}',
+  'revisions.fact_state_superseded': 'Já substituída',
+  'revisions.fact_state_dormant': 'Aguardando revisão',
+  'revisions.fact_state_archived': 'Arquivada',
   'revisions.reanalyze_short': 'Analisar',
   // — Écrans mémoire (G2) : Maintenance —
   'maintenance.never_used_hint': 'Memórias nunca usadas numa resposta — a matéria-prima da arrumação.',

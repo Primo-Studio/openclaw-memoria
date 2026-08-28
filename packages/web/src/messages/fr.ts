@@ -1397,7 +1397,11 @@ export const fr: Messages = {
   'revisions.action_accept_alone': 'Ranger ce souvenir',
   'revisions.fact_kept': 'Gardé',
   'revisions.fact_archived': 'Sera rangé',
-  'revisions.fact_missing': 'Texte non affiché : ce souvenir est plus ancien que les {count} derniers.',
+  'revisions.fact_missing': 'Ce souvenir a été supprimé depuis : son texte n’est plus consultable.',
+  'revisions.fact_from': 'Écrit par {agent}',
+  'revisions.fact_state_superseded': 'Déjà remplacé',
+  'revisions.fact_state_dormant': 'En attente de revue',
+  'revisions.fact_state_archived': 'Archivé',
   'revisions.reanalyze_short': 'Analyser',
   // — Écrans mémoire (G2) : Maintenance —
   'maintenance.never_used_hint': 'Les souvenirs jamais utilisés dans une réponse — la matière du ménage.',
