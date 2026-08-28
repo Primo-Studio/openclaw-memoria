@@ -17,7 +17,7 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import { getAgents, getScopes, type ScopeAccess } from '../api'
-import { agentTypeLabel } from './ui'
+import { agentFullName } from '../lib/agent-name'
 
 export type Translate = (key: string, vars?: Record<string, string | number>) => string
 
@@ -75,7 +75,8 @@ export function useDirectory(t: Translate): Directory {
     // instance.id → nom, avec repli sur le type d'agent quand l'assistant a disparu.
     const byInstance = new Map<string, string>()
     for (const a of agents) {
-      byInstance.set(a.instance.id, names.get(a.instance.assistant_id) ?? agentTypeLabel(a.assistant_type))
+      // Même chaîne d'identité que les sélecteurs et le Tableau de bord.
+      byInstance.set(a.instance.id, agentFullName(names.get(a.instance.assistant_id), a.assistant_type))
     }
     const agentName = (instanceId: string) => byInstance.get(instanceId) ?? null
     const byScope = new Map<string, string>()
