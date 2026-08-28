@@ -194,6 +194,22 @@ const LABEL_STOPWORDS = new Set([
   'would', 'could', 'into', 'over', 'under', 'about', 'after', 'before', 'because', 'their',
 ])
 
+/**
+ * Particules qui peuvent appartenir à un NOM plutôt qu'introduire une phrase :
+ * « De Souza », « Du Bellay », « D'Artagnan ». Les retirer rendrait le nom
+ * indistinct — le défaut même qu'on corrige.
+ */
+const NAME_PARTICLES = new Set(['de', 'd', 'du'])
+
+/**
+ * Faut-il GARDER ce mot de tête ? Oui si c'est une particule de nom suivie
+ * d'une majuscule (« De Souza contrat »). « De la mairie… », suivi d'une
+ * minuscule, reste un début de phrase et se retire.
+ */
+function keepsParticle(head: string, rest: string): boolean {
+  return NAME_PARTICLES.has(fold(head)) && /^\p{Lu}/u.test(rest)
+}
+
 /** Minuscule sans accent — pour comparer un mot à une liste, jamais pour l'afficher. */
 function fold(word: string): string {
   return normalizeText(word)
@@ -246,13 +262,19 @@ export function cleanTopicLabel(raw: string, opts: { source?: string; maxWords?:
   for (let pass = 0; pass < 2; pass++) {
     const elided = text.match(/^(\p{L}+)['’]\s*(?=\p{L})/u)
     if (elided && LEADING_FILLERS.has(fold(elided[1] ?? ''))) {
-      text = text.slice(elided[0].length)
-      continue
+      const rest = text.slice(elided[0].length)
+      if (!keepsParticle(elided[1] ?? '', rest)) {
+        text = rest
+        continue
+      }
     }
     const parts = text.split(' ')
     if (parts.length > 1 && LEADING_FILLERS.has(fold(parts[0] ?? ''))) {
-      text = parts.slice(1).join(' ')
-      continue
+      const rest = parts.slice(1).join(' ')
+      if (!keepsParticle(parts[0] ?? '', rest)) {
+        text = rest
+        continue
+      }
     }
     break
   }

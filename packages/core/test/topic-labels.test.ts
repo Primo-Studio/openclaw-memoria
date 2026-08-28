@@ -44,6 +44,15 @@ describe('cleanTopicLabel (mise en forme d’un libellé)', () => {
     expect(cleanTopicLabel('De la mairie de Saint-Laurent')).toBe('Mairie de Saint-Laurent')
   })
 
+  it('garde une particule de NOM : « De Souza » n’est pas « Souza »', () => {
+    expect(cleanTopicLabel('De Souza contrat')).toBe('De Souza contrat')
+    expect(cleanTopicLabel('Du Bellay poèmes')).toBe('Du Bellay poèmes')
+    expect(cleanTopicLabel('D’Artagnan mousquetaire')).toBe('D’Artagnan mousquetaire')
+    // Suivie d'une minuscule, la même particule redevient un début de phrase.
+    expect(cleanTopicLabel('De la mairie de Saint-Laurent')).toBe('Mairie de Saint-Laurent')
+    expect(cleanTopicLabel('Du tarif horaire')).toBe('Tarif horaire')
+  })
+
   it('retire aussi une préposition de tête — un sujet ne commence pas par « Sur »', () => {
     expect(cleanTopicLabel('Sur Hello-Primo Vercel')).toBe('Hello-Primo Vercel')
     expect(cleanTopicLabel('Au tarif horaire')).toBe('Tarif horaire')
