@@ -9,7 +9,13 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: "bg-primary text-primary-foreground hover:bg-primary/80",
+        // POURQUOI un mélange et non `bg-primary/80` au survol : diluer l'orange le
+        // rapproche du fond de page, et le contraste du libellé TOMBAIT au survol
+        // (5,01 → 3,58:1 en clair). Mélanger vers `--foreground` va toujours dans le
+        // bon sens : il assombrit l'orange en thème clair (texte clair) et l'éclaircit
+        // en sombre (encre sombre). Mesuré 5,80:1 clair / 5,96:1 sombre.
+        default:
+          "bg-primary text-primary-foreground hover:bg-[color-mix(in_oklch,var(--primary),var(--foreground)_10%)]",
         outline:
           "border-border bg-background hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
         secondary:
