@@ -1,6 +1,6 @@
 /**
  * Personnes — qui peut parler aux agents ? Néto le plus souvent, mais aussi
- * Badette, des stagiaires, un client… Chaque personne a des identifiants
+ * Claire, des stagiaires, un client… Chaque personne a des identifiants
  * (numéro Telegram/WhatsApp, e-mail, handle) qui permettent à l'agent de
  * RECONNAÎTRE son interlocuteur, et des notes (rôle, ce qu'on peut partager).
  *

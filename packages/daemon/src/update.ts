@@ -1,7 +1,7 @@
 /**
  * Mise à jour de l'installation Memoria depuis l'UI (« bouton Mise à jour »).
  * Tire la dernière version (git), réinstalle + reconstruit, puis redémarre le
- * daemon. Pensé pour un non-dev (Badette sur l'iMac) : un clic, pas de terminal.
+ * daemon. Pensé pour un non-dev (Claire sur l'iMac) : un clic, pas de terminal.
  *
  * Best-effort et HONNÊTE : renvoie le log réel ; si ce n'est pas un dépôt git
  * (paquet npm publié plus tard), le dit clairement au lieu d'échouer en silence.

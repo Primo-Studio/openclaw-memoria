@@ -2625,7 +2625,7 @@ export class Memoria {
         if (filter.query) {
           // La requête FTS est un OR (pensé pour le recall, qui note ensuite la
           // couverture). Pour EFFACER, on exige tous les mots : « clé API
-          // Stripe » ne doit pas emporter « la clé du bureau est chez Badette ».
+          // Stripe » ne doit pas emporter « la clé du bureau est chez Claire ».
           const tokens = queryTokens(filter.query)
           rows = store
             .searchFacts(filter.query, { limit: 500, includeDormant: true, maxSensitivity: 'critical', scopeIds: filter.scope_id ? [filter.scope_id] : undefined })

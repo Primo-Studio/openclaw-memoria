@@ -78,9 +78,9 @@ describe('cleanTopicLabel (mise en forme d’un libellé)', () => {
   })
 
   it('ne démajuscule JAMAIS un nom propre absent du fait en minuscules', () => {
-    // Le fait n'écrit jamais « marion » ni « dol » : ce sont des noms.
-    expect(cleanTopicLabel('Devis Marion Dol', { source: 'Devis envoyé à Marion Dol pour la plénière.' })).toBe(
-      'Devis Marion Dol',
+    // Le fait n'écrit jamais « hélène » ni « rey » : ce sont des noms.
+    expect(cleanTopicLabel('Devis Hélène Rey', { source: 'Devis envoyé à Hélène Rey pour la plénière.' })).toBe(
+      'Devis Hélène Rey',
     )
     expect(cleanTopicLabel('Site Primo Studio', { source: 'Le site Primo Studio est hébergé sur Vercel.' })).toBe(
       'Site Primo Studio',

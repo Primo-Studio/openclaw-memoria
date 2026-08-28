@@ -244,7 +244,7 @@ function upperFirst(word: string): string {
  *
  * `source` = le texte du fait d'origine, quand on l'a. Il sert d'arbitre pour
  * la casse : un mot n'est démajusculé QUE s'il apparaît aussi en minuscules
- * dans le fait. « Marion Dol » (jamais écrit en minuscules) reste intact,
+ * dans le fait. « Hélène Rey » (jamais écrit en minuscules) reste intact,
  * « Tarif Horaire » (écrit « tarif horaire » dans le fait) redevient minuscule.
  */
 export function cleanTopicLabel(raw: string, opts: { source?: string; maxWords?: number } = {}): string {

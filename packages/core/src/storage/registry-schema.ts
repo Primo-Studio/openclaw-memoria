@@ -173,7 +173,7 @@ export const registryMigrations: Migration[] = [
     name: 'registry-person-identifiers',
     up(db) {
       // IDENTITÉ DE L'INTERLOCUTEUR (spec §5 persons, activée) : qui parle à
-      // l'agent ? Néto (owner) le plus souvent, mais aussi Badette, des
+      // l'agent ? Néto (owner) le plus souvent, mais aussi Claire, des
       // stagiaires, un client… reconnus par un identifiant (numéro Telegram/
       // WhatsApp, e-mail, handle). Un identifiant = AU PLUS une personne.
       db.exec(`

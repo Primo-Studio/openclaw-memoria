@@ -258,7 +258,7 @@ describe('buildServer handlers', () => {
   it('memoria_identify_interlocutor / _or_create renvoient une personne compacte (id, nom, relation, notes, known, created)', async () => {
     const full = {
       id: 'p-1',
-      display_name: 'Marion Dol',
+      display_name: 'Hélène Rey',
       relation: 'client',
       notes: 'GCSMS',
       org_id: 'org-1',
@@ -268,15 +268,15 @@ describe('buildServer handlers', () => {
       identifiers: [{ id: 'pi-1', person_id: 'p-1', kind: 'email', value: 'm@x.fr', created_at: '2026-08-24T10:00:00.000Z' }],
     }
     const gateway = fakeGateway()
-    gateway.identifyInterlocutor = async () => ({ match: { person: full, known: ['Marion Dol pilote la plénière GCSMS.'] } })
+    gateway.identifyInterlocutor = async () => ({ match: { person: full, known: ['Hélène Rey pilote la plénière GCSMS.'] } })
     gateway.identifyOrCreateInterlocutor = async () => ({ match: { person: full, known: [], created: true } })
     const { handlers } = buildServer({ instanceId: 'i', tracker: new ActiveContextTracker(), connect: async () => gateway })
 
     const a = JSON.parse(((await handlers.identifyInterlocutor({ email: 'm@x.fr' })).content[0] as { type: 'text'; text: string }).text)
     expect(a).toEqual({
       found: true,
-      person: { id: 'p-1', display_name: 'Marion Dol', relation: 'client', notes: 'GCSMS' },
-      known: ['Marion Dol pilote la plénière GCSMS.'],
+      person: { id: 'p-1', display_name: 'Hélène Rey', relation: 'client', notes: 'GCSMS' },
+      known: ['Hélène Rey pilote la plénière GCSMS.'],
     })
     const b = JSON.parse(((await handlers.identifyOrCreateInterlocutor({ email: 'm@x.fr' })).content[0] as { type: 'text'; text: string }).text)
     expect(b).toMatchObject({ found: true, created: true })

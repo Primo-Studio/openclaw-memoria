@@ -23,25 +23,25 @@ afterEach(() => {
 
 describe('personnes & identifiants', () => {
   it('crée une personne et la liste', () => {
-    const p = m.createPerson({ display_name: 'Badette', relation: 'collaboratrice', notes: 'Gère les builds iOS' })
+    const p = m.createPerson({ display_name: 'Claire', relation: 'collaboratrice', notes: 'Gère les builds iOS' })
     expect(p.id).toBeTruthy()
     const list = m.listPersons()
     expect(list).toHaveLength(1)
-    expect(list[0]!.display_name).toBe('Badette')
+    expect(list[0]!.display_name).toBe('Claire')
     expect(list[0]!.relation).toBe('collaboratrice')
     expect(list[0]!.identifiers).toEqual([])
   })
 
   it('normalise les identifiants (téléphone, telegram, email)', () => {
-    const p = m.createPerson({ display_name: 'Badette' })
+    const p = m.createPerson({ display_name: 'Claire' })
     m.addPersonIdentifier(p.id, 'phone', '+594 6 94 12 34 56')
     m.addPersonIdentifier(p.id, 'telegram', '@Badette_Primo')
     m.addPersonIdentifier(p.id, 'email', 'Badette@Primo-Studio.FR')
 
     // matching insensible à la mise en forme (même numéro, ponctuation différente)
-    expect(m.identifyInterlocutor({ phone: '+594-6-94.12.34.56' })?.person.display_name).toBe('Badette')
-    expect(m.identifyInterlocutor({ telegram: 'badette_primo' })?.person.display_name).toBe('Badette')
-    expect(m.identifyInterlocutor({ email: 'badette@primo-studio.fr' })?.person.display_name).toBe('Badette')
+    expect(m.identifyInterlocutor({ phone: '+594-6-94.12.34.56' })?.person.display_name).toBe('Claire')
+    expect(m.identifyInterlocutor({ telegram: 'badette_primo' })?.person.display_name).toBe('Claire')
+    expect(m.identifyInterlocutor({ email: 'badette@primo-studio.fr' })?.person.display_name).toBe('Claire')
   })
 
   it('identifyInterlocutor : telegram > nom en repli ; inconnu = null', () => {
@@ -76,29 +76,29 @@ describe('personnes & identifiants', () => {
 
   it('identifyInterlocutor renvoie les faits connus sur la personne', () => {
     const a = m.pairAssistant({ type: 'claude-code' })
-    const p = m.createPerson({ display_name: 'Badette', relation: 'collaboratrice' })
+    const p = m.createPerson({ display_name: 'Claire', relation: 'collaboratrice' })
     m.addPersonIdentifier(p.id, 'telegram', 'badette')
-    m.storeFact({ instance: a.assistant_instance_id, content: 'Badette gère les builds iOS et les soumissions TestFlight' })
+    m.storeFact({ instance: a.assistant_instance_id, content: 'Claire gère les builds iOS et les soumissions TestFlight' })
 
     const match = m.identifyInterlocutor({ telegram: 'badette' })
     expect(match).not.toBeNull()
-    expect(match!.known.some(f => /Badette/.test(f))).toBe(true)
+    expect(match!.known.some(f => /Claire/.test(f))).toBe(true)
   })
 
   it('describeInterlocutor produit une ligne lisible', () => {
-    const p = m.createPerson({ display_name: 'Badette', relation: 'collaboratrice', notes: 'Accès builds iOS.' })
+    const p = m.createPerson({ display_name: 'Claire', relation: 'collaboratrice', notes: 'Accès builds iOS.' })
     const line = m.describeInterlocutor(p.id)
-    expect(line).toContain('Badette')
+    expect(line).toContain('Claire')
     expect(line).toContain('collaboratrice')
     expect(line).toContain('Accès builds iOS.')
   })
 
   it('identifyOrCreateInterlocutor crée la personne au 1er contact puis la retrouve', () => {
     // 1er contact d'un numéro WhatsApp inconnu → création automatique
-    const first = m.identifyOrCreateInterlocutor({ whatsapp: '+594694003393', name: 'Patron SOC' })
+    const first = m.identifyOrCreateInterlocutor({ whatsapp: '+594694003393', name: 'Patron Verso' })
     expect(first).not.toBeNull()
     expect(first!.created).toBe(true)
-    expect(first!.person.display_name).toBe('Patron SOC')
+    expect(first!.person.display_name).toBe('Patron Verso')
     expect(first!.person.identifiers.some(i => i.kind === 'whatsapp')).toBe(true)
 
     // 2e contact du même numéro → retrouvée, PAS recréée
@@ -124,29 +124,29 @@ describe('identifyInterlocutor — isolation des faits connus', () => {
   it('un agent ne reçoit ni les faits privés d’un autre agent ni les faits critiques', () => {
     const a = m.pairAssistant({ type: 'claude-code' })
     const b = m.pairAssistant({ type: 'openclaw' })
-    const p = m.createPerson({ display_name: 'Badette', relation: 'collaboratrice' })
+    const p = m.createPerson({ display_name: 'Claire', relation: 'collaboratrice' })
     m.addPersonIdentifier(p.id, 'telegram', 'badette_primo')
-    m.storeFact({ instance: a.assistant_instance_id, content: 'Badette a un problème de santé confidentiel suivi à Cayenne', sensitivity: 'critical' })
-    m.storeFact({ instance: a.assistant_instance_id, content: 'Badette préfère être contactée le matin' })
+    m.storeFact({ instance: a.assistant_instance_id, content: 'Claire a un problème de santé confidentiel suivi à Cayenne', sensitivity: 'critical' })
+    m.storeFact({ instance: a.assistant_instance_id, content: 'Claire préfère être contactée le matin' })
 
     // B (bot WhatsApp) : rien de la mémoire privée de A
     expect(m.identifyInterlocutor({ telegram: 'badette_primo' }, b.assistant_instance_id)?.known).toEqual([])
     expect(m.identifyOrCreateInterlocutor({ telegram: 'badette_primo' }, b.assistant_instance_id)?.known).toEqual([])
     // A : son fait normal, jamais le critique (même plafond que le recall)
     const knownA = m.identifyInterlocutor({ telegram: 'badette_primo' }, a.assistant_instance_id)?.known ?? []
-    expect(knownA).toEqual(['Badette préfère être contactée le matin'])
+    expect(knownA).toEqual(['Claire préfère être contactée le matin'])
   })
 
   it('un fait partagé dans `user` est connu des deux agents', () => {
     const a = m.pairAssistant({ type: 'claude-code' })
     const b = m.pairAssistant({ type: 'openclaw' })
-    const p = m.createPerson({ display_name: 'Badette' })
+    const p = m.createPerson({ display_name: 'Claire' })
     m.addPersonIdentifier(p.id, 'telegram', 'badette_primo')
-    const f = m.storeFact({ instance: a.assistant_instance_id, content: 'Badette gère les builds iOS de Primo' })
+    const f = m.storeFact({ instance: a.assistant_instance_id, content: 'Claire gère les builds iOS de Primo' })
     m.shareFacts([f.id], 'user')
-    expect(m.identifyInterlocutor({ telegram: 'badette_primo' }, b.assistant_instance_id)?.known).toEqual(['Badette gère les builds iOS de Primo'])
-    expect(m.identifyInterlocutor({ telegram: 'badette_primo' }, a.assistant_instance_id)?.known).toEqual(['Badette gère les builds iOS de Primo'])
+    expect(m.identifyInterlocutor({ telegram: 'badette_primo' }, b.assistant_instance_id)?.known).toEqual(['Claire gère les builds iOS de Primo'])
+    expect(m.identifyInterlocutor({ telegram: 'badette_primo' }, a.assistant_instance_id)?.known).toEqual(['Claire gère les builds iOS de Primo'])
     // sans instance (UI locale, route admin) : vue globale conservée
-    expect(m.identifyInterlocutor({ telegram: 'badette_primo' })?.known).toEqual(['Badette gère les builds iOS de Primo'])
+    expect(m.identifyInterlocutor({ telegram: 'badette_primo' })?.known).toEqual(['Claire gère les builds iOS de Primo'])
   })
 })

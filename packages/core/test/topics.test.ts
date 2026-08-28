@@ -102,7 +102,7 @@ describe('TopicEngine — consolidation (anti-fragmentation)', () => {
   const sample = [
     'Le devis GCSMS pour la plénière annuelle est à 1 209 € avec remise de 5 %',
     'Le devis GCSMS inclut une option vidéo à 752 € avec assistant caméra',
-    'Marion Dol est le contact pour le devis GCSMS de la plénière',
+    'Hélène Rey est le contact pour le devis GCSMS de la plénière',
     'Le build 17 de JamBoard est bloqué en WAITING_FOR_REVIEW chez Apple',
     'Le build 18 de JamBoard corrige le rejet Apple sur Sign in with Apple',
     'JamBoard utilise Firebase eur3 et un compte démo appreview@primo-studio.fr',
