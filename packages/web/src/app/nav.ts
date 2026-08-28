@@ -80,4 +80,12 @@ export function screenFromHash(hash: string): ScreenId {
 }
 
 /** Écrans déjà réécrits sur la coquille + composants shadcn (sans wrapper legacy). */
-export const MIGRATED_SCREENS: ReadonlySet<ScreenId> = new Set<ScreenId>(['dashboard', 'agents', 'settings'])
+export const MIGRATED_SCREENS: ReadonlySet<ScreenId> = new Set<ScreenId>([
+  'dashboard',
+  'agents',
+  'settings',
+  'themes',
+  'patterns',
+  'procedures',
+  'persons',
+])
