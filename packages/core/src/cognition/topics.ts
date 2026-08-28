@@ -128,13 +128,145 @@ export function topicKeywords(text: string): string[] {
 }
 
 /**
- * Capitalise la 1re lettre de chaque mot — frontières Unicode. `\b` de JS est
- * ASCII : « Néto » devenait « NÉTo » (é traité comme un séparateur). Réservé aux
- * libellés issus de MOTS-CLÉS (déjà en minuscules) ; les noms d'entités gardent
- * leur casse d'origine (JamBoard, GCSMS, macOS).
+ * Mêmes mots-clés, mais TELS QU'ÉCRITS dans le fait (accents, majuscules).
+ *
+ * POURQUOI : `topicKeywords` passe par `normalizeText`, qui met en minuscules
+ * ET retire les accents — c'est ce qu'il faut pour comparer deux faits, jamais
+ * pour NOMMER un thème. C'est de là que venaient « Prefere », « Neto » et
+ * « Boitier » : le libellé était fabriqué avec des mots déjà mutilés, et aucun
+ * rafistolage de casse ne pouvait rendre l'accent perdu.
+ *
+ * Les mots-outils de libellé sont écartés ici (voir LABEL_STOPWORDS) : ils font
+ * des noms de sujet qui commencent par une préposition.
  */
-function titleCase(s: string): string {
-  return s.replace(/(^|\s)(\p{L})/gu, (_m, sep: string, c: string) => sep + c.toUpperCase())
+export function topicKeywordSurfaces(text: string): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const token of text.split(/[^\p{L}\p{N}_-]+/u)) {
+    if (token === '') continue
+    const norm = fold(token)
+    if (norm.length <= 3 || STOPWORDS.has(norm) || LABEL_STOPWORDS.has(norm) || !isContentWord(norm)) continue
+    if (seen.has(norm)) continue
+    seen.add(norm)
+    out.push(token)
+  }
+  return out
+}
+
+/**
+ * Articles de tête retirés d'un libellé de thème, dans les 5 langues de
+ * l'interface. « Le Memoria CLI » est un début de phrase ; « Memoria CLI » est
+ * un nom de sujet. Comparaison sans accent ni casse.
+ */
+const LEADING_ARTICLES = new Set([
+  // français
+  'le', 'la', 'les', 'l', 'un', 'une', 'des', 'du', 'de', 'd',
+  // anglais
+  'the', 'a', 'an',
+  // espagnol
+  'el', 'los', 'las', 'unos', 'unas',
+  // portugais
+  'o', 'os', 'as', 'um', 'uma', 'uns', 'umas',
+  // allemand
+  'der', 'die', 'das', 'ein', 'eine', 'einen', 'dem', 'den',
+])
+
+/**
+ * Mots-outils EXCLUS DES LIBELLÉS seulement (jamais du matching : STOPWORDS
+ * sert au Jaccard et aux mots-clés stockés, y toucher déplacerait des faits).
+ *
+ * POURQUOI : sans eux, le libellé heuristique attrape le premier mot « plein »
+ * venu et le thème s'appelle « Part Tarif Horaire » ou « Nouveau Boitier Chez ».
+ * Un nom de sujet ne commence pas par une préposition.
+ */
+const LABEL_STOPWORDS = new Set([
+  'chez', 'sans', 'sous', 'vers', 'dont', 'quand', 'aussi', 'donc', 'alors', 'ainsi', 'encore',
+  'toujours', 'jamais', 'tres', 'bien', 'faut', 'part', 'plutot', 'depuis', 'entre', 'apres',
+  'avant', 'pendant', 'comme', 'meme', 'tout', 'tous', 'toute', 'toutes', 'celui', 'celle',
+  'ceux', 'elles', 'nous', 'vous', 'leurs', 'notre', 'votre', 'chaque', 'autre', 'autres',
+  'then', 'than', 'when', 'also', 'still', 'always', 'never', 'very', 'well', 'must', 'should',
+  'would', 'could', 'into', 'over', 'under', 'about', 'after', 'before', 'because', 'their',
+])
+
+/** Minuscule sans accent — pour comparer un mot à une liste, jamais pour l'afficher. */
+function fold(word: string): string {
+  return normalizeText(word)
+}
+
+/** Un sigle garde sa casse : CLI, API, MCP, RSMA, GCSMS. */
+function isAcronym(word: string): boolean {
+  return word.length >= 2 && word === word.toUpperCase() && /\p{Lu}/u.test(word)
+}
+
+/** Casse interne (JamBoard, PixConsent, macOS) : jamais retouchée. */
+function hasInnerCase(word: string): boolean {
+  return /\p{Ll}\p{Lu}/u.test(word) || /^\p{Ll}+\p{Lu}/u.test(word)
+}
+
+/** Majuscule initiale, frontière Unicode (« neto » → « Néto », pas « NÉTo »). */
+function upperFirst(word: string): string {
+  return word.replace(/^\p{L}/u, c => c.toUpperCase())
+}
+
+/**
+ * NETTOIE un libellé de thème : article de tête retiré, casse de PHRASE (et
+ * non Title Case), accents et noms propres intacts, longueur bornée.
+ *
+ * POURQUOI cette fonction existe (et est exportée) : sur la mémoire réelle les
+ * thèmes s'appelaient « Le Memoria CLI », « Part Tarif Horaire »,
+ * « Prefere Appelle Neto » — article de tête gardé, chaque mot re-capitalisé
+ * (un prénom devient indistinct d'un mot commun), et le Title Case n'existe pas
+ * en français. Elle est le SEUL endroit qui décide de la forme d'un libellé :
+ * heuristique et LLM y passent tous les deux, et un futur
+ * `memoria retitle-topics` pourra la réutiliser sur les thèmes déjà en base.
+ *
+ * `source` = le texte du fait d'origine, quand on l'a. Il sert d'arbitre pour
+ * la casse : un mot n'est démajusculé QUE s'il apparaît aussi en minuscules
+ * dans le fait. « Marion Dol » (jamais écrit en minuscules) reste intact,
+ * « Tarif Horaire » (écrit « tarif horaire » dans le fait) redevient minuscule.
+ */
+export function cleanTopicLabel(raw: string, opts: { source?: string; maxWords?: number } = {}): string {
+  const maxWords = opts.maxWords ?? 4
+  const source = opts.source ?? ''
+  const lowerSource = source.toLowerCase()
+
+  let text = raw.normalize('NFC').replace(/\s+/g, ' ').trim()
+  // Ponctuation et guillemets de bord (le LLM rend parfois « "Titre." »).
+  text = text.replace(/^[\s"'“”«»*#\-–—:.]+/u, '').replace(/[\s"'“”«»*#\-–—:;,.!?]+$/u, '')
+  if (text === '') return raw.trim()
+
+  // Article de tête, y compris élidé (« L'application » → « application »).
+  // Deux passes au plus : « De la mairie » → « mairie ».
+  for (let pass = 0; pass < 2; pass++) {
+    const elided = text.match(/^(\p{L}+)['’]\s*(?=\p{L})/u)
+    if (elided && LEADING_ARTICLES.has(fold(elided[1] ?? ''))) {
+      text = text.slice(elided[0].length)
+      continue
+    }
+    const parts = text.split(' ')
+    if (parts.length > 1 && LEADING_ARTICLES.has(fold(parts[0] ?? ''))) {
+      text = parts.slice(1).join(' ')
+      continue
+    }
+    break
+  }
+
+  const words = text.split(' ').filter(w => w !== '')
+  if (words.length === 0) return raw.trim()
+
+  const kept = words.slice(0, maxWords).map((word, i) => {
+    if (i === 0) {
+      // Un sigle ou une casse interne (iPhone, macOS) ne se « corrige » pas.
+      return isAcronym(word) || hasInnerCase(word) ? word : upperFirst(word)
+    }
+    if (isAcronym(word) || hasInnerCase(word)) return word
+    if (!/^\p{Lu}/u.test(word)) return word
+    // Démajusculer SEULEMENT si le fait l'écrit aussi en minuscules : c'est la
+    // preuve que ce n'est pas un nom propre.
+    return lowerSource.includes(word.toLowerCase()) && !source.includes(word) ? word.toLowerCase() : word
+  })
+
+  return kept.join(' ').slice(0, 60).trim()
 }
 
 interface EntityInfo {
@@ -308,20 +440,29 @@ export class TopicEngine {
 
   private async createTopic(fact: { id: string; fact: string; scope_id: string }, entities: EntityInfo[], keywords: string[]): Promise<string> {
     const candidates = this.labelCandidates(entities, fact.fact)
-    let label = this.heuristicLabel(candidates, keywords)
+    let label = cleanTopicLabel(this.heuristicLabel(candidates, fact.fact), { source: fact.fact })
     // LLM SEULEMENT si le label heuristique est faible (1 mot générique) et provider fourni.
     if (this.llm && label.split(' ').length < 2) {
       try {
         if (await this.llm.isAvailable()) {
           const raw = await this.llm.complete({
+            // Le prompt imposait « Title Case » : ça n'existe pas en français,
+            // et ça transformait « tarif horaire » en « Tarif Horaire ». On
+            // demande un NOM DE SUJET, en casse de phrase, sans article, et on
+            // interdit explicitement de retoucher l'orthographe des noms.
             system:
-              'Give a SHORT topic title (2-4 words, Title Case) for this memory, written in the same language as the memory. Reply with the title ONLY.',
+              'Name the SUBJECT of this memory as a short noun phrase of 2 to 4 words, in the same language as the memory. ' +
+              'No leading article. Sentence case: capitalise only the first word, proper nouns and acronyms. ' +
+              'Keep the exact spelling, accents and capitalisation of names and acronyms (Néto, JamBoard, CLI). ' +
+              'A subject name, not a sentence fragment. Reply with the title ONLY.',
             prompt: fact.fact,
             maxTokens: 16,
             temperature: 0.2,
           })
           const cleaned = raw.trim().replace(/^["'#\s]+|["'.\s]+$/g, '').slice(0, 60)
-          if (cleaned.length >= 3) label = titleCase(cleaned)
+          // Même nettoyage que l'heuristique : un LLM qui ignore la consigne
+          // (Title Case, article de tête) ne salit pas la base pour autant.
+          if (cleaned.length >= 3) label = cleanTopicLabel(cleaned, { source: fact.fact })
         }
       } catch (err) {
         console.warn(`[memoria:topics] libellé LLM en échec (fait ${fact.id}) — heuristique :`, (err as Error).message)
@@ -345,16 +486,36 @@ export class TopicEngine {
   }
 
   /**
-   * Label lisible sans LLM : entité dominante (déjà triée par labelCandidates)
-   * + qualificatif, ou keywords saillants. Les noms d'entités gardent leur casse.
+   * Label lisible sans LLM. Trois sources, dans cet ordre :
+   *  1. l'entité dominante (déjà triée par labelCandidates) + un qualificatif ;
+   *  2. faute d'entité extraite, les NOMS PROPRES et sigles du fait — c'est le
+   *     rattrapage de ce que la couche graph n'a pas vu, et ça donne un vrai
+   *     nom de sujet (« Néto ») au lieu d'un bout de phrase
+   *     (« Prefere Appelle Neto ») ;
+   *  3. à défaut, deux mots-clés saillants (« Tarif horaire »). DEUX et pas
+   *     trois : au-delà, le libellé redevient un extrait de phrase.
+   *
+   * Dans tous les cas les mots viennent du texte D'ORIGINE : accents et casse
+   * des noms propres intacts. La mise en forme finale est faite une seule fois,
+   * par `cleanTopicLabel`.
    */
-  private heuristicLabel(candidates: EntityInfo[], keywords: string[]): string {
-    const dominant = candidates[0]
+  private heuristicLabel(candidates: EntityInfo[], source: string): string {
+    // Une entité qui n'apparaît qu'EN TÊTE DE PHRASE est le plus souvent un mot
+    // commun capitalisé par la ponctuation, que l'extracteur a pris pour une
+    // entité (« Préfère qu'on l'appelle Néto » donnait « Néto Préfère »). Elle
+    // ne sert donc de libellé QUE si rien de mieux n'existe — sinon un fait qui
+    // commence par un vrai nom (« Néto prend son café… ») perdrait son sujet.
+    const strong = candidates.filter(e => !(e.mention_count < 2 && isSentenceInitialOnly(e.name, source)))
+    const usable = strong.length > 0 ? strong : candidates
+    const dominant = usable[0]
     if (dominant) {
-      const second = candidates[1]
+      const second = usable[1]
       return second ? `${dominant.name} ${second.name}` : dominant.name
     }
-    if (keywords.length > 0) return titleCase(keywords.slice(0, 3).join(' '))
+    const surfaces = topicKeywordSurfaces(source)
+    const names = surfaces.filter(w => looksLikeName(w, source))
+    if (names.length > 0) return names.slice(0, 2).join(' ')
+    if (surfaces.length > 0) return surfaces.slice(0, 2).join(' ')
     return 'Divers'
   }
 
@@ -524,6 +685,24 @@ export class TopicEngine {
 
 function slugify(s: string): string {
   return normalizeText(s).replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-+|-+$/g, '').slice(0, 60)
+}
+
+/**
+ * Ce mot du fait ressemble-t-il à un NOM (personne, produit, sigle) plutôt qu'à
+ * un mot commun ? Sert quand la couche graph n'a extrait aucune entité : c'est
+ * le mot qui a le plus de chances de nommer le sujet.
+ *
+ * Une majuscule ne suffit pas : le premier mot d'une phrase en porte une
+ * (« Nouveau boîtier… »). On exige donc une occurrence AILLEURS qu'en tête de
+ * phrase — sauf casse interne (JamBoard) ou sigle (CLI, RSMA), qui parlent
+ * d'eux-mêmes.
+ */
+function looksLikeName(word: string, source: string): boolean {
+  if (isLabelNoise(word)) return false
+  if (hasInnerCase(word)) return true
+  if (isAcronym(word)) return true
+  if (!/^\p{Lu}/u.test(word)) return false
+  return !isSentenceInitialOnly(word, source)
 }
 
 /** Une entité « fichier/chemin » (AppsPage.tsx, config.env, /Users/…) pollue les thèmes. */
