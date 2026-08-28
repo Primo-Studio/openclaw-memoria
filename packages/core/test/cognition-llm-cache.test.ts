@@ -27,7 +27,7 @@ class CountingLlm implements LlmProvider {
       this.graph++
       return Promise.resolve('{"entities":[{"name":"Vercel","type":"tool"},{"name":"Primo","type":"company"}],"relations":[{"from":"Primo","to":"Vercel","type":"deployed_on"}]}')
     }
-    if (sys.includes('topic title')) {
+    if (sys.includes('Name the SUBJECT')) {
       this.titles++
       return Promise.resolve('Déploiement Primo')
     }

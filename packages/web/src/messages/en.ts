@@ -1395,7 +1395,11 @@ export const en: Messages = {
   'revisions.action_accept_alone': 'Tidy this memory',
   'revisions.fact_kept': 'Kept',
   'revisions.fact_archived': 'Will be tidied away',
-  'revisions.fact_missing': 'Text not shown: this memory is older than the last {count}.',
+  'revisions.fact_missing': 'This memory has since been deleted: its text is no longer available.',
+  'revisions.fact_from': 'Written by {agent}',
+  'revisions.fact_state_superseded': 'Already replaced',
+  'revisions.fact_state_dormant': 'Awaiting review',
+  'revisions.fact_state_archived': 'Archived',
   'revisions.reanalyze_short': 'Analyse',
   // — Écrans mémoire (G2) : Maintenance —
   'maintenance.never_used_hint': 'Memories never used in an answer — the raw material for tidying up.',
