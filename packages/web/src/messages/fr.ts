@@ -1261,7 +1261,11 @@ export const fr: Messages = {
   'themes.refined_toast': '{count} thème(s) renommé(s).',
   'themes.importance': 'Importance du thème',
   'themes.list_title': 'Thèmes de l’agent',
-  'themes.list_hint': 'Seuls les thèmes d’au moins deux souvenirs sont affichés. La jauge indique l’importance du thème.',
+  // Nombre de souvenirs d'un thème, écrit en toutes lettres sur la carte
+  // (le chiffre nu ne disait pas de quoi il parlait).
+  'themes.card_facts': '{count} souvenir',
+  'themes.card_facts_plural': '{count} souvenirs',
+  'themes.list_hint': 'Seuls les thèmes d’au moins deux souvenirs sont affichés, les plus fournis en premier.',
   'themes.relations_title': 'Relations entre thèmes',
   'themes.relations_hint': 'Deux thèmes sont reliés quand ils partagent des souvenirs ou des entités (une personne, un client, un projet). Plus le trait est épais, plus le lien est fort. Clique un thème pour ouvrir ses souvenirs.',
   'themes.keywords': 'Mots-clés',

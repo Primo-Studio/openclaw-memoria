@@ -1259,7 +1259,11 @@ export const pt: Messages = {
   'themes.refined_toast': '{count} tema(s) renomeado(s).',
   'themes.importance': 'Importância do tema',
   'themes.list_title': 'Temas do agente',
-  'themes.list_hint': 'Só aparecem os temas com pelo menos duas memórias. A barra indica a importância do tema.',
+  // Nombre de souvenirs d'un thème, écrit en toutes lettres sur la carte
+  // (le chiffre nu ne disait pas de quoi il parlait).
+  'themes.card_facts': '{count} memória',
+  'themes.card_facts_plural': '{count} memórias',
+  'themes.list_hint': 'Só aparecem os temas com pelo menos duas memórias, primeiro os mais fartos.',
   'themes.relations_title': 'Relações entre temas',
   'themes.relations_hint': 'Dois temas estão ligados quando partilham memórias ou entidades (uma pessoa, um cliente, um projeto). Quanto mais grosso o traço, mais forte o elo. Clica num tema para abrir as suas memórias.',
   'themes.keywords': 'Palavras-chave',

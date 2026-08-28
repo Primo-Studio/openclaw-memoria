@@ -1259,7 +1259,11 @@ export const de: Messages = {
   'themes.refined_toast': '{count} Thema/Themen umbenannt.',
   'themes.importance': 'Bedeutung des Themas',
   'themes.list_title': 'Themen des Agenten',
-  'themes.list_hint': 'Es werden nur Themen mit mindestens zwei Erinnerungen angezeigt. Der Balken zeigt die Bedeutung des Themas.',
+  // Nombre de souvenirs d'un thème, écrit en toutes lettres sur la carte
+  // (le chiffre nu ne disait pas de quoi il parlait).
+  'themes.card_facts': '{count} Erinnerung',
+  'themes.card_facts_plural': '{count} Erinnerungen',
+  'themes.list_hint': 'Es werden nur Themen mit mindestens zwei Erinnerungen angezeigt, die reichhaltigsten zuerst.',
   'themes.relations_title': 'Beziehungen zwischen Themen',
   'themes.relations_hint': 'Zwei Themen sind verbunden, wenn sie Erinnerungen oder Entitäten teilen (eine Person, ein Kunde, ein Projekt). Je dicker die Linie, desto stärker die Verbindung. Klicke ein Thema an, um seine Erinnerungen zu öffnen.',
   'themes.keywords': 'Schlüsselwörter',

@@ -17,7 +17,6 @@ import { CogAgentSelect, useAnalyzableAgents } from '../components/CogAgentSelec
 import { EmptyState, ErrorBanner, PageHeader, SectionCard, Spinner, formatNumber, humanError, listPhase } from '../components/ui'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
-import { Progress } from '../components/ui/progress'
 import { Skeleton } from '../components/ui/skeleton'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { Tooltip, TooltipContent, TooltipTrigger } from '../components/ui/tooltip'
@@ -108,12 +107,16 @@ export function Themes() {
         actions={
           <>
             <CogAgentSelect agents={ag.agents} value={ag.instance} onChange={ag.setInstance} />
+            {/* POURQUOI caché sous 640 px : la barre supérieure mobile (menu, marque,
+                titre, sélecteur d'agent, préférences) n'a plus la place d'un libellé,
+                et une icône « étincelle » seule ne dit pas qu'elle réécrit TOUS les
+                libellés de l'agent. Sur mobile, le même bouton est rendu LIBELLÉ dans
+                la carte « Thèmes de l'agent » (voir ThemeGrid). */}
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button variant="outline" size="sm" disabled={refining || !ag.instance} onClick={() => void refine()} aria-label={t('themes.refine_button')}>
+                <Button variant="outline" size="sm" className="hidden sm:inline-flex" disabled={refining || !ag.instance} onClick={() => void refine()}>
                   {refining ? <Loader2 className="animate-spin" aria-hidden="true" /> : <Sparkles aria-hidden="true" />}
-                  {/* Sous 640 px la barre supérieure est pleine : icône seule, libellé dans l'infobulle. */}
-                  <span className="hidden sm:inline">{refining ? t('themes.refining') : t('themes.refine_button')}</span>
+                  {refining ? t('themes.refining') : t('themes.refine_button')}
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="bottom">{t('themes.refine_title')}</TooltipContent>
@@ -125,11 +128,11 @@ export function Themes() {
       {bannerError && <ErrorBanner message={bannerError} onRetry={ag.retry} />}
 
       {ag.noAgent ? (
-        <EmptyState icon={<Bot className="size-5" />} title={t('memory.no_agent_title')} body={t('memory.no_agent_body')} />
+        <EmptyState icon={<Bot className="size-5" />} title={t('memory.no_agent_title')} body={t('memory.no_agent_body')} className="mx-auto w-full max-w-xl sm:py-8" />
       ) : phase === 'loading' ? (
         <ThemesSkeleton />
       ) : phase === 'failed' || topics === null ? null : topics.length === 0 ? (
-        <EmptyState icon={<Tags className="size-5" />} title={t('themes.empty_title')} body={t('themes.empty_body')} />
+        <EmptyState icon={<Tags className="size-5" />} title={t('themes.empty_title')} body={t('themes.empty_body')} className="mx-auto w-full max-w-xl sm:py-8" />
       ) : (
         <Tabs value={view} onValueChange={v => setView(v as View)} className="gap-4">
           <TabsList aria-label={t('themes.view_aria')}>
@@ -144,7 +147,13 @@ export function Themes() {
           </TabsList>
 
           <TabsContent value="list" className="flex flex-col gap-4">
-            <ThemeGrid topics={topics} activeId={active?.id ?? null} onOpen={topic => void openTopic(topic)} />
+            <ThemeGrid
+              topics={topics}
+              activeId={active?.id ?? null}
+              onOpen={topic => void openTopic(topic)}
+              refining={refining}
+              onRefine={() => void refine()}
+            />
             {active && (
               <ThemeDetail
                 topic={active}
@@ -190,20 +199,37 @@ function ThemesSkeleton() {
 }
 
 /** Grille des thèmes : une carte cliquable par thème, jauge = importance relative. */
-function ThemeGrid({ topics, activeId, onOpen }: { topics: Topic[]; activeId: string | null; onOpen: (topic: Topic) => void }) {
+function ThemeGrid({
+  topics,
+  activeId,
+  onOpen,
+  refining,
+  onRefine,
+}: {
+  topics: Topic[]
+  activeId: string | null
+  onOpen: (topic: Topic) => void
+  refining: boolean
+  onRefine: () => void
+}) {
   const { t } = useT()
-  const maxImportance = useMemo(() => Math.max(1, ...topics.map(x => x.importance_score)), [topics])
   return (
     <SectionCard
       title={t('themes.list_title')}
       description={t('themes.list_hint')}
       actions={<Badge variant="secondary" className="tabular-nums">{formatNumber(topics.length)}</Badge>}
       className="mb-0"
+      contentClassName="flex flex-col gap-3"
     >
+      {/* Mobile : l'action « Affiner les libellés (IA) » avec son texte, plutôt
+          qu'une icône seule dans la barre supérieure (elle y reste ≥ 640 px). */}
+      <Button variant="outline" size="sm" className="w-full sm:hidden" disabled={refining} onClick={onRefine}>
+        {refining ? <Loader2 className="animate-spin" aria-hidden="true" /> : <Sparkles aria-hidden="true" />}
+        {refining ? t('themes.refining') : t('themes.refine_button')}
+      </Button>
       <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
         {topics.map(topic => {
           const isActive = topic.id === activeId
-          const pct = Math.round((topic.importance_score / maxImportance) * 100)
           return (
             <button
               key={topic.id}
@@ -218,10 +244,11 @@ function ThemeGrid({ topics, activeId, onOpen }: { topics: Topic[]; activeId: st
               <span className="flex items-start justify-between gap-2">
                 <span className={cn('text-sm leading-snug font-medium', isActive && 'text-primary')}>{topic.name}</span>
                 <Badge variant={isActive ? 'default' : 'secondary'} className="shrink-0 tabular-nums">
-                  {formatNumber(topic.fact_count)}
+                  {topic.fact_count > 1
+                    ? t('themes.card_facts_plural', { count: formatNumber(topic.fact_count) })
+                    : t('themes.card_facts', { count: formatNumber(topic.fact_count) })}
                 </Badge>
               </span>
-              <Progress value={pct} aria-label={t('themes.importance')} className="h-1" />
               {topic.keywords.length > 0 && <span className="truncate text-xs text-muted-foreground">{topic.keywords.slice(0, 4).join(' · ')}</span>}
             </button>
           )
@@ -368,7 +395,7 @@ function ThemeRelations({ instance, tick, onOpen }: { instance: string; tick: nu
       ) : graph === null || layout === null ? (
         <Spinner label={t('themes.loading_relations')} />
       ) : graph.edges.length === 0 ? (
-        <EmptyState icon={<Waypoints className="size-5" />} title={t('themes.relations_empty_title')} body={t('themes.relations_empty_body')} />
+        <EmptyState icon={<Waypoints className="size-5" />} title={t('themes.relations_empty_title')} body={t('themes.relations_empty_body')} className="mx-auto w-full max-w-xl sm:py-8" />
       ) : (
         <RelationsGraph graph={graph} layout={layout} hover={hover} setHover={setHover} onOpen={onOpen} />
       )}
