@@ -480,7 +480,7 @@ export class TopicEngine {
     }
     // Jamais deux thèmes du même nom : un libellé déjà pris désigne le thème
     // existant (c'est le filet de sécurité de la consolidation par ancre).
-    const slug = slugify(label)
+    const slug = topicSlug(label)
     const same = this.db.prepare('SELECT id FROM topics WHERE slug = ?').get(slug) as { id: string } | undefined
     if (same) return same.id
 
@@ -693,7 +693,12 @@ export class TopicEngine {
   }
 }
 
-function slugify(s: string): string {
+/**
+ * Clé de dédoublonnage d'un thème : le nom, sans accent ni casse. C'est elle
+ * qui garantit « jamais deux thèmes du même nom » — un renommage doit donc la
+ * mettre à jour, sinon le prochain thème homonyme repart sur l'ancien slug.
+ */
+export function topicSlug(s: string): string {
   return normalizeText(s).replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-+|-+$/g, '').slice(0, 60)
 }
 

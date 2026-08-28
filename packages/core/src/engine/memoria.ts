@@ -42,6 +42,8 @@ import {
   type ProceduralProcedure,
   type SelfObservation,
   type DialecticResult,
+  cleanTopicLabel,
+  topicSlug,
 } from '../cognition/index.js'
 import { estimateTokens, newId, nowISO, sha256Hex } from '../util.js'
 import { AesVaultProvider, createSecretProvider, RegexRedactor } from '../secrets/index.js'
@@ -3281,6 +3283,16 @@ export class Memoria {
    * Affine les libellés de thèmes d'une instance avec le LLM configuré (à la
    * demande, couche 14). Gratuit par défaut (heuristique) ; ce bouton paie un
    * petit appel par thème pour des noms propres. Retourne le nombre renommé.
+   *
+   * C'est le SEUL chemin qui renomme des thèmes déjà en base, et il est
+   * déclenché par l'utilisateur (bouton « Affiner les libellés ») ou par
+   * l'option `auto_themes_ai` qu'il a activée — jamais par une migration.
+   *
+   * Le prompt demandait « Title Case » : ça n'existe pas en français et ça
+   * rendait un prénom indistinct d'un mot commun (« Le Tarif Horaire »). Il
+   * demande maintenant un NOM DE SUJET en casse de phrase, sans article, et la
+   * réponse passe par `cleanTopicLabel` — la même mise en forme que les thèmes
+   * créés automatiquement, pour que les deux chemins produisent la même chose.
    */
   async refineTopicLabels(instanceId: string, limit = 40): Promise<{ refined: number }> {
     this.assertOpen()
@@ -3298,14 +3310,31 @@ export class Memoria {
       try {
         const raw = await extraction.complete({
           system:
-            'Give a SHORT, clear topic title (2-5 words, Title Case) summarising these memories, written in the same language as the memories. Reply with the title ONLY, nothing else.',
+            'Name the SUBJECT shared by these memories as a short noun phrase of 2 to 5 words, in the same language as the memories. ' +
+            'No leading article. Sentence case: capitalise only the first word, proper nouns and acronyms. ' +
+            'Keep the exact spelling, accents and capitalisation of names and acronyms (Néto, JamBoard, CLI). ' +
+            'A subject name, not a sentence fragment. Reply with the title ONLY, nothing else.',
           prompt: sample.map(s => `- ${s}`).join('\n'),
           maxTokens: 20,
           temperature: 0.2,
         })
-        const label = raw.trim().replace(/^["'#*\s]+|["'.*\s]+$/g, '').slice(0, 60)
+        const answer = raw.trim().replace(/^["'#*\s]+|["'.*\s]+$/g, '').slice(0, 60)
+        // Une réponse hors sujet (JSON, balise, phrase entière) ne renomme rien :
+        // le thème garde son nom, et on le DIT (pas de mort silencieuse).
+        if (answer.length < 3 || !/\p{L}/u.test(answer) || /[{}[\]<>]/u.test(answer) || answer.split(/\s+/).length > 8) {
+          if (answer !== '') console.warn(`[memoria:topics] affinage refusé (${t.id}) — réponse inutilisable : ${answer.slice(0, 40)}`)
+          continue
+        }
+        // Même mise en forme que les thèmes créés automatiquement. La source
+        // est un échantillon des faits du thème : elle sert d'arbitre pour la
+        // casse (un mot écrit en minuscules dans les faits n'est pas un nom propre).
+        const label = cleanTopicLabel(answer, { source: sample.join(' '), maxWords: 5 })
         if (label.length >= 3 && label.toLowerCase() !== t.name.toLowerCase()) {
-          store.db.prepare('UPDATE topics SET name = ?, updated_at = ? WHERE id = ?').run(label, nowISO(), t.id)
+          // Le slug suit le nom : c'est lui qui empêche deux thèmes homonymes
+          // à la prochaine création (createTopic déduplique par slug).
+          store.db
+            .prepare('UPDATE topics SET name = ?, slug = ?, updated_at = ? WHERE id = ?')
+            .run(label, topicSlug(label), nowISO(), t.id)
           refined++
         }
       } catch (err) {
