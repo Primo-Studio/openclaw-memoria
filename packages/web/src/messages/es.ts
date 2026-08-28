@@ -1105,7 +1105,7 @@ export const es: Messages = {
   'vault.empty.body': 'Es normal: la caja fuerte se llena en cuanto un agente se cruza con una clave o una contraseña.',
   'vault.empty.title': 'Ningún secreto en la caja fuerte por ahora.',
   'vault.explainer.after': ' en la memoria, las exportaciones o los logs.',
-  'vault.explainer.before': '🔒 Cuando un agente encuentra una clave API o una contraseña, Memoria la reemplaza por una referencia ',
+  'vault.explainer.before': 'Cuando un agente encuentra una clave API o una contraseña, Memoria la reemplaza por una referencia ',
   'vault.explainer.mid': ' antes de guardarla. El valor real va a la caja fuerte del sistema.',
   'vault.explainer.never': 'Nunca aparece',
   'vault.lead': 'Claves y contraseñas detectadas y puestas a salvo automáticamente — el valor permanece cifrado.',
@@ -1209,4 +1209,11 @@ export const es: Messages = {
   'sharing.toast_shared': '{count} recuerdo(s) compartido(s) con todos tus agentes.',
   'sharing.identity_no_agents': 'Ningún agente conectado por ahora — conecta un agente para ver los hechos que te conciernen.',
   'sharing.scope_content_title': 'Contenido de «{scope}»',
+
+  // — Coffre (écran shadcn) — titre de l'explication, emplacements lisibles, compteur —
+  'vault.explainer.title': 'Los secretos nunca se convierten en recuerdos',
+  'vault.list_title': 'Referencias en la caja fuerte',
+  'vault.count': '{count} referencia(s) — el valor, en cambio, se queda en la caja fuerte del sistema.',
+  'vault.location.keychain': 'Llavero de macOS',
+  'vault.location.vault': 'Caja fuerte cifrada',
 }

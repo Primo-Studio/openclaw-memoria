@@ -1105,7 +1105,7 @@ export const pt: Messages = {
   'vault.empty.body': 'É normal: o cofre enche-se assim que um agente encontra uma chave ou uma palavra-passe.',
   'vault.empty.title': 'Nenhum segredo no cofre por agora.',
   'vault.explainer.after': ' na memória, nas exportações ou nos logs.',
-  'vault.explainer.before': '🔒 Quando um agente encontra uma chave API ou uma palavra-passe, o Memoria substitui-a por uma referência ',
+  'vault.explainer.before': 'Quando um agente encontra uma chave API ou uma palavra-passe, o Memoria substitui-a por uma referência ',
   'vault.explainer.mid': ' antes de a registar. O valor real vai para o cofre do sistema.',
   'vault.explainer.never': 'Nunca aparece',
   'vault.lead': 'Chaves e palavras-passe detetadas e postas a salvo automaticamente — o valor fica cifrado.',
@@ -1209,4 +1209,11 @@ export const pt: Messages = {
   'sharing.toast_shared': '{count} recordação(ões) partilhada(s) com todos os teus agentes.',
   'sharing.identity_no_agents': 'Nenhum agente ligado por agora — liga um agente para ver os factos que te dizem respeito.',
   'sharing.scope_content_title': 'Conteúdo de «{scope}»',
+
+  // — Coffre (écran shadcn) — titre de l'explication, emplacements lisibles, compteur —
+  'vault.explainer.title': 'Os segredos nunca se tornam recordações',
+  'vault.list_title': 'Referências no cofre',
+  'vault.count': '{count} referência(s) — o valor em si fica no cofre do sistema.',
+  'vault.location.keychain': 'Porta-chaves do macOS',
+  'vault.location.vault': 'Cofre cifrado',
 }
