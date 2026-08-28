@@ -1213,4 +1213,13 @@ export const pt: Messages = {
   'patterns.dismiss_body': 'A Memoria não voltará a propô-la. As memórias envolvidas ficam intactas.',
   'patterns.consolidated_toast': 'Recorrência consolidada numa única memória.',
   'patterns.dismissed_toast': 'Recorrência descartada.',
+  'procedures.list_title': 'Saber-fazer aprendido',
+  'procedures.list_hint': 'Cada execução conta: o que funciona sobe, o que falha fica anotado.',
+  'procedures.no_execution': 'Nunca executado',
+  'procedures.executions': '{success} sucesso(s) · {failure} falha(s)',
+  'procedures.rate_label': 'Taxa de sucesso',
+  'procedures.steps': 'Passos',
+  'procedures.more_steps': 'mais {count} passo(s)',
+  'procedures.less_steps': 'Mostrar menos',
+  'procedures.triggers': 'Ativa-se com',
 }

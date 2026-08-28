@@ -1215,4 +1215,13 @@ export const fr: Messages = {
   'patterns.dismiss_body': 'Memoria ne la proposera plus. Les souvenirs concernés restent intacts.',
   'patterns.consolidated_toast': 'Récurrence consolidée en un seul souvenir.',
   'patterns.dismissed_toast': 'Récurrence écartée.',
+  'procedures.list_title': 'Savoir-faire appris',
+  'procedures.list_hint': 'Chaque exécution compte : ce qui marche remonte, ce qui rate est noté.',
+  'procedures.no_execution': 'Jamais exécutée',
+  'procedures.executions': '{success} réussite(s) · {failure} échec(s)',
+  'procedures.rate_label': 'Taux de réussite',
+  'procedures.steps': 'Étapes',
+  'procedures.more_steps': '{count} étape(s) de plus',
+  'procedures.less_steps': 'Réduire',
+  'procedures.triggers': 'Se déclenche sur',
 }

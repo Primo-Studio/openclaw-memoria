@@ -1213,4 +1213,13 @@ export const en: Messages = {
   'patterns.dismiss_body': 'Memoria won’t suggest it again. The memories involved stay untouched.',
   'patterns.consolidated_toast': 'Pattern consolidated into a single memory.',
   'patterns.dismissed_toast': 'Pattern dismissed.',
+  'procedures.list_title': 'Learned know-how',
+  'procedures.list_hint': 'Every run counts: what works rises, what fails gets noted.',
+  'procedures.no_execution': 'Never run',
+  'procedures.executions': '{success} success(es) · {failure} failure(s)',
+  'procedures.rate_label': 'Success rate',
+  'procedures.steps': 'Steps',
+  'procedures.more_steps': '{count} more step(s)',
+  'procedures.less_steps': 'Show less',
+  'procedures.triggers': 'Triggered by',
 }

@@ -1213,4 +1213,13 @@ export const es: Messages = {
   'patterns.dismiss_body': 'Memoria no la volverá a proponer. Los recuerdos implicados quedan intactos.',
   'patterns.consolidated_toast': 'Recurrencia consolidada en un único recuerdo.',
   'patterns.dismissed_toast': 'Recurrencia descartada.',
+  'procedures.list_title': 'Saber hacer aprendido',
+  'procedures.list_hint': 'Cada ejecución cuenta: lo que funciona sube, lo que falla se anota.',
+  'procedures.no_execution': 'Nunca ejecutado',
+  'procedures.executions': '{success} éxito(s) · {failure} fallo(s)',
+  'procedures.rate_label': 'Tasa de éxito',
+  'procedures.steps': 'Pasos',
+  'procedures.more_steps': '{count} paso(s) más',
+  'procedures.less_steps': 'Mostrar menos',
+  'procedures.triggers': 'Se activa con',
 }

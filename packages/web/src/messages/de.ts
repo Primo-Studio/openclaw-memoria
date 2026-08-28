@@ -1213,4 +1213,13 @@ export const de: Messages = {
   'patterns.dismiss_body': 'Memoria schlägt es nicht mehr vor. Die betroffenen Erinnerungen bleiben unverändert.',
   'patterns.consolidated_toast': 'Muster zu einer einzigen Erinnerung zusammengeführt.',
   'patterns.dismissed_toast': 'Muster verworfen.',
+  'procedures.list_title': 'Gelerntes Know-how',
+  'procedures.list_hint': 'Jede Ausführung zählt: Was funktioniert, steigt auf; was scheitert, wird notiert.',
+  'procedures.no_execution': 'Nie ausgeführt',
+  'procedures.executions': '{success} erfolgreich · {failure} fehlgeschlagen',
+  'procedures.rate_label': 'Erfolgsquote',
+  'procedures.steps': 'Schritte',
+  'procedures.more_steps': '{count} weitere Schritt(e)',
+  'procedures.less_steps': 'Weniger anzeigen',
+  'procedures.triggers': 'Ausgelöst durch',
 }
