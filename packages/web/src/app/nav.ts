@@ -92,4 +92,9 @@ export const MIGRATED_SCREENS: ReadonlySet<ScreenId> = new Set<ScreenId>([
   'review',
   'revisions',
   'maintenance',
+  'sharing',
+  'vault',
+  'audit',
+  'system',
+  'docs',
 ])

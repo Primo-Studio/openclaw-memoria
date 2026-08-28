@@ -1105,7 +1105,7 @@ export const de: Messages = {
   'vault.empty.body': 'Das ist normal: Der Tresor füllt sich, sobald ein Agent auf einen Schlüssel oder ein Passwort trifft.',
   'vault.empty.title': 'Bisher kein Geheimnis im Tresor.',
   'vault.explainer.after': ' im Gedächtnis, in den Exporten oder in den Logs.',
-  'vault.explainer.before': '🔒 Wenn ein Agent auf einen API-Schlüssel oder ein Passwort trifft, ersetzt Memoria es durch eine Referenz ',
+  'vault.explainer.before': 'Wenn ein Agent auf einen API-Schlüssel oder ein Passwort trifft, ersetzt Memoria es durch eine Referenz ',
   'vault.explainer.mid': ' bevor es gespeichert wird. Der echte Wert geht in den Tresor des Systems.',
   'vault.explainer.never': 'Er erscheint nie',
   'vault.lead': 'Schlüssel und Passwörter automatisch erkannt und in Sicherheit gebracht — der Wert bleibt verschlüsselt.',
@@ -1353,4 +1353,52 @@ export const de: Messages = {
   'maintenance.count_plural': '{count} Erinnerungen angezeigt',
   'maintenance.list_label': 'Zu pflegende Erinnerungen',
   'maintenance.edit_label': 'Korrigierter Text',
+  // — Partage (écran shadcn) — confirmations, retours d'action, états —
+  'sharing.matrix_lead': 'Ein Schalter pro Agent und pro geteiltem Gedächtnis. Ohne Zugriff sieht ein Agent nichts aus diesem Gedächtnis.',
+  'sharing.matrix_empty_body': 'Geteilte Gedächtnisse (über dich, Firma, Kunden, Projekte) erscheinen hier, sobald eine erste Erinnerung geteilt wurde.',
+  'sharing.revoke_confirm': '{agent} den Lesezugriff auf {scope} entziehen?',
+  'sharing.grant_body': 'Der Agent kann ab sofort alle Erinnerungen dieses geteilten Gedächtnisses lesen.',
+  'sharing.revoke_body': 'Der Agent sieht die Erinnerungen dieses geteilten Gedächtnisses nicht mehr. Du kannst den Zugriff jederzeit wieder erteilen.',
+  'sharing.grant_action': 'Erlauben',
+  'sharing.revoke_action': 'Zugriff entziehen',
+  'sharing.toast_granted': '{agent} kann jetzt {scope} lesen.',
+  'sharing.toast_revoked': '{agent} liest {scope} nicht mehr.',
+  'sharing.toast_shared': '{count} Erinnerung(en) mit allen deinen Agenten geteilt.',
+  'sharing.identity_no_agents': 'Noch kein Agent verbunden — verbinde einen Agenten, um die Fakten über dich zu sehen.',
+  'sharing.scope_content_title': 'Inhalt von „{scope}“',
+
+  // — Coffre (écran shadcn) — titre de l'explication, emplacements lisibles, compteur —
+  'vault.explainer.title': 'Geheimnisse werden nie zu Erinnerungen',
+  'vault.list_title': 'Referenzen im Tresor',
+  'vault.count': '{count} Referenz(en) — der Wert selbst bleibt im Tresor des Systems.',
+  'vault.location.keychain': 'macOS-Schlüsselbund',
+  'vault.location.vault': 'Verschlüsselter Tresor',
+
+  // — Journal (écran shadcn) — filtres, compteur, état « aucun résultat » —
+  'audit.list_title': 'Letzte Aktionen',
+  'audit.count': '{shown} von {total} Einträgen angezeigt — der Dienst behält die letzten 200.',
+  'audit.filter.search': 'Suchen (Agent, Aktion, Grund…)',
+  'audit.filter.all_actors': 'Alle Akteure',
+  'audit.filter.all_actions': 'Alle Aktionen',
+  'audit.filter.none.title': 'Kein Eintrag passt',
+  'audit.filter.none.body': 'Versuche ein anderes Wort oder setze die Filter zurück.',
+  'audit.filter.clear': 'Filter zurücksetzen',
+
+  // — Système (écran shadcn) — chiffres clés et accessibilité des tuiles —
+  'system.stat.layers': 'kognitive Schichten',
+  'system.stat.tracked': 'mit Live-Zähler',
+  'system.stat.trackedHint': 'die anderen arbeiten ohne Zähler',
+  'system.stat.live': 'bereits gefüllt',
+  'system.stat.liveHintEmpty': 'die Zähler füllen sich mit der Nutzung',
+  'system.layer_number': 'Schicht {n}',
+  'system.live_count': 'Live-Zähler',
+
+  // — Docs (écran shadcn) — sommaire, tableau des commandes —
+  'docs.toc': 'Inhalt',
+  'docs.nav.jump': 'Zu einem Abschnitt springen',
+  'docs.cli.col.command': 'Befehl',
+  'docs.cli.col.desc': 'Was er tut',
+
+  // — Journal (écran shadcn) — action set_capture_mode —
+  'audit.action.set_capture_mode': 'Erfassungsmodus geändert',
 }

@@ -1105,7 +1105,7 @@ export const en: Messages = {
   'vault.empty.body': 'That\'s normal: the vault fills up as soon as an agent comes across a key or a password.',
   'vault.empty.title': 'No secrets in the vault yet.',
   'vault.explainer.after': ' in the memory, the exports or the logs.',
-  'vault.explainer.before': '🔒 When an agent encounters an API key or a password, Memoria replaces it with a reference ',
+  'vault.explainer.before': 'When an agent encounters an API key or a password, Memoria replaces it with a reference ',
   'vault.explainer.mid': ' before saving it. The real value goes into the system\'s vault.',
   'vault.explainer.never': 'It never appears',
   'vault.lead': 'Keys and passwords detected and safeguarded automatically — the value stays encrypted.',
@@ -1353,4 +1353,52 @@ export const en: Messages = {
   'maintenance.count_plural': '{count} memories shown',
   'maintenance.list_label': 'Memories to maintain',
   'maintenance.edit_label': 'Corrected text',
+  // — Partage (écran shadcn) — confirmations, retours d'action, états —
+  'sharing.matrix_lead': 'One switch per agent and per shared memory. Without access, an agent sees nothing from that memory.',
+  'sharing.matrix_empty_body': 'Shared memories (about you, company, clients, projects) will show up here as soon as a first memory is shared into one.',
+  'sharing.revoke_confirm': 'Remove {agent}’s read access to {scope}?',
+  'sharing.grant_body': 'The agent will be able to read every memory in this shared space, starting now.',
+  'sharing.revoke_body': 'The agent will no longer see the memories in this shared space. You can grant access again at any time.',
+  'sharing.grant_action': 'Allow',
+  'sharing.revoke_action': 'Remove access',
+  'sharing.toast_granted': '{agent} can now read {scope}.',
+  'sharing.toast_revoked': '{agent} no longer reads {scope}.',
+  'sharing.toast_shared': '{count} memory(ies) shared with all your agents.',
+  'sharing.identity_no_agents': 'No agent connected yet — connect an agent to see the facts about you.',
+  'sharing.scope_content_title': 'Contents of “{scope}”',
+
+  // — Coffre (écran shadcn) — titre de l'explication, emplacements lisibles, compteur —
+  'vault.explainer.title': 'Secrets never become memories',
+  'vault.list_title': 'Vault references',
+  'vault.count': '{count} reference(s) — the value itself stays in the system vault.',
+  'vault.location.keychain': 'macOS Keychain',
+  'vault.location.vault': 'Encrypted vault',
+
+  // — Journal (écran shadcn) — filtres, compteur, état « aucun résultat » —
+  'audit.list_title': 'Latest actions',
+  'audit.count': '{shown} of {total} entries shown — the service keeps the last 200.',
+  'audit.filter.search': 'Search (agent, action, reason…)',
+  'audit.filter.all_actors': 'All actors',
+  'audit.filter.all_actions': 'All actions',
+  'audit.filter.none.title': 'No entry matches',
+  'audit.filter.none.body': 'Try another word, or reset the filters.',
+  'audit.filter.clear': 'Clear filters',
+
+  // — Système (écran shadcn) — chiffres clés et accessibilité des tuiles —
+  'system.stat.layers': 'cognitive layers',
+  'system.stat.tracked': 'with a live counter',
+  'system.stat.trackedHint': 'the others work without a counter',
+  'system.stat.live': 'already populated',
+  'system.stat.liveHintEmpty': 'counters fill up with use',
+  'system.layer_number': 'Layer {n}',
+  'system.live_count': 'Live counter',
+
+  // — Docs (écran shadcn) — sommaire, tableau des commandes —
+  'docs.toc': 'Contents',
+  'docs.nav.jump': 'Jump to a section',
+  'docs.cli.col.command': 'Command',
+  'docs.cli.col.desc': 'What it does',
+
+  // — Journal (écran shadcn) — action set_capture_mode —
+  'audit.action.set_capture_mode': 'Capture mode changed',
 }

@@ -1105,7 +1105,7 @@ export const pt: Messages = {
   'vault.empty.body': 'É normal: o cofre enche-se assim que um agente encontra uma chave ou uma palavra-passe.',
   'vault.empty.title': 'Nenhum segredo no cofre por agora.',
   'vault.explainer.after': ' na memória, nas exportações ou nos logs.',
-  'vault.explainer.before': '🔒 Quando um agente encontra uma chave API ou uma palavra-passe, o Memoria substitui-a por uma referência ',
+  'vault.explainer.before': 'Quando um agente encontra uma chave API ou uma palavra-passe, o Memoria substitui-a por uma referência ',
   'vault.explainer.mid': ' antes de a registar. O valor real vai para o cofre do sistema.',
   'vault.explainer.never': 'Nunca aparece',
   'vault.lead': 'Chaves e palavras-passe detetadas e postas a salvo automaticamente — o valor fica cifrado.',
@@ -1353,4 +1353,52 @@ export const pt: Messages = {
   'maintenance.count_plural': '{count} memórias apresentadas',
   'maintenance.list_label': 'Memórias a manter',
   'maintenance.edit_label': 'Texto corrigido',
+  // — Partage (écran shadcn) — confirmations, retours d'action, états —
+  'sharing.matrix_lead': 'Um interruptor por agente e por memória partilhada. Sem acesso, um agente não vê nada dessa memória.',
+  'sharing.matrix_empty_body': 'As memórias partilhadas (sobre ti, empresa, clientes, projetos) aparecem aqui assim que uma primeira recordação for partilhada.',
+  'sharing.revoke_confirm': 'Retirar a {agent} o acesso de leitura a {scope}?',
+  'sharing.grant_body': 'O agente poderá ler todas as recordações desta memória partilhada, a partir de agora.',
+  'sharing.revoke_body': 'O agente deixará de ver as recordações desta memória partilhada. Podes voltar a dar-lhe acesso quando quiseres.',
+  'sharing.grant_action': 'Autorizar',
+  'sharing.revoke_action': 'Retirar o acesso',
+  'sharing.toast_granted': '{agent} já pode ler {scope}.',
+  'sharing.toast_revoked': '{agent} já não lê {scope}.',
+  'sharing.toast_shared': '{count} recordação(ões) partilhada(s) com todos os teus agentes.',
+  'sharing.identity_no_agents': 'Nenhum agente ligado por agora — liga um agente para ver os factos que te dizem respeito.',
+  'sharing.scope_content_title': 'Conteúdo de «{scope}»',
+
+  // — Coffre (écran shadcn) — titre de l'explication, emplacements lisibles, compteur —
+  'vault.explainer.title': 'Os segredos nunca se tornam recordações',
+  'vault.list_title': 'Referências no cofre',
+  'vault.count': '{count} referência(s) — o valor em si fica no cofre do sistema.',
+  'vault.location.keychain': 'Porta-chaves do macOS',
+  'vault.location.vault': 'Cofre cifrado',
+
+  // — Journal (écran shadcn) — filtres, compteur, état « aucun résultat » —
+  'audit.list_title': 'Últimas ações',
+  'audit.count': '{shown} de {total} entrada(s) apresentada(s) — o serviço guarda as 200 últimas.',
+  'audit.filter.search': 'Pesquisar (agente, ação, motivo…)',
+  'audit.filter.all_actors': 'Todos os atores',
+  'audit.filter.all_actions': 'Todas as ações',
+  'audit.filter.none.title': 'Nenhuma entrada corresponde',
+  'audit.filter.none.body': 'Tenta outra palavra ou repõe os filtros.',
+  'audit.filter.clear': 'Limpar filtros',
+
+  // — Système (écran shadcn) — chiffres clés et accessibilité des tuiles —
+  'system.stat.layers': 'camadas cognitivas',
+  'system.stat.tracked': 'com contador em direto',
+  'system.stat.trackedHint': 'as outras trabalham sem contador',
+  'system.stat.live': 'já preenchidas',
+  'system.stat.liveHintEmpty': 'os contadores enchem-se com o uso',
+  'system.layer_number': 'Camada {n}',
+  'system.live_count': 'Contador em direto',
+
+  // — Docs (écran shadcn) — sommaire, tableau des commandes —
+  'docs.toc': 'Índice',
+  'docs.nav.jump': 'Ir para uma secção',
+  'docs.cli.col.command': 'Comando',
+  'docs.cli.col.desc': 'O que faz',
+
+  // — Journal (écran shadcn) — action set_capture_mode —
+  'audit.action.set_capture_mode': 'Modo de captura alterado',
 }

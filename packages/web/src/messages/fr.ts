@@ -1107,7 +1107,7 @@ export const fr: Messages = {
   'vault.empty.body': 'C’est normal : le coffre se remplit dès qu’un agent croise une clé ou un mot de passe.',
   'vault.empty.title': 'Aucun secret au coffre pour l’instant.',
   'vault.explainer.after': ' dans la mémoire, les exports ou les logs.',
-  'vault.explainer.before': '🔒 Quand un agent rencontre une clé API ou un mot de passe, Memoria le remplace par une référence ',
+  'vault.explainer.before': 'Quand un agent rencontre une clé API ou un mot de passe, Memoria le remplace par une référence ',
   'vault.explainer.mid': ' avant de l’enregistrer. La vraie valeur part dans le coffre du système.',
   'vault.explainer.never': 'Elle n’apparaît jamais',
   'vault.lead': 'Clés et mots de passe détectés et mis à l’abri automatiquement — la valeur reste chiffrée.',
@@ -1355,4 +1355,52 @@ export const fr: Messages = {
   'maintenance.count_plural': '{count} souvenirs affichés',
   'maintenance.list_label': 'Souvenirs à entretenir',
   'maintenance.edit_label': 'Texte corrigé',
+  // — Partage (écran shadcn) — confirmations, retours d'action, états —
+  'sharing.matrix_lead': 'Un interrupteur par agent et par mémoire partagée. Sans accès, un agent ne voit rien de cette mémoire.',
+  'sharing.matrix_empty_body': 'Les mémoires partagées (sur toi, entreprise, clients, projets) apparaîtront ici dès qu’un premier souvenir y sera partagé.',
+  'sharing.revoke_confirm': 'Retirer à {agent} l’accès en lecture à {scope} ?',
+  'sharing.grant_body': 'L’agent pourra lire tous les souvenirs de cette mémoire partagée, dès maintenant.',
+  'sharing.revoke_body': 'L’agent ne verra plus les souvenirs de cette mémoire partagée. Tu pourras lui redonner l’accès à tout moment.',
+  'sharing.grant_action': 'Autoriser',
+  'sharing.revoke_action': 'Retirer l’accès',
+  'sharing.toast_granted': '{agent} peut maintenant lire {scope}.',
+  'sharing.toast_revoked': '{agent} ne lit plus {scope}.',
+  'sharing.toast_shared': '{count} souvenir(s) partagé(s) avec tous tes agents.',
+  'sharing.identity_no_agents': 'Aucun agent connecté pour l’instant — connecte un agent pour voir les faits qui te concernent.',
+  'sharing.scope_content_title': 'Contenu de « {scope} »',
+
+  // — Coffre (écran shadcn) — titre de l'explication, emplacements lisibles, compteur —
+  'vault.explainer.title': 'Les secrets ne deviennent jamais des souvenirs',
+  'vault.list_title': 'Références au coffre',
+  'vault.count': '{count} référence(s) — la valeur, elle, reste dans le coffre du système.',
+  'vault.location.keychain': 'Trousseau macOS',
+  'vault.location.vault': 'Coffre chiffré',
+
+  // — Journal (écran shadcn) — filtres, compteur, état « aucun résultat » —
+  'audit.list_title': 'Dernières actions',
+  'audit.count': '{shown} entrée(s) affichée(s) sur {total} — le service garde les 200 dernières.',
+  'audit.filter.search': 'Rechercher (agent, action, raison…)',
+  'audit.filter.all_actors': 'Tous les acteurs',
+  'audit.filter.all_actions': 'Toutes les actions',
+  'audit.filter.none.title': 'Aucune entrée ne correspond',
+  'audit.filter.none.body': 'Essaie un autre mot, ou remets les filtres à zéro.',
+  'audit.filter.clear': 'Effacer les filtres',
+
+  // — Système (écran shadcn) — chiffres clés et accessibilité des tuiles —
+  'system.stat.layers': 'couches cognitives',
+  'system.stat.tracked': 'avec un compteur en direct',
+  'system.stat.trackedHint': 'les autres travaillent sans compteur',
+  'system.stat.live': 'déjà remplies',
+  'system.stat.liveHintEmpty': 'les compteurs se remplissent avec l’usage',
+  'system.layer_number': 'Couche {n}',
+  'system.live_count': 'Compteur en direct',
+
+  // — Docs (écran shadcn) — sommaire, tableau des commandes —
+  'docs.toc': 'Sommaire',
+  'docs.nav.jump': 'Aller à une section',
+  'docs.cli.col.command': 'Commande',
+  'docs.cli.col.desc': 'Ce qu’elle fait',
+
+  // — Journal (écran shadcn) — action set_capture_mode —
+  'audit.action.set_capture_mode': 'Mode de capture modifié',
 }
