@@ -497,15 +497,29 @@ describe('buildServer handlers', () => {
     expect(text.text).not.toMatch(/unreachable/)
   })
 
-  it('404 (Memoria en pause ou daemon trop ancien) → dit « paused », pas « unreachable »', async () => {
+  it('404 « route inconnue » (daemon trop ancien) → dit « older », pas « unreachable » ni « doctor »', async () => {
     const gateway = fakeGateway()
     gateway.pin = async () => {
       throw new DaemonHttpError('/v1/memory/pin', 404, 'route mémoire inconnue : POST /v1/memory/pin')
     }
     const { handlers } = buildServer({ instanceId: 'i', tracker: new ActiveContextTracker(), connect: async () => gateway })
     const text = ((await handlers.pin({ fact_id: 'f1', pinned: true })).content[0] as { type: 'text'; text: string }).text
-    expect(text).toMatch(/paused/)
-    expect(text).not.toMatch(/unreachable/)
+    expect(text).toMatch(/older/)
+    expect(text).not.toMatch(/unreachable|memoria doctor/)
+  })
+
+  it('404 « fait inconnu » (identifiant faux) → « fix the arguments », pas « memoria doctor »', async () => {
+    const gateway = fakeGateway()
+    gateway.expiry = async () => {
+      throw new DaemonHttpError('/v1/memory/expiry', 404, 'fait inconnu dans les scopes de cet agent : f-zzz')
+    }
+    const { handlers } = buildServer({ instanceId: 'i', tracker: new ActiveContextTracker(), connect: async () => gateway })
+    const res = await handlers.expiry({ fact_id: 'f-zzz', expires_at: null })
+    const text = (res.content[0] as { type: 'text'; text: string }).text
+    expect(res.isError).toBe(true)
+    expect(text).toMatch(/identifier is unknown/)
+    expect(text).toContain('f-zzz')
+    expect(text).not.toMatch(/memoria doctor|paused/)
   })
 
   it('store_fact scope:"user" refusé par la policy → message « store it privately », pas de « memoria doctor »', async () => {

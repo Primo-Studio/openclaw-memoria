@@ -377,7 +377,14 @@ export function buildServer(opts: BuildServerOptions): BuiltServer {
         return `Memoria refused this agent's token (${m}): it was revoked or never paired. Continue without memory and tell the user to reconnect this agent from the Memoria app (or run \`memoria-mcp connect\`).`
       }
       if (err.status === 404) {
-        return `Memoria could not serve this operation (${m}). Either the user has paused Memoria, or the daemon is older than this MCP server. Continue without it and do not retry; mention it to the user only if they expected memory to work.`
+        // Deux 404 très différents : une ROUTE absente (daemon plus ancien que
+        // ce serveur MCP) et un IDENTIFIANT inconnu (fait, scope…) — ce second
+        // cas est une erreur d'argument, pas une panne : le LLM doit corriger,
+        // pas abandonner la mémoire.
+        if (/^route /.test(m)) {
+          return `Memoria could not serve this operation (${m}). The daemon is older than this MCP server. Continue without it and do not retry; mention it to the user only if they expected memory to work.`
+        }
+        return `Memoria rejected this request: ${m}. The memory layer itself is fine — the identifier is unknown in this agent's scopes; use ids returned by memoria_recall and retry.`
       }
       return `Memoria daemon failed on ${err.path} (HTTP ${err.status}: ${m}). Continue without memory for now; if it keeps happening, suggest the user runs \`memoria doctor\`.`
     }
