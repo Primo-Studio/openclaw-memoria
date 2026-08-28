@@ -56,6 +56,20 @@ const SEARCH_DEBOUNCE_MS = 300
 
 type Source = 'search' | 'never-used'
 
+type Translate = (key: string, vars?: Record<string, string | number>) => string
+
+/**
+ * Libellé lisible d'une catégorie de souvenir. Les catégories arrivent du
+ * moteur en anglais (« preference », « general »…) ; on les traduit, et on
+ * retombe sur la valeur brute pour une catégorie inconnue — `t()` renvoyant la
+ * clé quand elle manque, la comparaison suffit à le détecter.
+ */
+function categoryLabel(t: Translate, category: string): string {
+  const key = `fact.category.${category.toLowerCase()}`
+  const label = t(key)
+  return label === key ? category : label
+}
+
 export function Maintenance() {
   const { t } = useT()
   const [agents, setAgents] = useState<AgentEntry[]>([])
@@ -200,7 +214,15 @@ export function Maintenance() {
       <PageHeader
         title={t('maintenance.title')}
         description={t('maintenance.lead')}
-        actions={<MemRefreshButton label={t('common.refresh')} onClick={retry} disabled={!instance || phase === 'loading'} spinning={phase === 'loading'} />}
+        actions={
+          <MemRefreshButton
+            label={t('common.refresh')}
+            shortLabel={t('common.refresh_short')}
+            onClick={retry}
+            disabled={!instance || phase === 'loading'}
+            spinning={phase === 'loading'}
+          />
+        }
       />
 
       {!noAgent && (
@@ -325,10 +347,10 @@ export function Maintenance() {
                             {topic}
                           </Badge>
                         ))}
-                        <Badge variant="secondary">{f.category}</Badge>
+                        <Badge variant="secondary">{categoryLabel(t, f.category)}</Badge>
                         {f.id === keepId && selected.size >= 2 && <Badge>{t('maintenance.badge_keep')}</Badge>}
                         <MemSensitivityBadge sensitivity={f.sensitivity} />
-                        <MemMetaText>{formatDay(f.created_at)}</MemMetaText>
+                        <MemMetaText className="w-full sm:w-auto">{formatDay(f.created_at)}</MemMetaText>
                       </>
                     }
                     actions={

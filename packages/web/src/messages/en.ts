@@ -84,6 +84,8 @@ export const en: Messages = {
 
   // — Common —
   'common.refresh': 'Refresh',
+  // Version courte pour la barre supérieure mobile (jamais d'icône muette).
+  'common.refresh_short': 'Refresh',
   'error.session_expired': 'Session expired or invalid key — restart “memoria” from your terminal.',
   'error.not_available': 'This feature is not available yet in your version of Memoria.',
   'error.no_response': 'The Memoria service is not responding. Check it’s running (“memoria” command).',
@@ -1328,6 +1330,14 @@ export const en: Messages = {
   'selection.unselect_all': 'Deselect all',
   'fact.sensitivity.sensitive': 'Sensitive',
   'fact.sensitivity.critical': 'Critical',
+  // Catégories de souvenir renvoyées en anglais par le moteur : on les traduit.
+  'fact.category.preference': 'Preference',
+  'fact.category.decision': 'Decision',
+  'fact.category.config': 'Configuration',
+  'fact.category.error': 'Error',
+  'fact.category.process': 'Process',
+  'fact.category.general': 'General',
+  'fact.category.identity': 'Identity',
   // — Écrans mémoire (G2) : Revue —
   'review.approve_selected': 'Approve selection',
   'review.reject_selected': 'Reject selection',

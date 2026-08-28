@@ -84,6 +84,8 @@ export const de: Messages = {
 
   // — Allgemeines —
   'common.refresh': 'Aktualisieren',
+  // Version courte pour la barre supérieure mobile (jamais d'icône muette).
+  'common.refresh_short': 'Neu laden',
   'error.session_expired': 'Sitzung abgelaufen oder Schlüssel ungültig — starte „memoria“ im Terminal neu.',
   'error.not_available': 'Diese Funktion ist in deiner Memoria-Version noch nicht verfügbar.',
   'error.no_response': 'Der Memoria-Dienst antwortet nicht. Prüfe, ob er läuft („memoria“-Befehl).',
@@ -1328,6 +1330,14 @@ export const de: Messages = {
   'selection.unselect_all': 'Alle abwählen',
   'fact.sensitivity.sensitive': 'Sensibel',
   'fact.sensitivity.critical': 'Kritisch',
+  // Catégories de souvenir renvoyées en anglais par le moteur : on les traduit.
+  'fact.category.preference': 'Präferenz',
+  'fact.category.decision': 'Entscheidung',
+  'fact.category.config': 'Konfiguration',
+  'fact.category.error': 'Fehler',
+  'fact.category.process': 'Ablauf',
+  'fact.category.general': 'Allgemein',
+  'fact.category.identity': 'Identität',
   // — Écrans mémoire (G2) : Revue —
   'review.approve_selected': 'Auswahl genehmigen',
   'review.reject_selected': 'Auswahl ablehnen',

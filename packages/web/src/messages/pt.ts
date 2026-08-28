@@ -84,6 +84,8 @@ export const pt: Messages = {
 
   // — Comuns —
   'common.refresh': 'Atualizar',
+  // Version courte pour la barre supérieure mobile (jamais d'icône muette).
+  'common.refresh_short': 'Atualizar',
   'error.session_expired': 'Sessão expirada ou chave inválida — reinicie «memoria» no seu terminal.',
   'error.not_available': 'Este recurso ainda não está disponível na sua versão do Memoria.',
   'error.no_response': 'O serviço Memoria não responde. Verifique se está ativo (comando «memoria»).',
@@ -1328,6 +1330,14 @@ export const pt: Messages = {
   'selection.unselect_all': 'Anular a seleção',
   'fact.sensitivity.sensitive': 'Sensível',
   'fact.sensitivity.critical': 'Crítico',
+  // Catégories de souvenir renvoyées en anglais par le moteur : on les traduit.
+  'fact.category.preference': 'Preferência',
+  'fact.category.decision': 'Decisão',
+  'fact.category.config': 'Configuração',
+  'fact.category.error': 'Erro',
+  'fact.category.process': 'Método',
+  'fact.category.general': 'Geral',
+  'fact.category.identity': 'Identidade',
   // — Écrans mémoire (G2) : Revue —
   'review.approve_selected': 'Aprovar a seleção',
   'review.reject_selected': 'Rejeitar a seleção',
