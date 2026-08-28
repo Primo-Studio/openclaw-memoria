@@ -2829,6 +2829,7 @@ export class Memoria {
     // (clé API, le plus simple) ou Ollama local. Quand rien n'est résolu, on
     // recommande selon ce qui est détecté au lieu d'imposer Ollama.
     let embeddings: LlmEngineHealth
+    const pinnedEmbeddings = this.resolved.config.llm?.embeddings
     if (profile.embeddings) {
       embeddings = {
         provider: profile.embeddings.name,
@@ -2836,6 +2837,32 @@ export class Memoria {
         available: true,
         pending: await this.embeddingsPending(),
       }
+    } else if (pinnedEmbeddings?.provider) {
+      // Choix EXPLICITE indisponible : on le dit tel quel (provider/modèle
+      // choisis + raison) — jamais un autre moteur annoncé « disponible » à
+      // sa place. Avant, Ollama prenait le relais en silence.
+      const provider = pinnedEmbeddings.provider
+      let model: string
+      let reason: string
+      switch (provider) {
+        case 'openai':
+          model = pinnedEmbeddings.model ?? DEFAULT_OPENAI_EMBEDDING_MODEL
+          reason = `clé API absente — place-la dans ~/.openai/api_key (chmod 600), ou choisis Ollama dans Réglages`
+          break
+        case 'ollama': {
+          model = pinnedEmbeddings.model ?? DEFAULT_OLLAMA_EMBEDDING_MODEL
+          reason = !options.ollama.serverUp
+            ? 'serveur Ollama injoignable — lance l’application Ollama (ou « ollama serve »)'
+            : options.ollama.models.some(m => modelMatches(m, model))
+              ? `modèle « ${model} » présent mais provider indisponible — vérifie les logs du service`
+              : `modèle « ${model} » non téléchargé — « ollama pull ${model} »`
+          break
+        }
+        default:
+          model = pinnedEmbeddings.model ?? '(inconnu)'
+          reason = `provider d'embeddings inconnu : ${provider} (attendu : ollama|openai)`
+      }
+      embeddings = { provider, model, available: false, reason }
     } else if (options.openai.available) {
       embeddings = {
         provider: 'openai',
@@ -2947,6 +2974,11 @@ export class Memoria {
     this.assertOpen()
     if (provider !== 'ollama' && provider !== 'openai') {
       throw new Error(`provider d'embeddings non supporté : ${provider} (attendu : ollama|openai)`)
+    }
+    // Gravées avec chaque vecteur : une valeur fausse corrompt la base. On
+    // refuse tout ce qui n'est pas un entier plausible plutôt que de l'écrire.
+    if (dimensions !== undefined && (!Number.isInteger(dimensions) || dimensions < 64 || dimensions > 8192)) {
+      throw new Error(`dimensions invalides : ${JSON.stringify(dimensions)} (entier entre 64 et 8192 attendu)`)
     }
     this.resolved.config.llm = {
       ...this.resolved.config.llm,

@@ -470,11 +470,23 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         if (!['ollama', 'openai'].includes(provider)) {
           throw new HttpError(400, `provider d'embeddings inconnu : ${provider} (attendu : ollama|openai)`)
         }
+        // `dimensions` : entier plausible ou rien. Les dimensions sont gravées
+        // avec chaque vecteur — une chaîne « abc » était persistée telle quelle
+        // dans config.toml puis envoyée à l'API (« une valeur fausse corrompt
+        // la base », config.ts).
+        let dimensions: number | undefined
+        const rawDims = body['dimensions']
+        if (rawDims !== undefined && rawDims !== null) {
+          if (typeof rawDims !== 'number' || !Number.isInteger(rawDims) || rawDims < 64 || rawDims > 8192) {
+            throw new HttpError(400, `dimensions doit être un entier entre 64 et 8192 (reçu : ${JSON.stringify(rawDims)}) — omets-le pour un modèle connu`)
+          }
+          dimensions = rawDims
+        }
         memoria.setEmbeddingsProvider(
           provider,
-          body['model'] as string | undefined,
-          body['dimensions'] as number | undefined,
-          body['base_url'] as string | undefined,
+          optionalString(body, 'model'),
+          dimensions,
+          optionalString(body, 'base_url'),
         )
         // Réindexation incrémentale en tâche de fond (ne bloque pas la réponse) :
         // seuls les faits sans vecteur pour le nouveau modèle sont ré-embqués.
