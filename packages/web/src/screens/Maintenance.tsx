@@ -376,13 +376,21 @@ export function Maintenance() {
                     }
                   >
                     {isEditing ? (
-                      <Textarea
-                        value={editing.text}
-                        rows={3}
-                        autoFocus
-                        aria-label={t('maintenance.edit_label')}
-                        onChange={e => setEditing({ id: f.id, text: e.target.value })}
-                      />
+                      <>
+                        <Textarea
+                          value={editing.text}
+                          rows={3}
+                          autoFocus
+                          aria-label={t('maintenance.edit_label')}
+                          onChange={e => setEditing({ id: f.id, text: e.target.value })}
+                        />
+                        {/* La garantie s'affiche ICI, au moment où l'on hésite à
+                            corriger, et non seulement dans le toast qui arrive
+                            APRÈS. « Corriger » est le geste le plus fréquent de
+                            l'écran et le seul où l'on cliquait sans savoir si on
+                            détruisait quelque chose. */}
+                        <p className="mt-1.5 text-xs text-muted-foreground">{t('maintenance.edit_safe')}</p>
+                      </>
                     ) : (
                       f.fact
                     )}

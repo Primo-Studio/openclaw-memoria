@@ -1133,6 +1133,7 @@ export const de: Messages = {
   'maintenance.search.title': 'Die zu reparierenden Erinnerungen wählen',
   'maintenance.empty_never_used_action': 'Eine Erinnerung suchen',
   'maintenance.lead': 'Die Werkstatt: einen ungenauen Satz korrigieren, Dubletten zusammenführen, nie genutzte Erinnerungen finden. Zum bloßen Lesen oder Vergessen geht es ins Gedächtnis.',
+  'maintenance.edit_safe': 'Die vorherige Fassung wird nicht gelöscht, sondern nur als „ersetzt“ markiert.',
   'maintenance.source': 'Quelle',
   'maintenance.source_search': 'Suche',
   'maintenance.source_never_used': 'Nie verwendet',

@@ -1135,6 +1135,7 @@ export const fr: Messages = {
   'maintenance.search.title': 'Choisir les souvenirs à réparer',
   'maintenance.empty_never_used_action': 'Chercher un souvenir',
   'maintenance.lead': 'L’atelier de réparation : corriger une phrase inexacte, fusionner des doublons, retrouver les souvenirs jamais utilisés. Pour simplement relire ou oublier, va dans Mémoire.',
+  'maintenance.edit_safe': 'La version précédente n’est pas effacée : elle est seulement marquée « remplacée ».',
   'maintenance.source': 'Source',
   'maintenance.source_search': 'Recherche',
   'maintenance.source_never_used': 'Jamais utilisés',

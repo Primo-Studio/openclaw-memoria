@@ -1133,6 +1133,7 @@ export const es: Messages = {
   'maintenance.search.title': 'Elegir los recuerdos que reparar',
   'maintenance.empty_never_used_action': 'Buscar un recuerdo',
   'maintenance.lead': 'El taller de reparación: corregir una frase inexacta, fusionar duplicados, encontrar los recuerdos nunca usados. Para solo releer u olvidar, ve a Memoria.',
+  'maintenance.edit_safe': 'La versión anterior no se borra: solo queda marcada como «reemplazada».',
   'maintenance.source': 'Origen',
   'maintenance.source_search': 'Búsqueda',
   'maintenance.source_never_used': 'Nunca usados',

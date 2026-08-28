@@ -1133,6 +1133,7 @@ export const en: Messages = {
   'maintenance.search.title': 'Pick the memories to repair',
   'maintenance.empty_never_used_action': 'Search a memory',
   'maintenance.lead': 'The repair shop: correct an inaccurate sentence, merge duplicates, find memories that have never been used. To simply read or forget, go to Memory.',
+  'maintenance.edit_safe': 'The previous version is not erased: it is only marked “replaced”.',
   'maintenance.source': 'Source',
   'maintenance.source_search': 'Search',
   'maintenance.source_never_used': 'Never used',

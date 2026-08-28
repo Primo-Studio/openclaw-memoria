@@ -1133,6 +1133,7 @@ export const pt: Messages = {
   'maintenance.search.title': 'Escolher as memórias a reparar',
   'maintenance.empty_never_used_action': 'Procurar uma memória',
   'maintenance.lead': 'A oficina de reparação: corrigir uma frase inexata, fundir duplicados, encontrar as memórias nunca usadas. Para apenas reler ou esquecer, vai a Memória.',
+  'maintenance.edit_safe': 'A versão anterior não é apagada: fica apenas marcada como «substituída».',
   'maintenance.source': 'Origem',
   'maintenance.source_search': 'Pesquisa',
   'maintenance.source_never_used': 'Nunca usados',
