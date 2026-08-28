@@ -333,9 +333,17 @@ function MemoryBrowser({ agents }: { agents: AgentEntry[] }) {
                       </>
                     }
                     actions={
+                      /* `max-sm:-ml-3` : sous 640 px la rangée d'actions passe à la
+                         ligne et s'aligne à gauche, mais le bouton fantôme porte
+                         12 px de marge intérieure (ajoutés pour la cible tactile
+                         de 44 px). Son libellé démarrait donc 13 px à droite du
+                         texte du souvenir, de ses pastilles et de sa date —
+                         mesuré : texte à x=56, libellé à x=69. Le décalage
+                         négatif remet le libellé sur l'axe sans rien retirer à la
+                         zone tactile. */
                       <ConfirmButton
                         variant="ghost"
-                        className={cn('text-destructive hover:text-destructive', TOUCH_ROW_ACTION)}
+                        className={cn('text-destructive hover:text-destructive max-sm:-ml-3', TOUCH_ROW_ACTION)}
                         label={t('memory.forget')}
                         title={t('memory.forget_one_title')}
                         description={t('memory.forget_one_body')}
