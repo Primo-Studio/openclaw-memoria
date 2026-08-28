@@ -35,7 +35,11 @@ if [ "$OS" = "Darwin" ]; then
     say "Memoria a besoin des outils de développement Apple (gratuits, ~5 min)."
     say "Une fenêtre système va s’ouvrir : clique sur « Installer » et attends la fin."
     xcode-select --install || true # déjà en cours d'installation = pas une erreur
-    printf '\n\033[1;36m▸ Quand l’installation est terminée, RELANCE simplement ce script (même commande).\033[0m\n\n'
+    # La commande d'origine est un `curl | sh` collé : après ~5 min d'attente, le
+    # Terminal a souvent été fermé et elle n'est plus sous les yeux. On la
+    # RÉÉCRIT EN ENTIER plutôt que de dire « relance la même commande ».
+    printf '\n\033[1;36m▸ Quand l’installation est terminée, laisse cette fenêtre ouverte et recopie la ligne ci-dessous :\033[0m\n'
+    printf '\n  curl -fsSL https://raw.githubusercontent.com/Primo-Studio/openclaw-memoria/%s/scripts/install-memoria.sh | sh\n\n' "$BRANCH"
     exit 0
   fi
 else
@@ -44,7 +48,9 @@ fi
 say "Outils de développement OK"
 
 # 1) Node >= 20 (22 LTS recommandé pour cohabiter avec OpenClaw)
-command -v node >/dev/null 2>&1 || err "Node.js manquant. Installe Node 22 LTS depuis https://nodejs.org puis relance."
+# Message pour quelqu'un qui n'a jamais installé Node : sur nodejs.org il faut
+# choisir entre plusieurs boutons, puis entre arm64 et x64. On dit lequel.
+command -v node >/dev/null 2>&1 || err "Node.js manquant. Va sur https://nodejs.org, prends le bouton « LTS », télécharge le fichier .pkg pour macOS (Apple Silicon si ton Mac est un M1/M2/M3/M4), double-clique dessus, suis les étapes — puis reviens ici et relance cette commande."
 NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
 [ "$NODE_MAJOR" -ge 20 ] || err "Node $NODE_MAJOR détecté ; Memoria requiert Node 20+ (22 LTS conseillé)."
 if [ $((NODE_MAJOR % 2)) -ne 0 ]; then
@@ -69,8 +75,19 @@ else
 fi
 
 # 3) installer + construire
+# Mesuré le 28/08 sur une installation neuve (cache npm vide) : 21 s, 338 paquets,
+# AUCUNE compilation native — better-sqlite3 et sqlite-vec passent par des binaires
+# précompilés (prebuild-install). Le piège classique « Xcode / node-gyp » ne se
+# produit pas. Sur une connexion lente, compter plutôt 1 à 3 min.
+# ⚠️ `install` et non `ci` alors qu'un package-lock.json est versionné : le lock
+#    peut être réécrit et résoudre d'autres versions que celles sur lesquelles la
+#    suite de tests est verte. À basculer sur `npm ci` — voir docs/v3/TODO.md T18.
 say "Installation des dépendances (peut prendre 1-2 min)…"
 npm --prefix "$DEST" install --no-audit --no-fund
+# ⚠️ Ce build ne pose PAS le marqueur `.memoria-built-sha` (seul `memoria update`
+#    l'écrit) : après une installation neuve, `GET /v1/health` renvoie donc
+#    `built_sha: null` et on ne peut pas savoir à distance quelle version tourne.
+#    Voir docs/v3/TODO.md T18 et docs/v3/INSTALLER-ET-METTRE-A-JOUR.md § 9.
 say "Construction…"
 npm --prefix "$DEST" run build
 
@@ -99,6 +116,11 @@ chmod +x "$BIN_DIR/memoria"
 say "Initialisation du stockage…"
 "$BIN_DIR/memoria" init
 if [ "$OS" = "Darwin" ]; then
+  # ⚠️ NON VÉRIFIÉ en conditions neuves (au 28/08). Le label launchd
+  #    `fr.primo-studio.memoria` est une constante et `launchctl bootout` est scopé
+  #    à l'UID, pas à $HOME : impossible de tester ce chemin sur une machine de
+  #    développement sans couper le service de production. À valider une fois sur
+  #    une VM ou un second compte macOS. Voir docs/v3/TODO.md T8.
   say "Démarrage du service (lancement automatique au login)…"
   "$BIN_DIR/memoria" autostart on
 else
