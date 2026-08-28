@@ -1350,6 +1350,16 @@ export const de: Messages = {
   'revisions.list_label': 'Aufräumvorschläge',
   'revisions.accepted': 'Aufgeräumt: die neuere Erinnerung bleibt, die alte wird beiseitegelegt.',
   'revisions.dismissed': 'Vorschlag beiseitegelegt.',
+  // Carte de proposition : on MONTRE les deux souvenirs en cause, avec leur date.
+  'revisions.explain_contradicted': 'Diese beiden Erinnerungen widersprechen sich. Beim Aufräumen bleibt die neuere erhalten; die ältere bleibt einsehbar.',
+  'revisions.explain_duplicate': 'Diese beiden Erinnerungen sagen dasselbe. Beim Aufräumen bleibt die neuere erhalten; die ältere bleibt einsehbar.',
+  'revisions.explain_obsolete': 'Diese Erinnerung wurde von einer neueren überholt. Beim Aufräumen bleibt die neuere erhalten; die ältere bleibt einsehbar.',
+  'revisions.explain_alone': 'Diese Erinnerung gilt als veraltet. Beim Aufräumen taucht sie nicht mehr in Antworten auf, bleibt aber einsehbar.',
+  'revisions.action_accept_alone': 'Diese Erinnerung aufräumen',
+  'revisions.fact_kept': 'Bleibt',
+  'revisions.fact_archived': 'Wird aufgeräumt',
+  'revisions.fact_missing': 'Diese Erinnerung gehört nicht zu den neuesten des Agenten: Ihr Text konnte nicht angezeigt werden.',
+  'revisions.reanalyze_short': 'Analysieren',
   // — Écrans mémoire (G2) : Maintenance —
   'maintenance.never_used_hint': 'Erinnerungen, die nie in einer Antwort verwendet wurden — das Material zum Aufräumen.',
   'maintenance.hidden_selected': '{count} außerhalb der angezeigten Liste ausgewählt.',

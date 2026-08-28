@@ -1350,6 +1350,16 @@ export const en: Messages = {
   'revisions.list_label': 'Tidy-up proposals',
   'revisions.accepted': 'Tidied up: the recent memory is kept, the old one is set aside.',
   'revisions.dismissed': 'Proposal left aside.',
+  // Carte de proposition : on MONTRE les deux souvenirs en cause, avec leur date.
+  'revisions.explain_contradicted': 'These two memories contradict each other. Tidying keeps the newer one; the older one stays readable.',
+  'revisions.explain_duplicate': 'These two memories say the same thing. Tidying keeps the newer one; the older one stays readable.',
+  'revisions.explain_obsolete': 'This memory is outdated by a newer one. Tidying keeps the newer one; the older one stays readable.',
+  'revisions.explain_alone': 'This memory is flagged as outdated. Tidying it takes it out of answers, but it stays readable.',
+  'revisions.action_accept_alone': 'Tidy this memory',
+  'revisions.fact_kept': 'Kept',
+  'revisions.fact_archived': 'Will be tidied away',
+  'revisions.fact_missing': 'This memory is not among the agent’s latest ones: its text could not be shown.',
+  'revisions.reanalyze_short': 'Analyse',
   // — Écrans mémoire (G2) : Maintenance —
   'maintenance.never_used_hint': 'Memories never used in an answer — the raw material for tidying up.',
   'maintenance.hidden_selected': '{count} selected outside the list shown.',

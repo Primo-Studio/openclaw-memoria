@@ -1350,6 +1350,16 @@ export const es: Messages = {
   'revisions.list_label': 'Propuestas de orden',
   'revisions.accepted': 'Ordenado: se conserva el recuerdo reciente y se aparta el antiguo.',
   'revisions.dismissed': 'Propuesta dejada de lado.',
+  // Carte de proposition : on MONTRE les deux souvenirs en cause, avec leur date.
+  'revisions.explain_contradicted': 'Estos dos recuerdos se contradicen. Al ordenar se conserva el más reciente; el antiguo sigue consultable.',
+  'revisions.explain_duplicate': 'Estos dos recuerdos dicen lo mismo. Al ordenar se conserva el más reciente; el antiguo sigue consultable.',
+  'revisions.explain_obsolete': 'Este recuerdo quedó superado por uno más reciente. Al ordenar se conserva el reciente; el antiguo sigue consultable.',
+  'revisions.explain_alone': 'Este recuerdo se propone como caducado. Al ordenarlo deja de aparecer en las respuestas, pero sigue consultable.',
+  'revisions.action_accept_alone': 'Ordenar este recuerdo',
+  'revisions.fact_kept': 'Conservado',
+  'revisions.fact_archived': 'Se ordenará',
+  'revisions.fact_missing': 'Este recuerdo no está entre los últimos del agente: no se pudo mostrar su texto.',
+  'revisions.reanalyze_short': 'Analizar',
   // — Écrans mémoire (G2) : Maintenance —
   'maintenance.never_used_hint': 'Recuerdos nunca usados en una respuesta: la materia prima de la limpieza.',
   'maintenance.hidden_selected': '{count} seleccionado(s) fuera de la lista mostrada.',

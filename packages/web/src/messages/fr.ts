@@ -1352,6 +1352,16 @@ export const fr: Messages = {
   'revisions.list_label': 'Propositions de rangement',
   'revisions.accepted': 'Rangé : le souvenir récent est conservé, l’ancien est écarté.',
   'revisions.dismissed': 'Proposition laissée de côté.',
+  // Carte de proposition : on MONTRE les deux souvenirs en cause, avec leur date.
+  'revisions.explain_contradicted': 'Ces deux souvenirs se contredisent. En rangeant, le plus récent est gardé ; l’ancien reste consultable.',
+  'revisions.explain_duplicate': 'Ces deux souvenirs disent la même chose. En rangeant, le plus récent est gardé ; l’ancien reste consultable.',
+  'revisions.explain_obsolete': 'Ce souvenir est dépassé par un plus récent. En rangeant, le récent est gardé ; l’ancien reste consultable.',
+  'revisions.explain_alone': 'Ce souvenir est proposé comme dépassé. En le rangeant, il n’apparaît plus dans les réponses, mais reste consultable.',
+  'revisions.action_accept_alone': 'Ranger ce souvenir',
+  'revisions.fact_kept': 'Gardé',
+  'revisions.fact_archived': 'Sera rangé',
+  'revisions.fact_missing': 'Ce souvenir ne fait pas partie des derniers souvenirs de l’agent : son texte n’a pas pu être affiché.',
+  'revisions.reanalyze_short': 'Analyser',
   // — Écrans mémoire (G2) : Maintenance —
   'maintenance.never_used_hint': 'Les souvenirs jamais utilisés dans une réponse — la matière du ménage.',
   'maintenance.hidden_selected': '{count} sélectionné(s) hors de la liste affichée.',

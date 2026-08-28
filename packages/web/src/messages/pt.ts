@@ -1350,6 +1350,16 @@ export const pt: Messages = {
   'revisions.list_label': 'Propostas de arrumação',
   'revisions.accepted': 'Arrumado: a memória recente é mantida, a antiga é posta de lado.',
   'revisions.dismissed': 'Proposta deixada de lado.',
+  // Carte de proposition : on MONTRE les deux souvenirs en cause, avec leur date.
+  'revisions.explain_contradicted': 'Estas duas memórias se contradizem. Ao arrumar, a mais recente é mantida; a antiga continua consultável.',
+  'revisions.explain_duplicate': 'Estas duas memórias dizem a mesma coisa. Ao arrumar, a mais recente é mantida; a antiga continua consultável.',
+  'revisions.explain_obsolete': 'Esta memória foi superada por uma mais recente. Ao arrumar, a recente é mantida; a antiga continua consultável.',
+  'revisions.explain_alone': 'Esta memória é proposta como ultrapassada. Ao arrumá-la, ela deixa de aparecer nas respostas, mas continua consultável.',
+  'revisions.action_accept_alone': 'Arrumar esta memória',
+  'revisions.fact_kept': 'Mantida',
+  'revisions.fact_archived': 'Será arrumada',
+  'revisions.fact_missing': 'Esta memória não está entre as últimas do agente: não foi possível mostrar o texto.',
+  'revisions.reanalyze_short': 'Analisar',
   // — Écrans mémoire (G2) : Maintenance —
   'maintenance.never_used_hint': 'Memórias nunca usadas numa resposta — a matéria-prima da arrumação.',
   'maintenance.hidden_selected': '{count} selecionada(s) fora da lista apresentada.',
