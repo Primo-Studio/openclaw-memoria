@@ -1347,7 +1347,6 @@ export const fr: Messages = {
   'selection.unselect_all': 'Tout désélectionner',
   'fact.sensitivity.sensitive': 'Sensible',
   'fact.sensitivity.critical': 'Critique',
-<<<<<<< HEAD
   // Catégorie d’un souvenir (valeur brute du moteur) → mot lisible ; repli sur la valeur brute (lib/labels.ts).
   'fact.category.general': 'Général',
   'fact.category.preference': 'Préférence',
@@ -1365,16 +1364,7 @@ export const fr: Messages = {
   'fact.category.statement': 'Fait',
   'fact.topics_more': '+{count}',
   'fact.topics_more_title': 'Autres thèmes : {list}',
-=======
   // Catégories de souvenir renvoyées en anglais par le moteur : on les traduit.
-  'fact.category.preference': 'Préférence',
-  'fact.category.decision': 'Décision',
-  'fact.category.config': 'Configuration',
-  'fact.category.error': 'Erreur',
-  'fact.category.process': 'Méthode',
-  'fact.category.general': 'Général',
-  'fact.category.identity': 'Identité',
->>>>>>> feat/ui-fixC
   // — Écrans mémoire (G2) : Revue —
   'review.approve_selected': 'Approuver la sélection',
   'review.reject_selected': 'Rejeter la sélection',

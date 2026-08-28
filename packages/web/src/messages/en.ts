@@ -1345,14 +1345,13 @@ export const en: Messages = {
   'selection.unselect_all': 'Deselect all',
   'fact.sensitivity.sensitive': 'Sensitive',
   'fact.sensitivity.critical': 'Critical',
-<<<<<<< HEAD
   // Memory category (raw engine value) → readable word; falls back to the raw value (lib/labels.ts).
   'fact.category.general': 'General',
   'fact.category.preference': 'Preference',
   'fact.category.decision': 'Decision',
   'fact.category.config': 'Configuration',
   'fact.category.process': 'Process',
-  'fact.category.error': 'Mistake',
+  'fact.category.error': 'Error',
   'fact.category.erreur': 'Mistake',
   'fact.category.savoir': 'Knowledge',
   'fact.category.outil': 'Tool',
@@ -1363,16 +1362,7 @@ export const en: Messages = {
   'fact.category.statement': 'Fact',
   'fact.topics_more': '+{count}',
   'fact.topics_more_title': 'Other topics: {list}',
-=======
   // Catégories de souvenir renvoyées en anglais par le moteur : on les traduit.
-  'fact.category.preference': 'Preference',
-  'fact.category.decision': 'Decision',
-  'fact.category.config': 'Configuration',
-  'fact.category.error': 'Error',
-  'fact.category.process': 'Process',
-  'fact.category.general': 'General',
-  'fact.category.identity': 'Identity',
->>>>>>> feat/ui-fixC
   // — Écrans mémoire (G2) : Revue —
   'review.approve_selected': 'Approve selection',
   'review.reject_selected': 'Reject selection',

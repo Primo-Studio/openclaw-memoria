@@ -1345,7 +1345,6 @@ export const de: Messages = {
   'selection.unselect_all': 'Alle abwählen',
   'fact.sensitivity.sensitive': 'Sensibel',
   'fact.sensitivity.critical': 'Kritisch',
-<<<<<<< HEAD
   // Kategorie einer Erinnerung (Rohwert der Engine) → lesbares Wort; Rückfall auf den Rohwert (lib/labels.ts).
   'fact.category.general': 'Allgemein',
   'fact.category.preference': 'Vorliebe',
@@ -1363,16 +1362,7 @@ export const de: Messages = {
   'fact.category.statement': 'Fakt',
   'fact.topics_more': '+{count}',
   'fact.topics_more_title': 'Weitere Themen: {list}',
-=======
   // Catégories de souvenir renvoyées en anglais par le moteur : on les traduit.
-  'fact.category.preference': 'Präferenz',
-  'fact.category.decision': 'Entscheidung',
-  'fact.category.config': 'Konfiguration',
-  'fact.category.error': 'Fehler',
-  'fact.category.process': 'Ablauf',
-  'fact.category.general': 'Allgemein',
-  'fact.category.identity': 'Identität',
->>>>>>> feat/ui-fixC
   // — Écrans mémoire (G2) : Revue —
   'review.approve_selected': 'Auswahl genehmigen',
   'review.reject_selected': 'Auswahl ablehnen',
