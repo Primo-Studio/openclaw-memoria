@@ -27,6 +27,12 @@
  *      survol du bouton, `bg-primary/80` → mélange vers --foreground à 10 %
  *             (button.tsx, badge.tsx) : clair 3,58 → 5,80:1, sombre 3,87 → 5,96:1
  *
+ * 3. TEXTE SECONDAIRE sur fond teinté. --muted-foreground est INCHANGÉ (0,49
+ *    en clair) : il mesure 6,02:1 sur la page, 6,29:1 sur une carte, 5,51:1 sur
+ *    un fond `--muted` et 5,86:1 sur une carte sélectionnée (`bg-primary/5`) —
+ *    tous conformes. L'onglet inactif qui semblait fautif ne l'utilisait pas :
+ *    il portait `text-foreground/60` (4,45:1), corrigé dans `ui/tabs.tsx`.
+ *
  * RESTE CONNU, non traité ici : le motif `bg-primary/10 text-primary` (item de
  * navigation actif, initiales, numéros de couche) monte de 3,69 à 4,47:1 sur
  * carte et 4,29:1 sur page en clair, mais plafonne à 4,05:1 sur le fond de la
