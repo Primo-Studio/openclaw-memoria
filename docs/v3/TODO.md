@@ -1,5 +1,7 @@
 # Memoria V3 — TODO de passation
 
+> **Reprise après une pause : commence par [`00-POINT-DE-REPRISE.md`](00-POINT-DE-REPRISE.md)** — état, décisions en attente, ordre des prochaines actions.
+
 > **But** : reprendre le travail SANS contexte oral. Lire d'abord `STATUS.md` (état mesuré), puis ce
 > fichier, puis `DECISIONS-LOG.md`. Spec gelée = `PLAN-Memoria-v3-2026-06-03.md` (dossier dev).
 > Carte des agents/mémoires du réseau = `AGENTS-RESEAU.md` (snapshot juin).
