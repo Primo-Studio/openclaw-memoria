@@ -269,3 +269,24 @@ dépend de Lucien devant sa machine.
 ⚠️ **Consentement** : rejoindre le tailnet de Néto donne à Néto un accès permanent à la machine de
 Lucien. **Lucien doit être d'accord.** Révocation : retirer la machine depuis l'admin Tailscale, et
 retirer la clé SSH `primo-mac-openclaw` de `C:\ProgramData\ssh\administrators_authorized_keys`.
+
+---
+
+## 10. ⚠️ Piège d'encodage PowerShell (vécu 03/09, à ne jamais réintroduire)
+
+Deux règles **opposées** selon le type de fichier, sur **Windows PowerShell 5.1** :
+
+| Fichier | Règle | Pourquoi |
+|---|---|---|
+| **`.json`** (openclaw.json…) | UTF-8 **SANS BOM** | `Set-Content -Encoding UTF8` ajoute un BOM qui **casse les parseurs JSON stricts**. Utiliser `[System.IO.File]::WriteAllText(..., New-Object System.Text.UTF8Encoding($false))`. |
+| **`.ps1`** (scripts) | **ASCII pur** (ou UTF-8 **AVEC** BOM) | PowerShell 5.1 lit un `.ps1` sans BOM en **ANSI**. Un tiret long `—` ou un accent devient du charabia multi-octets et **casse l'analyse du script** : `Le terminateur " est manquant dans la chaîne`. **Le script ne s'exécute pas du tout.** |
+
+**Vécu** : `Mettre-A-Jour.ps1` écrit avec des `—` et des accents a échoué au *parse* (rien n'a tourné,
+donc rien de cassé, mais le bouton était inutilisable). `Memoire-Verifier-Reconnecter.ps1` avait le
+même défaut latent. **Les trois `.ps1` sont désormais en ASCII pur**, testés sur la machine cible.
+
+> Les `.command` macOS ne sont pas concernés : bash/macOS gèrent l'UTF-8 nativement.
+
+**Règle pour les futures versions** : tout script `.ps1` livré à un utilisateur doit être **ASCII pur**
+et **exécuté au moins une fois sur une vraie machine Windows** avant livraison. Un script qui ne
+parse pas est pire qu'un script absent : le bouton existe, l'utilisateur clique, rien ne se passe.
