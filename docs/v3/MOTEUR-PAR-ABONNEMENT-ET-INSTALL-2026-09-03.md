@@ -246,3 +246,26 @@ Règles communes durcies le 03/09 :
   reconnexion Claude que dans le cas abonnement.
 - ⚠️ macOS : charger `nvm` puis n'ajouter `/usr/local/bin` qu'en **fin** de PATH (un Node 18 périmé
   y traîne souvent et casse tout).
+
+---
+
+## 9. Assistance à distance : ce qu'on peut faire une fois parti
+
+⚠️ **Point dur** : aujourd'hui l'accès se fait en **SSH sur le WiFi local** (`CCOG@192.168.1.24`).
+**Dès qu'on quitte les lieux, cet accès disparaît.** L'IP publique du site (82.123.158.238) n'est pas
+exploitable sans ouverture de ports (à éviter). Les options, de la meilleure à la plus limitée :
+
+| Option | Ce qu'on peut faire | Ce qu'il faut | État |
+|---|---|---|---|
+| **Tailscale** (recommandé) | **Tout** : SSH complet de n'importe où, diagnostic + réparation comme sur place | Compte Tailscale de Néto + **clé d'auth** (`tailscale up --authkey tskey-…`) + **accord de Lucien** | **Client installé le 03/09**, PAS connecté à un réseau |
+| **Bot Telegram d'OpenClaw** | Parler à son agent depuis un téléphone, lui faire faire des choses (selon les outils autorisés) | Que Lucien partage/autorise le bot | Déjà en place et fonctionnel |
+| **Les 3 boutons** | Lucien se dépanne **seul** : réparer, reconnecter, mettre à jour | Rien | Livrés sur son Bureau |
+| **RustDesk** | Voir son écran, manips graphiques | Installation + accord | Non installé |
+
+**Recommandation** : installer le client Tailscale **pendant qu'on est sur place** (fait), puis le
+connecter au tailnet de Néto avec une clé d'auth. Sans cette étape, toute intervention future
+dépend de Lucien devant sa machine.
+
+⚠️ **Consentement** : rejoindre le tailnet de Néto donne à Néto un accès permanent à la machine de
+Lucien. **Lucien doit être d'accord.** Révocation : retirer la machine depuis l'admin Tailscale, et
+retirer la clé SSH `primo-mac-openclaw` de `C:\ProgramData\ssh\administrators_authorized_keys`.
