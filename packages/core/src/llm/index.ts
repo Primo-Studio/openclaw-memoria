@@ -152,6 +152,10 @@ async function buildExplicitProvider(
         env: opts.env,
         ...(opts.openaiKeyFile ? { keyFilePath: opts.openaiKeyFile } : {}),
         model: model ?? DEFAULT_OPENAI_MODEL,
+        // base_url d'extraction : indispensable pour viser un endpoint compatible
+        // OpenAI (LM Studio, ou le pont abonnement Claude/ChatGPT). Sans ça la
+        // requête partait vers api.openai.com et échouait en 401 (bug 03/09).
+        ...(baseUrl ? { baseUrl } : {}),
       })
       break
     case 'openrouter':
@@ -160,6 +164,7 @@ async function buildExplicitProvider(
         env: opts.env,
         ...(opts.openaiKeyFile ? { keyFilePath: opts.openaiKeyFile } : {}),
         model: model ?? DEFAULT_OPENROUTER_MODEL,
+        ...(baseUrl ? { baseUrl } : {}),
       })
       break
     default:
