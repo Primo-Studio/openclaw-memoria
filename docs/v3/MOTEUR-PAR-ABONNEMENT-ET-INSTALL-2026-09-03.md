@@ -290,3 +290,165 @@ même défaut latent. **Les trois `.ps1` sont désormais en ASCII pur**, testés
 **Règle pour les futures versions** : tout script `.ps1` livré à un utilisateur doit être **ASCII pur**
 et **exécuté au moins une fois sur une vraie machine Windows** avant livraison. Un script qui ne
 parse pas est pire qu'un script absent : le bouton existe, l'utilisateur clique, rien ne se passe.
+
+---
+
+## 11. Utilisabilité par la personne (objectif : « qu'il puisse s'en servir »)
+
+### 11.1 🐛 Bug : `memoria ui` n'ouvre pas le navigateur hors Linux
+`memoria ui` appelle **`xdg-open`**, commande **Linux uniquement**. Sous **Windows** (et **macOS**)
+l'ouverture échoue : `spawn xdg-open ENOENT`, et l'utilisateur ne reçoit qu'une URL à recopier —
+inutilisable pour un non-informaticien.
+**À corriger dans le core** : ouverture selon la plateforme —
+`start ""` (Windows) · `open` (macOS) · `xdg-open` (Linux).
+*Contourné pour l'instant par le bouton `Ma-Memoire` qui ouvre le navigateur lui-même.*
+
+### 11.2 Le port et le token changent à chaque démarrage
+L'URL de l'interface est `http://127.0.0.1:<port>/ui/#token=<token>`, et **le port change à chaque
+redémarrage du daemon** (58866 → 49263 → 59660 → 56563 → 59477). Un favori de navigateur est donc
+inutilisable. **À prévoir** : un port stable optionnel, ou un raccourci/tray qui résout l'URL.
+
+### 11.3 Démarrage automatique : vérifié
+Les deux tâches planifiées (`Memoria Daemon`, `Memoria Subscription Bridge`) sont en déclencheur
+**à l'ouverture de session** de l'utilisateur, en `Interactive`. Vérifié : le daemon lancé par la
+tâche **survit** à la fin de la tâche (contrairement à un lancement depuis une session SSH, où il
+mourait avec la session). Dernier résultat de tâche = 0.
+
+---
+
+## 12. Ce que la mise à jour OpenClaw a cassé (essai réel 03/09, 2026.7.1-2 → 2026.9.1)
+
+Le bouton `Mettre-A-Jour` a été **exécuté pour de vrai** sur la machine de Lucien, volontairement
+pendant qu'on avait encore l'accès. Résultats :
+
+### 12.1 🔴 La mise à jour DÉSACTIVE la tâche planifiée de la passerelle
+Après passage en **2026.9.1**, la tâche **`OpenClaw Gateway` se retrouve à l'état `Disabled`**.
+Conséquence : la passerelle ne démarre plus (`ECONNREFUSED`), **l'agent ne répond plus, ni en CLI ni
+sur Telegram** — et **elle ne redémarrera pas non plus au prochain allumage**.
+**Réparation** : `Enable-ScheduledTask -TaskName 'OpenClaw Gateway'` puis `openclaw daemon start`.
+> À vérifier après CHAQUE montée de version majeure d'OpenClaw. C'est le piège le plus sournois :
+> tout semble installé, et le service est simplement éteint.
+
+### 12.2 🔴 `openclaw doctor --yes` peut se BLOQUER sur un saut de version
+Sur ce saut de deux versions, `doctor --yes` est resté figé sans rendre la main (aucune sortie
+pendant plus de 20 min), bloquant tout le script. **Correctif appliqué au bouton** : l'étape
+`doctor` est désormais **bornée par un délai** (3 min) et abandonnée proprement si elle dépasse.
+
+### 12.3 ✅ Ce qui a bien marché (le garde-fou a joué son rôle)
+- Le bouton a **détecté** que l'assistant ne répondait plus et a **renvoyé vers le bouton de
+  réparation** au lieu de laisser l'utilisateur devant une machine muette.
+- **Memoria n'a pas bougé** : daemon et pont toujours actifs, moteur opérationnel, **6 souvenirs
+  intacts**. La mémoire est bien **indépendante** de la passerelle OpenClaw — c'est une bonne
+  séparation, à conserver.
+- La mise à jour Memoria a échoué proprement, avec le message « ta mémoire continue de
+  fonctionner », sans rien casser.
+
+### 12.4 Leçon pour les futures versions
+Un bouton de mise à jour livré à un non-informaticien **doit** : borner chaque étape par un délai,
+**re-vérifier après coup**, ne jamais laisser la machine muette sans le dire, et **vérifier que les
+services sont encore ACTIVÉS** (pas seulement installés).
+
+### 12.5 🔴 OpenClaw 2026.9.1 est INUTILISABLE sur cette machine — retour à 2026.7.1-2
+Après la montée en **2026.9.1**, la passerelle ne devient jamais saine :
+```
+Gateway start timed out after 90s waiting for /healthz and /readyz.
+```
+et les commandes de service (`doctor --yes`, `daemon start`, `daemon install`) **restent bloquées
+sans rendre la main**. Rien à voir avec notre config : c'est la version qui ne démarre pas ici.
+
+**Décision** : **revenir à `openclaw@2026.7.1-2`**, la version qui a fonctionné toute la journée
+(agent, Telegram, MCP Memoria). Version à considérer comme **connue-bonne** pour ce poste.
+
+### 12.6 Conséquence de conception : le bouton doit SAVOIR REVENIR EN ARRIÈRE
+Mettre « la dernière version » sans filet est dangereux chez un non-informaticien : personne ne sera
+là pour réparer. Le bouton `Mettre-A-Jour` doit donc :
+1. **mémoriser la version installée avant** ;
+2. mettre à jour, puis **re-tester réellement** (l'agent doit répondre) ;
+3. si le test échoue → **réinstaller automatiquement la version précédente**, la redémarrer, et le
+   **dire clairement** à l'utilisateur ;
+4. ne jamais laisser la machine muette.
+> *Implémenté le 03/09 dans `Mettre-A-Jour.ps1` (retour arrière automatique).*
+
+### 12.7 🔴 LEÇON MAJEURE : on ne revient PAS en arrière sur OpenClaw en réinstallant le paquet
+Le retour arrière « npm install -g openclaw@<ancienne> » **ne suffit pas** et laisse la machine
+**cassée**. En montant de version, OpenClaw migre **trois choses en avant**, de façon irréversible :
+
+| Ce qui migre | Effet au retour arrière |
+|---|---|
+| **Base d'état** `~/.openclaw/state/openclaw.sqlite` | passée en **schéma 15** ; l'ancienne version ne gère que le **schéma 1** → refus de démarrer |
+| **Clés de configuration** (`meta`, `agents`, `agents.defaults`) | `openclaw config validate` → **config invalide** pour l'ancienne version |
+| **Plugins gérés** (`~/.openclaw/npm`) | `@openclaw/codex` installé en **API ≥ 2026.9.1** → au démarrage : *« startup migrations did not complete cleanly »*, **la CLI ne démarre plus du tout** |
+
+Retirer le paquet, la dépendance, l'entrée `plugins.entries.codex` **et** `plugins.allow` **n'a pas
+suffi** : la référence persiste ailleurs et bloque encore le démarrage.
+
+**Conséquence de conception (corrige le §12.6)** : un retour arrière fiable exige de **sauvegarder
+tout `~/.openclaw` AVANT la mise à jour** (config + état + plugins gérés) et de **restaurer ce
+dossier entier** si la vérification échoue. Réinstaller seulement le paquet npm est un piège.
+
+**Autre option, plus sage pour un poste d'utilisateur** : **ne pas suivre « latest »**. Épingler une
+version connue-bonne et ne la changer que sur décision, en présence de quelqu'un.
+
+---
+
+## 13. 🔴 Le blocage qui reste à corriger : MCP au démarrage de la passerelle (2026.9.1)
+
+**Découverte de fin de session (03/09)** : sur **OpenClaw 2026.9.1**, la présence de
+`mcp.servers.memoria` dans `openclaw.json` **empêche la passerelle de démarrer**. Elle reste bloquée
+et n'atteint jamais `ready` (« timed out waiting for /healthz and /readyz »).
+
+**Preuve** : en retirant la clé `mcp`, la passerelle démarre en 16 s et affiche :
+```
+[gateway] http server listening (4 plugins: codex, memory-core, openai, telegram)
+[gateway] agent model: openai/gpt-5.4
+[gateway] ready
+[telegram] [default] starting provider (@…)
+```
+En 2026.7.1-2 le même branchement MCP fonctionnait (probe = 12 tools). **C'est donc une régression
+de 2026.9.1** : le démarrage attend la connexion MCP au lieu de la faire en tâche de fond.
+
+**Conséquence sur la machine de Lucien** : pour rendre l'assistant fonctionnel, la clé `mcp` a été
+**retirée** (sauvegarde : `~/.openclaw/openclaw.json.avec-mcp`). Donc **l'agent n'a plus les outils
+Memoria**. Memoria fonctionne toujours seule (interface, extraction), mais l'assistant ne s'en sert
+plus.
+
+**À faire** : rendre la connexion MCP **non bloquante au démarrage** (connexion paresseuse + délai),
+ou attendre un correctif OpenClaw. C'est le point n°1 pour rebrancher mémoire et assistant.
+
+## 14. ⚠️ État réellement laissé chez Lucien le 03/09 (vérification finale NON faite)
+
+La session SSH a été coupée au départ des lieux : **le dernier test de l'agent n'a jamais abouti**.
+Ce qui est établi, et ce qui ne l'est pas :
+
+| Élément | État | Vérifié ? |
+|---|---|---|
+| Passerelle OpenClaw 2026.9.1 | tâche `Running`, port 18789 ouvert | ✅ mesuré |
+| Telegram | provider démarré dans le journal | ✅ vu au journal |
+| Réponse réelle de l'agent | — | ❌ **jamais confirmée** |
+| Memoria daemon + pont | actifs, autostart à l'ouverture de session | ✅ mesuré |
+| Memoria ↔ agent (MCP) | **débranché** (voir §13) | ✅ volontaire |
+| Boutons sur le Bureau | 4 boutons déployés | ✅ |
+
+**Signalement de Lucien le 05/09 au soir : « ça ne marche plus »**, sans détail et sans accès
+possible. Hypothèses, par ordre de vraisemblance :
+1. **Limite d'abonnement atteinte** (le plus probable : le quota OpenClaw était déjà à 98–99 % le
+   03/09 ; l'abonnement Claude alimente en plus l'extraction Memoria). Les boutons affichent le quota.
+2. **Jeton d'authentification expiré** (déjà arrivé le 23/08) → le bouton mémoire propose la
+   reconnexion.
+3. **Redémarrage du PC** : les tâches doivent repartir à l'ouverture de session ; à confirmer.
+4. Séquelle de la montée en 2026.9.1.
+
+→ Marche à suivre remise à Lucien : `OpenClaw-Helper/MESSAGE-POUR-LUCIEN.txt`.
+
+## 15. Demande produit : thèmes, sujets et relations entre sujets
+
+Lucien **travaille sur ses projets avec ces IA**. L'intérêt de Memoria pour lui n'est pas seulement
+de retenir des faits isolés, mais de **structurer** : quels **thèmes**, quels **sujets**, et
+**comment les sujets se relient entre eux**. L'export existe déjà « un fichier Markdown par thème » ;
+il manque la **relation** entre sujets.
+
+**À concevoir** (backlog) :
+- une **carte des sujets** (qui est lié à quoi, et pourquoi) visible dans l'interface ;
+- des **liens typés** entre sujets (dépend de, contredit, fait suite à, même client…) ;
+- une vue « **où en est ce projet** » qui rassemble faits, décisions et questions ouvertes d'un sujet ;
+- des thèmes **proposés automatiquement** à l'extraction, pas seulement à l'export.
