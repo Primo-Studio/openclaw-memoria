@@ -3,6 +3,9 @@
  */
 export { Memoria } from './engine/memoria.js'
 export type {
+  CognitionPassOptions,
+  CognitionPassResult,
+  CognitionProgress,
   DeclareFactResult,
   LlmEngineHealth,
   LlmHealthReport,
@@ -11,6 +14,17 @@ export type {
   PairAssistantResult,
 } from './engine/memoria.js'
 export { scoreFact, passesClientIsolation } from './engine/scoring.js'
+export {
+  applyRecallCutoff,
+  buildRecallBlocks,
+  compactRecall,
+  formatRecallBlocks,
+  rankEntities,
+  RECALL_CUTOFF_FLOOR,
+} from './engine/recall-format.js'
+export type { EntityCandidate, FormatRecallBlocksOptions } from './engine/recall-format.js'
+export { formatRecallOpenClaw, OPENCLAW_RECALL_DEFAULTS } from './engine/recall-format-openclaw.js'
+export type { FormatRecallOpenClawOptions, OpenClawRecallItem } from './engine/recall-format-openclaw.js'
 export type { MemoryMap, MemoryMapAgent, MemoryMapLinks, MemoryMapPoint } from './cognition/memory-map.js'
 export {
   resolveStorageRoot,

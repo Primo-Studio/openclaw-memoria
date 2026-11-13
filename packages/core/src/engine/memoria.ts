@@ -42,6 +42,7 @@ import {
   type ProceduralProcedure,
   type SelfObservation,
   type DialecticResult,
+  type ExpandResult,
   cleanTopicLabel,
   topicSlug,
 } from '../cognition/index.js'
@@ -85,6 +86,7 @@ import type { EmbeddingProvider, LlmProvider } from '../llm/provider.js'
 import { CapturePipeline, type CaptureTurnInput, type CaptureTurnResult } from './capture.js'
 import type { WalReplaySummary } from './wal.js'
 import { isProceduralQuery, passesClientIsolation, scoreFact } from './scoring.js'
+import { applyRecallCutoff, buildRecallBlocks, rankEntities } from './recall-format.js'
 import { localMachineId, nextRev } from '../sync/clock.js'
 import { contentHash } from '../sync/merge.js'
 import { SyncEngine } from '../sync/engine.js'
@@ -104,8 +106,12 @@ import type {
   Person,
   PersonIdentifier,
   PersonProfile,
+  ActiveContext,
+  RecallDropped,
   RecallInput,
   RecallItem,
+  RecallLink,
+  RecallMatch,
   PendingRevision,
   DoctorActivity,
   DoctorMemory,
@@ -178,6 +184,90 @@ const DEFAULT_TOKEN_BUDGET = 1500
 const DEFAULT_RECALL_LIMIT = 12
 /** Délai de regroupement des indexations d'embeddings déclenchées par storeFact. */
 const EMBEDDINGS_DEBOUNCE_MS = 250
+/**
+ * Délai avant la cognition d'un fait DÉCLARÉ (store_fact, partage). Plus long
+ * que celui des embeddings : une rafale d'écritures donne un seul passage, et
+ * chaque fait peut coûter un appel LLM d'extraction.
+ */
+const COGNITION_DEBOUNCE_MS = 1500
+/** Faits traités par base et par lot (plafond historique d'un passage ordinaire). */
+const COGNITION_BATCH = 2000
+/** Faits rangés par thème entre deux retours à la boucle d'événements. */
+const COGNITION_TOPIC_SLICE = 20
+/** Les amas se recalculent au plus une fois par jour hors rattrapage. */
+const CLUSTER_REBUILD_INTERVAL_MS = 24 * 60 * 60 * 1000
+/**
+ * Au-delà, le recalcul des amas est sauté : son coût croît comme le carré du
+ * nombre de faits (mesuré sur données fictives : 0,1 s pour 1 000 faits, 0,9 s
+ * pour 3 000, 3,3 s pour 6 000). Le calcul est découpé (ClusterEngine.rebuildAsync
+ * rend la main toutes les 15 ms), donc il ne fige plus le daemon ; ces plafonds
+ * bornent seulement le temps de calcul total : environ une seconde pour le
+ * passage automatique, une dizaine pour le rattrapage, lancé à la main.
+ */
+const CLUSTER_AUTO_MAX_FACTS = 3000
+const CLUSTER_CATCHUP_MAX_FACTS = 10_000
+
+/** Options d'un passage de cognition (voir Memoria.processCognition). */
+export interface CognitionPassOptions {
+  /** Rattrapage : reprend aussi les faits marqués `backfill` par la migration, sans plafond de lot. */
+  includeBackfill?: boolean
+  /**
+   * Avec `includeBackfill` seulement : autorise le LLM d'extraction (un appel
+   * par fait). Défaut false : heuristique seule, aucun appel LLM.
+   */
+  llm?: boolean
+  /**
+   * Avec `includeBackfill` seulement : nombre maximal de faits traités par ce
+   * passage. C'est la borne du coût en mode LLM (un appel par fait). Le reste
+   * attend le rattrapage suivant. Absent = pas de plafond.
+   */
+  maxFacts?: number
+  /** Avancement, appelé après chaque fait et à la fin de chaque base. */
+  onProgress?: (progress: CognitionProgress) => void
+}
+
+export interface CognitionProgress {
+  dbs_total: number
+  dbs_done: number
+  processed: number
+  errors: number
+}
+
+export interface CognitionPassResult {
+  /** Faits traités (marqueur posé). */
+  processed: number
+  /** Parmi eux, ceux dont l'extraction est passée par le LLM (= appels LLM d'extraction réussis). */
+  llm_facts: number
+  /** Faits en échec, mis de côté jusqu'au redémarrage (jamais rejoués en boucle). */
+  errors: number
+  /** Bases dont les amas ont été recalculés. */
+  clusters_rebuilt: number
+  /** Bases trop grosses pour un recalcul des amas sans figer le daemon (absent = aucune). */
+  clusters_skipped?: number
+  /** Vrai si `maxFacts` a arrêté le rattrapage avant la fin : il reste des faits à reprendre. */
+  capped?: boolean
+  /** Vrai si le rattrapage a été annulé (cancelCognitionCatchup) : le reste attend le lancement suivant. */
+  cancelled?: boolean
+}
+
+/** Demande de passage en attente : plusieurs appels se fondent en une seule. */
+interface CognitionRequest {
+  /** null = toutes les bases. */
+  instances: Set<string> | null
+  includeBackfill: boolean
+  llm: boolean
+  /** null = pas de plafond. */
+  maxFacts: number | null
+  listeners: Array<(progress: CognitionProgress) => void>
+  promise: Promise<CognitionPassResult>
+  /** Annulation demandée (rattrapage seulement), lue entre deux faits. */
+  cancelled: boolean
+}
+
+/** Rend la main à la boucle d'événements (le daemon sert ses requêtes HTTP entre deux faits). */
+function yieldToEventLoop(): Promise<void> {
+  return new Promise(resolve => setImmediate(resolve))
+}
 /** Plafond du niveau d'expertise AMORCÉ depuis le volume de thèmes (jamais « expert » sans usage réel). */
 const BOOTSTRAP_EXPERTISE_CAP = 0.4
 
@@ -210,6 +300,27 @@ export class Memoria {
   /** Instances dont l'indexation d'embeddings est planifiée (storeFact, debounce). */
   private readonly indexQueue = new Set<string>()
   private indexTimer: NodeJS.Timeout | null = null
+  /** Instances dont la cognition est planifiée (storeFact, partage), même principe. */
+  private readonly cognitionQueue = new Set<string>()
+  /** Vrai si la cognition planifiée doit couvrir TOUTES les bases (partage : pas d'instance). */
+  private cognitionQueueAll = false
+  private cognitionTimer: NodeJS.Timeout | null = null
+  /** Public pour les tests (0 = au prochain tour de boucle). */
+  cognitionDebounceMs = COGNITION_DEBOUNCE_MS
+  /** File des passages de cognition : un seul tourne à la fois. */
+  private cognitionChain: Promise<void> = Promise.resolve()
+  /** Passage en attente par nature (ordinaire, rattrapage heuristique, rattrapage LLM). */
+  private readonly cognitionWaiting = new Map<string, CognitionRequest>()
+  /** Passage en train de tourner (pour pouvoir annuler un rattrapage). */
+  private cognitionRunning: CognitionRequest | null = null
+  /**
+   * Faits mis de côté pour la vie du processus : extraction LLM tentée et
+   * ratée, ou traitement en erreur. Sans cela ils repartaient au LLM à chaque
+   * passage, donc désormais à chaque store_fact.
+   */
+  private readonly cognitionSkip = new Set<string>()
+  /** Dernier recalcul des amas par base (ms), en plus de la date lue en base. */
+  private readonly clustersRebuiltAt = new Map<string, number>()
   /** Calcul de la carte des souvenirs en cours (un seul à la fois). */
   private mapJob: Promise<void> | null = null
   private mapError: string | null = null
@@ -828,6 +939,10 @@ export class Memoria {
     // embeddé qu'à la capture suivante ou au redémarrage → invisible à la
     // branche vectorielle du recall entre-temps. Bucket B, jamais bloquant.
     this.scheduleEmbeddings(instance.id)
+    // Même raison pour le graphe et les thèmes : sans capture derrière, un
+    // fait déclaré restait sans entité, sans thème et sans amas. L'écriture
+    // est déjà validée ici ; un échec de cognition ne peut plus la défaire.
+    this.scheduleCognition(instance.id)
     return { fact, created: true }
   }
 
@@ -854,6 +969,32 @@ export class Memoria {
   }
 
   /**
+   * Cognition différée et dédoublonnée, sur le modèle de scheduleEmbeddings :
+   * une rafale de faits déclarés donne UN passage. Sans instance (partage) :
+   * toutes les bases. Le passage lui-même est sérialisé par processCognition.
+   */
+  private scheduleCognition(instanceId?: string): void {
+    if (instanceId) this.cognitionQueue.add(instanceId)
+    else this.cognitionQueueAll = true
+    if (this.cognitionTimer) return
+    this.cognitionTimer = setTimeout(() => {
+      this.cognitionTimer = null
+      const ids = [...this.cognitionQueue]
+      const all = this.cognitionQueueAll
+      this.cognitionQueue.clear()
+      this.cognitionQueueAll = false
+      if (this.closed) return
+      // Les appels se fondent dans un seul passage en attente (voir processCognition).
+      for (const id of all ? [undefined] : ids) {
+        void this.processCognition(id).catch((err: unknown) =>
+          console.warn('[memoria] cognition différée en échec :', (err as Error).message),
+        )
+      }
+    }, this.cognitionDebounceMs)
+    this.cognitionTimer.unref()
+  }
+
+  /**
    * Active un fait dormant et clôt ses items de revue `pending` (même règle
    * que le partage : valider par un autre chemin = sortir de la revue, sans
    * item orphelin qui répondrait « updated: 1 » pour rien).
@@ -869,6 +1010,8 @@ export class Memoria {
         .run(nowISO(), factId)
     })
     tx()
+    // Dormant = ignoré par la cognition : maintenant qu'il est actif, on le relie.
+    this.scheduleCognition()
   }
 
   /**
@@ -939,7 +1082,9 @@ export class Memoria {
     const searchTargets = this.resolveReadTargets(instance)
     const now = Date.now()
     const procedural = isProceduralQuery(input.query) // boost procédures sur requête impérative
-    const candidates: Array<{ item: RecallItem; store: ContentStore }> = []
+    // `row` voyage avec le candidat : l'enrichissement (statut, confiance) le
+    // relit après la sélection sans refaire de requête.
+    const candidates: Array<{ item: RecallItem; store: ContentStore; row: FactRow }> = []
     let totalFound = 0
 
     for (const target of searchTargets) {
@@ -953,14 +1098,21 @@ export class Memoria {
         maxSensitivity: 'sensitive',
         scopeIds: target.scopeIds,
       })
-      totalFound += hits.length
       for (const hit of hits) {
         // FILTRE DUR anti-fuite inter-clients — jamais un boost, une exclusion.
         if (!passesClientIsolation(hit.row, context)) continue
         const parts = scoreFact(hit.row, hit.relevance, context, now, procedural)
         if (parts.total <= 0) continue
+        // Compté APRÈS les filtres durs : compté avant, `total_found` disait
+        // combien de faits d'un autre client (ou expirés) répondaient à la
+        // requête, sans en rendre aucun. Un agent pouvait sonder mot par mot.
+        totalFound++
+        const matchedBy: RecallMatch[] = []
+        if (hit.via !== 'meaning') matchedBy.push('text')
+        if (hit.via === 'meaning' || hit.via === 'both') matchedBy.push('meaning')
         candidates.push({
           store,
+          row: hit.row,
           item: {
             kind: 'fact',
             id: hit.row.id,
@@ -971,13 +1123,17 @@ export class Memoria {
             score: parts.total,
             created_at: hit.row.created_at,
             origin: factOrigin(hit.row),
+            matched_by: [...matchedBy, ...boostReasons(hit.row, context)],
           },
         })
       }
     }
 
     // --- Expansion graphe (bucket B au recall, §6.1 étape 4) : SQL pur, 0 LLM.
-    // L'anti-fuite est garantie par expandEntities (bornée aux scopes autorisés).
+    // expandEntities ne borne que les scopes et la supersession : un voisin
+    // repasse donc ici par les MÊMES filtres durs que la recherche directe
+    // (passesRecallHardFilters), sinon un fait dormant ou `critical` relié par
+    // une entité ressortait en entier.
     if (input.expand_graph !== false && candidates.length > 0) {
       const existing = new Set(candidates.map(c => c.item.id))
       const storeScopes = new Map<ContentStore, { scopeIds: string[]; dbPath: string }>()
@@ -993,19 +1149,36 @@ export class Memoria {
       for (const [store, seeds] of seedsByStore) {
         const meta = storeScopes.get(store)
         if (!meta || seeds.length === 0) continue
-        const expanded = this.cognitionFor(store, null).expandEntities(seeds, meta.scopeIds, { maxHops: 2, maxFacts: 8 })
+        // `via_entity` est posé par expandByEntities mais absent du type
+        // ExpandResult (cognition/index.ts) : lecture optionnelle.
+        let expanded: Array<ExpandResult & { via_entity?: string }> = []
+        try {
+          // On demande plus de voisins que les GRAPH_MAX_NEIGHBORS gardés : ceux
+          // que les filtres durs écartent ne doivent pas prendre la place des autres.
+          expanded = this.cognitionFor(store, null).expandEntities(seeds, meta.scopeIds, {
+            maxHops: 2,
+            maxFacts: GRAPH_MAX_NEIGHBORS * 3,
+          })
+        } catch {
+          // Graphe d'entités absent ou illisible dans cette base : l'expansion
+          // est un plus, le rappel direct reste entier.
+        }
+        let kept = 0
         for (const ex of expanded) {
+          if (kept >= GRAPH_MAX_NEIGHBORS) break
           if (existing.has(ex.fact_id)) continue
           const row = store.db.prepare('SELECT * FROM facts WHERE id = ?').get(ex.fact_id) as FactRow | undefined
           if (!row) continue
-          if (!passesClientIsolation(row, context)) continue
+          if (!passesRecallHardFilters(row, meta.scopeIds, context, now)) continue
           // relevance dérivée du lien graphe, fortement escomptée (un voisin n'est
           // jamais aussi pertinent qu'un hit direct) ; on garde recency/confiance.
           const parts = scoreFact(row, Math.min(0.4, ex.score) * 0.5, context, now, procedural)
           if (parts.total <= 0) continue
           existing.add(ex.fact_id)
+          kept++
           candidates.push({
             store,
+            row,
             item: {
               kind: 'fact',
               id: row.id,
@@ -1016,6 +1189,8 @@ export class Memoria {
               score: parts.total,
               created_at: row.created_at,
               origin: factOrigin(row),
+              matched_by: ['graph', ...boostReasons(row, context)],
+              ...(ex.via_entity ? { via_entity: ex.via_entity } : {}),
             },
           })
         }
@@ -1047,6 +1222,12 @@ export class Memoria {
       const thisShared = c.store.path !== privateDbPath
       const winner = thisShared && !keptShared ? c : kept
       winner.item.score = Math.max(kept.item.score, c.item.score)
+      // Les raisons des deux copies valent pour l'énoncé gardé.
+      winner.item.matched_by = [...new Set([...(kept.item.matched_by ?? []), ...(c.item.matched_by ?? [])])]
+      // L'union peut apporter la raison « graph » de la copie écartée : son
+      // entité de passage suit, sinon le rappel dit « graph » sans dire par où.
+      const via = kept.item.via_entity ?? c.item.via_entity
+      if (via && !winner.item.via_entity) winner.item.via_entity = via
       deduped[twinIdx] = winner
     }
     candidates.length = 0
@@ -1054,16 +1235,35 @@ export class Memoria {
 
     candidates.sort((a, b) => b.item.score - a.item.score)
 
+    // ARRÊT SUR DÉCROCHAGE (optionnel) : fait AVANT le budget et les compteurs
+    // d'usage, sinon un souvenir coupé serait quand même compté comme rappelé
+    // et remonterait au prochain rappel (auto-renforcement).
+    const cut = applyRecallCutoff(candidates, input.cutoff, c => c.item.score)
+    const ranked = cut.kept
+
     // CAP DUR de tokens (corrige format.ts legacy : aucun cap global)
-    const selected: Array<{ item: RecallItem; store: ContentStore }> = []
+    const selected: typeof candidates = []
     let tokens = 0
-    for (const c of candidates) {
-      if (selected.length >= limit) break
+    let overBudget = 0
+    let overLimit = 0
+    for (let i = 0; i < ranked.length; i++) {
+      const c = ranked[i]!
+      if (selected.length >= limit) {
+        overLimit = ranked.length - i
+        break
+      }
       const cost = estimateTokens(c.item.content)
-      if (tokens + cost > budget && selected.length > 0) continue
+      if (tokens + cost > budget && selected.length > 0) {
+        overBudget++
+        continue
+      }
       tokens += cost
       selected.push(c)
     }
+    const dropped: RecallDropped[] = []
+    if (cut.dropped > 0) dropped.push({ reason: 'cutoff', count: cut.dropped })
+    if (overBudget > 0) dropped.push({ reason: 'budget', count: overBudget })
+    if (overLimit > 0) dropped.push({ reason: 'limit', count: overLimit })
 
     // Compteurs d'usage par DB d'origine
     const byStore = new Map<ContentStore, string[]>()
@@ -1072,7 +1272,8 @@ export class Memoria {
       arr.push(s.item.id)
       byStore.set(s.store, arr)
     }
-    for (const [store, ids] of byStore) store.touchFacts(ids)
+    // Un aperçu ne laisse aucune trace : ni compteur, ni « dernier accès ».
+    if (!input.preview) for (const [store, ids] of byStore) store.touchFacts(ids)
 
     // Marque les souvenirs CONTESTÉS (révision proposée, pas encore tranchée).
     // Fait après la sélection : une seule requête par DB, sur les seuls ids
@@ -1087,23 +1288,47 @@ export class Memoria {
       }
     }
 
-    this.registry.audit({
-      actor_type: 'assistant',
-      actor_id: instance.id,
-      action: 'recall',
-      target_id_hash: null,
-      scope_id: null,
-      // Format PARSABLE (`clé=valeur`) : `doctor` en dérive latence et coût en
-      // tokens sans table de métriques dédiée ni migration. Aucune donnée
-      // sensible — que des compteurs.
-      reason: `returned=${selected.length} tokens=${tokens} ms=${Date.now() - startedAt}`,
-    })
+    // ENRICHISSEMENT (T30) : thème, entités, statut, confiance, voisins. Après
+    // la sélection, donc sur une douzaine d'ids, en requêtes groupées par DB.
+    for (const [store] of byStore) {
+      enrichRecallItems(
+        store,
+        selected.filter(s => s.store === store),
+        {
+          now,
+          context,
+          // Thèmes et voisins obéissent aux mêmes scopes que la recherche elle-même.
+          scopeIds: searchTargets.filter(t => this.openContent(t.dbPath) === store).flatMap(t => t.scopeIds),
+          links: input.links === true,
+          exclude: new Set(selected.map(s => s.item.id)),
+        },
+      )
+    }
 
+    // L'audit alimente `doctor` (rappels sur 24 h, latence, tokens) : un aperçu
+    // humain n'est pas un rappel d'agent et ne doit pas y figurer.
+    if (!input.preview) {
+      this.registry.audit({
+        actor_type: 'assistant',
+        actor_id: instance.id,
+        action: 'recall',
+        target_id_hash: null,
+        scope_id: null,
+        // Format PARSABLE (`clé=valeur`) : `doctor` en dérive latence et coût en
+        // tokens sans table de métriques dédiée ni migration. Aucune donnée
+        // sensible — que des compteurs.
+        reason: `returned=${selected.length} tokens=${tokens} ms=${Date.now() - startedAt}`,
+      })
+    }
+
+    const items = selected.map(s => s.item)
     return {
-      items: selected.map(s => s.item),
+      items,
       totalFound,
       tokens,
       scopes_searched: searchTargets.flatMap(t => t.scopeNames),
+      ...(dropped.length > 0 ? { dropped } : {}),
+      ...(input.format === 'blocks' ? { blocks: buildRecallBlocks(items) } : {}),
     }
   }
 
@@ -1146,30 +1371,300 @@ export class Memoria {
   }
 
   /**
-   * Traite les faits sans graphe (entités/relations/observations) d'une
-   * instance. Async, bucket B — appelé après capture (fire-and-forget) et au
-   * boot du daemon. LLM d'extraction optionnel (heuristique sinon).
+   * Traite les faits sans graphe (entités/relations/observations) puis les
+   * range par thème. Async, bucket B : appelé après une capture, après un
+   * fait déclaré ou un partage (différé), et au démarrage du daemon. LLM
+   * d'extraction optionnel (heuristique sinon).
+   *
+   * SÉRIALISÉ : un seul passage tourne à la fois. Un appel pendant un passage
+   * attend UN passage suivant, et tous les appels de même nature arrivés
+   * entre-temps s'y fondent (leurs instances s'additionnent). Sans cela deux
+   * passages lisaient la même liste de faits en attente et payaient deux fois
+   * le LLM pour le même fait.
+   *
+   * `includeBackfill` = rattrapage de l'existant (voir CognitionPassOptions) :
+   * heuristique seule par défaut, donc aucun appel LLM ; avec `llm: true`, un
+   * appel par fait repris et rien d'autre (les thèmes créés gardent leur
+   * libellé heuristique), donc au plus `maxFacts` appels. Les amas sont
+   * recalculés à la fin.
    */
-  async processCognition(instanceId?: string): Promise<{ processed: number }> {
+  async processCognition(instanceId?: string, opts: CognitionPassOptions = {}): Promise<CognitionPassResult> {
     this.assertOpen()
-    const { extraction } = await this.ensureProfile()
-    let processed = 0
-    for (const path of this.contentDbPathsFor(instanceId)) {
+    const includeBackfill = opts.includeBackfill === true
+    const llm = includeBackfill && opts.llm === true
+    // Les natures ne se mélangent pas : un rattrapage heuristique qui
+    // absorberait un passage ordinaire priverait les faits neufs du LLM.
+    const kind = includeBackfill ? (llm ? 'catchup-llm' : 'catchup') : 'pass'
+    // En pause, Memoria ne lit ni n'écrit pour les agents : un rattrapage qui
+    // enverrait des centaines de faits au LLM dans le dos de l'utilisateur est
+    // refusé. L'heuristique, locale, reste permise.
+    if (llm && !this.isEnabled()) {
+      throw new Error('Memoria est en pause : rattrapage en mode LLM refusé. Réactive Memoria, ou lance le rattrapage sans LLM.')
+    }
+    const maxFacts =
+      includeBackfill && typeof opts.maxFacts === 'number' && opts.maxFacts > 0 ? Math.floor(opts.maxFacts) : null
+    const waiting = this.cognitionWaiting.get(kind)
+    if (waiting) {
+      // Demandes fondues : la plus large l'emporte (un appelant sans plafond n'est pas bridé).
+      waiting.maxFacts = waiting.maxFacts === null || maxFacts === null ? null : Math.max(waiting.maxFacts, maxFacts)
+      if (instanceId && waiting.instances) waiting.instances.add(instanceId)
+      else waiting.instances = null
+      if (opts.onProgress) waiting.listeners.push(opts.onProgress)
+      return waiting.promise
+    }
+    const request: CognitionRequest = {
+      instances: instanceId ? new Set([instanceId]) : null,
+      includeBackfill,
+      llm,
+      maxFacts,
+      listeners: opts.onProgress ? [opts.onProgress] : [],
+      promise: undefined as unknown as Promise<CognitionPassResult>,
+      cancelled: false,
+    }
+    const run = this.cognitionChain.then(() => {
+      // Retiré de l'attente au DÉPART du passage : un appel qui arrive pendant
+      // qu'il tourne ouvre le passage suivant au lieu d'être perdu.
+      this.cognitionWaiting.delete(kind)
+      this.cognitionRunning = request
+      return this.runCognitionPass(request).finally(() => {
+        this.cognitionRunning = null
+      })
+    })
+    request.promise = run
+    this.cognitionWaiting.set(kind, request)
+    this.cognitionChain = run.then(
+      () => undefined,
+      () => undefined,
+    )
+    return run
+  }
+
+  /**
+   * Demande l'arrêt du rattrapage en cours ou en attente. Il s'arrête entre
+   * deux faits : ce qui est traité le reste, la suite attend le prochain
+   * lancement. Un rattrapage LLM de plusieurs milliers de faits peut durer des
+   * heures et retient derrière lui les passages ordinaires ; sans ceci, le seul
+   * moyen de l'arrêter était de redémarrer. Un passage ordinaire n'est jamais
+   * annulé. Rend false s'il n'y a aucun rattrapage à arrêter.
+   */
+  cancelCognitionCatchup(): boolean {
+    const targets = [this.cognitionRunning, this.cognitionWaiting.get('catchup'), this.cognitionWaiting.get('catchup-llm')].filter(
+      (r): r is CognitionRequest => r != null && r.includeBackfill,
+    )
+    for (const request of targets) request.cancelled = true
+    return targets.length > 0
+  }
+
+  /** Un passage de cognition (toujours appelé sous la file de processCognition). */
+  private async runCognitionPass(request: CognitionRequest): Promise<CognitionPassResult> {
+    const result: CognitionPassResult = { processed: 0, llm_facts: 0, errors: 0, clusters_rebuilt: 0 }
+    // Fermé pendant l'attente (arrêt du daemon) : on sort sans bruit.
+    if (this.closed) return result
+    const heuristicOnly = request.includeBackfill && !request.llm
+    // Heuristique seule : on ne résout même pas le profil LLM (aucune sonde réseau).
+    const extraction = heuristicOnly ? null : (await this.ensureProfile()).extraction
+    const cancelled = (): boolean => {
+      if (request.cancelled) result.cancelled = true
+      return request.cancelled
+    }
+    if (cancelled()) return result
+    // Mode LLM demandé sans LLM joignable : on refuse AVANT de toucher un fait.
+    // Dégrader en heuristique marquait les faits « heuristic » : ils partaient
+    // ensuite au LLM lors d'un passage ordinaire (jusqu'à maxFacts appels que
+    // personne n'avait demandés), alors que la sortie annonçait 0 appel.
+    if (request.llm && !(await this.extractionReachable(extraction))) {
+      throw new Error(
+        'rattrapage en mode LLM impossible : aucun LLM d’extraction joignable. Rien n’a été traité. Relance sans LLM (heuristique), ou quand le LLM répond.',
+      )
+    }
+
+    const paths = request.instances
+      ? [...new Set([...request.instances].flatMap(id => this.contentDbPathsFor(id)))]
+      : this.contentDbPathsFor()
+    const progress: CognitionProgress = { dbs_total: paths.length, dbs_done: 0, processed: 0, errors: 0 }
+    const report = (): void => {
+      progress.processed = result.processed
+      progress.errors = result.errors
+      for (const listener of request.listeners) {
+        try {
+          listener({ ...progress })
+        } catch {
+          /* un écouteur fautif n'arrête pas la cognition */
+        }
+      }
+    }
+
+    const capReached = (): boolean => request.maxFacts !== null && result.processed + result.errors >= request.maxFacts
+
+    for (const path of paths) {
+      if (this.closed) return result
       const store = this.openContent(path)
-      const engine = this.cognitionFor(store, extraction)
+      // Moteurs SANS LLM hors cache pour le rattrapage heuristique : ceux du
+      // cache gardent le LLM dès qu'ils l'ont connu (il est « collant »).
+      const engine = heuristicOnly ? new CognitionEngine({ store, llm: null }) : this.cognitionFor(store, extraction)
       // Faits jamais traités (marqueur fact_cognition), + ceux vus en
       // heuristique seulement si un LLM est disponible maintenant (une fois).
       // Avant : « sans entité liée » → un fait où le LLM ne trouve rien
       // repartait au cloud à CHAQUE capture, sans fin.
-      const llmAvailable = extraction !== null && (await extraction.isAvailable())
-      for (const id of engine.pendingFactIds(llmAvailable)) {
-        const r = await engine.processFact(id)
-        if (r.processed) processed++
+      const llmAvailable = !heuristicOnly && extraction !== null && (await extraction.isAvailable())
+      const remark = store.db.prepare("UPDATE fact_cognition SET via = 'backfill' WHERE fact_id = ?")
+      const seen = new Set<string>()
+      let processedHere = 0
+      for (;;) {
+        const ids = engine
+          .pendingFactIds(llmAvailable, COGNITION_BATCH + seen.size + this.cognitionSkip.size, {
+            includeBackfill: request.includeBackfill,
+          })
+          .filter(id => !seen.has(id) && !this.cognitionSkip.has(id))
+        if (ids.length === 0) break
+        // Plafond atteint alors qu'il reste des faits : on le dit, on n'y touche pas.
+        if (capReached()) {
+          result.capped = true
+          break
+        }
+        for (const id of ids) {
+          if (this.closed || cancelled()) return result
+          if (capReached()) break
+          seen.add(id)
+          // Mode LLM : ce fait n'est pas passé par le LLM (voir après le try).
+          let llmMissed = false
+          try {
+            const r = await engine.processFact(id)
+            if (r.processed) {
+              result.processed++
+              processedHere++
+              if (r.via === 'llm') result.llm_facts++
+              // LLM disponible mais extraction ratée (erreur, délai, JSON
+              // illisible) : le marqueur reste « heuristic », donc le fait
+              // serait rejoué à chaque passage. Une seule tentative par vie
+              // du processus.
+              else if (llmAvailable) this.cognitionSkip.add(id)
+              // Rattrapage heuristique : le marqueur reste « backfill » pour
+              // qu'aucun passage ordinaire ne renvoie ensuite ces faits au LLM
+              // (le coût surprise que la migration 11 évitait déjà).
+              // Idem en mode LLM quand l'extraction a raté : laissé « heuristic »,
+              // le fait repartirait au LLM au premier passage ordinaire.
+              if (heuristicOnly || (request.llm && r.via !== 'llm')) remark.run(id)
+              llmMissed = request.llm && r.via !== 'llm'
+            }
+          } catch (err) {
+            // Un fait qui plante (texte trop court pour une observation, ligne
+            // abîmée) ne doit ni arrêter le passage ni revenir en tête de
+            // liste à chaque fois : il bloquait tous les faits suivants.
+            result.errors++
+            this.cognitionSkip.add(id)
+            console.warn(`[memoria] cognition du fait ${id} en échec :`, (err as Error).message)
+          }
+          report()
+          // Extraction ratée en mode LLM : si le LLM ne répond plus du tout, on
+          // arrête. Continuer traiterait tout le reste en heuristique en
+          // annonçant un rattrapage LLM.
+          if (llmMissed && !(await this.extractionReachable(extraction))) {
+            throw new Error(
+              `LLM d’extraction devenu injoignable : rattrapage arrêté après ${result.processed} faits (${result.llm_facts} par le LLM). Relance-le quand le LLM répond.`,
+            )
+          }
+          // Un traitement heuristique n'attend rien : sans ce retour à la
+          // boucle, 2 000 faits formaient un seul bloc et le daemon ne
+          // répondait plus (voir docs/analyse-pannes-daemon-2026-11-05.md).
+          await yieldToEventLoop()
+        }
+        // Passage ordinaire : un seul lot, comme avant. Le rattrapage va au bout
+        // (ou jusqu'au plafond, constaté au tour suivant).
+        if (!request.includeBackfill) break
       }
-      // TOPICS : ranger les faits par thème APRÈS que les entités existent (entité-first).
-      await this.topicFor(store, extraction).assignPending(2000)
+      if (this.closed || cancelled()) return result
+
+      // TOPICS : ranger les faits par thème APRÈS que les entités existent
+      // (entité-first), par petites tranches pour la même raison.
+      try {
+        // Rattrapage (les deux modes) : libellés heuristiques, moteur hors cache.
+        // Le rangement couvre TOUS les faits sans thème de la base, hors du
+        // plafond maxFacts : avec le LLM, le coût du rattrapage ne serait plus borné.
+        const topics = request.includeBackfill ? new TopicEngine({ store, llm: null }) : this.topicFor(store, extraction)
+        // Faits ACTIFS sans thème, les plus récents d'abord. Un fait dormant (en
+        // attente de validation) n'est pas rangé : le thème qu'il créerait
+        // porterait son nom jusque dans le rappel des autres faits. Il sera
+        // rangé au passage qui suit sa validation.
+        const pending = store.db
+          .prepare(
+            `SELECT f.id FROM facts f
+             WHERE f.superseded = 0 AND f.lifecycle_state = 'active'
+               AND NOT EXISTS (SELECT 1 FROM fact_topics ft WHERE ft.fact_id = f.id)
+             ORDER BY f.created_at DESC LIMIT ?`,
+          )
+          // LIMIT -1 = sans limite (rattrapage).
+          .all(request.includeBackfill ? -1 : COGNITION_BATCH) as Array<{ id: string }>
+        for (let i = 0; i < pending.length; i++) {
+          if (this.closed || request.cancelled) break
+          await topics.assignFact((pending[i] as { id: string }).id)
+          if ((i + 1) % COGNITION_TOPIC_SLICE === 0) await yieldToEventLoop()
+        }
+      } catch (err) {
+        result.errors++
+        console.warn('[memoria] rangement par thème en échec :', (err as Error).message)
+      }
+      if (this.closed || cancelled()) return result
+
+      // AMAS : recalcul complet sans LLM. Toujours après un rattrapage ; sinon
+      // au plus une fois par jour, et seulement si ce passage a traité des faits.
+      if (request.includeBackfill || (processedHere > 0 && this.clustersDue(path, store))) {
+        try {
+          const max = request.includeBackfill ? CLUSTER_CATCHUP_MAX_FACTS : CLUSTER_AUTO_MAX_FACTS
+          const { n } = store.db
+            .prepare("SELECT COUNT(*) AS n FROM facts WHERE superseded = 0 AND lifecycle_state = 'active'")
+            .get() as { n: number }
+          if (n > max) {
+            // On note la tentative : sinon ce comptage et ce message reviendraient à chaque passage.
+            this.clustersRebuiltAt.set(path, Date.now())
+            result.clusters_skipped = (result.clusters_skipped ?? 0) + 1
+            console.warn(`[memoria] amas non recalculés (${n} faits actifs, plafond ${max}) : le calcul durerait trop longtemps`)
+          } else {
+            await this.rebuildClustersAt(path, store)
+            result.clusters_rebuilt++
+          }
+        } catch (err) {
+          result.errors++
+          console.warn('[memoria] recalcul des amas en échec :', (err as Error).message)
+        }
+        await yieldToEventLoop()
+      }
+      progress.dbs_done++
+      report()
     }
-    return { processed }
+    return result
+  }
+
+  /** Le LLM d'extraction répond-il ? (une sonde en erreur vaut « non ») */
+  private async extractionReachable(extraction: LlmProvider | null): Promise<boolean> {
+    if (!extraction) return false
+    try {
+      return await extraction.isAvailable()
+    } catch {
+      return false
+    }
+  }
+
+  /** Recalcul automatique des amas dû pour cette base ? (dernier recalcul vieux de plus d'un jour) */
+  private clustersDue(path: string, store: ContentStore): boolean {
+    let last = this.clustersRebuiltAt.get(path) ?? 0
+    try {
+      // La date survit au redémarrage tant qu'il reste au moins un amas en
+      // base. On lit celle du RECALCUL : la date de mise à jour d'un amas bouge
+      // à chaque oubli, et un oubli par jour repoussait le recalcul sans fin.
+      const stored = this.clusterFor(store).lastRebuildAt()
+      if (stored !== null) last = Math.max(last, stored)
+    } catch {
+      /* table absente : on s'en tient à la mémoire du processus */
+    }
+    return Date.now() - last >= CLUSTER_REBUILD_INTERVAL_MS
+  }
+
+  /** Recalcul des amas d'une base, découpé : le daemon répond pendant le calcul. */
+  private async rebuildClustersAt(path: string, store: ContentStore): Promise<{ clusters: number }> {
+    const r = await this.clusterFor(store).rebuildAsync()
+    this.clustersRebuiltAt.set(path, Date.now())
+    return { clusters: r.clusters }
   }
 
   /** Thèmes (couche 14) : liste des sujets d'une instance, triés par importance. */
@@ -2028,7 +2523,10 @@ export class Memoria {
     this.assertOpen()
     const db = this.registry.dbForInstance(instanceId)
     if (!db || !existsSync(db.path)) return { clusters: 0 }
+    // Appel direct, d'un seul bloc (API synchrone) ; les passages de cognition
+    // utilisent la version découpée (rebuildClustersAt).
     const r = this.clusterFor(this.openContent(db.path)).rebuild()
+    this.clustersRebuiltAt.set(db.path, Date.now())
     return { clusters: r.clusters }
   }
 
@@ -2473,6 +2971,9 @@ export class Memoria {
       })
       tx()
       updated += rows.length
+      // Un fait dormant n'a ni entité ni thème (la cognition l'ignore) : une
+      // fois validé, il doit rejoindre le graphe sans attendre une capture.
+      if (decision === 'accepted') this.scheduleCognition()
       this.registry.audit({
         actor_type: 'user',
         actor_id: 'local',
@@ -2669,6 +3170,11 @@ export class Memoria {
         scope_id: scope.id,
         reason: `shared=${shared}`,
       })
+      // Le partage ne copie que la ligne du fait : entités, thème et marqueur
+      // restent dans la base d'origine (puis y sont supprimés). La base
+      // partagée doit donc refaire la cognition de ce qu'elle vient de recevoir.
+      // Pas d'instance ici : toutes les bases, en un seul passage différé.
+      this.scheduleCognition()
     }
     return { shared, scope: scope.name }
   }
@@ -3846,6 +4352,10 @@ export class Memoria {
       clearTimeout(this.indexTimer)
       this.indexTimer = null
     }
+    if (this.cognitionTimer) {
+      clearTimeout(this.cognitionTimer)
+      this.cognitionTimer = null
+    }
     for (const store of this.pool.values()) store.close()
     this.pool.clear()
     this.registry.close()
@@ -4020,6 +4530,215 @@ function pendingRevisionsFor(store: ContentStore, ids: string[]): Map<string, Pe
   }
   return out
 }
+
+/** Raisons de score qui ne viennent pas de la recherche : contexte actif, épinglage. */
+function boostReasons(row: FactRow, context: ActiveContext | undefined): RecallMatch[] {
+  const out: RecallMatch[] = []
+  const inContext =
+    !!context &&
+    ((!!context.project_id && row.project_id === context.project_id) ||
+      (!!context.client_org_id && row.client_org_id === context.client_org_id) ||
+      (!!context.org_id && row.org_id === context.org_id))
+  if (inContext) out.push('context')
+  if (row.pinned) out.push('pinned')
+  return out
+}
+
+/** Voisins de graphe ajoutés au rappel, par base. */
+const GRAPH_MAX_NEIGHBORS = 8
+/** Au-delà, une date d'expiration n'est pas « bientôt » : le statut `expiring` tromperait. */
+const EXPIRING_WINDOW_MS = 30 * 86_400_000
+
+/**
+ * Filtres DURS du rappel, pour un fait relu hors de la recherche (voisin de
+ * graphe). Ce sont ceux que la recherche directe applique dans son SQL
+ * (searchFacts : non supersédé, actif, sensibilité, scopes) et après
+ * (isolation client, expiration). Un seul endroit pour qu'un chemin d'accès
+ * de plus ne devienne pas une fuite.
+ */
+function passesRecallHardFilters(
+  row: FactRow,
+  scopeIds: readonly string[],
+  context: ActiveContext | undefined,
+  now: number,
+): boolean {
+  if (row.superseded) return false
+  if (row.lifecycle_state !== 'active') return false
+  if (row.sensitivity !== 'normal' && row.sensitivity !== 'sensitive') return false
+  if (!row.scope_id || !scopeIds.includes(row.scope_id)) return false
+  if (row.expires_at && Date.parse(row.expires_at) <= now) return false
+  return passesClientIsolation(row, context)
+}
+
+/** Une entité citée dans plus de faits que cela ne relie rien d'utile (et coûte cher à suivre). */
+const LINK_MAX_MENTIONS = 30
+const LINK_MAX_PER_ITEM = 3
+const LINK_EXCERPT_CHARS = 60
+
+interface EnrichOptions {
+  now: number
+  context: ActiveContext | undefined
+  /** Scopes lisibles dans cette base : bornent les thèmes émis et les voisins. */
+  scopeIds: string[]
+  /** Voisins (`links`) demandés. */
+  links: boolean
+  /** Ids déjà rendus : un voisin doit apporter autre chose que le rappel lui-même. */
+  exclude: ReadonlySet<string>
+}
+
+/**
+ * Complète les souvenirs sélectionnés d'UNE base : thème, entités, statut,
+ * confiance et, sur demande, voisins. Lectures groupées (`IN (...)`), jamais
+ * une requête par souvenir : le rappel est sur le chemin de la réponse.
+ *
+ * Chaque lecture est isolée dans son `try` : une table de cognition absente
+ * (base ancienne, couche jamais appliquée) retire une information d'affichage,
+ * pas le rappel.
+ */
+function enrichRecallItems(
+  store: ContentStore,
+  selected: Array<{ item: RecallItem; row: FactRow }>,
+  opts: EnrichOptions,
+): void {
+  if (selected.length === 0) return
+  const ids = selected.map(s => s.item.id)
+  const marks = ids.map(() => '?').join(',')
+
+  // Confiance et statut « expire » : déjà dans la ligne, aucune requête.
+  for (const { item, row } of selected) {
+    item.trust = { confidence: row.confidence, used_count: row.used_count, recall_count: row.recall_count }
+    if (item.revision) item.status = 'contested'
+    else if (row.expires_at) {
+      // « expiring » se lit « bientôt périmé » : seulement dans la fenêtre proche.
+      const left = Date.parse(row.expires_at) - opts.now
+      if (left > 0 && left <= EXPIRING_WINDOW_MS) item.status = 'expiring'
+    }
+  }
+
+  // Statut « remplace » : un fait supersédé pointe sur ce fait. Servi par
+  // l'index partiel idx_facts_superseded_by (migration 9), sinon c'était un
+  // parcours complet de `facts` à chaque rappel.
+  try {
+    const rows = store.db
+      .prepare(`SELECT DISTINCT superseded_by FROM facts WHERE superseded = 1 AND superseded_by IN (${marks})`)
+      .all(...ids) as Array<{ superseded_by: string }>
+    const replacing = new Set(rows.map(r => r.superseded_by))
+    for (const { item } of selected) if (!item.status && replacing.has(item.id)) item.status = 'replaces'
+  } catch {
+    /* colonne absente : pas de statut « remplace » */
+  }
+
+  // Thème principal : le plus important, puis le plus fourni. Les thèmes sont
+  // communs à toute la base et leur NOM est tiré de leurs faits : un thème qui
+  // contient un fait hors de portée de ce rappel (dormant ou archivé, critical,
+  // autre scope, client masqué) pourrait le révéler par son seul nom. Il n'est
+  // donc émis que si TOUS ses faits sont lisibles ici.
+  // Les faits supersédés ou expirés du thème ne bloquent PAS son nom : ce sont
+  // d'anciennes versions des informations de ce même espace (périmées, pas
+  // interdites), et les exclure ferait disparaître presque tous les thèmes
+  // d'une base qui vit. Le nom peut donc dater ; l'affinage des thèmes le rafraîchit.
+  try {
+    const scopeMarks = opts.scopeIds.map(() => '?').join(',')
+    const rows = store.db
+      .prepare(
+        `SELECT ft.fact_id, t.id, t.name FROM fact_topics ft JOIN topics t ON t.id = ft.topic_id
+         WHERE ft.fact_id IN (${marks})
+           AND NOT EXISTS (
+             SELECT 1 FROM fact_topics ft2 JOIN facts f2 ON f2.id = ft2.fact_id
+             WHERE ft2.topic_id = t.id
+               AND (f2.lifecycle_state != 'active'
+                 OR f2.sensitivity NOT IN ('normal','sensitive')
+                 OR f2.scope_id IS NULL OR f2.scope_id NOT IN (${scopeMarks})
+                 OR (f2.client_org_id IS NOT NULL AND f2.client_org_id != '' AND f2.client_org_id IS NOT ?)))
+         ORDER BY t.importance_score DESC, t.fact_count DESC, t.id`,
+      )
+      .all(...ids, ...opts.scopeIds, opts.context?.client_org_id ?? null) as Array<{ fact_id: string; id: string; name: string }>
+    const first = new Map<string, { id: string; name: string }>()
+    for (const r of rows) if (r.name && !first.has(r.fact_id)) first.set(r.fact_id, { id: r.id, name: r.name })
+    for (const { item } of selected) {
+      const topic = first.get(item.id)
+      if (topic) item.topic = topic
+    }
+  } catch {
+    /* thèmes absents */
+  }
+
+  // Entités signifiantes (et, plus bas, point de départ des voisins).
+  const ranked = new Map<string, Array<{ id: string; name: string; type: string; mention_count: number }>>()
+  try {
+    const rows = store.db
+      .prepare(
+        `SELECT fe.fact_id, e.id, e.name, e.type, e.mention_count FROM fact_entities fe
+         JOIN entities e ON e.id = fe.entity_id WHERE fe.fact_id IN (${marks})`,
+      )
+      .all(...ids) as Array<{ fact_id: string; id: string; name: string; type: string; mention_count: number }>
+    const byFact = new Map<string, typeof rows>()
+    for (const r of rows) byFact.set(r.fact_id, [...(byFact.get(r.fact_id) ?? []), r])
+    for (const { item } of selected) {
+      const best = rankEntities(byFact.get(item.id) ?? [])
+      if (best.length === 0) continue
+      ranked.set(item.id, best)
+      item.entities = best.map(e => e.name)
+    }
+  } catch {
+    /* graphe d'entités absent */
+  }
+
+  if (!opts.links || opts.scopeIds.length === 0 || ranked.size === 0) return
+
+  // VOISINS : faits qui partagent une entité RARE avec un souvenir rendu. Mêmes
+  // filtres durs que la recherche (actif, non supersédé, sensibilité, scopes,
+  // isolation client, non expiré) : un lien ne doit jamais devenir une fuite.
+  const entityIds = [
+    ...new Set(
+      [...ranked.values()].flatMap(list => list.filter(e => e.mention_count <= LINK_MAX_MENTIONS).map(e => e.id)),
+    ),
+  ]
+  if (entityIds.length === 0) return
+  try {
+    const rows = store.db
+      .prepare(
+        `SELECT fe.entity_id, f.id, f.fact, f.created_at, f.client_org_id, f.expires_at
+         FROM fact_entities fe JOIN facts f ON f.id = fe.fact_id
+         WHERE fe.entity_id IN (${entityIds.map(() => '?').join(',')})
+           AND f.superseded = 0 AND f.lifecycle_state = 'active' AND f.sensitivity IN ('normal','sensitive')
+           AND f.scope_id IN (${opts.scopeIds.map(() => '?').join(',')})
+         ORDER BY f.created_at DESC`,
+      )
+      .all(...entityIds, ...opts.scopeIds) as Array<{
+      entity_id: string
+      id: string
+      fact: string
+      created_at: string
+      client_org_id: string | null
+      expires_at: string | null
+    }>
+    const byEntity = new Map<string, typeof rows>()
+    for (const r of rows) {
+      if (opts.exclude.has(r.id)) continue
+      if (!passesClientIsolation(r, opts.context)) continue
+      if (r.expires_at && Date.parse(r.expires_at) <= opts.now) continue
+      byEntity.set(r.entity_id, [...(byEntity.get(r.entity_id) ?? []), r])
+    }
+    for (const { item } of selected) {
+      const links: RecallLink[] = []
+      const seen = new Set<string>()
+      // Entités dans l'ordre de signifiance, voisins du plus récent au plus ancien.
+      for (const entity of ranked.get(item.id) ?? []) {
+        for (const n of byEntity.get(entity.id) ?? []) {
+          if (links.length >= LINK_MAX_PER_ITEM) break
+          if (seen.has(n.id)) continue
+          seen.add(n.id)
+          links.push({ id: n.id, excerpt: n.fact.replace(/\s+/g, ' ').trim().slice(0, LINK_EXCERPT_CHARS), via: entity.name })
+        }
+      }
+      if (links.length > 0) item.links = links
+    }
+  } catch {
+    /* pas de voisins : le rappel reste complet */
+  }
+}
+
 /** Masque toute occurrence d'une valeur de secret dans un message d'erreur. */
 function hideValue(message: string, value: string): string {
   return value.length > 0 ? message.split(value).join('[secret]') : message

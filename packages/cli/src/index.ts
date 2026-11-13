@@ -13,6 +13,7 @@ import { Memoria, resolveStorageRoot } from '@memoria/core'
 import { DaemonClient, readDaemonState, type DaemonState } from '@memoria/daemon'
 import { AgentsCommand, DeleteAgentCommand, RevokeCommand } from './commands/agents.js'
 import { AuditCommand } from './commands/audit.js'
+import { CognitionCatchupCommand } from './commands/cognition.js'
 import { AutostartCommand, DisableCommand, EnableCommand, MoveCommand, UpdateCommand } from './commands/control.js'
 import { DaemonCommand, StartCommand, StopCommand } from './commands/daemon.js'
 import {
@@ -39,6 +40,7 @@ export {
   AgentsCommand,
   AuditCommand,
   AutostartCommand,
+  CognitionCatchupCommand,
   DaemonCommand,
   DeleteAgentCommand,
   DisableCommand,
@@ -168,5 +170,6 @@ export function buildCli(): Cli {
   cli.register(SyncNowCommand)
   cli.register(SyncRevokeCommand)
   cli.register(SyncLeaveCommand)
+  cli.register(CognitionCatchupCommand)
   return cli
 }

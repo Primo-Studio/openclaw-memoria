@@ -93,6 +93,13 @@ export interface RebuildOptions {
   linkThreshold?: number
 }
 
+export interface RebuildAsyncOptions extends RebuildOptions {
+  /** Durée d'une tranche de calcul avant de rendre la main, en ms (défaut 15). */
+  sliceMs?: number
+  /** Comparaisons entre deux points d'arrêt possibles (défaut 2000 ; les tests le baissent). */
+  stepComparisons?: number
+}
+
 export interface RebuildResult {
   /** Nombre de clusters retenus (taille ≥ minSize). */
   clusters: number
@@ -103,6 +110,12 @@ export interface RebuildResult {
 const DEFAULT_MIN_SIZE = 3
 const DEFAULT_LINK_THRESHOLD = 0.34
 const MAX_CENTROID_KEYWORDS = 8
+/** Durée d'une tranche de calcul avant de rendre la main (rebuildAsync). */
+const DEFAULT_SLICE_MS = 15
+/** Comparaisons de signatures entre deux points d'arrêt possibles du calcul. */
+const COMPARISONS_PER_STEP = 2000
+/** Faits qui peuvent entrer dans un amas. */
+const ACTIVE_FACTS_SQL = "SELECT id FROM facts WHERE superseded = 0 AND lifecycle_state = 'active'"
 
 /** Mots-outils FR/EN ignorés pour les keywords structurels. */
 const STOPWORDS = new Set([
@@ -146,20 +159,80 @@ export class ClusterEngine {
   }
 
   /**
-   * Recalcul COMPLET des clusters (job async batch). Déterministe et idempotent :
+   * Recalcul COMPLET des clusters, d'un seul bloc. Déterministe et idempotent :
    * efface les clusters existants, repartitionne les faits actifs en composantes
    * connexes du graphe de proximité structurelle, ne garde que les paquets de
    * taille ≥ minSize. Ne touche AUCUN fait.
+   *
+   * BLOQUANT : le calcul croît comme le carré du nombre de faits. Dans un
+   * processus qui sert des requêtes (le daemon), préférer `rebuildAsync`.
    */
   rebuild(opts: RebuildOptions = {}): RebuildResult {
     const minSize = Math.max(2, opts.minSize ?? DEFAULT_MIN_SIZE)
-    const threshold = opts.linkThreshold ?? DEFAULT_LINK_THRESHOLD
+    const steps = connectedComponents(this.loadNodes(), opts.linkThreshold ?? DEFAULT_LINK_THRESHOLD)
+    let step = steps.next()
+    while (!step.done) step = steps.next()
+    return this.persist(step.value, minSize)
+  }
 
-    const nodes = this.loadNodes()
-    const groups = connectedComponents(nodes, threshold).filter(g => g.length >= minSize)
+  /**
+   * Même recalcul, même partition, mais DÉCOUPÉ : le calcul rend la main à la
+   * boucle d'événements toutes les `sliceMs` (défaut 15 ms). Sans cela, 10 000
+   * faits figeaient le daemon une dizaine de secondes : /v1/health ne répondait
+   * plus et la commande qui suit le rattrapage expirait.
+   *
+   * Des faits peuvent changer pendant les pauses : à l'écriture, un fait qui
+   * n'est plus actif est retiré de son paquet (voir persist).
+   */
+  async rebuildAsync(opts: RebuildAsyncOptions = {}): Promise<RebuildResult> {
+    const minSize = Math.max(2, opts.minSize ?? DEFAULT_MIN_SIZE)
+    const sliceMs = opts.sliceMs ?? DEFAULT_SLICE_MS
+    const steps = connectedComponents(
+      this.loadNodes(),
+      opts.linkThreshold ?? DEFAULT_LINK_THRESHOLD,
+      opts.stepComparisons ?? COMPARISONS_PER_STEP,
+    )
+    let sliceStart = Date.now()
+    let step = steps.next()
+    while (!step.done) {
+      if (Date.now() - sliceStart >= sliceMs) {
+        await new Promise<void>(resolve => setImmediate(resolve))
+        sliceStart = Date.now()
+      }
+      step = steps.next()
+    }
+    return this.persist(step.value, minSize, true)
+  }
 
+  /**
+   * Date (ms) du dernier recalcul complet, ou null s'il ne reste aucun amas.
+   * `created_at` n'est posé que par un recalcul ; `updated_at` bouge aussi à
+   * chaque oubli (onForget) et ne dit donc rien du dernier recalcul.
+   */
+  lastRebuildAt(): number | null {
+    const row = this.db.prepare('SELECT MAX(created_at) AS at FROM fact_clusters').get() as { at: string | null }
+    const at = row.at ? Date.parse(row.at) : Number.NaN
+    return Number.isFinite(at) ? at : null
+  }
+
+  /**
+   * Remplace tous les clusters par les paquets calculés (une transaction).
+   * `recheck` : le calcul a été interrompu par des pauses, on ne garde que les
+   * faits encore actifs à l'instant de l'écriture.
+   */
+  private persist(components: Node[][], minSize: number, recheck = false): RebuildResult {
     let clustered = 0
+    let kept = 0
     const tx = this.db.transaction(() => {
+      let groups = components
+      if (recheck) {
+        const active = new Set(
+          (this.db.prepare(ACTIVE_FACTS_SQL).all() as Array<{ id: string }>).map(r => r.id),
+        )
+        groups = components.map(g => g.filter(n => active.has(n.id)))
+      }
+      groups = groups.filter(g => g.length >= minSize)
+
       // Recalcul complet : on repart d'une table propre (déterminisme de partition).
       this.db.prepare('DELETE FROM cluster_members').run()
       this.db.prepare('DELETE FROM fact_clusters').run()
@@ -180,10 +253,11 @@ export class ClusterEngine {
         for (const fid of memberIds) insMember.run(id, fid)
         clustered += memberIds.length
       }
+      kept = groups.length
     })
     tx()
 
-    return { clusters: groups.length, factsClustered: clustered }
+    return { clusters: kept, factsClustered: clustered }
   }
 
   /** Tous les clusters, triés par taille décroissante. */
@@ -269,7 +343,7 @@ export class ClusterEngine {
    */
   private loadNodes(): Node[] {
     const facts = this.db
-      .prepare(`SELECT id, fact FROM facts WHERE superseded = 0 AND lifecycle_state = 'active'`)
+      .prepare("SELECT id, fact FROM facts WHERE superseded = 0 AND lifecycle_state = 'active'")
       .all() as Array<{ id: string; fact: string }>
     const entStmt = this.db.prepare('SELECT entity_id FROM fact_entities WHERE fact_id = ?')
 
@@ -321,10 +395,20 @@ export function linkStrength(a: Set<string>, b: Set<string>): number {
  * force de lien dépasse le seuil. Déterministe (ordre d'insertion préservé) :
  * chaque nœud non assigné démarre un paquet et absorbe transitivement ses
  * voisins.
+ *
+ * Générateur : il s'arrête (yield) toutes les `stepComparisons` comparaisons
+ * pour que l'appelant puisse rendre la main ; la valeur de retour est la liste
+ * des paquets. Les pauses ne changent pas le résultat : les nœuds sont chargés
+ * avant le premier pas.
  */
-function connectedComponents(nodes: Node[], threshold: number): Node[][] {
+function* connectedComponents(
+  nodes: Node[],
+  threshold: number,
+  stepComparisons = COMPARISONS_PER_STEP,
+): Generator<void, Node[][], void> {
   const assigned = new Set<string>()
   const groups: Node[][] = []
+  let comparisons = 0
   for (const seed of nodes) {
     if (assigned.has(seed.id)) continue
     const group: Node[] = [seed]
@@ -334,10 +418,22 @@ function connectedComponents(nodes: Node[], threshold: number): Node[][] {
       grew = false
       for (const cand of nodes) {
         if (assigned.has(cand.id)) continue
-        if (group.some(m => linkStrength(m.signature, cand.signature) >= threshold)) {
+        let linked = false
+        for (const member of group) {
+          comparisons++
+          if (linkStrength(member.signature, cand.signature) >= threshold) {
+            linked = true
+            break
+          }
+        }
+        if (linked) {
           group.push(cand)
           assigned.add(cand.id)
           grew = true
+        }
+        if (comparisons >= stepComparisons) {
+          comparisons = 0
+          yield
         }
       }
     }

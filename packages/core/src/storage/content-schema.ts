@@ -380,4 +380,16 @@ export const contentMigrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 9,
+    name: 'content-facts-superseded-by-index',
+    up(db) {
+      // RAPPEL (T30) : le statut « remplace » cherche, à CHAQUE rappel, les
+      // faits supersédés qui pointent sur les souvenirs rendus
+      // (`superseded_by IN (...)`). Aucun index ne servait cette lecture : la
+      // table `facts` était parcourue en entier. Index partiel : presque tous
+      // les faits ont `superseded_by` NULL, il reste donc minuscule.
+      db.exec('CREATE INDEX IF NOT EXISTS idx_facts_superseded_by ON facts(superseded_by) WHERE superseded_by IS NOT NULL')
+    },
+  },
 ]

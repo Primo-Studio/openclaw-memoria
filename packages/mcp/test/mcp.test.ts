@@ -181,6 +181,8 @@ describe('buildServer handlers', () => {
       query: 'règles de déploiement',
       limit: 7,
       active_context: { project_id: 'memoria-v3', client_org_id: 'interne' },
+      // T30 : le MCP demande par défaut l'arrêt sur décrochage (seuil 0,3).
+      cutoff: 0.3,
     })
     const text = (result.content[0] as { type: 'text'; text: string }).text
     expect(JSON.parse(text)).toEqual({ items: [], total_found: 0, tokens: 0 })
@@ -618,7 +620,7 @@ describe('buildServer handlers', () => {
     expect(getPayload.active_context.project_id).toBe('jamboard')
   })
 
-  it('le serveur MCP expose bien les 12 outils', () => {
+  it('le serveur MCP expose bien les 13 outils', () => {
     const { server } = buildServer({
       instanceId: 'i',
       tracker: new ActiveContextTracker(),
@@ -627,6 +629,7 @@ describe('buildServer handlers', () => {
     // registre privé du SDK — vérification structurelle volontairement minimale
     const tools = (server as unknown as { _registeredTools: Record<string, unknown> })._registeredTools
     expect(Object.keys(tools).sort()).toEqual([
+      'memoria_brief',
       'memoria_capture_status',
       'memoria_capture_turn',
       'memoria_correct',

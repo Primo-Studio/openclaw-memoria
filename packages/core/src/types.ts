@@ -316,6 +316,22 @@ export interface RecallInput {
   token_budget?: number
   /** Expansion graphe (voisins par entités partagées). Défaut activé. */
   expand_graph?: boolean
+  /**
+   * APERÇU HUMAIN (T30) : exécute le vrai rappel sans rien modifier. Pas de
+   * compteur d'usage, pas d'audit : regarder ce qu'un agent recevrait ne doit
+   * ni fausser le classement futur ni les statistiques de santé.
+   */
+  preview?: boolean
+  /**
+   * Arrêt sur décrochage, entre 0 et 1 : coupe les souvenirs dont le score est
+   * sous `cutoff × meilleur score`, en gardant toujours au moins 3 souvenirs.
+   * Absent : aucun seuil (comportement historique).
+   */
+  cutoff?: number
+  /** Calcule `links` (voisins par entité partagée). Désactivé par défaut : coût SQL. */
+  links?: boolean
+  /** 'blocks' ajoute `blocks` (regroupement par thème). `items` reste complet. */
+  format?: 'flat' | 'blocks'
 }
 
 /**
@@ -349,6 +365,67 @@ export interface RecallItem {
   revision?: PendingRevision
   /** Niveau de vérité dérivé (déclaré / extrait / déduit / confirmé). */
   origin?: FactOrigin
+  // --- Enrichissement T30. Tous optionnels et émis SEULEMENT s'ils ont une
+  // valeur (jamais null ni tableau vide) : un client ancien ne voit aucune
+  // différence, et les projections compactes ne grossissent pas pour rien.
+  /** Pourquoi ce souvenir est sorti (une ou plusieurs raisons). */
+  matched_by?: RecallMatch[]
+  /** Nom de l'entité qui a mené à ce voisin de graphe (avec `matched_by: graph`). */
+  via_entity?: string
+  /** Thème principal du fait. */
+  topic?: { id: string; name: string }
+  /** Au plus 4 entités, les plus signifiantes d'abord. */
+  entities?: string[]
+  /**
+   * contested = révision en attente (détail dans `revision`) ; expiring = date
+   * d'expiration à venir ; replaces = ce fait en a remplacé un autre.
+   */
+  status?: RecallStatus
+  /** Éléments de confiance bruts (l'origine est dans `origin`). */
+  trust?: RecallTrust
+  /** Au plus 3 voisins par entité partagée ; seulement si `RecallInput.links`. */
+  links?: RecallLink[]
+}
+
+/** Raison d'un match : mots, sens (vecteurs), voisin de graphe, contexte actif, épinglé. */
+export type RecallMatch = 'text' | 'meaning' | 'graph' | 'context' | 'pinned'
+export type RecallStatus = 'contested' | 'expiring' | 'replaces'
+
+export interface RecallTrust {
+  confidence: number
+  used_count: number
+  recall_count: number
+}
+
+export interface RecallLink {
+  id: string
+  /** Début du souvenir voisin, sur une ligne, 60 caractères au plus. */
+  excerpt: string
+  /** Nom de l'entité partagée. */
+  via: string
+}
+
+/** Ce qui a été écarté du rappel, et pourquoi. */
+export interface RecallDropped {
+  reason: 'cutoff' | 'budget' | 'limit'
+  count: number
+}
+
+/**
+ * Regroupement par thème (format 'blocks'). Le dernier bloc, `loose: true` et
+ * `title: ''`, réunit les souvenirs sans thème ou seuls dans leur thème : les
+ * couches d'affichage choisissent son libellé (langue de l'interface).
+ */
+export interface RecallBlock {
+  title: string
+  topic_id?: string
+  /** Ordre chronologique (du plus ancien au plus récent). */
+  item_ids: string[]
+  /** Souvenir le plus récent du bloc : l'état courant du sujet. */
+  latest_id: string
+  /** Au plus 4 entités communes au bloc. */
+  entities?: string[]
+  loose?: true
 }
 
 export interface RecallResult {
@@ -357,6 +434,10 @@ export interface RecallResult {
   /** Tokens estimés du bloc injecté (≤ budget). */
   tokens: number
   scopes_searched: string[]
+  /** Émis seulement si quelque chose a été écarté. */
+  dropped?: RecallDropped[]
+  /** Émis seulement en format 'blocks'. */
+  blocks?: RecallBlock[]
 }
 
 export interface ForgetFilter {

@@ -19,6 +19,11 @@ import { fileURLToPath } from 'node:url'
 import {
   AUTOSTART_LABEL,
   Memoria,
+  OPENCLAW_RECALL_DEFAULTS,
+  compactRecall,
+  estimateTokens,
+  formatRecallBlocks,
+  formatRecallOpenClaw,
   RegexRedactor,
   autoRegister,
   autostartStatus,
@@ -41,7 +46,9 @@ import {
   type CaptureTurnInput,
   type ForgetFilter,
   type MemoriaInitOptions,
+  type RecallDropped,
   type RecallInput,
+  type RecallResult,
   type RegisterOptions,
   type RegisterResult,
   type ReusableProvider,
@@ -56,6 +63,35 @@ import { responsivenessWarning, startLoopMonitor } from './loop-monitor.js'
 
 export const DAEMON_VERSION = '0.1.0'
 
+/** Rattrapage de cognition en mode LLM : faits par lancement, par défaut et au plus (un appel LLM par fait). */
+const COGNITION_CATCHUP_LLM_DEFAULT = 500
+const COGNITION_CATCHUP_LLM_MAX = 5000
+
+/** État du rattrapage de cognition (POST, GET et DELETE /v1/admin/cognition_catchup). */
+export interface CognitionCatchupState {
+  /** `cancelled` : arrêté sur demande (DELETE) ; ce qui était traité le reste. */
+  status: 'idle' | 'running' | 'done' | 'cancelled' | 'error'
+  mode: 'heuristic' | 'llm'
+  /** null = toutes les bases. */
+  instance: string | null
+  /** Plafond de faits de ce lancement ; null = sans plafond (mode heuristique). */
+  max_facts: number | null
+  started_at: string | null
+  finished_at: string | null
+  dbs_total: number
+  dbs_done: number
+  processed: number
+  /** Faits passés par le LLM d'extraction (0 en mode heuristique). */
+  llm_facts: number
+  errors: number
+  clusters_rebuilt: number
+  /** Bases trop grosses pour recalculer leurs amas sans figer le daemon. */
+  clusters_skipped: number
+  /** Vrai si le plafond a arrêté le travail : relancer pour la suite. */
+  capped: boolean
+  error: string | null
+}
+
 export interface DaemonOptions {
   storageRoot?: string
   configPath?: string
@@ -67,6 +103,8 @@ export interface DaemonOptions {
   ollamaBaseUrl?: string
   /** HOME inspecté par la détection d'agents et la collecte de transcripts (tests : tmpdir). */
   agentsHome?: string
+  /** Délai du passage de cognition lancé après la chaîne de démarrage (défaut 60 s ; tests : court). */
+  bootCognitionDelayMs?: number
   /** Sonde de présence d'un CLI (tests : jamais les vrais binaires). */
   checkCli?: (bin: string) => boolean
   /** Enregistrement MCP auprès de l'hôte (tests : stub — jamais le vrai ~/.claude.json). */
@@ -147,6 +185,28 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     throw err
   }
   const importJobs = new ImportJobRunner(memoria, join(storageRoot, 'import-status.json'))
+  // Rattrapage de cognition : un seul à la fois, état gardé en mémoire (il
+  // repart de zéro au redémarrage, comme le travail lui-même, qui est idempotent).
+  let cognitionCatchup: CognitionCatchupState = {
+    status: 'idle',
+    mode: 'heuristic',
+    instance: null,
+    max_facts: null,
+    started_at: null,
+    finished_at: null,
+    dbs_total: 0,
+    dbs_done: 0,
+    processed: 0,
+    llm_facts: 0,
+    errors: 0,
+    clusters_rebuilt: 0,
+    clusters_skipped: 0,
+    capped: false,
+    error: null,
+  }
+  let bootCognitionTimer: ReturnType<typeof setTimeout> | null = null
+  /** Arrêt demandé : la chaîne de démarrage, si elle finit après, ne programme plus rien. */
+  let closing = false
   const loopMonitor = startLoopMonitor()
 
   const adminToken = newToken()
@@ -266,6 +326,31 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         sendJson(res, 200, mapEngineErrors(() => memoria.adoptLegacyInto(instanceId, { reindex: body['reindex'] !== false })))
         return
       }
+      case 'POST /v1/admin/recall_preview': {
+        // APERÇU HUMAIN (T30) : « que reçoit cet agent pour cette question ? ».
+        // Les autres routes admin de recherche contournent les politiques, la
+        // sensibilité et l'isolation client ; celle-ci exécute le VRAI rappel
+        // de l'instance, en `preview` (ni compteur d'usage, ni audit).
+        const body = await readJson(req)
+        const instanceId = optionalString(body, 'instance') ?? ''
+        if (!instanceId) throw new HttpError(400, 'instance requise')
+        if (!(optionalString(body, 'query') ?? '').trim()) throw new HttpError(400, 'query requise')
+        const agent = memoria.listAgents().find(a => a.instance.id === instanceId)
+        if (!agent) throw new HttpError(404, `instance inconnue : ${instanceId}`)
+        let preview: RecallPreviewResponse
+        try {
+          // La pause est lue ICI, avant tout calcul : en pause, l'aperçu ne
+          // doit lancer aucun embedding (donc aucun envoi au cloud).
+          preview = await buildRecallPreview(memoria, instanceId, agent.assistant_type, body, !memoria.isEnabled())
+        } catch (err) {
+          // Refus du moteur (instance révoquée...) : code HTTP parlant, pas 500.
+          return mapEngineErrors(() => {
+            throw err
+          })
+        }
+        sendJson(res, 200, preview)
+        return
+      }
       case 'GET /v1/admin/scopes': {
         sendJson(res, 200, { scopes: memoria.listScopesWithAccess(), assistants: memoria.registry.listAssistants() })
         return
@@ -369,6 +454,105 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         const instance = url.searchParams.get('instance')
         if (!instance) throw new HttpError(400, 'instance requise')
         sendJson(res, 200, { clusters: memoria.listClusters(instance) })
+        return
+      }
+      // Rattrapage de cognition : relie au graphe et aux thèmes les faits
+      // d'avant la migration (marqués « backfill ») et ceux jamais traités.
+      // Retour immédiat, travail en arrière-plan, état par le GET.
+      case 'POST /v1/admin/cognition_catchup': {
+        const body = await readJson(req)
+        const rawInstance = body['instance']
+        const instance = typeof rawInstance === 'string' && rawInstance ? rawInstance : null
+        const llm = body['llm'] === true
+        if (instance && !memoria.listAgents().some(a => a.instance.id === instance)) {
+          throw new HttpError(404, `instance inconnue : ${instance}`)
+        }
+        let maxFacts: number | null = null
+        const rawMax = body['max_facts']
+        if (rawMax !== undefined && rawMax !== null) {
+          const n = Number(rawMax)
+          if (!Number.isFinite(n) || n < 1) throw new HttpError(400, 'max_facts doit être un entier ≥ 1')
+          maxFacts = Math.min(Math.floor(n), COGNITION_CATCHUP_LLM_MAX)
+        } else if (llm) {
+          // Mode LLM : un appel par fait. Jamais sans plafond, même par oubli.
+          maxFacts = COGNITION_CATCHUP_LLM_DEFAULT
+        }
+        // En pause, aucun appel LLM dans le dos de l'utilisateur (le passage au
+        // démarrage la respecte déjà). L'heuristique, locale, reste permise.
+        if (llm && !memoria.isEnabled()) {
+          throw new HttpError(423, 'Memoria est en pause : rattrapage en mode LLM refusé (réactive Memoria, ou lance-le sans « llm »)')
+        }
+        if (llm && !(await memoria.hasExtraction())) {
+          throw new HttpError(422, 'aucun moteur d’extraction configuré : lance le rattrapage sans « llm » (heuristique seule)')
+        }
+        // APRÈS le dernier await : entre ce contrôle et le passage à « running »
+        // plus rien ne rend la main. Avant, deux POST simultanés passaient tous
+        // les deux pendant la sonde du LLM, et deux rattrapages s'enchaînaient.
+        if (cognitionCatchup.status === 'running') {
+          throw new HttpError(409, 'un rattrapage de cognition est déjà en cours (GET /v1/admin/cognition_catchup)')
+        }
+        const job: CognitionCatchupState = {
+          status: 'running',
+          mode: llm ? 'llm' : 'heuristic',
+          instance,
+          max_facts: maxFacts,
+          started_at: new Date().toISOString(),
+          finished_at: null,
+          dbs_total: 0,
+          dbs_done: 0,
+          processed: 0,
+          llm_facts: 0,
+          errors: 0,
+          clusters_rebuilt: 0,
+          clusters_skipped: 0,
+          capped: false,
+          error: null,
+        }
+        cognitionCatchup = job
+        void memoria
+          .processCognition(instance ?? undefined, {
+            includeBackfill: true,
+            llm,
+            ...(maxFacts !== null ? { maxFacts } : {}),
+            onProgress: p => {
+              job.dbs_total = p.dbs_total
+              job.dbs_done = p.dbs_done
+              job.processed = p.processed
+              job.errors = p.errors
+            },
+          })
+          .then(r => {
+            job.status = r.cancelled === true ? 'cancelled' : 'done'
+            job.processed = r.processed
+            job.llm_facts = r.llm_facts
+            job.errors = r.errors
+            job.clusters_rebuilt = r.clusters_rebuilt
+            job.clusters_skipped = r.clusters_skipped ?? 0
+            job.capped = r.capped === true
+          })
+          .catch((err: unknown) => {
+            job.status = 'error'
+            job.error = (err as Error).message
+          })
+          .finally(() => {
+            job.finished_at = new Date().toISOString()
+          })
+        sendJson(res, 200, job)
+        return
+      }
+      case 'GET /v1/admin/cognition_catchup': {
+        sendJson(res, 200, cognitionCatchup)
+        return
+      }
+      // Annulation : le rattrapage s'arrête entre deux faits (un rattrapage LLM
+      // peut durer des heures et retient les passages ordinaires derrière lui).
+      // Retour immédiat ; l'état passe à « cancelled » quand il s'est arrêté.
+      case 'DELETE /v1/admin/cognition_catchup': {
+        if (cognitionCatchup.status !== 'running') {
+          throw new HttpError(409, 'aucun rattrapage de cognition en cours')
+        }
+        memoria.cancelCognitionCatchup()
+        sendJson(res, 202, cognitionCatchup)
         return
       }
       case 'GET /v1/admin/self_observations': {
@@ -1358,9 +1542,31 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       if (o.ran.length > 0) console.log(`[memoria-daemon] options auto exécutées : ${o.ran.join(', ')}`)
     })
     .catch((err: unknown) => console.warn('[memoria-daemon] rejeu/indexation au boot en échec :', (err as Error).message))
+    .finally(() => {
+      // Un passage de cognition ORDINAIRE, différé : il relie les faits posés
+      // sans capture derrière (store_fact, partage) pendant que le daemon était
+      // arrêté ou avant cette version. Ce n'est pas un rattrapage : les faits
+      // « backfill » de la migration ne sont repris que sur demande.
+      if (closing) return
+      bootCognitionTimer = setTimeout(() => {
+        bootCognitionTimer = null
+        if (closing) return
+        // En pause, Memoria ne lit ni n'écrit : pas d'appel LLM dans le dos de l'utilisateur.
+        if (!memoria.isEnabled()) return
+        void memoria
+          .processCognition()
+          .then(r => {
+            if (r.processed > 0) console.log(`[memoria-daemon] cognition au démarrage : ${r.processed} faits reliés`)
+          })
+          .catch((err: unknown) => console.warn('[memoria-daemon] cognition au démarrage en échec :', (err as Error).message))
+      }, opts.bootCognitionDelayMs ?? 60_000)
+      bootCognitionTimer.unref()
+    })
 
   const close = async (): Promise<void> => {
     if (syncTimer) clearInterval(syncTimer)
+    closing = true
+    if (bootCognitionTimer) clearTimeout(bootCognitionTimer)
     loopMonitor.stop()
     if (lanServer) await new Promise<void>(r => lanServer!.close(() => r()))
     await new Promise<void>((resolveClose) => server.close(() => resolveClose()))
@@ -1517,13 +1723,204 @@ const PAUSED_MEMORY_RESPONSES: Record<string, Record<string, unknown>> = {
  */
 function recallInputFromBody(body: Record<string, unknown>): Omit<RecallInput, 'instance'> {
   const input: Omit<RecallInput, 'instance'> = { query: String(body['query'] ?? '') }
-  if (typeof body['limit'] === 'number') input.limit = body['limit']
-  if (typeof body['token_budget'] === 'number') input.token_budget = body['token_budget']
+  // Bornes identiques au schéma zod de l'outil MCP. Le token d'instance suffit
+  // pour appeler cette route sans passer par lui : sans borne, `limit: 100000`
+  // avec `links: true` faisait enrichir et sérialiser toute la base.
+  const bounded = (value: unknown, min: number, max: number): number | undefined =>
+    typeof value === 'number' && Number.isFinite(value) ? Math.min(max, Math.max(min, Math.round(value))) : undefined
+  const limit = bounded(body['limit'], 1, 50)
+  if (limit !== undefined) input.limit = limit
+  const tokenBudget = bounded(body['token_budget'], 100, 4000)
+  if (tokenBudget !== undefined) input.token_budget = tokenBudget
   if (typeof body['expand_graph'] === 'boolean') input.expand_graph = body['expand_graph']
   if (body['active_context'] && typeof body['active_context'] === 'object') {
     input.active_context = body['active_context'] as RecallInput['active_context']
   }
+  // Options de mise en forme (T30) : elles ne changent pas CE QUE l'agent a le
+  // droit de lire, seulement combien et sous quelle forme. `preview` n'est
+  // JAMAIS relayé : un agent qui rappellerait sans compteur ni audit
+  // échapperait aux statistiques d'usage. Il est réservé à l'aperçu admin.
+  if (typeof body['cutoff'] === 'number' && Number.isFinite(body['cutoff'])) input.cutoff = body['cutoff']
+  if (typeof body['links'] === 'boolean') input.links = body['links']
+  if (body['format'] === 'flat' || body['format'] === 'blocks') input.format = body['format']
   return input
+}
+
+/**
+ * Seuil que le serveur MCP demande par défaut.
+ * ⚠ Même valeur que MCP_RECALL_CUTOFF (packages/mcp/src/serve.ts) : le daemon
+ * ne peut pas importer le paquet mcp (qui dépend de lui). Un test du paquet mcp
+ * compare le texte de l'aperçu à celui de l'outil.
+ */
+const MCP_PREVIEW_CUTOFF = 0.3
+
+/**
+ * Plafond du texte en blocs, en caractères par token de budget, et budget par
+ * défaut du moteur (DEFAULT_TOKEN_BUDGET du core, non exporté).
+ * ⚠ Mêmes valeurs que BLOCKS_CHARS_PER_BUDGET_TOKEN et
+ * DAEMON_DEFAULT_TOKEN_BUDGET du paquet mcp (serve.ts) : même raison, même test.
+ */
+const BLOCKS_CHARS_PER_BUDGET_TOKEN = 6
+const DEFAULT_RECALL_TOKEN_BUDGET = 1500
+
+/** Le plugin OpenClaw compte 4 caractères par token (son budget de bloc). */
+const OPENCLAW_CHARS_PER_TOKEN = 4
+
+type RecallRenderingId = 'mcp' | 'blocks' | 'openclaw'
+
+interface RecallRendering {
+  id: RecallRenderingId
+  /** Vrai pour le rendu que CET agent reçoit sans rien demander. */
+  native: boolean
+  /** Texte exact reçu par l'agent. En pause : la réponse de pause. */
+  text: string
+  /** Estimation du poids de `text`, selon la règle de ce rendu. */
+  tokens: number
+  /**
+   * Le rappel exécuté pour ce rendu, avec ses propres limite, budget et seuil.
+   * En pause : ce que l'agent recevrait à la reprise (recherche plein texte).
+   */
+  result: RecallResult
+  disabled?: true
+}
+
+interface RecallPreviewResponse {
+  instance: string
+  agent_type: string
+  query: string
+  /** Résultat du rendu natif de l'agent (le même objet que dans `renderings`). */
+  result: RecallResult
+  renderings: RecallRendering[]
+  disabled?: true
+}
+
+/** Ce que reçoit un agent MCP quand Memoria est en pause (cf. PAUSED_MEMORY_RESPONSES). */
+const PAUSED_MCP_TEXT = JSON.stringify(
+  compactRecall({ items: [], totalFound: 0, tokens: 0, scopes_searched: [], disabled: true } as RecallResult & { disabled: true }),
+)
+
+/**
+ * Réduit le résultat du rappel OpenClaw aux souvenirs réellement ÉCRITS dans le
+ * bloc. Le plugin applique après le rappel un plancher de pertinence et un
+ * budget en caractères : sans cette réduction, la vue lisible montrait des
+ * souvenirs que l'agent ne lit jamais. Ce qu'ils écartent est ajouté à
+ * `dropped` (plancher : 'cutoff' ; caractères : 'budget').
+ */
+function openClawShownResult(recalled: RecallResult, shown: Set<unknown>, relevanceFloor: number): RecallResult {
+  const items = recalled.items.filter(i => shown.has(i))
+  const top = Math.max(0, ...recalled.items.map(i => i.score ?? 0))
+  const underFloor = top > 0 ? recalled.items.filter(i => (i.score ?? 0) < top * relevanceFloor).length : 0
+  const overBudget = recalled.items.length - items.length - underFloor
+  const counts = new Map<RecallDropped['reason'], number>((recalled.dropped ?? []).map(d => [d.reason, d.count]))
+  if (underFloor > 0) counts.set('cutoff', (counts.get('cutoff') ?? 0) + underFloor)
+  if (overBudget > 0) counts.set('budget', (counts.get('budget') ?? 0) + overBudget)
+  const dropped = [...counts].map(([reason, count]) => ({ reason, count }))
+  const { dropped: _dropped, ...rest } = recalled
+  return {
+    ...rest,
+    items,
+    tokens: items.reduce((n, i) => n + estimateTokens(i.content), 0),
+    ...(dropped.length > 0 ? { dropped } : {}),
+  }
+}
+
+/**
+ * Aperçu d'un rappel : pour chaque canal, le texte EXACT que l'agent reçoit et
+ * le résultat du rappel qui l'a produit. Rien n'est modifié (`preview`).
+ *
+ * Deux rappels, pas trois : le JSON du MCP et le texte en blocs sortent du
+ * même rappel (seuil du MCP), les voisins et les blocs étant des ajouts faits
+ * après la sélection, qu'on retire pour le rendu MCP. L'adaptateur OpenClaw,
+ * lui, appelle avec ses propres réglages (budget de 600 tokens, pas de seuil) :
+ * il lui faut son rappel. On applique ses réglages PAR DÉFAUT, la
+ * configuration réelle du plugin vit chez OpenClaw et le daemon ne la connaît
+ * pas.
+ *
+ * COÛT, hors pause : chacun des deux rappels embedde la requête. Avec un
+ * provider distant, un aperçu envoie donc la requête DEUX fois au cloud et
+ * apparaît dans l'audit des envois et les compteurs d'usage d'embeddings.
+ * L'éviter demande un rappel du moteur qui accepte un vecteur déjà calculé
+ * (à faire côté core).
+ *
+ * EN PAUSE : aucun embedding, aucun réseau. `text` est la réponse de pause que
+ * l'agent reçoit vraiment ; `result` montre ce qu'il recevrait à la reprise,
+ * calculé par la recherche plein texte seule (sans le volet sémantique).
+ */
+async function buildRecallPreview(
+  memoria: Memoria,
+  instanceId: string,
+  agentType: string,
+  body: Record<string, unknown>,
+  paused: boolean,
+): Promise<RecallPreviewResponse> {
+  const base = recallInputFromBody(body)
+  const run = async (input: RecallInput): Promise<RecallResult> => (paused ? memoria.recall(input) : memoria.recallSemantic(input))
+
+  const wide = await run({
+    ...base,
+    instance: instanceId,
+    cutoff: base.cutoff ?? MCP_PREVIEW_CUTOFF,
+    links: true,
+    format: 'blocks',
+    preview: true,
+  })
+  // Ce que l'outil memoria_recall reçoit par défaut : ni voisins, ni blocs.
+  const { blocks: _blocks, ...flat } = wide
+  const mcpResult: RecallResult = { ...flat, items: wide.items.map(({ links: _links, ...item }) => item) }
+  const mcpText = JSON.stringify(compactRecall(mcpResult))
+  const blocksText =
+    formatRecallBlocks(wide, { maxChars: (base.token_budget ?? DEFAULT_RECALL_TOKEN_BUDGET) * BLOCKS_CHARS_PER_BUDGET_TOKEN }) ||
+    JSON.stringify(compactRecall(wide))
+
+  const tokenBudget = base.token_budget ?? OPENCLAW_RECALL_DEFAULTS.tokenBudget
+  const recalled = await run({
+    instance: instanceId,
+    query: base.query,
+    // Le plugin borne sa limite à 20 (son readConfig).
+    limit: Math.min(20, base.limit ?? OPENCLAW_RECALL_DEFAULTS.recallLimit),
+    token_budget: tokenBudget,
+    ...(base.active_context ? { active_context: base.active_context } : {}),
+    preview: true,
+  })
+  const shown = new Set<unknown>()
+  const openclawText = formatRecallOpenClaw(recalled.items, {
+    relevanceFloor: OPENCLAW_RECALL_DEFAULTS.relevanceFloor,
+    tokenBudget,
+    showProvenance: OPENCLAW_RECALL_DEFAULTS.showProvenance,
+    onShown: item => shown.add(item),
+  })
+  const openclawResult = openClawShownResult(recalled, shown, OPENCLAW_RECALL_DEFAULTS.relevanceFloor)
+
+  const native: RecallRenderingId = agentType === 'openclaw' ? 'openclaw' : 'mcp'
+  const rendering = (id: RecallRenderingId, live: string, pausedText: string, charsPerToken: number | null, result: RecallResult): RecallRendering => {
+    const text = paused ? pausedText : live
+    return {
+      id,
+      native: native === id,
+      text,
+      // MCP et blocs : la règle du moteur (estimateTokens). OpenClaw : celle du
+      // plugin, sinon un bloc plein à 600 tokens s'affichait « environ 667 ».
+      tokens: charsPerToken === null ? estimateTokens(text) : Math.ceil(text.length / charsPerToken),
+      result,
+      ...(paused ? { disabled: true as const } : {}),
+    }
+  }
+  const renderings = [
+    rendering('mcp', mcpText, PAUSED_MCP_TEXT, null, mcpResult),
+    // Le format en blocs n'est natif pour personne : un agent MCP le DEMANDE.
+    // En pause il reçoit le même JSON que le rendu MCP.
+    rendering('blocks', blocksText, PAUSED_MCP_TEXT, null, wide),
+    // En pause le plugin n'injecte rien du tout.
+    rendering('openclaw', openclawText, '', OPENCLAW_CHARS_PER_TOKEN, openclawResult),
+  ]
+  return {
+    instance: instanceId,
+    agent_type: agentType,
+    query: base.query,
+    result: renderings.find(r => r.native)!.result,
+    renderings,
+    ...(paused ? { disabled: true as const } : {}),
+  }
 }
 
 /**

@@ -560,6 +560,27 @@ de l'équipe.
 ---
 
 ### T30. Rappel « en 3 dimensions » : le moteur sait, la sortie oublie ; les faits déclarés ne sont reliés à rien
+**Fait le 13/11 (première tranche)** : chaque item de rappel porte la raison du match (`matched_by`,
+`via_entity`), son thème, ses entités, son statut (`contested`, `expiring`, `replaces`), sa confiance et,
+sur demande, ses voisins ; options `cutoff` (arrêt sur décrochage, plancher 3), `format: 'blocks'`,
+`preview` (aperçu sans toucher aux compteurs) ; `dropped` dit ce qui a été écarté et pourquoi.
+MCP : `memoria_recall` enrichi (seuil 0,3 par défaut, `format: 'blocks'`), nouvel outil `memoria_brief`.
+Adaptateur OpenClaw : raison et statut dans le bloc injecté quand ils apprennent quelque chose.
+Cognition : déclenchée après `storeFact` et `shareFacts`, sérialisée, rattrapage par route admin et
+commande CLI (heuristique par défaut), amas recalculés. Écran « Ce que voit l'IA » : une question, et
+pour chaque agent ce qu'il reçoit (vue lisible + texte exact), route `POST /v1/admin/recall_preview`.
+Corrigé au passage : le rappel pouvait ressortir par le graphe un fait dormant, supersédé ou `critical`
+(fuite antérieure à T30) ; `total_found` ne compte plus les faits d'un autre client.
+**Reste** : contre-vérification des zones « rappel » et « cognition » du second tour (non faite) ;
+lancer le rattrapage sur les bases réelles (les faits déclarés n'ont pas encore d'entités ni de thème,
+donc 0 bloc en pratique) ; nommer les amas ; afficher la même structure dans l'écran Mémoire et sur la
+carte ; mesurer le seuil sur des requêtes réelles.
+**Connexions aux autres assistants (recherche du 13/11)** : ChatGPT : voie sûre = import périodique de
+l'export des conversations (rien ne sort du poste) ; le branchement direct passe par un tunnel et un
+compte développeur. Grok : pas de serveur MCP local dans l'application ; API avec appel de fonctions
+et relais local, ou connecteur distant avec tunnel (déconseillé pour des données privées).
+OpenClaw : déjà branché (adaptateur).
+
 **Demande du 08/11** : l'information doit arriver à l'agent structurée (sens, temps, confiance, liens entre
 sujets), pas comme une liste plate ; l'agent doit pouvoir dire ce que ce format lui apporte.
 

@@ -108,13 +108,17 @@ export function reinforceCooccurrence(db: Database, entityIds: string[], factId:
  * Retourne des fact_ids (PAS le contenu) : l'appelant les re-résout dans la DB
  * autorisée, jamais en contournant le pré-filtre. Un fait hors `allowedFactIds`
  * n'est jamais ni traversé ni remonté.
+ *
+ * `via_entity` : nom de l'entité par laquelle le voisin a été atteint (celle du
+ * meilleur chemin). Sans elle, le rappel ne peut pas expliquer pourquoi un fait
+ * sans aucun mot de la requête est remonté.
  */
 export function expandByEntities(
   db: Database,
   seedFactIds: string[],
   allowedFactIds: ReadonlySet<string>,
   opts: { maxHops?: number; maxFacts?: number } = {},
-): Array<{ fact_id: string; score: number; hops: number }> {
+): Array<{ fact_id: string; score: number; hops: number; via_entity?: string }> {
   const maxHops = opts.maxHops ?? 2
   const maxFacts = opts.maxFacts ?? 5
   // Germes filtrés : on ne part QUE de faits autorisés.
@@ -128,7 +132,7 @@ export function expandByEntities(
   const visited = new Set<string>(seedEntities)
   const queue: Array<{ entityId: string; hop: number }> = [...seedEntities].map(e => ({ entityId: e, hop: 0 }))
   // Meilleur score par fact_id découvert (hors germes).
-  const scores = new Map<string, { score: number; hops: number }>()
+  const scores = new Map<string, { score: number; hops: number; via: string }>()
   const getRelations = db.prepare(
     'SELECT from_entity, to_entity, weight FROM relations WHERE from_entity = ? OR to_entity = ?',
   )
@@ -152,7 +156,12 @@ export function expandByEntities(
         // jamais un germe (déjà connu de l'appelant).
         if (!allowedFactIds.has(fact_id) || seeds.includes(fact_id)) continue
         const prev = scores.get(fact_id)
-        if (!prev || prev.score < score) scores.set(fact_id, { score, hops: hop + 1 })
+        // À score égal, on retient l'entité que le voisin PARTAGE avec les
+        // germes : c'est elle qui explique le lien (sinon l'ordre des lignes
+        // SQL déciderait, et l'explication changerait d'un rappel à l'autre).
+        const better =
+          !prev || prev.score < score || (prev.score === score && seedEntities.has(neighbor) && !seedEntities.has(prev.via))
+        if (better) scores.set(fact_id, { score, hops: hop + 1, via: neighbor })
       }
       if (!visited.has(neighbor)) {
         visited.add(neighbor)
@@ -161,10 +170,23 @@ export function expandByEntities(
     }
   }
 
-  return [...scores.entries()]
-    .map(([fact_id, v]) => ({ fact_id, score: v.score, hops: v.hops }))
+  const top = [...scores.entries()]
+    .map(([fact_id, v]) => ({ fact_id, score: v.score, hops: v.hops, via: v.via }))
     .sort((a, b) => b.score - a.score)
     .slice(0, maxFacts)
+  // Noms des entités de passage : une seule requête, sur les seuls voisins gardés.
+  const viaIds = [...new Set(top.map(t => t.via))]
+  const names = new Map<string, string>()
+  if (viaIds.length > 0) {
+    const rows = db
+      .prepare(`SELECT id, name FROM entities WHERE id IN (${viaIds.map(() => '?').join(',')})`)
+      .all(...viaIds) as Array<{ id: string; name: string }>
+    for (const r of rows) names.set(r.id, r.name)
+  }
+  return top.map(({ via, ...rest }) => {
+    const name = names.get(via)
+    return name ? { ...rest, via_entity: name } : rest
+  })
 }
 
 /** Entités liées à un ensemble de faits (via la table de jointure). */

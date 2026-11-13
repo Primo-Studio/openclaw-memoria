@@ -1160,3 +1160,262 @@ export interface LlmUsageReport {
 export async function getLlmUsage(period: LlmUsagePeriod = '24h'): Promise<LlmUsageReport> {
   return request<LlmUsageReport>('GET', `/v1/admin/llm_usage?period=${period}`)
 }
+
+// ------------------------------------------------- aperçu du rappel (T30)
+
+/** Raison d'un match (miroir de core RecallMatch). */
+export type RecallMatch = 'text' | 'meaning' | 'graph' | 'context' | 'pinned'
+
+/** Voisin d'un souvenir par entité partagée (miroir de core RecallLink). */
+export interface RecallPreviewLink {
+  id: string
+  excerpt: string
+  via: string
+}
+
+/**
+ * Souvenir tel que le moteur le rend (miroir de core RecallItem). Les champs
+ * d'enrichissement sont tous optionnels : le moteur ne les émet que s'ils ont
+ * une valeur, et un service plus ancien n'en émet aucun.
+ */
+export interface RecallPreviewItem {
+  id: string
+  kind: string
+  content: string
+  category: string
+  score: number
+  created_at: string
+  origin?: string
+  revision?: { kind: string; replacement_fact_id?: string }
+  matched_by?: RecallMatch[]
+  via_entity?: string
+  topic?: { id: string; name: string }
+  entities?: string[]
+  status?: string
+  trust?: { confidence: number; used_count: number; recall_count: number }
+  links?: RecallPreviewLink[]
+}
+
+/** Regroupement par thème (miroir de core RecallBlock). */
+export interface RecallPreviewBlock {
+  title: string
+  topic_id?: string
+  item_ids: string[]
+  latest_id: string
+  entities?: string[]
+  loose?: boolean
+}
+
+export interface RecallPreviewDropped {
+  reason: string
+  count: number
+}
+
+/** Les trois formes sous lesquelles un rappel part vers un agent. */
+export type RecallRenderId = 'mcp' | 'blocks' | 'openclaw'
+export const RECALL_RENDER_IDS: readonly RecallRenderId[] = ['mcp', 'blocks', 'openclaw']
+
+/** Résultat d'un rappel, réduit à ce que l'écran lit (miroir de core RecallResult). */
+export interface RecallPreviewResult {
+  items: RecallPreviewItem[]
+  /** Blocs calculés par le moteur ; absent = l'écran regroupe lui-même. */
+  blocks?: RecallPreviewBlock[]
+  dropped: RecallPreviewDropped[]
+}
+
+export interface RecallRender {
+  /** Le texte EXACT envoyé à l'agent sous cette forme. */
+  text: string
+  /** Nombre de tokens compté par le service ; absent = l'écran l'estime. */
+  tokens?: number
+  /**
+   * Le rappel dont CE texte est tiré. Chaque forme a ses réglages (OpenClaw :
+   * autre limite, autre budget, pas de seuil), donc son propre résultat.
+   * Absent avec un service qui n'envoie qu'un résultat pour tous les rendus.
+   */
+  result?: RecallPreviewResult
+}
+
+/** Aperçu normalisé : ce que l'écran « Ce que voit l'IA » manipule. */
+export interface RecallPreview extends RecallPreviewResult {
+  instance: string
+  query: string
+  /**
+   * Mémoire en pause : l'agent ne reçoit rien, ce n'est pas « aucun souvenir ».
+   * `items` dit alors ce qu'il recevrait à la reprise, `renders` ce qu'il
+   * reçoit vraiment pendant la pause.
+   */
+  disabled: boolean
+  /** Forme que CET agent reçoit réellement. `items`, `blocks` et `dropped` sont ceux de son rappel. */
+  native: RecallRenderId
+  renders: Partial<Record<RecallRenderId, RecallRender>>
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v)
+}
+
+function isRenderId(v: unknown): v is RecallRenderId {
+  return typeof v === 'string' && (RECALL_RENDER_IDS as readonly string[]).includes(v)
+}
+
+/** Forme reçue par un agent d'après son type : OpenClaw reçoit un bloc de texte, les autres le JSON MCP. */
+export function nativeRenderOf(agentType: string | undefined): RecallRenderId {
+  return agentType === 'openclaw' ? 'openclaw' : 'mcp'
+}
+
+function isStringArray(v: unknown): v is string[] {
+  return Array.isArray(v) && v.every(x => typeof x === 'string')
+}
+
+/**
+ * Un souvenir sûr à afficher, ou null s'il n'a ni identifiant ni texte.
+ *
+ * POURQUOI champ par champ : l'écran fait `links.map`, `entities.map`,
+ * `topic.name`. Un seul champ d'une autre forme (service plus récent, réponse
+ * abîmée) ferait planter tout l'écran. Un champ mal formé est donc retiré, et
+ * le souvenir reste affiché avec ce qui est lisible.
+ */
+function normalizePreviewItem(raw: unknown): RecallPreviewItem | null {
+  if (!isRecord(raw) || typeof raw['id'] !== 'string' || typeof raw['content'] !== 'string') return null
+  const str = (key: string): string | undefined => (typeof raw[key] === 'string' ? (raw[key] as string) : undefined)
+  const item: RecallPreviewItem = {
+    id: raw['id'],
+    kind: str('kind') ?? '',
+    content: raw['content'],
+    category: str('category') ?? '',
+    score: typeof raw['score'] === 'number' && Number.isFinite(raw['score']) ? raw['score'] : 0,
+    created_at: str('created_at') ?? '',
+  }
+  const origin = str('origin')
+  if (origin) item.origin = origin
+  const status = str('status')
+  if (status) item.status = status
+  const via = str('via_entity')
+  if (via) item.via_entity = via
+  const revision = raw['revision']
+  if (isRecord(revision) && typeof revision['kind'] === 'string') {
+    item.revision = {
+      kind: revision['kind'],
+      ...(typeof revision['replacement_fact_id'] === 'string' ? { replacement_fact_id: revision['replacement_fact_id'] } : {}),
+    }
+  }
+  if (Array.isArray(raw['matched_by'])) item.matched_by = raw['matched_by'].filter((m): m is RecallMatch => typeof m === 'string')
+  const topic = raw['topic']
+  if (isRecord(topic) && typeof topic['id'] === 'string' && typeof topic['name'] === 'string') item.topic = { id: topic['id'], name: topic['name'] }
+  if (Array.isArray(raw['entities'])) item.entities = raw['entities'].filter((e): e is string => typeof e === 'string')
+  const trust = raw['trust']
+  if (isRecord(trust) && typeof trust['confidence'] === 'number') {
+    item.trust = {
+      confidence: trust['confidence'],
+      used_count: typeof trust['used_count'] === 'number' ? trust['used_count'] : 0,
+      recall_count: typeof trust['recall_count'] === 'number' ? trust['recall_count'] : 0,
+    }
+  }
+  if (Array.isArray(raw['links'])) {
+    item.links = raw['links'].flatMap(l =>
+      isRecord(l) && typeof l['id'] === 'string' && typeof l['excerpt'] === 'string'
+        ? [{ id: l['id'], excerpt: l['excerpt'], via: typeof l['via'] === 'string' ? l['via'] : '' }]
+        : [],
+    )
+  }
+  return item
+}
+
+/**
+ * Un bloc sûr à afficher, ou null. Un bloc de thème sans titre est refusé : il
+ * donnerait un intertitre vide. Ses souvenirs ne sont pas perdus, l'écran range
+ * dans « Autres souvenirs » tout souvenir qu'aucun bloc ne cite (viewBlocks).
+ */
+function normalizePreviewBlock(raw: unknown): RecallPreviewBlock | null {
+  if (!isRecord(raw) || !Array.isArray(raw['item_ids'])) return null
+  const loose = raw['loose'] === true
+  const title = typeof raw['title'] === 'string' ? raw['title'].trim() : ''
+  if (!loose && title === '') return null
+  return {
+    title,
+    item_ids: raw['item_ids'].filter((id): id is string => typeof id === 'string'),
+    latest_id: typeof raw['latest_id'] === 'string' ? raw['latest_id'] : '',
+    ...(typeof raw['topic_id'] === 'string' ? { topic_id: raw['topic_id'] } : {}),
+    ...(isStringArray(raw['entities']) ? { entities: raw['entities'] } : {}),
+    ...(loose ? { loose: true } : {}),
+  }
+}
+
+/** Résultat d'un rappel (racine ou rendu) : tableaux vérifiés, entrées illisibles ignorées. */
+function normalizePreviewResult(result: Record<string, unknown>): RecallPreviewResult {
+  const items = (Array.isArray(result['items']) ? result['items'] : []).flatMap(i => normalizePreviewItem(i) ?? [])
+  const blocks = Array.isArray(result['blocks']) ? result['blocks'].flatMap(b => normalizePreviewBlock(b) ?? []) : undefined
+  const dropped = (Array.isArray(result['dropped']) ? result['dropped'] : []).filter(
+    (d): d is RecallPreviewDropped => isRecord(d) && typeof d['reason'] === 'string' && typeof d['count'] === 'number' && d['count'] > 0,
+  )
+  return { items, ...(blocks ? { blocks } : {}), dropped }
+}
+
+/**
+ * Normalise la réponse de POST /v1/admin/recall_preview. Pur, testable.
+ *
+ * Forme attendue (packages/daemon/src/server.ts, `RecallPreviewResponse`) :
+ *   { instance, agent_type, query, result: RecallResult, disabled?,
+ *     renderings: [{ id: 'mcp' | 'blocks' | 'openclaw', native, text, tokens, result }] }
+ *
+ * POURQUOI un résultat par rendu : un agent OpenClaw ne reçoit pas le même
+ * rappel qu'un agent MCP (autre limite, autre budget, pas de seuil). La vue
+ * « Lisible » et le résumé doivent décrire le rappel du rendu NATIF, sinon ils
+ * montrent des souvenirs que l'agent ne reçoit pas. On lit donc le résultat du
+ * rendu natif, et celui de la racine seulement si le rendu n'en porte pas
+ * (service qui n'envoie qu'un résultat).
+ *
+ * POURQUOI tolérant : l'UI doit rester lisible devant un service un peu plus
+ * ancien ou un peu plus récent qu'elle. Un champ absent ou mal formé est
+ * ignoré, jamais inventé : un rendu manquant reste ABSENT et l'écran dit « non
+ * fourni » plutôt que de fabriquer un texte que l'agent n'a jamais reçu.
+ */
+export function normalizeRecallPreview(raw: unknown, fallback: { instance: string; query: string; agentType?: string }): RecallPreview {
+  const root = isRecord(raw) ? raw : {}
+
+  const renders: Partial<Record<RecallRenderId, RecallRender>> = {}
+  let declared: RecallRenderId | undefined
+  for (const r of Array.isArray(root['renderings']) ? root['renderings'] : []) {
+    if (!isRecord(r) || !isRenderId(r['id']) || typeof r['text'] !== 'string') continue
+    const tokens = r['tokens']
+    renders[r['id']] = {
+      text: r['text'],
+      ...(typeof tokens === 'number' && Number.isFinite(tokens) && tokens >= 0 ? { tokens } : {}),
+      ...(isRecord(r['result']) ? { result: normalizePreviewResult(r['result']) } : {}),
+    }
+    if (r['native'] === true && !declared) declared = r['id']
+  }
+
+  const agentType = typeof root['agent_type'] === 'string' ? root['agent_type'] : fallback.agentType
+  const native = declared ?? nativeRenderOf(agentType)
+  const result = renders[native]?.result ?? normalizePreviewResult(isRecord(root['result']) ? root['result'] : root)
+  return {
+    instance: typeof root['instance'] === 'string' ? root['instance'] : fallback.instance,
+    query: typeof root['query'] === 'string' ? root['query'] : fallback.query,
+    disabled: root['disabled'] === true,
+    ...result,
+    native,
+    renders,
+  }
+}
+
+/**
+ * Exécute le VRAI rappel de l'agent `instance`, en aperçu : le service ne
+ * touche ni aux compteurs d'usage ni au journal (option `preview` du moteur).
+ * Un 404 « route inconnue » remonte en ApiError : l'écran le traduit en
+ * « service plus ancien » (voir isOldServiceError).
+ */
+/**
+ * Vrai si l'erreur vient d'un service qui ne connaît pas encore la route.
+ * Le même code 404 sert aussi à « instance inconnue » (agent supprimé entre
+ * temps) : celui-là reste une erreur ordinaire, avec « Réessayer ».
+ */
+export function isOldServiceError(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 404 && !/instance/i.test(err.message)
+}
+
+export async function previewRecall(instance: string, query: string, agentType?: string): Promise<RecallPreview> {
+  const raw = await request<unknown>('POST', '/v1/admin/recall_preview', { instance, query })
+  return normalizeRecallPreview(raw, { instance, query, ...(agentType ? { agentType } : {}) })
+}

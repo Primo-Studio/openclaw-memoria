@@ -8,6 +8,7 @@ import {
   Brain,
   ClipboardCheck,
   Cpu,
+  Eye,
   GitCompareArrows,
   LayoutDashboard,
   ListOrdered,
@@ -24,7 +25,7 @@ import {
 } from 'lucide-react'
 
 export type ScreenId =
-  | 'dashboard' | 'agents' | 'memory' | 'map' | 'themes' | 'patterns' | 'procedures'
+  | 'dashboard' | 'agents' | 'memory' | 'map' | 'agent-view' | 'themes' | 'patterns' | 'procedures'
   | 'review' | 'revisions' | 'maintenance' | 'sharing' | 'persons' | 'vault' | 'system' | 'audit' | 'settings' | 'docs'
 
 export interface NavItemDef {
@@ -63,6 +64,9 @@ export const NAV_GROUPS: NavGroupDef[] = [
       { id: 'review', icon: ClipboardCheck },
       { id: 'themes', icon: Tags },
       { id: 'map', icon: Orbit },
+      // Juste après la carte : la carte montre ce que la mémoire CONTIENT,
+      // cet écran ce qu'un agent en REÇOIT pour une question donnée.
+      { id: 'agent-view', icon: Eye },
     ],
   },
   {

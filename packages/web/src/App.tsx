@@ -17,6 +17,7 @@ import { Memory } from './screens/Memory'
 import { Review } from './screens/Review'
 import { Themes } from './screens/Themes'
 import { MemoryMapScreen } from './screens/MemoryMap'
+import { AgentView } from './screens/AgentView'
 import { Patterns } from './screens/Patterns'
 import { Procedures } from './screens/Procedures'
 import { Revisions } from './screens/Revisions'
@@ -100,6 +101,7 @@ export function App() {
       {screen === 'memory' && <Memory />}
       {screen === 'themes' && <Themes />}
       {screen === 'map' && <MemoryMapScreen />}
+      {screen === 'agent-view' && <AgentView />}
       {screen === 'patterns' && <Patterns />}
       {screen === 'procedures' && <Procedures />}
       {screen === 'review' && <Review />}

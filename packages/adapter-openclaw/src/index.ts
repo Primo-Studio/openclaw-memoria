@@ -125,13 +125,13 @@ function readConfig(raw: Record<string, unknown> | undefined): AdapterConfig {
     injectionMode: c['injectionMode'] === 'corpus' || c['injectionMode'] === 'both' ? c['injectionMode'] : 'hooks',
     autoRecall: c['autoRecall'] !== false,
     autoCapture: c['autoCapture'] !== false,
-    recallLimit: clampInt(c['recallLimit'], 12, 1, 20),
+    recallLimit: clampInt(c['recallLimit'], RECALL_DEFAULTS.recallLimit, 1, 20),
     // 2 s et non 800 ms : avec des embeddings distants (openai/text-embedding-3-
     // small depuis le 24/08), un recall mesuré fait 425–929 ms et 1 845 ms à
     // froid ; à 800 ms, 1 tour sur 6 perdait sa mémoire sans que personne le voie.
     recallTimeoutMs: clampInt(c['recallTimeoutMs'], DEFAULT_RECALL_TIMEOUT_MS, 100, 5000),
-    tokenBudget: clampInt(c['tokenBudget'], 600, 100, 4000),
-    relevanceFloor: clampFloat(c['relevanceFloor'], 0.15, 0, 0.9),
+    tokenBudget: clampInt(c['tokenBudget'], RECALL_DEFAULTS.tokenBudget, 100, 4000),
+    relevanceFloor: clampFloat(c['relevanceFloor'], RECALL_DEFAULTS.relevanceFloor, 0, 0.9),
     showProvenance: c['showProvenance'] !== false,
     projectId: str(c['projectId']),
     clientOrgId: str(c['clientOrgId']),
@@ -140,6 +140,18 @@ function readConfig(raw: Record<string, unknown> | undefined): AdapterConfig {
 }
 
 export const DEFAULT_RECALL_TIMEOUT_MS = 2_000
+
+/**
+ * Réglages par défaut du rappel injecté. Exportés parce que l'aperçu humain du
+ * daemon (« ce que cet agent reçoit ») applique les mêmes valeurs, recopiées
+ * dans OPENCLAW_RECALL_DEFAULTS du core : un test vérifie qu'elles sont égales.
+ */
+export const RECALL_DEFAULTS = {
+  recallLimit: 12,
+  tokenBudget: 600,
+  relevanceFloor: 0.15,
+  showProvenance: true,
+} as const
 
 function clampInt(v: unknown, def: number, min: number, max: number): number {
   const n = typeof v === 'number' ? v : Number(v)
@@ -356,6 +368,18 @@ export interface RecallItem {
   created_at?: string
   scope_id?: string
   source_db?: string
+  // --- Enrichissement T30 (cf. RecallItem du core). Tous optionnels : un
+  // daemon antérieur ne les sert pas, et le bloc injecté reste alors identique.
+  /** Pourquoi ce souvenir est sorti : 'text', 'meaning', 'graph', 'context', 'pinned'. */
+  matched_by?: string[]
+  /** Nom de l'entité qui a mené à ce voisin de graphe. */
+  via_entity?: string
+  topic?: { id: string; name: string }
+  entities?: string[]
+  /** contested = révision en attente ; expiring = expire bientôt ; replaces = a remplacé un autre fait. */
+  status?: 'contested' | 'expiring' | 'replaces'
+  trust?: { confidence: number; used_count: number; recall_count: number }
+  links?: Array<{ id: string; excerpt: string; via: string }>
 }
 
 export interface FormatRecallOptions {
@@ -423,6 +447,47 @@ export function contestedPrefix(item: RecallItem): string {
   }
 }
 
+const NOTE_LABEL_MAX = 32
+
+/** Libellé venu de l'extraction automatique (nom d'entité) : nettoyé et borné. */
+function noteLabel(text: string): string {
+  return sanitizeMemory(String(text))
+    .replace(/[[\]#"]/g, '')
+    .slice(0, NOTE_LABEL_MAX)
+    .trim()
+}
+
+/**
+ * Raisons qui n'apprennent rien : un souvenir remonté par ses mots ou par son
+ * sens est une réponse directe, c'est ce que l'agent suppose déjà. Le moteur
+ * pose l'une des deux sur presque chaque ligne : les écrire coûtait 80 à 400
+ * caractères d'un bloc de 2 400, soit un souvenir de moins à budget égal.
+ */
+const DIRECT_MATCH = new Set(['text', 'meaning'])
+
+/**
+ * Note de fin de ligne, écrite SEULEMENT quand elle apprend quelque chose :
+ * le souvenir n'est pas une réponse directe (`graph:<entité>`, `context`,
+ * `pinned`) ou il a un statut. Exemple : ` [graph:Atlas · expiring]`. Même
+ * vocabulaire que le format en blocs du core.
+ *
+ * Sans cette note, un voisin de graphe (trouvé par une entité commune, pas par
+ * les mots de la question) se lisait comme une réponse directe. « contested »
+ * n'est pas répété quand le préfixe ⚠ de la révision le dit déjà.
+ */
+export function recallNote(item: RecallItem): string {
+  const parts: string[] = []
+  const why = (Array.isArray(item.matched_by) ? item.matched_by : [])
+    .filter(m => !DIRECT_MATCH.has(m))
+    .map(m => (m === 'graph' && item.via_entity ? `graph:${noteLabel(item.via_entity)}` : noteLabel(m)))
+    .filter(Boolean)
+  if (why.length > 0) parts.push(why.join('+'))
+  if (item.status === 'expiring') parts.push('expiring')
+  else if (item.status === 'replaces') parts.push('replaces an older memory')
+  else if (item.status === 'contested' && !item.revision) parts.push('contested')
+  return parts.length > 0 ? ` [${parts.join(' · ')}]` : ''
+}
+
 const CHARS_PER_TOKEN = 4
 
 /**
@@ -440,6 +505,9 @@ const SECTIONS: Array<{ kind: RecallItem['kind']; title: string }> = [
 /**
  * Formate les souvenirs en bloc Markdown injectable, groupé par TYPE.
  *
+ * ⚠ Copie miroir dans le core (engine/recall-format-openclaw.ts), utilisée par
+ * l'aperçu humain du daemon : modifier les deux ensemble (test de parité).
+ *
  * Une liste à plat mélangeait un fait durable, une procédure et une observation
  * ponctuelle sur le même plan — l'agent lisait alors un épisode passé comme une
  * règle permanente. Les sections rendent le statut explicite, et le plancher
@@ -449,7 +517,7 @@ const SECTIONS: Array<{ kind: RecallItem['kind']; title: string }> = [
 export function formatRecall(items: RecallItem[], opts: FormatRecallOptions = {}): string {
   if (!items || items.length === 0) return ''
   const floor = opts.relevanceFloor ?? 0
-  const budgetChars = (opts.tokenBudget ?? 600) * CHARS_PER_TOKEN
+  const budgetChars = (opts.tokenBudget ?? RECALL_DEFAULTS.tokenBudget) * CHARS_PER_TOKEN
 
   const ranked = [...items].sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
   const top = ranked[0]?.score ?? 0
@@ -473,8 +541,14 @@ export function formatRecall(items: RecallItem[], opts: FormatRecallOptions = {}
       const text = sanitizeMemory(item.content)
       if (!text) continue
       const stamp = opts.showProvenance && item.created_at ? ` _(${item.created_at.slice(0, 10)})_` : ''
-      const line = `- ${contestedPrefix(item)}${originPrefix(item)}${text}${stamp}`
-      const cost = line.length + 1 + (headerPending ? headerPending.join('\n').length + 1 : 0)
+      const base = `- ${contestedPrefix(item)}${originPrefix(item)}${text}${stamp}`
+      const headerCost = headerPending ? headerPending.join('\n').length + 1 : 0
+      // La note compte dans le budget comme le reste de la ligne. Si elle seule
+      // fait déborder, on garde le souvenir sans elle : le contenu passe avant
+      // son explication.
+      let line = base + recallNote(item)
+      if (used + line.length + 1 + headerCost > budgetChars) line = base
+      const cost = line.length + 1 + headerCost
       if (used + cost > budgetChars) break
       if (headerPending) {
         lines.push(...headerPending)

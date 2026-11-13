@@ -95,6 +95,12 @@ export interface FtsHit {
   row: FactRow
   /** Pertinence FTS positive (plus haut = meilleur). */
   relevance: number
+  /**
+   * Branche qui a trouvé le fait. Absent = texte (recherche FTS seule) ; la
+   * recherche hybride précise 'meaning' (vecteurs seuls) ou 'both'. Sert au
+   * rappel à dire POURQUOI un souvenir est sorti.
+   */
+  via?: 'text' | 'meaning' | 'both'
 }
 
 const SENSITIVITY_ORDER: Record<Sensitivity, number> = { normal: 0, sensitive: 1, critical: 2 }

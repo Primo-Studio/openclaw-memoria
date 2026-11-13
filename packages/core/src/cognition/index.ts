@@ -185,18 +185,45 @@ export class CognitionEngine {
     }
   }
 
-  /** Faits actifs jamais traités — ou vus en heuristique seulement, si un LLM est là pour mieux faire. */
-  pendingFactIds(llmAvailable: boolean, limit = 2000): string[] {
+  /**
+   * Faits actifs jamais traités — ou vus en heuristique seulement, si un LLM
+   * est là pour mieux faire.
+   *
+   * ACTIFS au sens du cycle de vie : un fait dormant (en attente de validation)
+   * ou archivé n'entre pas dans le graphe. Sinon il recevait des entités et
+   * devenait atteignable par ses voisins, alors qu'il doit rester invisible au
+   * rappel. Il n'a pas de marqueur : il sort ici dès qu'il est validé.
+   *
+   * `includeBackfill` (rattrapage demandé à la main) reprend aussi les faits
+   * que la migration 11 a marqués `backfill` sans jamais les traiter : c'est le
+   * seul moyen de relier au graphe ce qui existait avant la migration. Un fait
+   * `backfill` n'est « à rattraper » que si son marqueur date de la migration :
+   * le rattrapage heuristique laisse `via = 'backfill'` (pour qu'aucun passage
+   * ordinaire ne renvoie ensuite toute la base au LLM) mais rafraîchit
+   * `processed_at`, ce qui le sort de cette sélection. Sans trace de la
+   * migration (schéma posé autrement), tous les `backfill` sont repris.
+   *
+   * Seuls les `backfill` SANS entité sont repris : la migration a aussi marqué
+   * `backfill` des faits déjà reliés. Les retraiter gonflait mention_count et
+   * les poids de co-occurrence, et empilait des entités heuristiques sur
+   * celles du LLM.
+   */
+  pendingFactIds(llmAvailable: boolean, limit = 2000, opts: { includeBackfill?: boolean } = {}): string[] {
     const rows = this.db
       .prepare(
         `SELECT f.id FROM facts f
          LEFT JOIN fact_cognition fc ON fc.fact_id = f.id
          WHERE f.superseded = 0
-           AND (fc.fact_id IS NULL OR (fc.via = 'heuristic' AND ? = 1))
+           AND f.lifecycle_state = 'active'
+           AND (fc.fact_id IS NULL
+             OR (fc.via = 'heuristic' AND ? = 1)
+             OR (? = 1 AND fc.via = 'backfill' AND fc.processed_at <= COALESCE(
+                  (SELECT MAX(applied_at) FROM schema_migrations WHERE name = 'cognition-processed'), '9999')
+                AND NOT EXISTS (SELECT 1 FROM fact_entities fe WHERE fe.fact_id = f.id)))
          ORDER BY f.created_at
          LIMIT ?`,
       )
-      .all(llmAvailable ? 1 : 0, limit) as Array<{ id: string }>
+      .all(llmAvailable ? 1 : 0, opts.includeBackfill ? 1 : 0, limit) as Array<{ id: string }>
     return rows.map(r => r.id)
   }
 
@@ -215,11 +242,17 @@ export class CognitionEngine {
     const scopes = [...allowedScopeIds]
     if (scopes.length === 0 || seedFactIds.length === 0) return []
     // Pré-filtre permissions transposé en ensemble de fact_ids autorisés :
-    // actifs (superseded = 0) ET dans un scope autorisé. C'est l'équivalent
-    // local du filtre DUR §6.1 — le graphe ne voit JAMAIS au-delà.
+    // non remplacés, ACTIFS, de sensibilité rappelable, ET dans un scope
+    // autorisé. C'est l'équivalent local du filtre DUR §6.1 : le graphe ne voit
+    // JAMAIS au-delà. Sans le cycle de vie et la sensibilité, un fait dormant
+    // ou « critical » déjà relié remontait en entier par un voisin.
     const placeholders = scopes.map(() => '?').join(',')
     const allowedRows = this.db
-      .prepare(`SELECT id FROM facts WHERE superseded = 0 AND scope_id IN (${placeholders})`)
+      .prepare(
+        `SELECT id FROM facts
+         WHERE superseded = 0 AND lifecycle_state = 'active' AND sensitivity IN ('normal','sensitive')
+           AND scope_id IN (${placeholders})`,
+      )
       .all(...scopes) as Array<{ id: string }>
     const allowed = new Set(allowedRows.map(r => r.id))
     return expandByEntities(this.db, seedFactIds, allowed, opts)
@@ -299,7 +332,7 @@ export type { Procedure as ProceduralProcedure, ProcedureMatch, StoreProcedureIn
 export { FeedbackEngine, feedbackMigrations, ensureFeedbackSchema } from './feedback.js'
 export type { FeedbackEngineOptions, ReinforceOptions, ReinforceResult, Expertise, FeedbackStats } from './feedback.js'
 export { ClusterEngine, clusterMigrations, ensureClusterSchema } from './clusters.js'
-export type { ClusterEngineOptions } from './clusters.js'
+export type { ClusterEngineOptions, RebuildAsyncOptions as ClusterRebuildAsyncOptions } from './clusters.js'
 export { detectContradiction } from './contradiction.js'
 export type { Contradiction, DetectContradictionOptions } from './contradiction.js'
 export { SelfObservationEngine, selfObservationMigrations, ensureSelfObservationSchema, SELF_OBSERVATION_KINDS } from './self-observation.js'

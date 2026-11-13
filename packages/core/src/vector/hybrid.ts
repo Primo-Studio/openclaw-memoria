@@ -19,6 +19,13 @@ export interface HybridSearchOptions extends FtsSearchOptions {
 }
 
 const RRF_K = 60
+/**
+ * Le KNN renvoie toujours ses `limit × 2` plus proches voisins, même lointains :
+ * dans une petite base, TOUT fait serait « trouvé par le sens ». Pour un fait
+ * déjà trouvé par les mots, on ne compte le sens comme raison que s'il est dans
+ * les premiers rangs vectoriels.
+ */
+const MEANING_TOP_RANK = 10
 
 export function hybridSearchFacts(store: ContentStore, query: string, opts: HybridSearchOptions = {}): FtsHit[] {
   const ftsHits = store.searchFacts(query, opts)
@@ -67,11 +74,13 @@ export function hybridSearchFacts(store: ContentStore, query: string, opts: Hybr
     lexRelById.set(hit.row.id, hit.relevance)
     scores.set(hit.row.id, { row: hit.row, score: (RRF_K / 2) * (1 / (RRF_K + rank + 1)) })
   })
+  const vecRankById = new Map<string, number>()
   let vecRank = 0
   for (const hit of knnHits) {
     const row = allowedById.get(hit.fact_id)
     if (!row) continue // bloqué par permissions — le vectoriel ne les contourne pas
     const inc = (RRF_K / 2) * (1 / (RRF_K + vecRank + 1))
+    vecRankById.set(row.id, vecRank)
     vecRank++
     const existing = scores.get(row.id)
     if (existing) existing.score += inc
@@ -88,6 +97,10 @@ export function hybridSearchFacts(store: ContentStore, query: string, opts: Hybr
     .map(s => {
       const rrf = Math.min(1, s.score)
       const lex = lexRelById.get(s.row.id) ?? 0
-      return { row: s.row, relevance: rrf * (0.4 + 0.6 * lex) }
+      const byText = lexRelById.has(s.row.id)
+      const rank = vecRankById.get(s.row.id)
+      const byMeaning = rank !== undefined && (!byText || rank < MEANING_TOP_RANK)
+      const via: FtsHit['via'] = byText ? (byMeaning ? 'both' : 'text') : 'meaning'
+      return { row: s.row, relevance: rrf * (0.4 + 0.6 * lex), via }
     })
 }

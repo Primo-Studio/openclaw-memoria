@@ -5,7 +5,7 @@
 export { startDaemon, DAEMON_VERSION, DaemonLockHeldError } from './server.js'
 export { startWithStandby } from './standby.js'
 export type { StandbyOptions } from './standby.js'
-export type { DaemonControlHooks, DaemonOptions, DaemonUpdaterHooks, RunningDaemon } from './server.js'
+export type { CognitionCatchupState, DaemonControlHooks, DaemonOptions, DaemonUpdaterHooks, RunningDaemon } from './server.js'
 export { ImportJobRunner } from './import-job.js'
 export type { ImportJobKind, ImportJobProgress, ImportJobState, ImportJobStatus } from './import-job.js'
 export { DaemonClient, ensureDaemon, daemonBinPath, daemonProgramArguments, waitForDaemon, waitForExit } from './client.js'
