@@ -3,7 +3,7 @@
  * chemin HTTP admin avec fetch mocké, gardes de forget.
  * Aucun réseau réel (fetch stubé), aucun vrai HOME (tmpdir + --config).
  */
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
@@ -156,6 +156,141 @@ describe('doctor', () => {
     expect(io.out()).not.toContain('daemon arrêté')
     expect(io.out()).toContain('État : ✓ OK')
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/v1/admin/doctor'), expect.anything())
+  })
+
+  // Un daemon figé par un import ne répond pas au health : le doctor le disait
+  // « arrêté » et ouvrait les bases à côté de lui, au moment où on venait
+  // justement chercher pourquoi il ne répondait pas.
+  const liveDaemonState = (pid: number): void => {
+    mkdirSync(root, { recursive: true })
+    writeDaemonState(root, { daemon_id: 'd-test', port: 4242, admin_token: 'token-admin-test', pid, started_at: new Date().toISOString() })
+  }
+
+  it('daemon vivant qui ne répond pas : « bloqué », jamais « arrêté », bases non ouvertes, code 1', async () => {
+    liveDaemonState(process.pid) // le process existe, le health échoue (fetch interdit)
+    const io = makeIo()
+    const code = await buildCli().run(args('doctor', '--wait', '1'), io.context)
+    expect(code).toBe(1)
+    const out = io.out()
+    expect(out).toContain('daemon bloqué')
+    expect(out).toContain(`pid ${process.pid}`)
+    expect(out).not.toContain('daemon arrêté')
+    expect(out).not.toContain('lecture locale')
+    // aucune lecture locale : rien n'a été créé ni ouvert dans le stockage
+    expect(existsSync(join(root, 'registry.sqlite'))).toBe(false)
+  })
+
+  it('daemon bloqué qui reprend la main pendant l’attente : rapport HTTP, délai et réactivité affichés', async () => {
+    liveDaemonState(process.pid)
+    const report = {
+      ok: true,
+      storage_root: root,
+      config_path: cfg,
+      registry_path: join(root, 'registry.sqlite'),
+      databases: [],
+      network_guard: { on_network_volume: false, journal_mode: 'wal' },
+      responsiveness: { max_block_ms_1m: 23_400, max_block_ms_15m: 23_400 },
+      warnings: [],
+    }
+    let healthCalls = 0
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request) => {
+      const u = String(url)
+      if (u.endsWith('/v1/health')) {
+        if (++healthCalls < 3) throw new Error('pas de réponse')
+        return jsonResponse({ ok: true, version: 'test', daemon_id: 'd-test' })
+      }
+      if (u.endsWith('/v1/admin/doctor')) return jsonResponse(report)
+      throw new Error(`URL inattendue : ${u}`)
+    }))
+    const io = makeIo()
+    const code = await buildCli().run(args('doctor', '--wait', '5'), io.context)
+    expect(code).toBe(0)
+    expect(io.out()).toContain('il était bloqué')
+    expect(io.out()).toContain('réactivité : plus long blocage 23,4 s')
+    expect(io.out()).not.toContain('daemon arrêté')
+    expect(existsSync(join(root, 'registry.sqlite'))).toBe(false)
+  })
+
+  // Un daemon relancé après un crash tient le verrou et ouvre ses bases AVANT
+  // d'écrire daemon.json : le doctor ne regardait que daemon.json, le disait
+  // « arrêté » et ouvrait les bases à côté de lui.
+  it('verrou tenu par un process vivant, pas de daemon.json : « bloqué », bases non ouvertes, code 1', async () => {
+    writeFileSync(join(root, 'daemon.lock'), `${process.pid}\n`, 'utf8')
+    const io = makeIo()
+    const code = await buildCli().run(args('doctor', '--wait', '1'), io.context)
+    expect(code).toBe(1)
+    expect(io.out()).toContain('daemon bloqué')
+    expect(io.out()).toContain(`pid ${process.pid}, en cours de démarrage`)
+    expect(io.out()).not.toContain('daemon arrêté')
+    expect(existsSync(join(root, 'registry.sqlite'))).toBe(false)
+  })
+
+  it('verrou tenu, daemon.json écrit pendant l’attente : rapport HTTP du daemon qui vient de démarrer', async () => {
+    writeFileSync(join(root, 'daemon.lock'), `${process.pid}\n`, 'utf8')
+    const report = {
+      ok: true,
+      storage_root: root,
+      config_path: cfg,
+      registry_path: join(root, 'registry.sqlite'),
+      databases: [],
+      network_guard: { on_network_volume: false, journal_mode: 'wal' },
+      warnings: [],
+    }
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request) => {
+      const u = String(url)
+      if (u.endsWith('/v1/health')) return jsonResponse({ ok: true, version: 'test', daemon_id: 'd-test' })
+      if (u.endsWith('/v1/admin/doctor')) return jsonResponse(report)
+      throw new Error(`URL inattendue : ${u}`)
+    }))
+    const timer = setTimeout(() => liveDaemonState(process.pid), 200)
+    const io = makeIo()
+    const code = await buildCli().run(args('doctor', '--wait', '5'), io.context)
+    clearTimeout(timer)
+    expect(code).toBe(0)
+    expect(io.out()).toContain('État : ✓ OK')
+    expect(io.out()).not.toContain('daemon arrêté')
+    expect(existsSync(join(root, 'registry.sqlite'))).toBe(false)
+  })
+
+  it('verrou périmé (pid mort), pas de daemon.json : « daemon arrêté », lecture locale sans attente', async () => {
+    writeFileSync(join(root, 'daemon.lock'), '999999\n', 'utf8')
+    const io = makeIo()
+    const started = Date.now()
+    const code = await buildCli().run(args('doctor'), io.context)
+    expect(code).toBe(0)
+    expect(io.out()).toContain('daemon arrêté')
+    expect(Date.now() - started).toBeLessThan(5000)
+  })
+
+  // Le daemon peut se figer entre le health et le rapport : sans délai sur
+  // l'appel, le doctor restait suspendu sans rien afficher.
+  it('rapport qui n’arrive pas dans le délai : « bloqué », code 1, bases non ouvertes', async () => {
+    liveDaemonState(process.pid)
+    let doctorSignal: AbortSignal | null | undefined
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const u = String(url)
+      if (u.endsWith('/v1/health')) return jsonResponse({ ok: true, version: 'test', daemon_id: 'd-test' })
+      doctorSignal = init?.signal
+      // Ce que fetch lève quand AbortSignal.timeout expire.
+      throw new DOMException('délai dépassé', 'TimeoutError')
+    }))
+    const io = makeIo()
+    const code = await buildCli().run(args('doctor'), io.context)
+    expect(code).toBe(1)
+    expect(doctorSignal).toBeInstanceOf(AbortSignal)
+    expect(io.out()).toContain('daemon bloqué')
+    expect(io.out()).toContain('n’a pas rendu son rapport')
+    expect(existsSync(join(root, 'registry.sqlite'))).toBe(false)
+  })
+
+  it('daemon.json dont le process est mort : « daemon arrêté », lecture locale sans attente', async () => {
+    liveDaemonState(999_999) // pid inexistant
+    const io = makeIo()
+    const started = Date.now()
+    const code = await buildCli().run(args('doctor'), io.context)
+    expect(code).toBe(0)
+    expect(io.out()).toContain('daemon arrêté')
+    expect(Date.now() - started).toBeLessThan(5000)
   })
 })
 

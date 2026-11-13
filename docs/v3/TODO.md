@@ -488,11 +488,125 @@ Le dépôt et l'app sont publics (Apache-2.0, README anglais).
 - [ ] Reste vrai : `onboarding.engine.ollamaHint` dit encore « Recommandé » pour Ollama alors que
       Réglages et Docs recommandent OpenAI.
 
+### T28. Carte des souvenirs (demande du 08/11) — ✅ MVP fait le 13/11
+**Fait le 13/11** : écran « Carte » (`packages/web/src/screens/MemoryMap.tsx`, canvas 2D sans dépendance),
+routes `GET /v1/admin/memory_map`, `POST /v1/admin/memory_map/rebuild`, `GET /v1/admin/memory_map/links`,
+moteur `packages/core/src/cognition/projection.ts` (composantes principales à 100 dimensions puis UMAP,
+dans un worker thread) et `memory-map.ts` (cache `fact_projection`, migration 8). Tous les agents dans le
+même espace, couleur par agent ou par catégorie, taille = rappels, survol, clic = voisins par le sens +
+souvenirs reliés par une entité rare, recherche, curseur de temps, légende cliquable, clair/sombre,
+5 langues, démo `ui:preview` sur données fictives. **Mesuré sur 4 460 souvenirs réels** : calcul en 12 à
+120 s selon la charge, daemon jamais bloqué plus de 15 ms par le calcul ; 32 % des 10 vrais voisins
+conservés (8 % avec la première variante, projection aléatoire à 32 dimensions).
+**Reste** : placer un nouveau souvenir sans tout recalculer (aujourd'hui : recalcul auto au-delà de 5 %
+de retard, bouton « Mettre à jour » sinon) ; nommer les amas (lié à T30) ; lien direct vers le souvenir
+dans Mémoire ; les 1 025 vecteurs `nomic` de l'ancien modèle ne sont pas sur la carte.
+
+Plan d'origine :
+**Décision** : la ligne « Carte 3D UMAP hors périmètre » du 24/08 est levée le 08/11 par le propriétaire
+du produit. Ordre : d'abord le chantier daemon de la semaine (import qui bloque, ticket #27), puis la carte.
+
+**Mesuré le 08/11** : ~4 400 souvenirs actifs sur 3 agents, 100 % avec embeddings (OpenAI 1536 +
+nomic 768) ; graphe d'entités bruité (83 % de `related_to` par co-occurrence ; entités les plus citées :
+une date, « README », « thread », « Pour ») ; presque un thème par souvenir (71 thèmes sur 1 214 ont
+≥ 3 faits sur la plus grosse base) ; un graphe circulaire SVG des thèmes existe déjà
+(`packages/web/src/screens/Themes.tsx` → `ThemeRelations`, route `GET /v1/admin/topic_relations`,
+`Memoria.topicRelations`). **Ne rien perdre de cet onglet Relations.**
+
+**Choix** : position = sens (projection 2D des embeddings), pas les liens devinés ni les thèmes ; les fils
+n'apparaissent qu'au survol, autour du souvenir regardé. Bibliothèque intégrée (pas un projet entier) :
+`react-force-graph-2d` (Canvas, suffisant jusqu'à ~10 k points) ou `@cosmograph/cosmos` (GPU) si on
+dépasse. Projection calculée côté daemon et mise en cache ; le navigateur ne fait qu'afficher.
+
+**Plan MVP (1 jour)** :
+- [ ] core : projection 2D des embeddings (`umap-js` sous Node) par instance, cache en table
+      (`fact_projection` : fact_id, model, x, y, computed_at), recalcul incrémental (un nouveau fait est
+      placé près de ses voisins sans tout recalculer) ;
+- [ ] daemon : `GET /v1/admin/memory_map?instance=` → points `{id, x, y, label, category, topic_id,
+      created_at, recall_count}` ; `GET /v1/admin/memory_map/links?fact=` → arêtes vers les voisins
+      (entités partagées, même thème, relations typées ; jamais `related_to` seul) ;
+- [ ] web : écran « Carte » (ou onglet dans Thèmes) : nuage de points, couleur = agent ou thème (ordre
+      fixe, légende), taille = importance ou rappels, survol = fils + texte du souvenir, clic = ouvre le
+      souvenir, filtres agent / thème / période, curseur temps (les souvenirs s'allument dans l'ordre
+      d'apparition) ; clair/sombre suivant le système ; i18n 5 langues ;
+- [ ] démo `ui:preview` : données fictives uniquement (dépôt public) ;
+- [ ] tests : projection déterministe (graine fixe) sur un petit corpus, route sans `instance` → 400,
+      rendu 0 / 1 / 5 000 points.
+
+**Hors MVP** : 3D, animation de la simulation, édition des liens. **Effort** : M (1 jour).
+
+### T29. Partage d'équipe (espace `org`) : jamais testé en réel, et aucun agent ne peut y écrire
+**Mesuré le 08/11** : `memoria sync status` → synchro désactivée, rôle spoke, aucun hub, 0 pair. Les deux
+Macs de l'équipe n'étaient pas joignables depuis ce poste (état Memoria inconnu, cf. T15). Le scope
+`org` existe (« Mon organisation », `org_type = own_company`) avec **0 fait** ; une seule politique le
+référence (`can_read = 1, can_write = 0`) ; l'outil MCP `memoria_store_fact` n'accepte que
+`scope: private | user` → **aucun agent ne peut alimenter l'espace d'entreprise**.
+
+**Besoin produit** : les agents des collègues (montage vidéo, publication d'apps) partagent les process
+d'équipe via `org` ; l'espace `user` (personnel au propriétaire) ne doit jamais partir vers les machines
+de l'équipe.
+- [ ] MCP + daemon : `scope: 'org'` accepté par `memoria_store_fact` (+ `can_write = 1` sur la politique
+      `org` des agents choisis) ; refus clair sinon ;
+- [ ] écran Organisations & projets (cf. T25) ou au minimum une commande CLI pour créer l'org et poser
+      les politiques ;
+- [ ] `allowed_scopes` par pair : un Mac d'équipe ne reçoit que `org` par défaut (jamais `user`) ; test
+      automatisé d'isolation dans le benchmark ;
+- [ ] test réel à deux machines (même build, hub = le Mac toujours allumé) : **positif** = un fait `org`
+      écrit par l'agent d'un collègue est rappelé ici ; **négatif** = un fait `user` du propriétaire
+      n'apparaît pas chez le collègue ; consigner les timings et les obstacles (IP, pare-feu).
+
+**Effort** : M (hors T15 incrément 6). Dépend de T15 pour le confort (découverte réseau).
+
 ---
 
-## ⛔ Hors périmètre (Néto, 24/08, toujours valable)
-Carte 3D UMAP, continuous-learning OpenClaw (`llm_output`), **et toute nouvelle feature avant la
-distribution**.
+### T30. Rappel « en 3 dimensions » : le moteur sait, la sortie oublie ; les faits déclarés ne sont reliés à rien
+**Demande du 08/11** : l'information doit arriver à l'agent structurée (sens, temps, confiance, liens entre
+sujets), pas comme une liste plate ; l'agent doit pouvoir dire ce que ce format lui apporte.
+
+**Mesuré le 08/11** :
+- Le recall (`memoria.ts:869`) est bien hybride : FTS + vecteurs fusionnés RRF par DB, boost
+  context-tree (projet → client → org), boost procédural, hot-tier/decay, expansion graphe 2 sauts /
+  8 faits sans LLM. Mais `RecallItem` (`types.ts:339`) ne transporte que `content, category, score,
+  created_at, origin, revision` : la **raison du match** (texte, sens, voisin de graphe, boost contexte),
+  le **thème**, les **entités**, les **voisins** et les compteurs d'usage sont jetés à la sortie ; le
+  MCP (`serve.ts:78`) arrondit et ne rajoute rien.
+- Le rappel renvoie toujours 10 à 12 items quel que soit l'écart de score (meilleur à 0,79 → les 5
+  derniers à ~0,15 sont du remplissage ; meilleur à 0,29 → même longueur).
+- **Les faits déclarés ne sont pas reliés** : base Claude Code, 197/209 faits `manual` sans entité,
+  209/209 sans thème ni cluster ; 43/43 faits partagés `user` sans entité ; clusters : seulement
+  148 faits chez l'agent OpenClaw, 0 ailleurs. `storeFact` (`memoria.ts:650`) ne contient aucun appel
+  à la cognition ; `processCognition` n'est déclenché qu'après une capture (`memoria.ts:1110`). Les
+  faits les plus précieux (dits par le propriétaire) sont donc hors graphe et hors thèmes.
+- Les faits importés ont tous un thème, mais ~1 thème par fait (T13/T28) : le thème ne groupe pas.
+
+**À faire** :
+- [ ] Rattacher les faits déclarés : déclencher la cognition (entités + thème + cluster) après
+      `storeFact` et `shareFacts`, et un rattrapage (`memoria doctor --cognition` ou commande dédiée)
+      pour l'existant ; vérifier que `processCognition` ramasse bien les faits `manual` (marqueur
+      `fact_cognition`).
+- [ ] `RecallItem` enrichi (rétro-compatible, champs optionnels) : `matched_by` (`text | meaning |
+      graph:<entité> | context`), `topic` (id + libellé), `entities` (≤ 5 noms), `status`
+      (`current | superseded | contested | expiring`), `trust` (origin + used_count + confidence),
+      `links` (≤ 3 voisins : id + 60 caractères + type de lien).
+- [ ] Sortie **groupée** (option `format: 'blocks'` sur `memoria_recall`, défaut inchangé) : blocs =
+      cluster/thème, chacun avec titre, dernier état (fait le plus récent non supersédé), règles,
+      décisions dans l'ordre du temps, puis les faits isolés ; un bloc « écarté » qui dit combien
+      d'items ont été coupés et pourquoi.
+- [ ] **Arrêt sur décrochage** : couper quand le score passe sous 40 % du meilleur (seuil réglable),
+      plancher 3 items ; mesurer sur le benchmark que le rappel utile ne baisse pas.
+- [ ] Outil `memoria_brief(subject)` = « où en est ce sujet » (demande §15 du 03/09) : règles,
+      décisions chronologiques, questions ouvertes, personnes, dernière activité ; même moteur que
+      les blocs.
+- [ ] Afficher la même structure dans l'UI (écran Mémoire : pourquoi ce résultat) et dans la carte
+      (T28) : les blocs = les amas.
+
+**Effort** : M (1 jour pour l'enrichissement + l'arrêt sur décrochage + le rattachement ; 1 jour de plus
+pour les blocs et `memoria_brief`). **Ordre proposé** : daemon (#27) → T28 → T30.
+
+## ⛔ Hors périmètre (Néto, 24/08 ; amendé le 08/11)
+~~Carte 3D UMAP~~ (levée le 08/11 par le propriétaire du produit → **T28**, à faire après le chantier
+daemon), continuous-learning OpenClaw (`llm_output`), **et toute nouvelle feature avant la
+distribution** (T28 est l'exception décidée le 08/11).
 
 ## ✅ Fait (résumé — détail dans STATUS.md et les journaux)
 Fondation V3, 24 couches cognitives, recall hybride sqlite-vec + graphe, capture WAL-first, redaction

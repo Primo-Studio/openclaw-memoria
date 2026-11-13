@@ -288,8 +288,11 @@ describe('index vectoriel par (dimensions, modèle)', () => {
     store.db.exec(`DELETE FROM ${table}`) // index vidé, vérité (embeddings) intacte
     // Rien à ré-embedder (la vérité est intacte)…
     expect(idx.pendingCount()).toBe(0)
-    // …mais runAll répare l'index sans appel provider.
-    const run = await idx.runAll()
+    // …mais runAll répare l'index sans appel provider. La réparation complète
+    // se fait au premier passage d'un indexeur (démarrage), pas à chaque
+    // écriture (ticket #27) : on simule donc un redémarrage.
+    const afterRestart = new EmbeddingIndexer({ store, provider: a })
+    const run = await afterRestart.runAll()
     expect(run.indexed).toBe(0)
     expect(knn(store.db, { model: a.model, dimensions: 4 }, new Float32Array([1, 0, 0, 0]), 5).map(h => h.fact_id)).toContain(f.id)
   })

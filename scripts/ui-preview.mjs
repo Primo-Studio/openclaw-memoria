@@ -31,7 +31,7 @@ const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
 
 // Routes = identifiants d'écran de packages/web/src/app/nav.ts (hash #/<id>).
 const ROUTES = [
-  'dashboard', 'agents', 'memory', 'review', 'themes',
+  'dashboard', 'agents', 'memory', 'review', 'themes', 'map',
   'persons', 'patterns', 'procedures', 'revisions', 'sharing', 'vault', 'audit', 'maintenance', 'system', 'docs', 'settings',
 ]
 const VIEWPORTS = [
@@ -200,6 +200,35 @@ function parseArgs(argv) {
   return out
 }
 
+/**
+ * Embeddings de démo, sans réseau : chaque mot allume une case d'un vecteur de
+ * 48 dimensions (hachage). Deux souvenirs qui partagent des mots sont proches —
+ * assez pour que l'écran Carte montre des groupes sur les données fictives.
+ */
+class FakeEmbeddings {
+  name = 'fake'
+  model = 'apercu-sac-de-mots'
+  dimensions = 48
+  isAvailable() {
+    return Promise.resolve(true)
+  }
+  embed(texts) {
+    return Promise.resolve(
+      texts.map(text => {
+        const v = new Float32Array(this.dimensions)
+        for (const word of text.toLowerCase().split(/[^\p{L}\p{N}]+/u)) {
+          if (word.length < 4) continue
+          let h = 2166136261
+          for (const ch of word) h = Math.imul(h ^ ch.charCodeAt(0), 16777619) >>> 0
+          v[h % this.dimensions] += 1
+        }
+        const norm = Math.hypot(...v) || 1
+        return v.map(x => x / norm)
+      }),
+    )
+  }
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2))
   if (!existsSync(DAEMON_DIST) || !existsSync(join(UI_DIST, 'index.html'))) {
@@ -215,7 +244,8 @@ async function main() {
     storageRoot: root,
     configPath: join(root, 'config.toml'),
     uiDist: UI_DIST,
-    llm: { extraction: fake, embeddings: null },
+    // Vecteurs FAUX (sac de mots haché) : sans eux l'écran Carte reste vide.
+    llm: { extraction: fake, embeddings: new FakeEmbeddings() },
     agentsHome: join(root, 'home'),
     credentialsDir: join(root, 'creds'),
     checkCli: () => false,
@@ -247,6 +277,11 @@ async function main() {
 
   try {
     await seed(memoria, fake)
+    // Carte : vecteurs puis positions calculés AVANT les captures (sinon l'écran
+    // est pris en plein calcul).
+    await memoria.indexEmbeddings()
+    memoria.rebuildMemoryMap()
+    await memoria.memoryMapSettled()
     const url = `http://127.0.0.1:${state.port}/ui/#token=${state.admin_token}`
     console.log(`\nAperçu Memoria : ${url}`)
     console.log(`  stockage temporaire : ${root}`)

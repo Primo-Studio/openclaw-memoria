@@ -16,6 +16,7 @@
  * du port de chaque couche.
  */
 import type { Migration } from './migrations.js'
+import { factNormHash } from '../util.js'
 
 export const contentMigrations: Migration[] = [
   {
@@ -280,6 +281,103 @@ export const contentMigrations: Migration[] = [
       // ne paie pas un index plein pour eux.
       db.exec('CREATE INDEX IF NOT EXISTS idx_facts_pinned ON facts(pinned) WHERE pinned = 1')
       db.exec('CREATE INDEX IF NOT EXISTS idx_facts_expires ON facts(expires_at) WHERE expires_at IS NOT NULL')
+    },
+  },
+  {
+    version: 5,
+    name: 'content-transcript-file-state',
+    up(db) {
+      // ÉTAT DES FICHIERS DE TRANSCRIPT (ticket #27) : l'import relisait et
+      // hachait TOUT le corpus à chaque passage (2 105 fichiers, 5,4 Go) dans le
+      // thread du daemon, qui ne répondait plus pendant 23 à 40 s. Avec la taille
+      // et la date de modification, un fichier inchangé est écarté par un simple
+      // `stat`, sans lecture. `memory_sources` ne convient pas : ni taille, ni
+      // date, ni état « complet ».
+      // `complete = 0` : au moins une fenêtre a échoué à l'extraction → le
+      // fichier est retenté (`attempts` borne le coût), uniquement sur les
+      // fenêtres de `failed_windows` (index JSON) si le découpage n'a pas bougé.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS transcript_file_state (
+          path TEXT PRIMARY KEY,
+          size INTEGER NOT NULL,
+          mtime_ms INTEGER NOT NULL,
+          source_hash TEXT NOT NULL,
+          complete INTEGER NOT NULL DEFAULT 1,
+          attempts INTEGER NOT NULL DEFAULT 0,
+          windows_total INTEGER NOT NULL DEFAULT 0,
+          failed_windows TEXT NOT NULL DEFAULT '[]',
+          updated_at TEXT NOT NULL
+        )
+      `)
+    },
+  },
+  {
+    version: 6,
+    name: 'content-fact-norm-hash',
+    up(db) {
+      // DOUBLON EXACT PAR INDEX (ticket #27). `findDuplicate` relisait TOUT le
+      // scope (`SELECT *`) et renormalisait chaque ligne, pour chaque fait
+      // candidat. Avec une file de revue de 67 000 lignes, un seul fait extrait
+      // coûtait un balayage complet, et une fenêtre d'import figeait le daemon
+      // jusqu'à 39 s. `norm_hash` = sha256 du texte normalisé, indexé par scope.
+      //
+      // Une ligne dont `norm_hash` est NULL reste couverte : findDuplicate la
+      // balaie et la complète au passage (chemins d'écriture qui ne le posent
+      // pas, ex. import legacy).
+      const cols = (db.pragma('table_info(facts)') as Array<{ name: string }>).map(c => c.name)
+      if (!cols.includes('norm_hash')) db.exec('ALTER TABLE facts ADD COLUMN norm_hash TEXT')
+      db.exec('CREATE INDEX IF NOT EXISTS idx_facts_norm_hash ON facts(scope_id, norm_hash)')
+      // Garde-fou : un UPDATE qui change le texte SANS reposer le hash le remet à
+      // NULL (donc « à recalculer »), jamais un hash périmé qui masquerait un doublon.
+      db.exec(`
+        CREATE TRIGGER IF NOT EXISTS facts_norm_hash_reset
+        AFTER UPDATE OF fact ON facts
+        WHEN NEW.fact IS NOT OLD.fact AND NEW.norm_hash IS OLD.norm_hash
+        BEGIN
+          UPDATE facts SET norm_hash = NULL WHERE id = NEW.id;
+        END
+      `)
+      const rows = db.prepare('SELECT id, fact FROM facts WHERE norm_hash IS NULL').all() as Array<{ id: string; fact: string }>
+      const set = db.prepare('UPDATE facts SET norm_hash = ? WHERE id = ?')
+      for (const row of rows) set.run(factNormHash(row.fact), row.id)
+    },
+  },
+  {
+    version: 7,
+    name: 'content-transcript-window-state',
+    up(db) {
+      // FENÊTRES DÉJÀ EXTRAITES (ticket #27). Une conversation en cours grandit :
+      // son fichier change, donc tout le fichier repartait au LLM à chaque import
+      // (les 20 dernières fenêtres, dont 19 déjà vues). Le LLM reformulant à
+      // chaque passage, la dédup ne les reconnaissait pas : 65 836 faits en
+      // attente de revue en deux semaines, et des imports de 2 h 35.
+      // Clé = sha256 du texte envoyé au LLM : indépendante du chemin du fichier.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS transcript_window_state (
+          window_hash TEXT PRIMARY KEY,
+          done_at TEXT NOT NULL
+        )
+      `)
+    },
+  },
+  {
+    version: 8,
+    name: 'content-fact-projection',
+    up(db) {
+      // CARTE DES SOUVENIRS (T28) : position 2D de chaque fait, issue de la
+      // projection de son embedding. Cache : le calcul (UMAP) prend plusieurs
+      // secondes et se fait hors du thread du daemon. `model` : des vecteurs de
+      // modèles différents ne sont pas comparables, donc pas superposables.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS fact_projection (
+          fact_id TEXT NOT NULL,
+          model TEXT NOT NULL,
+          x REAL NOT NULL,
+          y REAL NOT NULL,
+          computed_at TEXT NOT NULL,
+          PRIMARY KEY (fact_id, model)
+        )
+      `)
     },
   },
 ]

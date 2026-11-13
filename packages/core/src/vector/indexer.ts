@@ -15,6 +15,9 @@ export interface IndexerRunResult {
   vec_available: boolean
 }
 
+/** Intervalle minimal entre deux réparations complètes de l'index par un même indexeur. */
+const REPAIR_INTERVAL_MS = 10 * 60_000
+
 export class EmbeddingIndexer {
   private readonly store: ContentStore
   private readonly provider: EmbeddingProvider
@@ -25,6 +28,9 @@ export class EmbeddingIndexer {
     this.provider = opts.provider
     this.batchSize = opts.batchSize ?? 16
   }
+
+  /** Dernier réalignement de l'index sur la table `embeddings` par cet indexeur (0 = jamais). */
+  private repairedAt = 0
 
   /** Identité de l'index de CE provider : modèle + dimensions (jamais la dimension seule). */
   private get key(): VecIndexKey {
@@ -118,8 +124,18 @@ export class EmbeddingIndexer {
     // Avant d'embedder quoi que ce soit : ce qui est déjà en base doit être
     // dans l'index. `pendingCount` ne voit que la table embeddings — sans ça,
     // un index vide avec une base pleine restait « à jour » et muet.
-    const repaired = this.repairIndex()
-    if (repaired > 0) console.warn(`[memoria] index vectoriel ${this.provider.model} : ${repaired} vecteur(s) réinséré(s) depuis la base`)
+    // Au premier passage de l'indexeur (donc au démarrage), puis au plus toutes
+    // les REPAIR_INTERVAL_MS : la réparation relit
+    // tout l'index vectoriel (34 Mo de vecteurs sur la base réelle). runAll étant
+    // rejoué après CHAQUE fait stocké, cette relecture pesait 1 s de lectures
+    // disque toutes les 20 s pendant un import (ticket #27). Les vecteurs écrits
+    // ensuite passent par runOnce, qui alimente l'index dans la même transaction.
+    if (Date.now() - this.repairedAt >= REPAIR_INTERVAL_MS) {
+      const repaired = this.repairIndex()
+      if (repaired > 0) console.warn(`[memoria] index vectoriel ${this.provider.model} : ${repaired} vecteur(s) réinséré(s) depuis la base`)
+      // Tant que l'extension vectorielle n'est pas chargée, rien n'a été vérifié.
+      if (ensureVecTable(this.store.db, this.key)) this.repairedAt = Date.now()
+    }
     let last: IndexerRunResult = { indexed: 0, remaining: this.pendingCount(), vec_available: false }
     let total = 0
     for (let i = 0; i < maxBatches && (i === 0 || last.remaining > 0); i++) {

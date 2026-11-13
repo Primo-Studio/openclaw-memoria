@@ -18,7 +18,7 @@ import Database from 'better-sqlite3'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { ContentStore } from '../storage/content.js'
-import { newId, nowISO, sha256Hex, toJson } from '../util.js'
+import { factNormHash, newId, nowISO, sha256Hex, toJson } from '../util.js'
 import type { Memoria } from '../engine/memoria.js'
 import type { MemoryScope } from '../types.js'
 
@@ -429,14 +429,14 @@ function runImport(
       sensitivity, visibility, tags, entity_ids,
       lifecycle_state, superseded, superseded_by,
       usefulness, recall_count, used_count, relevance_weight,
-      created_at, updated_at, last_accessed_at
+      created_at, updated_at, last_accessed_at, norm_hash
     ) VALUES (
       @id, @fact, @category, @fact_type, @confidence, @source,
       NULL, NULL, NULL, NULL, NULL, NULL, @scope_id,
       'normal', 'private', @tags, @entity_ids,
       @lifecycle_state, @superseded, @superseded_by,
       @usefulness, @recall_count, @used_count, @relevance_weight,
-      @created_at, @updated_at, @last_accessed_at
+      @created_at, @updated_at, @last_accessed_at, @norm_hash
     )
   `)
   const insertProc = target.db.prepare(`
@@ -477,7 +477,9 @@ function runImport(
         }),
       )
     for (const f of plan.facts) {
-      insertFact.run(f)
+      // Hash de dédup posé à la source : sans lui, chaque ligne importée
+      // retombait dans le rattrapage lent de findDuplicate.
+      insertFact.run({ ...f, norm_hash: factNormHash(f.fact) })
       insertItem.run(newId(), sourceId, f.id, 'fact', scope.id, f.entity_ids, f.confidence)
     }
     for (const p of plan.procedures) {

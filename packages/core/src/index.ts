@@ -11,6 +11,7 @@ export type {
   PairAssistantResult,
 } from './engine/memoria.js'
 export { scoreFact, passesClientIsolation } from './engine/scoring.js'
+export type { MemoryMap, MemoryMapAgent, MemoryMapLinks, MemoryMapPoint } from './cognition/memory-map.js'
 export {
   resolveStorageRoot,
   storagePaths,

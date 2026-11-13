@@ -32,6 +32,8 @@ export interface DaemonHealth {
   built_sha?: string | null
   storage_root?: string
   config_path?: string
+  /** Plus long blocage récent de la boucle d'événements (absent d'un daemon antérieur). */
+  responsiveness?: { max_block_ms_1m: number; max_block_ms_15m: number }
 }
 
 export class DaemonClient {
@@ -51,9 +53,13 @@ export class DaemonClient {
     return new DaemonClient(state, opts.token ?? state.admin_token)
   }
 
-  async health(): Promise<DaemonHealth | null> {
+  /**
+   * `timeoutMs` : 2 s par défaut, assez pour un daemon sain. Un appelant qui
+   * veut distinguer « bloqué » de « arrêté » (doctor) passe un délai long.
+   */
+  async health(timeoutMs = 2000): Promise<DaemonHealth | null> {
     try {
-      const res = await fetch(`${this.baseUrl}/v1/health`, { signal: AbortSignal.timeout(2000) })
+      const res = await fetch(`${this.baseUrl}/v1/health`, { signal: AbortSignal.timeout(timeoutMs) })
       if (!res.ok) return null
       return (await res.json()) as DaemonHealth
     } catch {
@@ -78,8 +84,13 @@ export class DaemonClient {
   async stats(): Promise<unknown> {
     return this.get('/v1/admin/stats')
   }
-  async doctor(): Promise<unknown> {
-    return this.get('/v1/admin/doctor')
+  /**
+   * `timeoutMs` : sans délai par défaut (comportement d'origine). Le doctor en
+   * passe un : un daemon qui se fige entre le health et le rapport le laissait
+   * suspendu sans message.
+   */
+  async doctor(timeoutMs?: number): Promise<unknown> {
+    return this.get('/v1/admin/doctor', timeoutMs)
   }
   async audit(): Promise<unknown> {
     return this.get('/v1/admin/audit')
@@ -172,14 +183,23 @@ export class DaemonClient {
     return handleResponse<T>(res, path)
   }
 
-  private async get<T>(path: string): Promise<T> {
-    const res = await fetch(`${this.baseUrl}${path}`, { headers: this.headers() })
+  private async get<T>(path: string, timeoutMs?: number): Promise<T> {
+    const res = await fetch(`${this.baseUrl}${path}`, {
+      headers: this.headers(),
+      ...(timeoutMs !== undefined ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
+    })
     return handleResponse<T>(res, path)
   }
 }
 
 async function handleResponse<T>(res: Response, path: string): Promise<T> {
-  const payload = (await res.json().catch(() => ({}))) as Record<string, unknown>
+  // Un délai dépassé pendant la lecture du corps doit remonter : l'avaler rendait
+  // un objet vide, et l'appelant plantait plus loin sur un rapport sans champs.
+  const payload = (await res.json().catch((err: unknown) => {
+    const name = (err as Error | undefined)?.name
+    if (name === 'TimeoutError' || name === 'AbortError') throw err
+    return {}
+  })) as Record<string, unknown>
   if (!res.ok) {
     throw new Error(`daemon ${path} → ${res.status} : ${String(payload['error'] ?? 'erreur')}`)
   }

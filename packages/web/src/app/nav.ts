@@ -15,6 +15,7 @@ import {
   ScrollText,
   Settings,
   Share2,
+  Orbit,
   Tags,
   Users,
   Vault,
@@ -23,7 +24,7 @@ import {
 } from 'lucide-react'
 
 export type ScreenId =
-  | 'dashboard' | 'agents' | 'memory' | 'themes' | 'patterns' | 'procedures'
+  | 'dashboard' | 'agents' | 'memory' | 'map' | 'themes' | 'patterns' | 'procedures'
   | 'review' | 'revisions' | 'maintenance' | 'sharing' | 'persons' | 'vault' | 'system' | 'audit' | 'settings' | 'docs'
 
 export interface NavItemDef {
@@ -61,6 +62,7 @@ export const NAV_GROUPS: NavGroupDef[] = [
       { id: 'memory', icon: Brain },
       { id: 'review', icon: ClipboardCheck },
       { id: 'themes', icon: Tags },
+      { id: 'map', icon: Orbit },
     ],
   },
   {

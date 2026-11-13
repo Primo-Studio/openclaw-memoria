@@ -571,6 +571,36 @@ describe('buildServer handlers', () => {
     expect((res.content[0] as { type: 'text'; text: string }).text).toContain('memoria_capture_status')
   })
 
+  it('timeout sur une ÉCRITURE → « pas forcément un échec », vérifier avant de rejouer, commande doctor exécutable', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const gateway = fakeGateway()
+    gateway.storeFact = async () => {
+      throw new DaemonTimeoutError('/v1/memory/store_fact', 30_000)
+    }
+    const { handlers } = buildServer({ instanceId: 'i', tracker: new ActiveContextTracker(), connect: async () => gateway })
+    const res = await handlers.storeFact({ content: 'Le site est déployé sur Vercel.' })
+    const text = (res.content[0] as { type: 'text'; text: string }).text
+    expect(res.isError).toBe(true)
+    expect(text).toContain('does NOT mean the write failed')
+    expect(text).toContain('memoria_recall')
+    // Dans le dépôt, le CLI voisin existe : on donne son chemin réel, pas un
+    // `memoria doctor` absent du PATH.
+    expect(text).toMatch(/node ".*cli\/dist\/bin\.js" doctor|memoria doctor/)
+  })
+
+  it('timeout sur une LECTURE (recall) → pas d’avertissement d’écriture', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const gateway = fakeGateway()
+    gateway.recall = async () => {
+      throw new DaemonTimeoutError('/v1/memory/recall', 30_000)
+    }
+    const { handlers } = buildServer({ instanceId: 'i', tracker: new ActiveContextTracker(), connect: async () => gateway })
+    const res = await handlers.recall({ query: 'déploiement' })
+    const text = (res.content[0] as { type: 'text'; text: string }).text
+    expect(res.isError).toBe(true)
+    expect(text).not.toContain('write failed')
+  })
+
   it('memoria_set_context / memoria_get_context retournent le contexte effectif', async () => {
     const tracker = new ActiveContextTracker()
     const { handlers } = buildServer({ instanceId: 'i', tracker, connect: async () => fakeGateway() })

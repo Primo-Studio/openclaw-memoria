@@ -15,7 +15,7 @@ import { clusterMigrations } from '../cognition/clusters.js'
 import { selfObservationMigrations } from '../cognition/self-observation.js'
 import { revisionMigrations } from '../cognition/revision.js'
 import { loadVecExtension, purgeFactVectors } from '../vector/vec-table.js'
-import { fromJsonArray, newId, nowISO, toJson } from '../util.js'
+import { factNormHash, fromJsonArray, newId, nowISO, toJson } from '../util.js'
 import type { Fact, LifecycleState, Sensitivity, Visibility, WalEntry } from '../types.js'
 
 export interface FactRow {
@@ -215,7 +215,7 @@ export class ContentStore {
           lifecycle_state, superseded, superseded_by,
           usefulness, recall_count, used_count, relevance_weight,
           created_at, updated_at, last_accessed_at,
-          origin_machine_id, origin_rev, content_hash, deleted_at
+          origin_machine_id, origin_rev, content_hash, deleted_at, norm_hash
         ) VALUES (
           @id, @fact, @category, @fact_type, @confidence, @source,
           @assistant_instance_id, @user_id, @org_id, @client_org_id, @project_id, @topic_id, @scope_id,
@@ -223,10 +223,10 @@ export class ContentStore {
           @lifecycle_state, @superseded, @superseded_by,
           @usefulness, @recall_count, @used_count, @relevance_weight,
           @created_at, @updated_at, @last_accessed_at,
-          @origin_machine_id, @origin_rev, @content_hash, @deleted_at
+          @origin_machine_id, @origin_rev, @content_hash, @deleted_at, @norm_hash
         )`,
       )
-      .run(row)
+      .run({ ...row, norm_hash: factNormHash(row.fact) })
     return rowToFact(row)
   }
 
@@ -265,16 +265,27 @@ export class ContentStore {
     created_at: string; updated_at: string
   }): void {
     const exists = this.db.prepare('SELECT 1 FROM facts WHERE id = ?').get(f.id)
+    // norm_hash est LOCAL (index de dédup) : recalculé ici, jamais synchronisé.
+    const params = { ...f, norm_hash: factNormHash(f.fact) }
     if (exists) {
-      this.db
-        .prepare(
+      const update = this.db.prepare(
           `UPDATE facts SET fact=@fact, category=@category, fact_type=@fact_type, confidence=@confidence, source=@source,
              scope_id=@scope_id, sensitivity=@sensitivity, visibility=@visibility, tags=@tags, entity_ids=@entity_ids,
              lifecycle_state=@lifecycle_state, superseded=@superseded, superseded_by=@superseded_by,
              origin_machine_id=@origin_machine_id, origin_rev=@origin_rev, content_hash=@content_hash,
-             deleted_at=@deleted_at, updated_at=@updated_at WHERE id=@id`,
-        )
-        .run(f)
+             deleted_at=@deleted_at, updated_at=@updated_at, norm_hash=@norm_hash WHERE id=@id`,
+      )
+      // Le trigger facts_norm_hash_reset remet le hash à NULL quand le texte
+      // change et que le hash reste le même : il ne distingue pas « hash
+      // oublié » de « hash reposé à la même valeur », ce qui arrive quand la
+      // synchro ne retouche que la ponctuation ou la casse. On le repose donc
+      // dans la même transaction ; ce second UPDATE ne touche pas la colonne
+      // `fact`, le trigger ne se déclenche pas.
+      const restoreHash = this.db.prepare('UPDATE facts SET norm_hash = ? WHERE id = ? AND norm_hash IS NULL')
+      this.db.transaction(() => {
+        update.run(params)
+        restoreHash.run(params.norm_hash, f.id)
+      })()
     } else {
       this.db
         .prepare(
@@ -285,7 +296,7 @@ export class ContentStore {
             lifecycle_state, superseded, superseded_by,
             usefulness, recall_count, used_count, relevance_weight,
             created_at, updated_at, last_accessed_at,
-            origin_machine_id, origin_rev, content_hash, deleted_at
+            origin_machine_id, origin_rev, content_hash, deleted_at, norm_hash
           ) VALUES (
             @id, @fact, @category, @fact_type, @confidence, @source,
             NULL, NULL, NULL, NULL, NULL, NULL, @scope_id,
@@ -293,10 +304,10 @@ export class ContentStore {
             @lifecycle_state, @superseded, @superseded_by,
             0, 0, 0, 1.0,
             @created_at, @updated_at, NULL,
-            @origin_machine_id, @origin_rev, @content_hash, @deleted_at
+            @origin_machine_id, @origin_rev, @content_hash, @deleted_at, @norm_hash
           )`,
         )
-        .run(f)
+        .run(params)
     }
   }
 
@@ -392,6 +403,10 @@ export class ContentStore {
       this.db.prepare(`DELETE FROM embeddings WHERE owner_type = 'fact' AND owner_id IN (${placeholders})`).run(...all)
       this.db.prepare(`DELETE FROM fact_topics WHERE fact_id IN (${placeholders})`).run(...all)
       this.db.prepare(`DELETE FROM memory_projection WHERE fact_id IN (${placeholders})`).run(...all)
+      // Carte des souvenirs (migration 8) : la table n'a ni clé étrangère ni
+      // trigger, donc la position d'un fait effacé restait sur disque jusqu'au
+      // prochain recalcul complet (et pour toujours sous un ancien modèle).
+      this.db.prepare(`DELETE FROM fact_projection WHERE fact_id IN (${placeholders})`).run(...all)
       // Index vectoriels : legacy `vec_index_<dims>` ET nommés `vec_index_<dims>_<modèle>`
       // (depuis 27/08). Le filtre `/^vec_index_\d+$/` d'avant ignorait les index
       // nommés → le vecteur d'un fait effacé (oubli, rejet de revue, partage)

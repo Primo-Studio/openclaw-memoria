@@ -19,6 +19,11 @@ export function openDatabase(path: string): OpenResult {
   const db = new Database(path)
   db.pragma('foreign_keys = ON')
   db.pragma('busy_timeout = 5000')
+  // Cache de pages : 32 Mo par connexion au lieu des 2 Mo par défaut. Sur une
+  // base de 200 Mo, chaque recherche (plein texte, vecteurs) relisait ses pages
+  // sur disque : 937 échantillons sur 16 754 en `pread` pendant un import, et le
+  // thread du daemon attendait le disque (ticket #27). Mémoire allouée à l'usage.
+  db.pragma('cache_size = -32000')
 
   const onNetworkVolume = isOnNetworkVolume(path)
   let journalMode: string

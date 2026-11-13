@@ -6,6 +6,8 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
+import { existsSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
 import type { RecallResult, Sensitivity } from '@memoria/core'
 import { ensureDaemon, type DaemonState } from '@memoria/daemon'
@@ -167,6 +169,22 @@ export class DaemonTimeoutError extends Error {
  * possible) — mais l'appel doit rester sous le timeout de l'hôte.
  */
 export const DAEMON_TIMEOUT_MS = 30_000
+
+/**
+ * Commande de diagnostic QUI MARCHE sur ce poste. Le message d'erreur envoyait
+ * vers `memoria doctor`, absent du PATH quand Memoria tourne depuis le dépôt
+ * (ticket #27) : l'utilisateur recevait « command not found ». On donne le
+ * chemin réel du CLI voisin s'il existe, sinon le nom court.
+ */
+export function doctorCommand(): string {
+  try {
+    const cli = fileURLToPath(new URL('../../cli/dist/bin.js', import.meta.url))
+    if (existsSync(cli)) return `node ${JSON.stringify(cli)} doctor`
+  } catch {
+    /* URL non résoluble (bundle) : nom court */
+  }
+  return 'memoria doctor'
+}
 export const CAPTURE_TIMEOUT_MS = 60_000
 
 /**
@@ -386,15 +404,22 @@ export function buildServer(opts: BuildServerOptions): BuiltServer {
         }
         return `Memoria rejected this request: ${m}. The memory layer itself is fine — the identifier is unknown in this agent's scopes; use ids returned by memoria_recall and retry.`
       }
-      return `Memoria daemon failed on ${err.path} (HTTP ${err.status}: ${m}). Continue without memory for now; if it keeps happening, suggest the user runs \`memoria doctor\`.`
+      return `Memoria daemon failed on ${err.path} (HTTP ${err.status}: ${m}). Continue without memory for now; if it keeps happening, suggest the user runs \`${doctorCommand()}\`.`
     }
     if (err instanceof DaemonTimeoutError) {
+      // Un délai dépassé n'est PAS un échec : le daemon était occupé et traite
+      // la requête dès qu'il reprend la main. Un `correct` annoncé « sans
+      // réponse » le 05/11/2026 avait bien été appliqué — le rejouer à l'aveugle
+      // double l'écriture.
+      const isRead = /\/(recall|get_context|capture_status|identify_interlocutor)$/.test(err.path)
       const hint = err.path.endsWith('/capture_turn')
         ? ' The turn may still have been journaled and processed: check with memoria_capture_status (if you have wal_ids) instead of re-capturing, which would create duplicates.'
-        : ''
-      return `Memoria daemon did not answer within ${Math.round(err.timeoutMs / 1000)} s on ${err.path}.${hint} Continue without memory; if it keeps happening, suggest the user runs \`memoria doctor\`.`
+        : isRead
+          ? ''
+          : ' This does NOT mean the write failed: the daemon was busy and may still have applied it. Check with memoria_recall before retrying, a blind retry could apply it twice.'
+      return `Memoria daemon did not answer within ${Math.round(err.timeoutMs / 1000)} s on ${err.path}.${hint} Continue without memory for now; if it keeps happening, suggest the user runs \`${doctorCommand()}\` (it reports how long the daemon was blocked).`
     }
-    return `Memoria daemon is unreachable (${(err as Error).message}). The memory layer is temporarily unavailable — continue without it and suggest the user runs \`memoria doctor\`.`
+    return `Memoria daemon is unreachable (${(err as Error).message}). The memory layer is temporarily unavailable — continue without it and suggest the user runs \`${doctorCommand()}\`.`
   }
 
   const fail = (err: unknown): CallToolResult => ({

@@ -52,6 +52,7 @@ import { ImportJobRunner } from './import-job.js'
 import { currentVersion, lastBuiltSha, pullAndBuild, repoRoot, scheduleAutostartHandover, scheduleRestart } from './update.js'
 import { findUiDist, serveUi } from './static.js'
 import { acquireLock, clearDaemonState, lockHolderPid, writeDaemonState, type DaemonState } from './state.js'
+import { responsivenessWarning, startLoopMonitor } from './loop-monitor.js'
 
 export const DAEMON_VERSION = '0.1.0'
 
@@ -146,6 +147,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     throw err
   }
   const importJobs = new ImportJobRunner(memoria, join(storageRoot, 'import-status.json'))
+  const loopMonitor = startLoopMonitor()
 
   const adminToken = newToken()
   const daemonId = newToken().slice(0, 16)
@@ -199,6 +201,9 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         built_sha: builtSha,
         storage_root: storageRoot,
         config_path: configPath,
+        // Plus long blocage récent de la boucle d'événements (ms) : un daemon
+        // qui « tourne » mais ne répond plus se voit ici (ticket #27).
+        responsiveness: loopMonitor.snapshot(),
       })
       return
     }
@@ -312,6 +317,23 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         if (!instance) throw new HttpError(400, 'instance requise')
         const minFacts = intParam(url, 'min_facts', { def: 2, min: 1, max: 100_000 })
         sendJson(res, 200, memoria.topicRelations(instance, minFacts))
+        return
+      }
+      case 'GET /v1/admin/memory_map': {
+        // Carte des souvenirs (T28) : positions 2D en cache, tous agents.
+        sendJson(res, 200, await memoria.memoryMap())
+        return
+      }
+      case 'POST /v1/admin/memory_map/rebuild': {
+        sendJson(res, 200, memoria.rebuildMemoryMap())
+        return
+      }
+      case 'GET /v1/admin/memory_map/links': {
+        const fact = url.searchParams.get('fact')
+        if (!fact) throw new HttpError(400, 'fact requis')
+        const links = await memoria.memoryMapLinks(fact)
+        if (!links) throw new HttpError(404, 'fait inconnu')
+        sendJson(res, 200, links)
         return
       }
       case 'GET /v1/admin/patterns': {
@@ -729,7 +751,15 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         return
       }
       case 'GET /v1/admin/doctor': {
-        sendJson(res, 200, memoria.doctor())
+        const report = memoria.doctor()
+        const responsiveness = loopMonitor.snapshot()
+        const slow = responsivenessWarning(responsiveness)
+        sendJson(res, 200, {
+          ...report,
+          responsiveness,
+          warnings: slow ? [...report.warnings, slow] : report.warnings,
+          ok: report.ok && !slow,
+        })
         return
       }
       case 'POST /v1/admin/forget': {
@@ -1250,6 +1280,10 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       })
     })
   } catch (err) {
+    // Le moniteur garde une minuterie et un histogramme actifs jusqu'à stop() :
+    // sans cet arrêt, chaque démarrage raté dans un même process (port pris,
+    // nouvel essai) en laissait un de plus tourner.
+    loopMonitor.stop()
     release()
     memoria.close()
     throw err
@@ -1262,7 +1296,18 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     pid: process.pid,
     started_at: startedAt,
   }
-  writeDaemonState(storageRoot, state)
+  try {
+    writeDaemonState(storageRoot, state)
+  } catch (err) {
+    // daemon.json impossible à écrire (disque plein, droits) : personne ne
+    // pourra découvrir ce daemon. On défait tout, sinon il reste à l'écoute,
+    // verrou tenu et bases ouvertes, sans que rien ne puisse l'arrêter.
+    await new Promise<void>(r => server.close(() => r()))
+    loopMonitor.stop()
+    release()
+    memoria.close()
+    throw err
+  }
 
   // ---- SYNCHRO INTER-MACHINES (SYNC §3.10) -------------------------------
   // (a) HUB : second listener sur le LAN, routes /v1/sync/* uniquement.
@@ -1316,6 +1361,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
 
   const close = async (): Promise<void> => {
     if (syncTimer) clearInterval(syncTimer)
+    loopMonitor.stop()
     if (lanServer) await new Promise<void>(r => lanServer!.close(() => r()))
     await new Promise<void>((resolveClose) => server.close(() => resolveClose()))
     // Un import en cours est ANNONCÉ interrompu (persisté) avant de fermer les

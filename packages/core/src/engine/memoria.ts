@@ -45,12 +45,28 @@ import {
   cleanTopicLabel,
   topicSlug,
 } from '../cognition/index.js'
-import { estimateTokens, newId, nowISO, sha256Hex } from '../util.js'
+import { estimateTokens, factNormHash, newId, nowISO, sha256Hex } from '../util.js'
 import { AesVaultProvider, createSecretProvider, RegexRedactor } from '../secrets/index.js'
 import type { DetectedSecret, SecretProvider } from '../secrets/types.js'
 import { EXPERTISE_MAX } from '../cognition/feedback.js'
 import { factOrigin } from './origin.js'
 import { findDuplicate, normalizeFact, type DuplicateMatch } from './selective.js'
+import {
+  collectVectors,
+  countVectors,
+  countPlaceable,
+  countUnplaced,
+  lastComputedAt,
+  mapLinks,
+  readMapPoints,
+  writeProjection,
+  type MemoryMap,
+  type MemoryMapAgent,
+  type MemoryMapLinks,
+  type MemoryMapPoint,
+  type MemoryMapSource,
+} from '../cognition/memory-map.js'
+import { runProjection } from '../cognition/projection.js'
 import {
   resolveLlmProfile,
   auditExtraction,
@@ -194,6 +210,21 @@ export class Memoria {
   /** Instances dont l'indexation d'embeddings est planifiée (storeFact, debounce). */
   private readonly indexQueue = new Set<string>()
   private indexTimer: NodeJS.Timeout | null = null
+  /** Calcul de la carte des souvenirs en cours (un seul à la fois). */
+  private mapJob: Promise<void> | null = null
+  private mapError: string | null = null
+  /** Heure (ms) du dernier calcul en échec ; remise à zéro par un calcul réussi. */
+  private mapFailedAt: number | null = null
+  /**
+   * État des données au dernier calcul tenté (réussi ou non) : modèle, nombre
+   * de vecteurs, nombre de souvenirs encore plaçables. Tant qu'il n'a pas
+   * changé, aucun calcul AUTOMATIQUE ne repart : un calcul qui échoue, ou des
+   * vecteurs impossibles à placer, relanceraient sinon un calcul complet à
+   * chaque lecture de la carte. Le nombre de plaçables compte aussi : des faits
+   * remplacés un pour un laissent le nombre de vecteurs inchangé.
+   * `pending` : le calcul a échoué, la prochaine lecture relève l'état.
+   */
+  private mapAttempt: { model: string; vectors: number; placeable: number } | 'pending' | null = null
   private indexers = new WeakMap<ContentStore, EmbeddingIndexer>()
   private readonly cognitionEngines = new WeakMap<ContentStore, CognitionEngine>()
   private readonly topicEngines = new WeakMap<ContentStore, TopicEngine>()
@@ -1164,6 +1195,189 @@ export class Memoria {
     const db = this.registry.dbForInstance(instanceId)
     if (!db || !existsSync(db.path)) return { nodes: [], edges: [] }
     return this.topicFor(this.openContent(db.path), null).relations({ minFacts })
+  }
+
+  // ---------------------------------------------------------------- carte des souvenirs (T28)
+
+  /** Bases de contenu à cartographier : la base privée de chaque agent actif + les bases partagées. */
+  private mapSources(): Array<MemoryMapSource & { type: string; name: string }> {
+    const out: Array<MemoryMapSource & { type: string; name: string }> = []
+    for (const entry of this.registry.listDbs()) {
+      if (entry.kind === 'registry' || !existsSync(entry.path)) continue
+      if (entry.kind === 'assistant') {
+        const instance = entry.assistant_instance_id ? this.registry.getInstance(entry.assistant_instance_id) : null
+        if (!instance || instance.revoked_at) continue
+        const assistant = this.registry.getAssistant(instance.assistant_id)
+        out.push({
+          store: this.openContent(entry.path),
+          agent: instance.id,
+          type: assistant?.type ?? 'generic',
+          name: assistant?.display_name ?? assistant?.type ?? 'agent',
+        })
+      } else {
+        const scope = entry.scope_id ? this.registry.getScope(entry.scope_id) : null
+        out.push({
+          store: this.openContent(entry.path),
+          // Une base partagée PAR scope : l'identifiant doit l'être aussi. Avec
+          // le type (`shared:client`), deux clients fusionnaient dans la légende.
+          agent: `shared:${entry.scope_id ?? entry.id}`,
+          type: 'shared',
+          name: scope?.name ?? 'shared',
+        })
+      }
+    }
+    return out
+  }
+
+  /**
+   * Carte des souvenirs : chaque fait actif à sa position 2D (projection de
+   * son embedding), tous agents dans le même espace. Lecture du cache ; si la
+   * carte est vide ou nettement en retard, un recalcul part en arrière-plan.
+   */
+  async memoryMap(): Promise<MemoryMap> {
+    this.assertOpen()
+    const provider = await this.ensureEmbeddings()
+    if (!provider) {
+      return { status: 'no-embeddings', model: null, computed_at: null, points: [], agents: [], unplaced: 0 }
+    }
+    const key = { model: provider.model, dimensions: provider.dimensions }
+    const sources = this.mapSources()
+    const points: MemoryMapPoint[] = []
+    const agents: MemoryMapAgent[] = []
+    let unplaced = 0
+    let placeable = 0
+    let vectors = 0
+    let computedAt: string | null = null
+    const passes = new Set<string>()
+    for (const source of sources) {
+      const own = readMapPoints(source, key.model)
+      const missing = countUnplaced(source, key.model)
+      placeable += countPlaceable(source, key)
+      vectors += countVectors(source, key)
+      unplaced += missing
+      for (const p of own) points.push(p)
+      const at = lastComputedAt(source, key.model)
+      if (at) passes.add(at)
+      if (at && (!computedAt || at > computedAt)) computedAt = at
+      // TOUTES les sources, même sans souvenir placé (points: 0) : l'écran
+      // attribue les couleurs d'après le rang dans cette liste. Si elle ne
+      // contenait que les agents présents sur la carte, la couleur des autres
+      // changerait dès qu'un agent gagne ou perd son premier souvenir.
+      agents.push({ id: source.agent, type: source.type, name: source.name, points: own.length, unplaced: missing })
+    }
+    // Recalcul automatique : carte vide, ou retard notable (pas à chaque fait).
+    const late = placeable > 0 && (points.length === 0 || placeable >= Math.max(20, Math.ceil(points.length * 0.05)))
+    // Pendant qu'une indexation avance, chaque lecture trouvait assez de
+    // nouveaux vecteurs pour relancer un calcul complet, en chaîne. Une carte
+    // qui a déjà des points attend donc un délai minimal ; le bouton
+    // « Recalculer » (rebuildMemoryMap) reste immédiat.
+    // Une date dans le futur (horloge déréglée, base venue d'une autre machine)
+    // ne compte pas comme récente : elle bloquerait tout recalcul automatique.
+    const within = (since: number): boolean => {
+      const age = Date.now() - since
+      return age >= 0 && age < Memoria.MAP_AUTO_MIN_INTERVAL_MS
+    }
+    const recent = points.length > 0 && computedAt !== null && within(Date.parse(computedAt))
+    // Les positions de toutes les bases doivent sortir du MÊME calcul. Des dates
+    // différentes = une écriture a échoué en route (deux calculs superposés) :
+    // on refait un calcul complet, sans attendre le délai.
+    const mixed = passes.size > 1
+    if (this.mapAttempt === 'pending') this.mapAttempt = { model: key.model, vectors, placeable }
+    const changed =
+      !this.mapAttempt ||
+      this.mapAttempt.model !== key.model ||
+      this.mapAttempt.vectors !== vectors ||
+      this.mapAttempt.placeable !== placeable
+    // Après un échec, TOUTE relance automatique attend le délai, y compris pour
+    // les dates mélangées et la carte vide. Sinon, pendant une panne durable,
+    // chaque vecteur ajouté par l'indexation relance un calcul complet qui
+    // échoue à son tour, en chaîne.
+    const failedRecently = this.mapError !== null && this.mapFailedAt !== null && within(this.mapFailedAt)
+    if ((mixed || (late && !recent)) && changed && !failedRecently && !this.mapJob) this.rebuildMemoryMap()
+    if (this.mapJob) return { status: 'computing', model: key.model, computed_at: computedAt, points, agents, unplaced }
+    if (this.mapError) {
+      return { status: 'error', error: this.mapError, model: key.model, computed_at: computedAt, points, agents, unplaced }
+    }
+    return { status: points.length === 0 ? 'empty' : 'ready', model: key.model, computed_at: computedAt, points, agents, unplaced }
+  }
+
+  /**
+   * Délai minimal entre deux recalculs AUTOMATIQUES d'une carte qui a déjà des
+   * points, et avant toute relance automatique après un calcul en échec.
+   */
+  static readonly MAP_AUTO_MIN_INTERVAL_MS = 5 * 60_000
+
+  /** Lance le recalcul de la carte (sans attendre). `started: false` si un calcul tourne déjà. */
+  rebuildMemoryMap(): { started: boolean } {
+    this.assertOpen()
+    if (this.mapJob) return { started: false }
+    this.mapError = null
+    this.mapJob = (async () => {
+      const provider = await this.ensureEmbeddings()
+      if (!provider) return
+      const key = { model: provider.model, dimensions: provider.dimensions }
+      const sources = this.mapSources()
+      const collected = await collectVectors(sources, key)
+      if (this.closed) return
+      // Après un calcul réussi, il reste à placer les seuls vecteurs écartés
+      // (valeur non finie) : tout autre nombre veut dire que les données ont bougé.
+      const attempt = { model: key.model, vectors: collected.candidates, placeable: collected.candidates - collected.n }
+      // Le calcul part dans un worker thread : le daemon continue de répondre.
+      // `collected.flat` est cédé au worker (pas de copie) : ne plus le lire après.
+      const coords = await runProjection(collected.flat, collected.n, key.dimensions)
+      if (this.closed) return
+      const perSource = sources.map(() => [] as Array<{ id: string; x: number; y: number }>)
+      collected.owners.forEach((owner, i) => {
+        perSource[owner.source]!.push({ id: owner.id, x: coords[i * 2]!, y: coords[i * 2 + 1]! })
+      })
+      const computedAt = nowISO()
+      // Une transaction par base : si l'une échoue (base verrouillée par un
+      // autre process), on écrit quand même les autres, puis on signale
+      // l'échec. Les bases restées sur l'ancien calcul gardent leur ancienne
+      // date : memoryMap() voit le mélange et le dit.
+      const failed: string[] = []
+      for (const [i, source] of sources.entries()) {
+        // L'attente d'un verrou est synchrone : rendre la main entre deux bases.
+        if (i > 0) await new Promise<void>(resolve => setImmediate(resolve))
+        if (this.closed) return
+        try {
+          writeProjection(source, key.model, perSource[i]!, computedAt)
+        } catch (err) {
+          failed.push(`${source.name} (${(err as Error).message})`)
+        }
+      }
+      if (failed.length > 0) {
+        throw new Error(`positions non écrites pour ${failed.length} base(s) sur ${sources.length} : ${failed.join(' ; ')}`)
+      }
+      this.mapAttempt = attempt
+      this.mapFailedAt = null
+    })()
+      .catch((err: unknown) => {
+        // Ce qui reste à placer après un échec n'est pas prévisible (certaines
+        // bases sont écrites, d'autres non) : la prochaine lecture relève l'état.
+        this.mapAttempt = 'pending'
+        this.mapFailedAt = Date.now()
+        this.mapError = (err as Error).message
+        console.warn('[memoria] carte des souvenirs : calcul en échec :', this.mapError)
+      })
+      .finally(() => {
+        this.mapJob = null
+      })
+    return { started: true }
+  }
+
+  /** Attend la fin du calcul en cours (tests, CLI). Rejette si le calcul a échoué. */
+  async memoryMapSettled(): Promise<void> {
+    await this.mapJob
+    if (this.mapError) throw new Error(this.mapError)
+  }
+
+  /** Détail et fils d'un souvenir de la carte : voisins par le sens + entités partagées. */
+  async memoryMapLinks(factId: string): Promise<MemoryMapLinks | null> {
+    this.assertOpen()
+    const provider = await this.ensureEmbeddings()
+    if (!provider) return null
+    return mapLinks(this.mapSources(), { model: provider.model, dimensions: provider.dimensions }, factId)
   }
 
   /** Récurrences (couche 22) : détecte + liste les patterns proposés d'une instance. */
@@ -2333,7 +2547,17 @@ export class Memoria {
     const move = target.db.transaction(() => {
       let f = 0
       for (const row of factRows) {
-        insertFact.run({ ...row, scope_id: privateScope.id, assistant_instance_id: instanceId, visibility: 'private', lifecycle_state: 'active' })
+        insertFact.run({
+          ...row,
+          scope_id: privateScope.id,
+          assistant_instance_id: instanceId,
+          visibility: 'private',
+          lifecycle_state: 'active',
+          // La quarantaine peut contenir des lignes sans hash (import fait
+          // après la migration) : recopiées telles quelles, elles obligeaient
+          // la recherche de doublon à balayer le scope privé.
+          ...(factColNames.includes('norm_hash') ? { norm_hash: factNormHash(row.fact) } : {}),
+        })
         f++
       }
       let p = 0
@@ -2413,6 +2637,8 @@ export class Memoria {
             org_id: scope.org_id ?? row.org_id,
             client_org_id: scope.client_org_id ?? row.client_org_id,
             project_id: scope.project_id ?? row.project_id,
+            // Hash toujours posé à l'arrivée, même si la ligne source n'en avait pas.
+            ...(cols.includes('norm_hash') ? { norm_hash: factNormHash(row.fact) } : {}),
           })
           shared++
         }

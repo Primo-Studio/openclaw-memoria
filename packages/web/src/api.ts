@@ -645,6 +645,68 @@ export async function getTopicRelations(instance: string, minFacts = 2): Promise
   return request<TopicGraph>('GET', `/v1/admin/topic_relations?instance=${encodeURIComponent(instance)}&min_facts=${minFacts}`)
 }
 
+// ------------------------------------------------------------ carte des souvenirs
+
+export interface MemoryMapPoint {
+  id: string
+  /** Position dans [-1, 1] : deux points proches parlent de la même chose. */
+  x: number
+  y: number
+  label: string
+  category: string
+  /** Identifiant d'agent (instance) ou `shared:<scope>`. */
+  agent: string
+  created_at: string
+  recall_count: number
+  pinned: boolean
+}
+
+export interface MemoryMapAgent {
+  id: string
+  type: string
+  name: string
+  points: number
+  unplaced: number
+}
+
+export interface MemoryMap {
+  /** `error` : le dernier calcul a échoué, le service attend une relance explicite. */
+  status: 'ready' | 'computing' | 'empty' | 'no-embeddings' | 'error'
+  /** Raison de l'échec, seulement avec `status: 'error'`. */
+  error?: string
+  model: string | null
+  computed_at: string | null
+  points: MemoryMapPoint[]
+  agents: MemoryMapAgent[]
+  unplaced: number
+}
+
+export interface MemoryMapLinks {
+  id: string
+  content: string
+  category: string
+  agent: string
+  created_at: string
+  recall_count: number
+  entities: string[]
+  neighbours: Array<{ id: string; similarity: number }>
+  related: Array<{ id: string; via: string }>
+}
+
+/** Carte des souvenirs : positions 2D de tous les souvenirs actifs, tous agents. */
+export async function getMemoryMap(): Promise<MemoryMap> {
+  return request<MemoryMap>('GET', '/v1/admin/memory_map')
+}
+
+export async function rebuildMemoryMap(): Promise<{ started: boolean }> {
+  return request<{ started: boolean }>('POST', '/v1/admin/memory_map/rebuild', {})
+}
+
+/** Détail d'un point : texte complet, voisins par le sens, souvenirs liés par une entité. */
+export async function getMemoryMapLinks(fact: string): Promise<MemoryMapLinks> {
+  return request<MemoryMapLinks>('GET', `/v1/admin/memory_map/links?fact=${encodeURIComponent(fact)}`)
+}
+
 // ------------------------------------------------------------ récurrences (patterns)
 
 export interface Pattern {

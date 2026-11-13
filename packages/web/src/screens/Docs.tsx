@@ -445,6 +445,7 @@ function tabGroups(t: Translate): Array<{ title: string; tabs: Array<{ title: st
       tabs: [
         { title: t('docs.tabs.memory.label'), body: t('docs.tabs.memory.goal'), points: [t('docs.tabs.memory.detail.1'), t('docs.tabs.memory.detail.2')] },
         { title: t('docs.tabs.themes.label'), body: t('docs.tabs.themes.goal'), points: [t('docs.tabs.themes.detail.1'), t('docs.tabs.themes.detail.2')] },
+        { title: t('docs.tabs.map.label'), body: t('docs.tabs.map.goal'), points: [t('docs.tabs.map.detail.1'), t('docs.tabs.map.detail.2')] },
         {
           title: t('docs.tabs.recurrences.label'),
           body: t('docs.tabs.recurrences.goal'),

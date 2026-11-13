@@ -531,7 +531,20 @@ export interface DoctorReport {
   cloud: DoctorCloud
   /** Consommation des modèles sur 24 h (tous fournisseurs, locaux compris). */
   usage: LlmUsageReport
+  /**
+   * Réactivité du daemon (absent en lecture locale, daemon arrêté) : plus long
+   * blocage de sa boucle d'événements. Au-delà de quelques secondes, les agents
+   * reçoivent « did not answer » alors que le daemon tourne (ticket #27).
+   */
+  responsiveness?: DaemonResponsiveness
   warnings: string[]
+}
+
+export interface DaemonResponsiveness {
+  /** Plus long blocage sur la dernière minute écoulée (ms). */
+  max_block_ms_1m: number
+  /** Plus long blocage sur les 15 dernières minutes (ms). */
+  max_block_ms_15m: number
 }
 
 export interface MemoriaEvent {

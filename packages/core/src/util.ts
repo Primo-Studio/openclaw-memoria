@@ -12,6 +12,22 @@ export function sha256Hex(input: string | Buffer): string {
   return createHash('sha256').update(input).digest('hex')
 }
 
+/** Normalisation canonique d'un fait : lowercase, ponctuation/espaces compactés en un séparateur. */
+export function normalizeFact(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim()
+}
+
+/**
+ * Hash du texte NORMALISÉ d'un fait (colonne `facts.norm_hash`) : la recherche
+ * de doublon exact devient une lecture d'index au lieu d'un balayage du scope.
+ */
+export function factNormHash(text: string): string {
+  return sha256Hex(normalizeFact(text))
+}
+
 /** Token opaque pour instances/pairing — 32 octets url-safe. */
 export function newToken(): string {
   return randomBytes(32).toString('base64url')
