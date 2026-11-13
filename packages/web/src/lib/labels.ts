@@ -25,6 +25,7 @@ const KNOWN_CATEGORIES = new Set([
   'decision',
   'config',
   'process',
+  'procedure',
   'error',
   'erreur',
   'savoir',

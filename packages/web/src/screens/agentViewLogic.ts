@@ -245,7 +245,9 @@ export interface PreviewSummary {
 export function previewSummary(preview: RecallPreview): PreviewSummary {
   return {
     memories: preview.items.length,
-    blocks: viewBlocks(preview.items, preview.blocks).length,
+    // Seuls les blocs de THÈME comptent : le bac « autres » n'est pas une
+    // structure, le compter affichait « 1 bloc » pour une liste à plat.
+    blocks: viewBlocks(preview.items, preview.blocks).filter(b => !b.loose).length,
     dropped: droppedSummary(preview.dropped).total,
     tokens: preview.disabled ? null : renderTokens(preview.renders[preview.native], preview.native),
   }

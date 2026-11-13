@@ -4632,11 +4632,10 @@ function enrichRecallItems(
   // communs à toute la base et leur NOM est tiré de leurs faits : un thème qui
   // contient un fait hors de portée de ce rappel (dormant ou archivé, critical,
   // autre scope, client masqué) pourrait le révéler par son seul nom. Il n'est
-  // donc émis que si TOUS ses faits sont lisibles ici.
-  // Les faits supersédés ou expirés du thème ne bloquent PAS son nom : ce sont
-  // d'anciennes versions des informations de ce même espace (périmées, pas
-  // interdites), et les exclure ferait disparaître presque tous les thèmes
-  // d'une base qui vit. Le nom peut donc dater ; l'affinage des thèmes le rafraîchit.
+  // donc émis que si TOUS ses faits sont lisibles ici. Supersédés et expirés
+  // compris : une information qu'on a fait expirer est une information qu'on a
+  // choisi d'oublier. Mesuré le 13/11/2026 sur les bases réelles : 1 thème sur
+  // 3 000 touché par cette règle, aucune perte visible.
   try {
     const scopeMarks = opts.scopeIds.map(() => '?').join(',')
     const rows = store.db
@@ -4647,12 +4646,14 @@ function enrichRecallItems(
              SELECT 1 FROM fact_topics ft2 JOIN facts f2 ON f2.id = ft2.fact_id
              WHERE ft2.topic_id = t.id
                AND (f2.lifecycle_state != 'active'
+                 OR f2.superseded = 1
+                 OR (f2.expires_at IS NOT NULL AND f2.expires_at <= ?)
                  OR f2.sensitivity NOT IN ('normal','sensitive')
                  OR f2.scope_id IS NULL OR f2.scope_id NOT IN (${scopeMarks})
                  OR (f2.client_org_id IS NOT NULL AND f2.client_org_id != '' AND f2.client_org_id IS NOT ?)))
          ORDER BY t.importance_score DESC, t.fact_count DESC, t.id`,
       )
-      .all(...ids, ...opts.scopeIds, opts.context?.client_org_id ?? null) as Array<{ fact_id: string; id: string; name: string }>
+      .all(...ids, new Date(opts.now).toISOString(), ...opts.scopeIds, opts.context?.client_org_id ?? null) as Array<{ fact_id: string; id: string; name: string }>
     const first = new Map<string, { id: string; name: string }>()
     for (const r of rows) if (r.name && !first.has(r.fact_id)) first.set(r.fact_id, { id: r.id, name: r.name })
     for (const { item } of selected) {

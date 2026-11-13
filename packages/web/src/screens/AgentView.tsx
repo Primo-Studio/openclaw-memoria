@@ -429,10 +429,12 @@ export function AgentColumn({ name, run, view, onRetry }: { name: string; run: R
 export function SummaryLine({ preview }: { preview: RecallPreview }) {
   const { t } = useT()
   const s = previewSummary(preview)
+  // Singulier pour 1 (et 0 en français, mais « 0 souvenirs » reste lisible).
+  const one = (n: number, key: string): string => t(n === 1 ? `${key}.one` : key)
   const cells: Array<[number, string]> = [
-    [s.memories, t('agentview.summary.memories')],
-    [s.blocks, t('agentview.summary.blocks')],
-    [s.dropped, t('agentview.summary.dropped')],
+    [s.memories, one(s.memories, 'agentview.summary.memories')],
+    [s.blocks, one(s.blocks, 'agentview.summary.blocks')],
+    [s.dropped, one(s.dropped, 'agentview.summary.dropped')],
     // En pause, pas de chiffre de tokens : il compterait la réponse « en pause ».
     ...(s.tokens === null ? [] : [[s.tokens, t('agentview.summary.tokens')] as [number, string]]),
   ]

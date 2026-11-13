@@ -91,7 +91,7 @@ describe('thème : un nom n’est émis que si tous ses faits sont lisibles', ()
     expect(m.recall(q()).items.find(i => i.id === shown)?.topic?.name).toBeTruthy()
   })
 
-  it.each(['dormant', 'critical', 'autre scope', 'autre client'])(
+  it.each(['dormant', 'critical', 'supersédé', 'expiré', 'autre scope', 'autre client'])(
     'un fait %s dans le thème : le thème n’est plus nommé',
     async state => {
       const { shown, other } = await seed()

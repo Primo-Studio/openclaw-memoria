@@ -186,7 +186,8 @@ describe('écartés et résumé', () => {
       },
       { instance: 'inst-1', query: 'site Orion' },
     )
-    expect(previewSummary(preview)).toEqual({ memories: 3, blocks: 2, dropped: 4, tokens: 20 })
+    // Le bac « autres » ne compte pas comme un bloc : seuls les thèmes structurent.
+    expect(previewSummary(preview)).toEqual({ memories: 3, blocks: 1, dropped: 4, tokens: 20 })
   })
 
   it('agent OpenClaw : le résumé et la vue lisible lisent le rappel du rendu natif, pas celui du MCP', () => {
@@ -205,7 +206,7 @@ describe('écartés et résumé', () => {
     expect(preview.native).toBe('openclaw')
     expect(preview.items.map(i => i.id)).toEqual(['c1', 'c2'])
     expect(preview.dropped).toEqual([{ reason: 'budget', count: 5 }])
-    expect(previewSummary(preview)).toEqual({ memories: 2, blocks: 1, dropped: 5, tokens: 93 })
+    expect(previewSummary(preview)).toEqual({ memories: 2, blocks: 0, dropped: 5, tokens: 93 })
     // Vue brute : chaque rendu garde SON texte, SES tokens et SON résultat.
     expect(renderTokens(preview.renders.mcp, 'mcp')).toBe(21)
     expect(preview.renders.mcp?.result?.items).toHaveLength(4)
@@ -233,7 +234,7 @@ describe('écartés et résumé', () => {
       { disabled: true, result: { items: [item('o1')] }, renderings: [{ id: 'mcp', native: true, text: '{"items":[],"disabled":true}', tokens: 8 }] },
       { instance: 'inst-1', query: 'q' },
     )
-    expect(previewSummary(preview)).toEqual({ memories: 1, blocks: 1, dropped: 0, tokens: null })
+    expect(previewSummary(preview)).toEqual({ memories: 1, blocks: 0, dropped: 0, tokens: null })
   })
 
   it('propose le rendu de l’agent en premier', () => {
