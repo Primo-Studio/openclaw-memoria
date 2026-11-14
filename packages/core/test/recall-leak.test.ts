@@ -73,6 +73,78 @@ describe('expansion par le graphe : mêmes filtres durs que la recherche', () =>
   })
 })
 
+/**
+ * Le PONT : un fait caché relie deux entités (Brumehost et Zephyrcorp) que
+ * rien de lisible ne relie. Avant, l'expansion suivait les arêtes entité-entité,
+ * nées de la co-occurrence dans n'importe quel fait, et rendait le fait lisible
+ * « siège de Zephyrcorp » avec via_entity « Zephyrcorp » : le contenu caché ne
+ * sortait pas, mais son association, si.
+ */
+describe('pont par le graphe : aucun lien ne passe par un fait caché', () => {
+  async function seed(): Promise<{ seedId: string; bridgeId: string; farId: string }> {
+    const seedFact = m.storeFact({ instance, content: 'Le portail Lumen est hébergé chez Brumehost' })
+    const bridge = m.storeFact({ instance, content: 'Brumehost facture Zephyrcorp 900 euros par mois' })
+    const far = m.storeFact({ instance, content: 'Le siège de Zephyrcorp est à Lyon' })
+    await m.processCognition(instance)
+    return { seedId: seedFact.id, bridgeId: bridge.id, farId: far.id }
+  }
+
+  /** Ni le fait lointain, ni l'entité que seul le pont caché justifie, ni un lien vers l'un d'eux. */
+  function expectNoBridge(res: RecallResult, bridgeId: string, farId: string): void {
+    const ids = res.items.map(i => i.id)
+    expect(ids).not.toContain(farId)
+    expect(ids).not.toContain(bridgeId)
+    expect(res.items.filter(i => i.via_entity === 'Zephyrcorp')).toEqual([])
+    const linked = res.items.flatMap(i => (i.links ?? []).map(l => l.id))
+    expect(linked).not.toContain(farId)
+    expect(linked).not.toContain(bridgeId)
+  }
+
+  it('témoin : un pont lisible ramène le fait lointain au deuxième saut', async () => {
+    const { seedId, bridgeId, farId } = await seed()
+    const res = m.recall({ instance, query: 'portail Lumen', preview: true })
+    expect(res.items[0]!.id).toBe(seedId)
+    expect(res.items.find(i => i.id === bridgeId)).toMatchObject({ matched_by: ['graph'], via_entity: 'Brumehost' })
+    // L'entité nommée est celle que le fait rendu partage avec le pont.
+    expect(res.items.find(i => i.id === farId)).toMatchObject({ matched_by: ['graph'], via_entity: 'Zephyrcorp' })
+  })
+
+  /** Expiration notée dans le passé, mais avec un décalage positif : en texte, elle paraît future. */
+  const pastWithPositiveOffset = (): string => {
+    const local = new Date(Date.now() - 30 * 60_000 + 5 * 3_600_000).toISOString().slice(0, 19)
+    return `${local}+05:00`
+  }
+  const HIDE_BRIDGE: Record<string, (db: Database, id: string) => void> = {
+    ...HIDE,
+    // Formats que Date.parse lit (et que le rappel juge expirés) mais qu'une
+    // comparaison de texte en SQL jugerait vivants.
+    'expiré (« Jan 1 2020 »)': (db, id) => void db.prepare("UPDATE facts SET expires_at = 'Jan 1 2020' WHERE id = ?").run(id),
+    'expiré (décalage +05:00)': (db, id) => void db.prepare('UPDATE facts SET expires_at = ? WHERE id = ?').run(pastWithPositiveOffset(), id),
+    'oublié (forget)': (_db, id) => void m.forget({ ids: [id] }),
+    'supersédé (correctFact)': (_db, id) => void m.correctFact(instance, id, 'Brumehost facture Ardoise chaque mois'),
+  }
+
+  it.each(Object.keys(HIDE_BRIDGE))('un pont %s ne relie plus rien', async state => {
+    const { bridgeId, farId } = await seed()
+    HIDE_BRIDGE[state]!(privateDb(), bridgeId)
+
+    expectNoBridge(m.recall({ instance, query: 'portail Lumen', preview: true }), bridgeId, farId)
+    expectNoBridge(m.recall({ instance, query: 'portail Lumen', preview: true, links: true, format: 'blocks' }), bridgeId, farId)
+  })
+
+  it('le client du contexte actif garde son pont', async () => {
+    const org = m.registry.createOrganization('Client Fictif A', 'client')
+    const { bridgeId, farId } = await seed()
+    privateDb().prepare('UPDATE facts SET client_org_id = ? WHERE id = ?').run(org.id, bridgeId)
+
+    // Hors contexte : le pont appartient à un client, il ne relie rien.
+    expectNoBridge(m.recall({ instance, query: 'portail Lumen', preview: true }), bridgeId, farId)
+    // Dans le contexte de ce client : il est lisible, donc il relie.
+    const res = m.recall({ instance, query: 'portail Lumen', preview: true, active_context: { client_org_id: org.id } })
+    expect(res.items.find(i => i.id === farId)?.via_entity).toBe('Zephyrcorp')
+  })
+})
+
 describe('thème : un nom n’est émis que si tous ses faits sont lisibles', () => {
   async function seed(): Promise<{ shown: string; other: string }> {
     const shown = m.storeFact({ instance, content: 'Le déploiement Brumehost utilise le compte Solstice' })

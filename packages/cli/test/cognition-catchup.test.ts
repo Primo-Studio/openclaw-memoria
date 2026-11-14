@@ -5,12 +5,14 @@
  *
  * Les tests passent par buildCli() : c'est le CLI que reçoit l'utilisateur.
  */
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { Memoria } from '@memoria/core'
+import { Memoria, storagePaths } from '@memoria/core'
 import { startDaemon, type RunningDaemon } from '@memoria/daemon'
 import { buildCli, CognitionCatchupCommand } from '../src/index.js'
 
@@ -113,6 +115,30 @@ describe('memoria cognition catchup', () => {
     const status = makeIo()
     expect(await run(['--status'], status)).toBe(1)
     expect(status.err()).toContain('daemon arrêté')
+  })
+
+  it('daemon vivant mais muet : refus clair, aucun rattrapage local', async () => {
+    const m = Memoria.init({ storageRoot: root, configPath: cfg, llm: { extraction: null } })
+    const { instance, ids } = seed(m)
+    m.close()
+    // daemon.json d'un process vivant (celui du test) dont le port ne répond pas :
+    // c'est ce que voit la commande quand /v1/health dépasse son délai.
+    const silent = createServer()
+    await new Promise<void>(r => silent.listen(0, '127.0.0.1', () => r()))
+    const port = (silent.address() as AddressInfo).port
+    await new Promise<void>(r => silent.close(() => r()))
+    writeFileSync(
+      storagePaths(root).daemonState,
+      JSON.stringify({ daemon_id: 'fictif', port, admin_token: 'jeton-fictif', pid: process.pid, started_at: new Date().toISOString() }),
+    )
+
+    const io = makeIo()
+    expect(await run([], io)).toBe(1)
+    expect(io.err()).toContain('ne répond pas')
+    expect(io.out()).not.toContain('rattrapage local direct')
+    const check = Memoria.init({ storageRoot: root, configPath: cfg, llm: { extraction: null } })
+    for (const id of ids) expect(linked(check, instance, id)).toBe(0)
+    check.close()
   })
 
   it('la commande fait partie du CLI livré (buildCli)', () => {

@@ -575,11 +575,46 @@ Corrigé au passage : le rappel pouvait ressortir par le graphe un fait dormant,
 lancer le rattrapage sur les bases réelles (les faits déclarés n'ont pas encore d'entités ni de thème,
 donc 0 bloc en pratique) ; nommer les amas ; afficher la même structure dans l'écran Mémoire et sur la
 carte ; mesurer le seuil sur des requêtes réelles.
+**Mesuré le 13/11 (soir), pourquoi les blocs restent vides** : les thèmes ne regroupent pas
+(Claude Code : 893 thèmes pour 1 255 faits actifs, 48 thèmes de 3 faits ou plus) et leurs noms sont
+souvent mauvais (« Claude », un sigle de client tronqué, un prénom collé à un mot sans rapport). Le rattachement des faits déclarés, lui, a
+tourné au redémarrage : 0 fait actif sans thème, 1 123 sur 1 255 avec entités (211 par le LLM).
+Prototype hors moteur (`proto-blocs`, 8 questions × 3 agents) : regrouper les items rappelés par
+entité commune, en écartant les entités citées plus de 30 fois sur l'ensemble des bases (le
+propriétaire, sa société, Claude…) et celles qui couvrent plus de 60 % des items. Résultat : 9 rappels
+sur 24 forment un bloc, dont 5 pertinents (le logiciel de montage, le client pour la facturation, le
+stockage réseau) et 4 qui regroupent du bruit (un outil interne). **Non branché** : à reprendre après le tri du
+classement. **Cause principale du bruit** : les faits partagés `user` reviennent sur presque toutes
+les questions (le plus rappelé l'a été 72 fois) ; usage et « chaleur » montent leur score jusqu'à
+×1,6 (×2,6 avec le retour d'usage) : boucle d'auto-renforcement bornée mais visible. À mesurer avec
+un jeu de requêtes réelles avant de toucher au score.
+
 **Connexions aux autres assistants (recherche du 13/11)** : ChatGPT : voie sûre = import périodique de
 l'export des conversations (rien ne sort du poste) ; le branchement direct passe par un tunnel et un
 compte développeur. Grok : pas de serveur MCP local dans l'application ; API avec appel de fonctions
 et relais local, ou connecteur distant avec tunnel (déconseillé pour des données privées).
 OpenClaw : déjà branché (adaptateur).
+
+**Fuites fermées le 13/11 (nuit)**, après deux contre-vérifications puis une vérification finale
+(matrice de 18 états cachés × 5 requêtes × 5 réglages × 2 contextes, 0 fuite de contenu) :
+- graphe : l'expansion ne lit plus `relations` ; elle va d'un fait lisible à un autre fait lisible
+  par une entité commune, chaque fait traversé passant les mêmes filtres que le rappel (scope,
+  client, sensibilité, expiration, supersession) ; entités citées par plus de 30 faits ignorées ;
+  bornes 64 entités / 200 faits. 13,8 s → 0,4 ms sur 20 000 faits ; 1 à 4 ms sur les bases réelles ;
+- thèmes : supprimés à l'oubli et au rejet en revue ; expiration normalisée en ISO (migration 23)
+  et jugée par `Date.parse` ; index `fact_topics(topic_id)` (migration 22) ;
+- graphe nettoyé à l'oubli et à chaque supersession (`detachFacts`, `onFactSuperseded` enfin
+  appelé), `mention_count` décrémenté ; un original rendu par l'oubli de son remplaçant l'est dans
+  toutes les bases (remplaçant partagé) ;
+- cognition : faits critical exclus (et liens hérités purgés), rattrapage LLM arrêté après 3 échecs
+  sans « brûler » les faits (compteur `llm_failures`, migration 24), libellés LLM seulement pour les
+  faits du passage, pause respectée entre deux faits, CLI qui ne se rabat plus en local quand le
+  daemon vit.
+**Restes connus** : le bouton Pause de l'interface ne suspend pas la cognition ; `shareFacts` et la
+synchro ne nettoient ni thèmes ni graphe ; `patterns.ts` ne filtre pas les faits critical ; une base
+réelle a 100 faits dont `superseded_by` pointe vers un id absent (antérieur). Sur les bases réelles,
+le graphe trouve 8 voisins mais le seuil de pertinence les écarte tous (score 0,5) : à revoir avec le
+classement.
 
 **Demande du 08/11** : l'information doit arriver à l'agent structurée (sens, temps, confiance, liens entre
 sujets), pas comme une liste plate ; l'agent doit pouvoir dire ce que ce format lui apporte.

@@ -242,14 +242,22 @@ describe('rattrapage en mode LLM : jamais de dégradation silencieuse', () => {
     expect(llm.graph).toBe(2)
   })
 
-  it('extraction ratée mais LLM joignable : le fait reste « backfill », le rattrapage continue', async () => {
+  it('extraction ratée mais LLM « joignable » : arrêt après 3 échecs d’affilée, faits intacts et repris ensuite', async () => {
+    // Chez un fournisseur cloud, isAvailable() veut dire « clé présente » :
+    // continuer brûlait chaque fait (marqué backfill du jour, jamais repris).
     const ids = seedBackfill(true)
     llm.failGraph = true
-    const r = await m.processCognition(instance, { includeBackfill: true, llm: true, maxFacts: 10 })
-    expect(r.processed).toBe(4)
-    expect(r.llm_facts).toBe(0)
+    await expect(m.processCognition(instance, { includeBackfill: true, llm: true, maxFacts: 10 })).rejects.toThrow(/d’affilée/)
+    expect(llm.graph).toBe(3)
     const db = privateDb()
-    for (const id of ids) expect(marker(db, id)).toBe('backfill')
+    for (const id of ids) {
+      expect(marker(db, id)).toBe('backfill')
+      expect(entities(db, id)).toBe(0)
+    }
+    expect(count(db, "SELECT COUNT(*) AS n FROM fact_cognition WHERE processed_at != '2020-01-01T00:00:00.000Z'")).toBe(0)
+    llm.failGraph = false
+    const r = await m.processCognition(instance, { includeBackfill: true, llm: true, maxFacts: 10 })
+    expect(r.llm_facts).toBe(4)
   })
 
   it('Memoria en pause : le mode LLM est refusé, l’heuristique reste permise', async () => {

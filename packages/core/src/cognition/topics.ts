@@ -93,6 +93,59 @@ export const topicMigrations: Migration[] = [
       }
     },
   },
+  {
+    version: 22,
+    name: 'topics-fact-topics-topic-index',
+    up(db) {
+      // La garde du thème au rappel lit, pour chaque thème candidat, TOUS ses
+      // faits (`fact_topics WHERE topic_id = ...`). Seule la clé primaire
+      // (fact_id, topic_id) existait : la table entière était parcourue pour
+      // chaque souvenir rendu (88 ms par rappel à 60 000 lignes, 0,3 ms indexé).
+      db.exec('CREATE INDEX IF NOT EXISTS idx_fact_topics_topic ON fact_topics(topic_id)')
+    },
+  },
+  {
+    version: 23,
+    name: 'facts-expires-at-iso',
+    up(db) {
+      // Rangée dans la série des thèmes : celle du tronc (1-9) est pleine et 10
+      // appartient à la cognition. C'est la garde du thème qui comparait cette
+      // colonne comme du texte.
+      //
+      // Les dates écrites avant la normalisation de setExpiry sont réécrites en
+      // ISO Z. SQLite ne sait pas lire « Jan 1 2020 » (julianday rend NULL),
+      // donc la conversion se fait en JS, avec le Date.parse du rappel. Une date
+      // illisible reste telle quelle : au rappel elle n'expire pas, et on
+      // n'invente pas une échéance. `updated_at` n'est pas touché : le sens du
+      // souvenir ne change pas, la synchro n'a rien à propager.
+      const cols = (db.pragma('table_info(facts)') as Array<{ name: string }>).map(c => c.name)
+      if (!cols.includes('expires_at')) return
+      const rows = db.prepare('SELECT id, expires_at FROM facts WHERE expires_at IS NOT NULL').all() as Array<{
+        id: string
+        expires_at: string
+      }>
+      const set = db.prepare('UPDATE facts SET expires_at = ? WHERE id = ?')
+      for (const row of rows) {
+        const at = Date.parse(row.expires_at)
+        if (Number.isNaN(at)) continue
+        const iso = new Date(at).toISOString()
+        if (iso !== row.expires_at) set.run(iso, row.id)
+      }
+    },
+  },
+  {
+    version: 24,
+    name: 'cognition-llm-failures',
+    up(db) {
+      // Même raison de créneau. Nombre d'extractions LLM ratées pour un fait :
+      // sans lui, un fait dont l'extraction échoue toujours repartait au LLM à
+      // chaque redémarrage du daemon, sans fin (voir pendingFactIds).
+      const table = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'fact_cognition'").get()
+      if (!table) return
+      const cols = (db.pragma('table_info(fact_cognition)') as Array<{ name: string }>).map(c => c.name)
+      if (!cols.includes('llm_failures')) db.exec('ALTER TABLE fact_cognition ADD COLUMN llm_failures INTEGER NOT NULL DEFAULT 0')
+    },
+  },
 ]
 
 /**
@@ -402,10 +455,18 @@ export class TopicEngine {
    * Range UN fait dans un (ou plusieurs) topic(s). Idempotent, 0 LLM par défaut.
    * Match si le fait porte l'entité ANCRE d'un thème (celle qui le nomme), OU
    * ≥2 entités partagées, OU 1 entité forte, OU Jaccard de keywords > 0.4.
+   *
+   * `labelLlm: false` : libellé heuristique même si un LLM est branché. Le
+   * passage ordinaire range aussi des faits qu'il n'a pas traités (validés,
+   * partagés, hérités) : leur demander un libellé au LLM contournait la règle
+   * « l'existant ne part au LLM que par le rattrapage plafonné ».
+   *
+   * Un fait `critical` n'est jamais rangé : le thème qu'il créerait porterait
+   * son contenu dans son nom (et le nom part au LLM de libellé).
    */
-  async assignFact(factId: string): Promise<AssignResult> {
+  async assignFact(factId: string, opts: { labelLlm?: boolean } = {}): Promise<AssignResult> {
     const fact = this.store.getFact(factId)
-    if (!fact || fact.superseded) return { topic_ids: [], topic_names: [], created: false }
+    if (!fact || fact.superseded || fact.sensitivity === 'critical') return { topic_ids: [], topic_names: [], created: false }
 
     const entities = this.entitiesOf(factId)
     const keywords = topicKeywords(fact.fact).slice(0, 12)
@@ -452,7 +513,7 @@ export class TopicEngine {
 
     let created = false
     if (!topicId) {
-      topicId = await this.createTopic(fact, entities, keywords)
+      topicId = await this.createTopic(fact, entities, keywords, opts.labelLlm !== false)
       created = true
     }
 
@@ -466,11 +527,16 @@ export class TopicEngine {
     return { topic_ids: [topicId], topic_names: [name], created }
   }
 
-  private async createTopic(fact: { id: string; fact: string; scope_id: string }, entities: EntityInfo[], keywords: string[]): Promise<string> {
+  private async createTopic(
+    fact: { id: string; fact: string; scope_id: string },
+    entities: EntityInfo[],
+    keywords: string[],
+    labelLlm: boolean,
+  ): Promise<string> {
     const candidates = this.labelCandidates(entities, fact.fact)
     let label = cleanTopicLabel(this.heuristicLabel(candidates, fact.fact), { source: fact.fact })
-    // LLM SEULEMENT si le label heuristique est faible (1 mot générique) et provider fourni.
-    if (this.llm && label.split(' ').length < 2) {
+    // LLM SEULEMENT si le label heuristique est faible (1 mot générique), provider fourni et appelant d'accord.
+    if (this.llm && labelLlm && label.split(' ').length < 2) {
       try {
         if (await this.llm.isAvailable()) {
           const raw = await this.llm.complete({
@@ -580,7 +646,7 @@ export class TopicEngine {
     const pending = this.db
       .prepare(
         `SELECT f.id FROM facts f
-         WHERE f.superseded = 0
+         WHERE f.superseded = 0 AND f.sensitivity IN ('normal','sensitive')
            AND NOT EXISTS (SELECT 1 FROM fact_topics ft WHERE ft.fact_id = f.id)
          ORDER BY f.created_at DESC LIMIT ?`,
       )
@@ -696,22 +762,37 @@ export class TopicEngine {
       .all(topicId, opts.limit ?? 50) as FactRow[]
   }
 
-  /** Oubli : retire les faits des topics, recompte, supprime les topics vides. Retourne nb topics supprimés. */
+  /**
+   * Oubli (ou fait qui n'aurait jamais dû être rangé) : SUPPRIME chaque thème
+   * qui contenait l'un de ces faits, avec tous ses liens. Retourne le nombre de
+   * thèmes supprimés.
+   *
+   * Retirer le seul lien ne suffisait pas : le nom d'un thème est tiré de ses
+   * faits (libellé heuristique, ou LLM sur le fait qui l'a créé). Le thème
+   * gardait donc ce qui avait été oublié, et la garde du rappel, qui ne voit
+   * plus le fait effacé, l'envoyait avec les faits restants. Ceux-ci n'ont plus
+   * de thème : le passage de cognition suivant les range de nouveau, avec un
+   * nom tiré d'eux seuls.
+   *
+   * Règle à tenir : on ne retire jamais le lien d'un fait caché sans supprimer
+   * le thème entier, sinon la garde du rappel cesse de masquer son nom.
+   */
   onForget(factIds: string[]): number {
     if (factIds.length === 0) return 0
-    const placeholders = factIds.map(() => '?').join(',')
-    const affected = this.db
-      .prepare(`SELECT DISTINCT topic_id FROM fact_topics WHERE fact_id IN (${placeholders})`)
-      .all(...factIds) as Array<{ topic_id: string }>
-    this.db.prepare(`DELETE FROM fact_topics WHERE fact_id IN (${placeholders})`).run(...factIds)
-    let removed = 0
-    for (const a of affected) {
-      const before = this.db.prepare('SELECT id FROM topics WHERE id = ?').get(a.topic_id)
-      this.recompute(a.topic_id, [])
-      const after = this.db.prepare('SELECT id FROM topics WHERE id = ?').get(a.topic_id)
-      if (before && !after) removed++
-    }
-    return removed
+    const tx = this.db.transaction((): number => {
+      const touched = (
+        this.db
+          .prepare('SELECT DISTINCT topic_id FROM fact_topics WHERE fact_id IN (SELECT value FROM json_each(?))')
+          .all(JSON.stringify(factIds)) as Array<{ topic_id: string }>
+      ).map(r => r.topic_id)
+      if (touched.length === 0) return 0
+      const ids = JSON.stringify(touched)
+      // Explicite plutôt que par cascade : une connexion sans clés étrangères ne laisse pas d'orphelins.
+      this.db.prepare('DELETE FROM fact_topics WHERE topic_id IN (SELECT value FROM json_each(?))').run(ids)
+      this.db.prepare('DELETE FROM topic_entities WHERE topic_id IN (SELECT value FROM json_each(?))').run(ids)
+      return this.db.prepare('DELETE FROM topics WHERE id IN (SELECT value FROM json_each(?))').run(ids).changes
+    })
+    return tx()
   }
 }
 

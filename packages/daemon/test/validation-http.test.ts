@@ -120,6 +120,13 @@ describe('POST /v1/memory/expiry, /pin, /merge — arguments et identifiants', (
     expect(r.status).toBe(400)
     expect(r.error).toContain('ISO 8601')
   })
+  it('date lisible dans un autre format : stockée en ISO Z', async () => {
+    expect((await agent('/v1/memory/expiry', { fact_id: factId, expires_at: '2030-01-01T05:00:00+05:00' })).json).toEqual({ updated: true })
+    const path = daemon.memoria.registry.dbForInstance(instanceId)!.path
+    const db = (daemon.memoria as unknown as { openContent(p: string): { db: { prepare(s: string): { get(...a: unknown[]): unknown } } } })
+      .openContent(path).db
+    expect(db.prepare('SELECT expires_at FROM facts WHERE id = ?').get(factId)).toEqual({ expires_at: '2030-01-01T00:00:00.000Z' })
+  })
   it('date valide → 200 updated:true ; null lève l’expiration', async () => {
     expect((await agent('/v1/memory/expiry', { fact_id: factId, expires_at: '2030-01-01T00:00:00.000Z' })).json).toEqual({ updated: true })
     expect((await agent('/v1/memory/expiry', { fact_id: factId, expires_at: null })).json).toEqual({ updated: true })

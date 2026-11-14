@@ -17,7 +17,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { ContentStore } from '../src/storage/content.js'
 import { CognitionEngine } from '../src/cognition/index.js'
-import { applyDecay, expandByEntities } from '../src/cognition/graph.js'
+import { applyDecay, expandByEntities, GRAPH_HUB_MAX_FACTS } from '../src/cognition/graph.js'
 import { ensureCognitionSchema } from '../src/storage/cognition-schema.js'
 import { importLegacyCognition } from '../src/migration/import-cognition.js'
 import type { LlmProvider } from '../src/llm/provider.js'
@@ -204,16 +204,113 @@ describe('CognitionEngine.expandEntities (anti-fuite par scope)', () => {
     expect(out.map(r => r.fact_id)).not.toContain(f2.id)
   })
 
-  it('expandByEntities (bas niveau) ne remonte jamais hors de allowedFactIds', async () => {
+  it('expandByEntities (bas niveau) ne remonte jamais un fait hors du filtre', async () => {
     const f1 = store.insertFact({ fact: 'Memoria utilise SQLite et FTS5', category: 'config', scope_id: 's1' })
-    const f2 = store.insertFact({ fact: 'SQLite porte FTS5 dans Memoria', category: 'config', scope_id: 's1' })
+    const f2 = store.insertFact({ fact: 'SQLite porte FTS5 dans Memoria', category: 'config', scope_id: 's2' })
     const engine = new CognitionEngine({ store })
     await engine.processFact(f1.id)
     await engine.processFact(f2.id)
-    // allowedFactIds délibérément vide pour f2 → expansion interdite de le remonter
-    const allowed = new Set([f1.id])
-    const out = expandByEntities(store.db, [f1.id], allowed)
-    expect(out.map(r => r.fact_id)).not.toContain(f2.id)
+    expect(expandByEntities(store.db, [f1.id], { scopeIds: ['s1'] }).map(r => r.fact_id)).not.toContain(f2.id)
+    // Témoin : le même appel avec les deux scopes le remonte.
+    expect(expandByEntities(store.db, [f1.id], { scopeIds: ['s1', 's2'] }).map(r => r.fact_id)).toContain(f2.id)
+  })
+})
+
+/**
+ * L'expansion suit des FAITS lisibles, jamais des arêtes : une arête entité-
+ * entité a pu naître d'un fait que l'appelant ne peut pas lire. Données fictives.
+ */
+describe('expandEntities : parcours par les faits lisibles', () => {
+  /** germe (Lumen, Brumehost) → pont (Brumehost, Zephyrcorp) → lointain (Zephyrcorp, Lyon). */
+  async function chain(bridgeExtra: { client_org_id?: string } = {}) {
+    const seed = store.insertFact({ fact: 'Le portail Lumen est hébergé chez Brumehost', category: 'config', scope_id: 's1' })
+    const bridge = store.insertFact({ fact: 'Brumehost facture Zephyrcorp chaque mois', category: 'config', scope_id: 's1', ...bridgeExtra })
+    const far = store.insertFact({ fact: 'Le siège de Zephyrcorp est à Lyon', category: 'config', scope_id: 's1' })
+    const engine = new CognitionEngine({ store })
+    for (const f of [seed, bridge, far]) await engine.processFact(f.id)
+    return { engine, seed: seed.id, bridge: bridge.id, far: far.id }
+  }
+
+  it('deux sauts : entité partagée nommée, score qui baisse avec le saut', async () => {
+    const { engine, seed, bridge, far } = await chain()
+    const out = engine.expandEntities([seed], ['s1'])
+    const byId = new Map(out.map(r => [r.fact_id, r]))
+    expect(byId.get(bridge)).toMatchObject({ hops: 1, via_entity: 'Brumehost' })
+    expect(byId.get(far)).toMatchObject({ hops: 2, via_entity: 'Zephyrcorp' })
+    expect(byId.get(bridge)!.score).toBeGreaterThan(byId.get(far)!.score)
+    // Un saut seulement : le fait lointain ne vient plus.
+    expect(engine.expandEntities([seed], ['s1'], { maxHops: 1 }).map(r => r.fact_id)).toEqual([bridge])
+  })
+
+  it('un pont d’un autre client ne relie rien hors de son contexte', async () => {
+    const { engine, seed, bridge, far } = await chain({ client_org_id: 'org-client-fictif' })
+    expect(engine.expandEntities([seed], ['s1'])).toEqual([])
+    expect(engine.expandEntities([seed], ['s1'], { clientOrgId: 'org-autre' })).toEqual([])
+    const own = engine.expandEntities([seed], ['s1'], { clientOrgId: 'org-client-fictif' }).map(r => r.fact_id)
+    expect(own).toEqual([bridge, far])
+  })
+
+  it.each(['2020-01-01T00:00:00.000Z', 'Jan 1 2020'])('un pont expiré (%s) ne relie rien', async expiresAt => {
+    const { engine, seed, bridge } = await chain()
+    store.db.prepare('UPDATE facts SET expires_at = ? WHERE id = ?').run(expiresAt, bridge)
+    expect(engine.expandEntities([seed], ['s1'])).toEqual([])
+  })
+
+  it('une arête née d’un fait caché n’est jamais suivie', async () => {
+    const { engine, seed, bridge, far } = await chain()
+    // L'arête Brumehost–Zephyrcorp reste en base ; seul le fait qui la justifie disparaît.
+    store.db.prepare("UPDATE facts SET sensitivity = 'critical' WHERE id = ?").run(bridge)
+    expect((store.db.prepare('SELECT COUNT(*) AS c FROM relations').get() as { c: number }).c).toBeGreaterThan(0)
+    const out = engine.expandEntities([seed], ['s1']).map(r => r.fact_id)
+    expect(out).not.toContain(far)
+    expect(out).not.toContain(bridge)
+  })
+
+  it(`une entité citée par plus de ${GRAPH_HUB_MAX_FACTS} faits (hub) ne relie rien`, async () => {
+    const engine = new CognitionEngine({ store })
+    const seed = store.insertFact({ fact: 'Le portail Lumen tourne chez Brumehost', category: 'config', scope_id: 's1' })
+    const lumen = store.insertFact({ fact: 'Lumen affiche le planning du hall', category: 'config', scope_id: 's1' })
+    await engine.processFact(seed.id)
+    await engine.processFact(lumen.id)
+    const viaHub: string[] = []
+    // Le germe cite déjà Brumehost : GRAPH_HUB_MAX_FACTS faits en tout, pas encore un hub.
+    for (let i = 1; i < GRAPH_HUB_MAX_FACTS; i++) {
+      const f = store.insertFact({ fact: `Brumehost héberge le dossier ${i}`, category: 'config', scope_id: 's1' })
+      await engine.processFact(f.id)
+      viaHub.push(f.id)
+    }
+    const before = engine.expandEntities([seed.id], ['s1'], { maxFacts: 100 }).map(r => r.fact_id)
+    expect(before).toEqual(expect.arrayContaining([lumen.id, ...viaHub]))
+
+    // Un fait de plus : Brumehost relie tout à tout, on ne la suit plus.
+    const extra = store.insertFact({ fact: 'Brumehost héberge le dossier final', category: 'config', scope_id: 's1' })
+    await engine.processFact(extra.id)
+    const after = engine.expandEntities([seed.id], ['s1'], { maxFacts: 100 })
+    expect(after.map(r => r.fact_id)).toEqual([lumen.id])
+    expect(after[0]!.via_entity).toBe('Lumen')
+  })
+
+  it('n’ouvre jamais les arêtes, et ne prépare ses requêtes qu’une fois', async () => {
+    const { engine, seed, far } = await chain()
+    const prepared: string[] = []
+    const prepare = store.db.prepare.bind(store.db)
+    store.db.prepare = ((sql: string) => {
+      prepared.push(sql)
+      return prepare(sql)
+    }) as typeof store.db.prepare
+    let afterFirst = 0
+    try {
+      expect(engine.expandEntities([seed], ['s1']).map(r => r.fact_id)).toContain(far)
+      afterFirst = prepared.length
+      // Autres scopes, autre client : mêmes instructions, rien à repréparer.
+      engine.expandEntities([seed], ['s1', 's2'], { clientOrgId: 'org-client-fictif' })
+      engine.expandEntities([seed, seed], ['s1'], { maxHops: 1 })
+    } finally {
+      store.db.prepare = prepare
+    }
+    expect(afterFirst).toBeGreaterThan(0)
+    expect(prepared).toHaveLength(afterFirst)
+    expect(prepared.filter(sql => /\brelations\b/.test(sql))).toEqual([])
   })
 })
 

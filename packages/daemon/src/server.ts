@@ -1327,13 +1327,17 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         const factId = String(body['fact_id'] ?? '')
         if (!factId) throw new HttpError(400, 'fact_id requis')
         const raw = body['expires_at']
-        const expires = raw === null || raw === undefined || raw === '' ? null : String(raw)
+        const received = raw === null || raw === undefined || raw === '' ? null : String(raw)
         // Validé ICI (400) : le moteur lève une Error plate qui finissait en
         // 500, et l'outil MCP envoyait le LLM vers « memoria doctor » pour une
         // simple faute d'argument.
-        if (expires !== null && Number.isNaN(Date.parse(expires))) {
-          throw new HttpError(400, `expires_at invalide : « ${expires} » (date ISO 8601 attendue, ex. 2026-12-31T00:00:00Z, ou null pour lever l'expiration)`)
+        const at = received === null ? null : Date.parse(received)
+        if (at !== null && Number.isNaN(at)) {
+          throw new HttpError(400, `expires_at invalide : « ${received} » (date ISO 8601 attendue, ex. 2026-12-31T00:00:00Z, ou null pour lever l'expiration)`)
         }
+        // Stockée en ISO Z quel que soit le format reçu : une date en texte brut
+        // (« Jan 1 2020 », décalage +05:00) se comparait mal en SQL.
+        const expires = at === null ? null : new Date(at).toISOString()
         const updated = mapEngineErrors(() => memoria.setExpiry(instanceId, factId, expires))
         if (!updated) throw new HttpError(404, `fait inconnu dans les scopes de cet agent : ${factId}`)
         sendJson(res, 200, { updated })

@@ -114,8 +114,12 @@ const MAX_CENTROID_KEYWORDS = 8
 const DEFAULT_SLICE_MS = 15
 /** Comparaisons de signatures entre deux points d'arrêt possibles du calcul. */
 const COMPARISONS_PER_STEP = 2000
-/** Faits qui peuvent entrer dans un amas. */
-const ACTIVE_FACTS_SQL = "SELECT id FROM facts WHERE superseded = 0 AND lifecycle_state = 'active'"
+/**
+ * Faits qui peuvent entrer dans un amas. Un fait `critical` n'y entre pas :
+ * le libellé de l'amas est fait des mots de ses membres.
+ */
+const CLUSTERABLE = "superseded = 0 AND lifecycle_state = 'active' AND sensitivity IN ('normal','sensitive')"
+const ACTIVE_FACTS_SQL = `SELECT id FROM facts WHERE ${CLUSTERABLE}`
 
 /** Mots-outils FR/EN ignorés pour les keywords structurels. */
 const STOPWORDS = new Set([
@@ -291,6 +295,10 @@ export class ClusterEngine {
    * est cité dans la liste d'effacement). Retire les faits des clusters, recompte
    * la taille, et SUPPRIME un cluster qui retombe sous minSize. Retourne
    * {updated, removed}.
+   *
+   * Le libellé et les mots du centroïde d'un cluster qui survit sont recalculés
+   * sur les seuls membres restants : ils étaient faits des mots de TOUS les
+   * membres, fait oublié (ou critical) compris.
    */
   onForget(factIds: string[], opts: { minSize?: number } = {}): { updated: number; removed: number } {
     if (factIds.length === 0) return { updated: 0, removed: 0 }
@@ -315,9 +323,13 @@ export class ClusterEngine {
           removed++
           continue
         }
+        const texts = this.db
+          .prepare('SELECT id, fact FROM facts WHERE id IN (SELECT value FROM json_each(?))')
+          .all(toJson(kept)) as Array<{ id: string; fact: string }>
+        const centroid = centroidKeywords(texts.map(t => ({ id: t.id, signature: new Set<string>(), keywords: clusterKeywords(t.fact) })))
         this.db
-          .prepare('UPDATE fact_clusters SET member_fact_ids = ?, size = ?, updated_at = ? WHERE id = ?')
-          .run(toJson(kept), kept.length, nowISO(), row.id)
+          .prepare('UPDATE fact_clusters SET member_fact_ids = ?, size = ?, label = ?, centroid_keywords = ?, updated_at = ? WHERE id = ?')
+          .run(toJson(kept), kept.length, labelFor(centroid, kept.length), toJson(centroid), nowISO(), row.id)
         updated++
       }
     })
@@ -336,15 +348,13 @@ export class ClusterEngine {
   // --- interne -------------------------------------------------------------
 
   /**
-   * Charge les faits ACTIFS en nœuds : signature = entités du graphe (préfixées
+   * Charge les faits ACTIFS (hors critical) en nœuds : signature = entités du graphe (préfixées
    * `e:` pour ne pas collisionner avec les keywords) ∪ keywords du texte. Si la
    * couche graph n'a pas tourné, on retombe sur les keywords seuls (le cluster
    * se forme quand même).
    */
   private loadNodes(): Node[] {
-    const facts = this.db
-      .prepare("SELECT id, fact FROM facts WHERE superseded = 0 AND lifecycle_state = 'active'")
-      .all() as Array<{ id: string; fact: string }>
+    const facts = this.db.prepare(`SELECT id, fact FROM facts WHERE ${CLUSTERABLE}`).all() as Array<{ id: string; fact: string }>
     const entStmt = this.db.prepare('SELECT entity_id FROM fact_entities WHERE fact_id = ?')
 
     const out: Node[] = []

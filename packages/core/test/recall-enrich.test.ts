@@ -9,8 +9,8 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Database } from 'better-sqlite3'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { Memoria, applyRecallCutoff, rankEntities, type EmbeddingProvider } from '../src/index.js'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { CognitionEngine, Memoria, applyRecallCutoff, rankEntities, type EmbeddingProvider } from '../src/index.js'
 
 /** Deux directions : « véhicule » (voiture, automobile...) et tout le reste. */
 class FakeEmbedding implements EmbeddingProvider {
@@ -108,6 +108,39 @@ describe('pourquoi un souvenir est sorti (matched_by)', () => {
     // Sans expansion, plus de voisin (et donc plus de raison « graph »).
     const plain = m.recall({ instance, query: 'chantier Zephyr', expand_graph: false })
     expect(plain.items.some(i => i.matched_by?.includes('graph'))).toBe(false)
+  })
+
+  it('voisins de graphe : 8 demandés comme avant, relus en une seule requête', async () => {
+    m.storeFact({ instance, content: 'Le chantier Zephyr dépend du service Kestrel' })
+    const BASES = ['Orvalis', 'Quintor', 'Belmira', 'Sartane', 'Kevrona', 'Talvane', 'Morvane', 'Pelisse', 'Ravelin', 'Ostrane', 'Velmour', 'Carnis']
+    for (const base of BASES) m.storeFact({ instance, content: `Kestrel héberge la base ${base}` })
+    await m.processCognition(instance)
+
+    const expand = vi.spyOn(CognitionEngine.prototype, 'expandEntities')
+    const db = privateDb()
+    const prepare = db.prepare.bind(db)
+    const prepared: string[] = []
+    db.prepare = ((sql: string) => {
+      prepared.push(sql.replace(/\s+/g, ' ').trim())
+      return prepare(sql)
+    }) as typeof db.prepare
+    let res: ReturnType<typeof m.recall>
+    let calls: unknown[][]
+    try {
+      res = m.recall({ instance, query: 'chantier Zephyr', limit: 30, preview: true })
+      calls = [...expand.mock.calls]
+    } finally {
+      db.prepare = prepare
+      expand.mockRestore()
+    }
+
+    // Un voisin déjà trouvé par les mots compte dans ces 8 : l'échelle du rappel
+    // sans option reste celle d'avant (demander 24 pour en garder 8 en ajoutait).
+    expect(calls).toHaveLength(1)
+    expect(calls[0]![2]).toMatchObject({ maxFacts: 8 })
+    expect(res.items.filter(i => i.matched_by?.includes('graph'))).toHaveLength(8)
+    // Plus une requête par voisin.
+    expect(prepared.filter(sql => sql.includes('FROM facts WHERE id = ?'))).toEqual([])
   })
 
   it('trouvé par le sens seul : meaning', async () => {

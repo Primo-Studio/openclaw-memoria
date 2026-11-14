@@ -10,12 +10,13 @@
  *
  * Daemon vivant : le travail tourne chez lui (route admin, retour immédiat)
  * et la commande suit l'avancement. Daemon arrêté : passage local direct,
- * annoncé. `--cancel` arrête le rattrapage en cours chez le daemon.
+ * annoncé. Daemon vivant mais muet (process ou verrou tenu) : refus, jamais de
+ * second écrivain. `--cancel` arrête le rattrapage en cours chez le daemon.
  */
 import { Command, Option } from 'clipanion/lib/advanced/index.js'
 import { Memoria } from '@memoria/core'
-import type { CognitionCatchupState } from '@memoria/daemon'
-import { fail, findAliveDaemon } from '../index.js'
+import { daemonLooksAlive, lockHolderPid, type CognitionCatchupState } from '@memoria/daemon'
+import { fail, findAliveDaemon, resolveCommon } from '../index.js'
 
 /** Refus du daemon (réponse HTTP en erreur) : à afficher tel quel, jamais à réessayer. */
 class DaemonRefusal extends Error {}
@@ -95,6 +96,18 @@ export class CognitionCatchupCommand extends Command {
       }
 
       if (!daemon) {
+        // /v1/health sans réponse en 2 s ne veut pas dire « arrêté » : un daemon
+        // occupé (rappel lent, recalcul) se tait aussi. Un rattrapage local
+        // ferait alors deux écrivains sur les mêmes bases, et paierait deux fois
+        // le LLM pour les mêmes faits.
+        const { storageRoot } = resolveCommon(opts)
+        const pid = daemonLooksAlive(storageRoot)?.pid ?? lockHolderPid(storageRoot, { liveOnly: true })
+        if (pid !== null) {
+          return fail(
+            this.context.stderr,
+            `cognition catchup : le daemon tourne (pid ${pid}) mais ne répond pas. Rattrapage local refusé : deux processus écriraient les mêmes bases. Réessaie dans un moment, ou vérifie avec memoria doctor.`,
+          )
+        }
         out.write('⚠ note : daemon arrêté — rattrapage local direct\n')
         const memoria = Memoria.init({ storageRoot: opts.storageRoot, configPath: opts.configPath })
         try {

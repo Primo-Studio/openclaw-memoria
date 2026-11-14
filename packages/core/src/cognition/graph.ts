@@ -6,16 +6,19 @@
  * renforcement +0.1 par co-occurrence. La double implémentation Hebbian
  * (dirigée, cap 2.0, doublons) est JETÉE.
  *
- * Anti-fuite (le risque #1 du portage) : l'expansion au recall RESPECTE
- * toujours un ensemble de fact_ids autorisés fourni par le pré-filtre
- * permissions (§6.1). Le graphe ne contourne JAMAIS les permissions — un fait
- * hors scope autorisé n'est jamais remonté (benchmark §16 : fuite = 0).
+ * Anti-fuite (le risque #1 du portage) : l'expansion au recall ne suit pas les
+ * arêtes `relations`. Une arête naît de la co-occurrence dans N'IMPORTE QUEL
+ * fait, y compris un fait que l'appelant ne peut pas lire (critical, autre
+ * client, expiré, supersédé, oublié, dormant) : la suivre trahissait
+ * l'association que ce fait porte. L'expansion va de fait LISIBLE en fait
+ * LISIBLE par une entité qu'ils citent tous deux (`fact_entities`), avec les
+ * mêmes filtres durs que la recherche (§6.1, benchmark §16 : fuite = 0).
  *
  * Liens fait↔entité via la table de jointure `fact_entities` (remplace le
  * `entity_ids LIKE` fragile, GE-3). Pas de colonne `status` : l'état actif d'un
  * fait = `superseded = 0` ; une arête vit par son poids (decay/prune).
  */
-import type { Database } from 'better-sqlite3'
+import type { Database, Statement } from 'better-sqlite3'
 import { newId, nowISO } from '../util.js'
 import type { RelationType } from './entities.js'
 
@@ -101,102 +104,233 @@ export function reinforceCooccurrence(db: Database, entityIds: string[], factId:
 }
 
 /**
- * EXPANSION au recall (étape 4 du pipeline §6.1) : à partir d'un ensemble de
- * faits germes, suit le graphe (BFS, `maxHops`) pour proposer des fact_ids
- * connexes — STRICTEMENT bornés par `allowedFactIds` (anti-fuite = 0).
+ * Une entité citée par plus de faits que cela relie tout à tout (le nom de
+ * l'utilisateur, de sa société) : l'expansion ne la suit pas. Même seuil que
+ * les voisins `links` du rappel (LINK_MAX_MENTIONS).
  *
- * Retourne des fact_ids (PAS le contenu) : l'appelant les re-résout dans la DB
- * autorisée, jamais en contournant le pré-filtre. Un fait hors `allowedFactIds`
- * n'est jamais ni traversé ni remonté.
+ * Le compte porte sur TOUTES les citations, faits cachés compris, et il est
+ * lu dans l'index seul. Un fait caché peut donc faire d'une entité un hub et
+ * retirer les liens qui passent par elle. Il ne peut jamais justifier un lien :
+ * chaque lien rendu relie deux faits lisibles. En échange, la lecture reste
+ * bornée à 31 lignes d'index par entité, même quand des milliers de faits
+ * dormants la citent (un compte sur les seuls faits lisibles devait, lui,
+ * relire chacun de ces faits).
+ */
+export const GRAPH_HUB_MAX_FACTS = 30
+/**
+ * Entités examinées au plus par expansion (hubs compris), germes compris.
+ * L'expansion est synchrone, sur le chemin de la réponse : avec le seuil des
+ * hubs, cela borne la lecture à 64 × 30 lignes, quelle que soit la base.
+ */
+const GRAPH_MAX_ENTITIES = 64
+/** Faits atteints au plus : borne le front du saut suivant. */
+const GRAPH_MAX_CANDIDATES = 200
+
+/** Ce que l'appelant pourrait lui-même rappeler : l'expansion ne voit rien d'autre. */
+export interface GraphFactFilter {
+  /** Scopes lisibles dans cette base. */
+  scopeIds: readonly string[]
+  /**
+   * Client du contexte actif. Un fait rattaché à un AUTRE client n'existe pas
+   * pour l'expansion. Absent : seuls les faits sans client passent (même règle
+   * que passesClientIsolation).
+   */
+  clientOrgId?: string | null
+  /** Instant de référence pour l'expiration (ms, défaut maintenant). */
+  now?: number
+}
+
+/**
+ * Filtres durs de la recherche directe (searchFacts + isolation client), sauf
+ * l'expiration. Celle-ci est jugée en JS avec Date.parse, comme partout dans le
+ * rappel : en SQL, la date serait comparée comme du texte, et « Jan 1 2020 »
+ * ou un décalage +05:00 paraîtraient vivants. Un tel fait servirait de pont.
+ */
+const READABLE_SQL = `f.superseded = 0 AND f.lifecycle_state = 'active' AND f.sensitivity IN ('normal','sensitive')
+  AND f.scope_id IN (SELECT value FROM json_each(@scopes))
+  AND (f.client_org_id IS NULL OR f.client_org_id = '' OR f.client_org_id = @client)`
+
+interface GraphStatements {
+  readable: Statement
+  entitiesOf: Statement
+  mentions: Statement
+  factsOf: Statement
+  names: Statement
+}
+
+/**
+ * Instructions préparées UNE fois par connexion : les listes passent en JSON
+ * (`json_each`), donc le texte SQL ne dépend ni du nombre de germes ni du
+ * nombre de scopes.
  *
- * `via_entity` : nom de l'entité par laquelle le voisin a été atteint (celle du
- * meilleur chemin). Sans elle, le rappel ne peut pas expliquer pourquoi un fait
- * sans aucun mot de la requête est remonté.
+ * CROSS JOIN fixe l'ordre de lecture : liste d'ids, puis jointure, puis le
+ * fait par sa clé. Sans lui, SQLite préférait l'index idx_facts_lifecycle et
+ * parcourait TOUS les faits actifs à chaque rappel (47 à 64 ms sur 20 000 faits).
+ */
+const statementsByDb = new WeakMap<Database, GraphStatements>()
+
+function graphStatements(db: Database): GraphStatements {
+  let st = statementsByDb.get(db)
+  if (!st) {
+    st = {
+      readable: db.prepare(
+        `SELECT f.id, f.expires_at FROM json_each(@ids) j CROSS JOIN facts f ON f.id = j.value WHERE ${READABLE_SQL}`,
+      ),
+      entitiesOf: db.prepare('SELECT fact_id, entity_id FROM fact_entities WHERE fact_id IN (SELECT value FROM json_each(@ids))'),
+      // LIMIT dans la sous-requête : on s'arrête au premier fait au-delà du seuil.
+      mentions: db.prepare(
+        `SELECT j.value AS entity_id,
+                (SELECT COUNT(*) FROM (SELECT 1 FROM fact_entities fe WHERE fe.entity_id = j.value LIMIT @cap)) AS n
+         FROM json_each(@ids) j`,
+      ),
+      factsOf: db.prepare(
+        `SELECT fe.entity_id, f.id, f.expires_at, f.created_at
+         FROM json_each(@ids) j CROSS JOIN fact_entities fe ON fe.entity_id = j.value CROSS JOIN facts f ON f.id = fe.fact_id
+         WHERE ${READABLE_SQL}`,
+      ),
+      names: db.prepare('SELECT id, name FROM entities WHERE id IN (SELECT value FROM json_each(@ids))'),
+    }
+    statementsByDb.set(db, st)
+  }
+  return st
+}
+
+interface Reach {
+  hops: number
+  /** Entité partagée avec le front qui explique le lien (la plus rare). */
+  via: string
+  /** Faits lisibles qui citent `via` : moins il y en a, plus le lien est parlant. */
+  viaFacts: number
+  /** Entités partagées avec le front au même saut. */
+  shared: number
+  created_at: string
+}
+
+/** Ordre d'un voisin : saut, puis entités partagées, rareté du lien, récence, id (stable d'un rappel à l'autre). */
+function compareReach(a: [string, Reach], b: [string, Reach]): number {
+  const [ida, ra] = a
+  const [idb, rb] = b
+  return (
+    ra.hops - rb.hops ||
+    rb.shared - ra.shared ||
+    ra.viaFacts - rb.viaFacts ||
+    (rb.created_at < ra.created_at ? -1 : rb.created_at > ra.created_at ? 1 : 0) ||
+    (ida < idb ? -1 : ida > idb ? 1 : 0)
+  )
+}
+
+/**
+ * EXPANSION au recall (étape 4 du pipeline §6.1). Germes → leurs entités →
+ * faits LISIBLES qui citent aussi ces entités → leurs entités → saut suivant
+ * (`maxHops`, 2 par défaut). Chaque fait traversé, pont compris, passe le
+ * filtre de l'appelant : aucun lien ne peut venir d'un fait qu'il ne pourrait
+ * pas rappeler. Les arêtes `relations` ne sont pas lues.
+ *
+ * Retourne des fact_ids (PAS le contenu) : l'appelant les relit lui-même.
+ *
+ * `via_entity` : nom de l'entité que le voisin partage avec le fait qui l'a
+ * amené (un germe au premier saut, le pont au second). Sans elle, le rappel ne
+ * peut pas expliquer pourquoi un fait sans aucun mot de la requête est remonté.
+ *
+ * Score : 0,5 au premier saut, 0,25 au second. Il ne dépend que du saut, donc
+ * quand le premier saut remplit déjà `maxFacts`, le second n'est pas calculé.
  */
 export function expandByEntities(
   db: Database,
   seedFactIds: string[],
-  allowedFactIds: ReadonlySet<string>,
+  filter: GraphFactFilter,
   opts: { maxHops?: number; maxFacts?: number } = {},
 ): Array<{ fact_id: string; score: number; hops: number; via_entity?: string }> {
   const maxHops = opts.maxHops ?? 2
   const maxFacts = opts.maxFacts ?? 5
-  // Germes filtrés : on ne part QUE de faits autorisés.
-  const seeds = seedFactIds.filter(id => allowedFactIds.has(id))
-  if (seeds.length === 0) return []
+  if (seedFactIds.length === 0 || filter.scopeIds.length === 0 || maxHops < 1 || maxFacts < 1) return []
+  const st = graphStatements(db)
+  const now = filter.now ?? Date.now()
+  const scope = { scopes: JSON.stringify(filter.scopeIds), client: filter.clientOrgId ?? null }
+  // Même règle que passesRecallHardFilters : une date illisible n'expire pas.
+  const alive = (r: { expires_at: string | null }): boolean => !(r.expires_at && Date.parse(r.expires_at) <= now)
 
-  // Entités des faits germes.
-  const seedEntities = entitiesOfFacts(db, seeds)
-  if (seedEntities.size === 0) return []
+  // Germes : seulement ceux que l'appelant pourrait lui-même rappeler.
+  const unique = [...new Set(seedFactIds)]
+  const readable = st.readable.all({ ...scope, ids: JSON.stringify(unique) }) as Array<{ id: string; expires_at: string | null }>
+  const seeds = new Set(readable.filter(alive).map(r => r.id))
+  let frontier = unique.filter(id => seeds.has(id))
 
-  const visited = new Set<string>(seedEntities)
-  const queue: Array<{ entityId: string; hop: number }> = [...seedEntities].map(e => ({ entityId: e, hop: 0 }))
-  // Meilleur score par fact_id découvert (hors germes).
-  const scores = new Map<string, { score: number; hops: number; via: string }>()
-  const getRelations = db.prepare(
-    'SELECT from_entity, to_entity, weight FROM relations WHERE from_entity = ? OR to_entity = ?',
-  )
-  const factsOfEntity = db.prepare('SELECT fact_id FROM fact_entities WHERE entity_id = ?')
+  const visited = new Set<string>()
+  const reached = new Map<string, Reach>()
+  let budget = GRAPH_MAX_ENTITIES
 
-  while (queue.length > 0) {
-    const { entityId, hop } = queue.shift()!
-    if (hop >= maxHops) continue
-    const rels = getRelations.all(entityId, entityId) as Array<{
-      from_entity: string
-      to_entity: string
-      weight: number
-    }>
-    for (const rel of rels) {
-      const neighbor = rel.from_entity === entityId ? rel.to_entity : rel.from_entity
-      const hopPenalty = 1 / (hop + 1)
-      const score = rel.weight * hopPenalty
-      const neighborFacts = factsOfEntity.all(neighbor) as Array<{ fact_id: string }>
-      for (const { fact_id } of neighborFacts) {
-        // FILTRE DUR anti-fuite : jamais un fait hors de l'ensemble autorisé,
-        // jamais un germe (déjà connu de l'appelant).
-        if (!allowedFactIds.has(fact_id) || seeds.includes(fact_id)) continue
-        const prev = scores.get(fact_id)
-        // À score égal, on retient l'entité que le voisin PARTAGE avec les
-        // germes : c'est elle qui explique le lien (sinon l'ordre des lignes
-        // SQL déciderait, et l'explication changerait d'un rappel à l'autre).
-        const better =
-          !prev || prev.score < score || (prev.score === score && seedEntities.has(neighbor) && !seedEntities.has(prev.via))
-        if (better) scores.set(fact_id, { score, hops: hop + 1, via: neighbor })
-      }
-      if (!visited.has(neighbor)) {
-        visited.add(neighbor)
-        queue.push({ entityId: neighbor, hop: hop + 1 })
-      }
+  for (let hop = 1; hop <= maxHops && frontier.length > 0 && budget > 0; hop++) {
+    // Entités du front, les meilleurs faits d'abord : si le budget coupe, il
+    // coupe les liens les moins pertinents.
+    const rank = new Map(frontier.map((id, i) => [id, i]))
+    const links = (st.entitiesOf.all({ ids: JSON.stringify(frontier) }) as Array<{ fact_id: string; entity_id: string }>).sort(
+      (a, b) => rank.get(a.fact_id)! - rank.get(b.fact_id)! || (a.entity_id < b.entity_id ? -1 : a.entity_id > b.entity_id ? 1 : 0),
+    )
+    const fresh: string[] = []
+    for (const { entity_id } of links) {
+      if (fresh.length >= budget) break
+      if (visited.has(entity_id)) continue
+      visited.add(entity_id)
+      fresh.push(entity_id)
     }
+    budget -= fresh.length
+    if (fresh.length === 0) break
+
+    const counts = st.mentions.all({ ids: JSON.stringify(fresh), cap: GRAPH_HUB_MAX_FACTS + 1 }) as Array<{ entity_id: string; n: number }>
+    const followed = counts.filter(c => c.n <= GRAPH_HUB_MAX_FACTS).map(c => c.entity_id)
+    // Que des hubs : aucun fait atteint, donc aucun front pour le saut suivant.
+    if (followed.length === 0) break
+
+    const rows = (
+      st.factsOf.all({ ...scope, ids: JSON.stringify(followed) }) as Array<{
+        entity_id: string
+        id: string
+        expires_at: string | null
+        created_at: string
+      }>
+    ).filter(alive)
+    const perEntity = new Map<string, number>()
+    for (const r of rows) perEntity.set(r.entity_id, (perEntity.get(r.entity_id) ?? 0) + 1)
+
+    const next: string[] = []
+    for (const r of rows) {
+      if (seeds.has(r.id)) continue
+      const n = perEntity.get(r.entity_id)!
+      const prev = reached.get(r.id)
+      if (!prev) {
+        if (reached.size >= GRAPH_MAX_CANDIDATES) continue
+        reached.set(r.id, { hops: hop, via: r.entity_id, viaFacts: n, shared: 1, created_at: r.created_at })
+        next.push(r.id)
+      } else if (prev.hops === hop) {
+        prev.shared++
+        if (n < prev.viaFacts || (n === prev.viaFacts && r.entity_id < prev.via)) {
+          prev.via = r.entity_id
+          prev.viaFacts = n
+        }
+      }
+      // Atteint à un saut plus court : ce chemin-là est déjà le meilleur.
+    }
+    frontier = next
+      .map(id => [id, reached.get(id)!] as [string, Reach])
+      .sort(compareReach)
+      .map(([id]) => id)
+    // Le saut suivant ne donnerait que des scores plus bas que ceux déjà en main.
+    if (reached.size >= maxFacts) break
   }
 
-  const top = [...scores.entries()]
-    .map(([fact_id, v]) => ({ fact_id, score: v.score, hops: v.hops, via: v.via }))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, maxFacts)
+  const top = [...reached.entries()].sort(compareReach).slice(0, maxFacts)
   // Noms des entités de passage : une seule requête, sur les seuls voisins gardés.
-  const viaIds = [...new Set(top.map(t => t.via))]
   const names = new Map<string, string>()
-  if (viaIds.length > 0) {
-    const rows = db
-      .prepare(`SELECT id, name FROM entities WHERE id IN (${viaIds.map(() => '?').join(',')})`)
-      .all(...viaIds) as Array<{ id: string; name: string }>
-    for (const r of rows) names.set(r.id, r.name)
+  if (top.length > 0) {
+    const viaIds = [...new Set(top.map(([, r]) => r.via))]
+    for (const r of st.names.all({ ids: JSON.stringify(viaIds) }) as Array<{ id: string; name: string }>) names.set(r.id, r.name)
   }
-  return top.map(({ via, ...rest }) => {
-    const name = names.get(via)
-    return name ? { ...rest, via_entity: name } : rest
+  return top.map(([fact_id, r]) => {
+    const base = { fact_id, score: 0.5 ** r.hops, hops: r.hops }
+    const name = names.get(r.via)
+    return name ? { ...base, via_entity: name } : base
   })
-}
-
-/** Entités liées à un ensemble de faits (via la table de jointure). */
-function entitiesOfFacts(db: Database, factIds: string[]): Set<string> {
-  if (factIds.length === 0) return new Set()
-  const placeholders = factIds.map(() => '?').join(',')
-  const rows = db
-    .prepare(`SELECT DISTINCT entity_id FROM fact_entities WHERE fact_id IN (${placeholders})`)
-    .all(...factIds) as Array<{ entity_id: string }>
-  return new Set(rows.map(r => r.entity_id))
 }
 
 /**
@@ -267,6 +401,10 @@ export function onFactSuperseded(db: Database, factId: string): number {
       }
       affected++
     }
+    // Une apparition par lien : le fait remplacé ne compte plus.
+    db.prepare(
+      'UPDATE entities SET mention_count = MAX(mention_count - 1, 0) WHERE id IN (SELECT entity_id FROM fact_entities WHERE fact_id = ?)',
+    ).run(factId)
     db.prepare('DELETE FROM fact_entities WHERE fact_id = ?').run(factId)
   })
   tx()
