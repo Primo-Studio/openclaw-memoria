@@ -10,6 +10,7 @@ import { dirname, join, relative } from 'node:path'
 import DatabaseCtor from 'better-sqlite3'
 import { importLegacyCognition } from '../migration/import-cognition.js'
 import { importTranscripts } from '../migration/import-transcripts.js'
+import { CHATGPT_EXTRACTION_SYSTEM } from '../migration/chatgpt-export.js'
 import {
   ensureStorageTree,
   resolveStorageRoot,
@@ -2730,6 +2731,9 @@ export class Memoria {
       memoria: this,
       instanceId,
       extraction,
+      // Même gate secrets que la capture : rien ne part au LLM en clair.
+      redactor: this.redactor,
+      secretSink: s => this.vaultSecret(s),
       sinceDate: opts.sinceDate,
       maxWindowsPerFile: opts.maxWindowsPerFile,
       dryRun: opts.dryRun,
@@ -2743,6 +2747,95 @@ export class Memoria {
         target_id_hash: sha256Hex(instanceId),
         scope_id: null,
         reason: `quarantined=${report.facts_quarantined};files=${report.files_read}`,
+      })
+    }
+    return report
+  }
+
+  /**
+   * Instance ChatGPT de cette machine (non révoquée), ou null. Toujours la
+   * MÊME d'un import à l'autre : une nouvelle instance = une nouvelle base, et
+   * tout l'export repartirait au LLM.
+   */
+  findChatGptInstance(): string | null {
+    this.assertOpen()
+    const machine = hostname()
+    const found = this.listAgents()
+      .filter(a => a.assistant_type === 'chatgpt' && a.instance.revoked_at === null)
+      .sort((a, b) => Number(b.instance.machine_id === machine) - Number(a.instance.machine_id === machine) || a.instance.created_at.localeCompare(b.instance.created_at))
+    return found[0]?.instance.id ?? null
+  }
+
+  /**
+   * Instance ChatGPT existante, sinon créée (type `chatgpt`, scope privé et
+   * base dédiée). L'appairage est conclu tout de suite : ChatGPT ne se
+   * connecte jamais au daemon, son jeton n'est gardé nulle part.
+   */
+  ensureChatGptInstance(): string {
+    const existing = this.findChatGptInstance()
+    if (existing) return existing
+    const paired = this.pairAssistant({ type: 'chatgpt', display_name: 'ChatGPT' })
+    const done = this.completePairing(paired.pairing_code)
+    if (!done) throw new Error('création de l’instance ChatGPT impossible (appairage refusé)')
+    return done.assistant_instance_id
+  }
+
+  /** Fournisseur et modèle d'extraction configurés, sans les appeler (estimation de coût). */
+  async extractionModel(): Promise<{ provider: string; model: string } | null> {
+    this.assertOpen()
+    const { extraction } = await this.ensureProfile()
+    return extraction ? { provider: extraction.name, model: extraction.model } : null
+  }
+
+  /**
+   * Importe des conversations d'un export ChatGPT (déjà lues) en QUARANTAINE,
+   * par la même chaîne que les transcripts : fenêtres, extraction, état des
+   * fenêtres, dédup, faits dormants en revue. Prompt dédié (idées, décisions,
+   * préférences) ; pas de plafond qui sacrifie le début d'une conversation.
+   * `instanceId` null : dry-run seulement (aucune instance encore créée).
+   */
+  async importChatGpt(
+    instanceId: string | null,
+    units: import('../migration/import-transcripts.js').TranscriptUnit[],
+    opts: {
+      maxWindowsPerFile?: number
+      dryRun?: boolean
+      onProgress?: import('../migration/import-transcripts.js').ImportTranscriptsInput['onProgress']
+    } = {},
+  ): Promise<import('../migration/import-transcripts.js').ImportTranscriptsReport> {
+    this.assertOpen()
+    if (instanceId !== null) {
+      const assistant = this.listAgents().find(a => a.instance.id === instanceId)
+      this.mustInstance(instanceId)
+      if (assistant && assistant.assistant_type !== 'chatgpt') {
+        throw new Error(`l'instance ${instanceId} est de type « ${assistant.assistant_type} », pas chatgpt`)
+      }
+    } else if (!opts.dryRun) {
+      throw new Error('import ChatGPT : instance cible manquante')
+    }
+    const { extraction } = await this.ensureProfile()
+    const report = await importTranscripts({
+      files: [],
+      units,
+      memoria: this,
+      instanceId,
+      extraction,
+      redactor: this.redactor,
+      secretSink: s => this.vaultSecret(s),
+      systemPrompt: CHATGPT_EXTRACTION_SYSTEM,
+      maxWindowsPerFile: opts.maxWindowsPerFile ?? Number.POSITIVE_INFINITY,
+      tailQuietMs: 0,
+      dryRun: opts.dryRun,
+      onProgress: opts.onProgress,
+    })
+    if (!opts.dryRun && instanceId !== null && report.facts_quarantined > 0) {
+      this.registry.audit({
+        actor_type: 'user',
+        actor_id: 'local',
+        action: 'import_chatgpt',
+        target_id_hash: sha256Hex(instanceId),
+        scope_id: null,
+        reason: `quarantined=${report.facts_quarantined};conversations=${report.files_read}`,
       })
     }
     return report

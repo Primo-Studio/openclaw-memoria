@@ -35,6 +35,8 @@ const KNOWN_CATEGORIES = new Set([
   'chronologie',
   'identity',
   'statement',
+  // Import ChatGPT : idées d'app, de business, de contenu, d'outil.
+  'idea',
 ])
 
 /** « preference » → « Préférence » ; une valeur inconnue est rendue telle quelle. */

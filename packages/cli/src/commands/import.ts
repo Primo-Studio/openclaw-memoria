@@ -12,8 +12,11 @@
  *    d'affilée, petit backoff, message clair) — on n'échoue qu'au-delà ;
  *  - un 409 au démarrage fait ATTENDRE la fin de l'import en cours, puis relance.
  */
+import { existsSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { resolve } from 'node:path'
 import { Command, Option } from 'clipanion/lib/advanced/index.js'
-import type { DaemonClient, ImportJobStatus } from '@memoria/daemon'
+import type { ChatGptImportSummary, DaemonClient, ImportJobStatus } from '@memoria/daemon'
 import { fail, findAliveDaemon } from '../index.js'
 
 /** Échecs réseau consécutifs tolérés pendant le polling (~40 s à 1 s de base avec le backoff). */
@@ -32,6 +35,7 @@ export class ImportCommand extends Command {
     examples: [
       ['Conversations Claude Code / Codex', 'memoria import --instance <id> --transcripts'],
       ['Mémoire legacy OpenClaw', 'memoria import --instance <id> --legacy ~/.openclaw/workspace/memory/memoria.db'],
+      ['Export ChatGPT (voir « memoria import chatgpt -h »)', 'memoria import chatgpt ~/chatgpt-export.zip --dry-run'],
     ],
   })
 
@@ -106,6 +110,171 @@ export class ImportCommand extends Command {
       return fail(this.context.stderr, `import : ${(err as Error).message}`)
     }
   }
+}
+
+/**
+ * `memoria import chatgpt <zip | dossier | conversations.json> [--dry-run]` —
+ * import de l'export ChatGPT dans l'instance ChatGPT de la machine (créée au
+ * premier import). Même client mince : le job tourne dans le daemon.
+ */
+export class ImportChatGptCommand extends Command {
+  static override paths = [['import', 'chatgpt']]
+  static override usage = Command.Usage({
+    description: 'Importe l’export ChatGPT (le .zip reçu par mail, son dossier décompressé, ou conversations.json).',
+    details:
+      'Le job tourne dans le daemon (« memoria start » d’abord). Les souvenirs arrivent DORMANTS et attendent ta validation dans l’écran Revue. Avec --dry-run : aucun appel au modèle, rien d’écrit ; la commande compte les conversations, les messages gardés, les fenêtres à extraire, et estime les jetons et le coût. Ré-importer le même export ne refait rien. Sous macOS, le daemon ne peut pas lire Téléchargements : place l’export dans ton dossier personnel.',
+    examples: [
+      ['Estimer le coût avant tout', 'memoria import chatgpt ~/chatgpt-export.zip --dry-run'],
+      ['Importer', 'memoria import chatgpt ~/chatgpt-export.zip'],
+    ],
+  })
+
+  exportPath = Option.String({ required: true, name: 'export' })
+  dryRun = Option.Boolean('--dry-run', false, { description: 'Compter et estimer sans appel au modèle ni écriture' })
+  instance = Option.String('--instance', { description: 'Instance ChatGPT cible (défaut : celle de cette machine, créée au premier import)' })
+  maxWindows = Option.String('--max-windows', { description: 'Fenêtres max analysées par conversation et par passage (défaut : aucune limite ; le surplus est repris au passage suivant)' })
+  pollMs = Option.String('--poll-ms', { description: 'Intervalle de rafraîchissement en ms (défaut : 1000)' })
+  storageRoot = Option.String('--storage-root', { description: 'Racine du stockage' })
+  config = Option.String('--config', { description: 'Fichier de découverte' })
+
+  override async execute(): Promise<number> {
+    const out = this.context.stdout
+    // Le daemon n'a pas le même dossier courant : chemin ABSOLU, « ~ » déplié.
+    const given = this.exportPath
+    const raw = given.startsWith('~/') || given === '~' ? `${homedir()}${given.slice(1)}` : given
+    const path = resolve(raw)
+    if (!existsSync(path)) return fail(this.context.stderr, `import chatgpt : export introuvable : « ${path} »`)
+    const maxWindows = this.maxWindows !== undefined ? Number(this.maxWindows) : undefined
+    if (maxWindows !== undefined && (!Number.isFinite(maxWindows) || maxWindows < 1)) {
+      return fail(this.context.stderr, 'import chatgpt : --max-windows doit être un entier ≥ 1.')
+    }
+    const pollMs = Math.max(10, this.pollMs !== undefined ? Number(this.pollMs) || 1000 : 1000)
+    const daemon = await findAliveDaemon({ storageRoot: this.storageRoot, configPath: this.config })
+    if (!daemon) {
+      return fail(this.context.stderr, 'import chatgpt : le daemon ne tourne pas — lance « memoria start » d’abord (le job d’import tourne dans le daemon).')
+    }
+    const write = (s: string): void => {
+      out.write(s)
+    }
+    try {
+      await startWhenFree(
+        daemon.client,
+        {
+          kind: 'chatgpt',
+          path,
+          dry_run: this.dryRun,
+          ...(this.instance ? { instance_id: this.instance } : {}),
+          ...(maxWindows !== undefined ? { max_windows_per_file: Math.floor(maxWindows) } : {}),
+        },
+        pollMs,
+        write,
+      )
+      write(this.dryRun ? 'Estimation de l’import ChatGPT (aucun appel au modèle, rien d’écrit)…\n' : 'Import de l’export ChatGPT lancé…\n')
+      const status = await pollUntilSettled(daemon.client, pollMs, write, s => `  ${chatGptProgressLine(s, this.dryRun)}`)
+      write('\n')
+      if (status.state === 'error' || status.state === 'interrupted') {
+        return fail(this.context.stderr, `import chatgpt : ${status.error ?? 'erreur inconnue (voir le journal du daemon)'}`)
+      }
+      if (status.state !== 'done' || !status.summary) {
+        return fail(this.context.stderr, 'import chatgpt : le daemon a perdu la trace de l’import (redémarrage ?) — relance la commande.')
+      }
+      write(renderChatGptSummary(status.summary, path))
+      if (status.errors.length > 0) {
+        write(`⚠ ${status.errors.length} erreur(s) non bloquante(s) :\n`)
+        for (const e of status.errors.slice(0, 10)) write(`  - ${e}\n`)
+        if (status.errors.length > 10) write(`  … et ${status.errors.length - 10} autre(s).\n`)
+      }
+      return 0
+    } catch (err) {
+      return fail(this.context.stderr, `import chatgpt : ${(err as Error).message}`)
+    }
+  }
+}
+
+const NUM = new Intl.NumberFormat('fr-FR')
+const DEC = new Intl.NumberFormat('fr-FR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })
+const USD = new Intl.NumberFormat('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
+function tokens(n: number): string {
+  if (n >= 1_000_000) return `${DEC.format(n / 1_000_000)} M`
+  if (n >= 10_000) return `${NUM.format(Math.round(n / 1000))} k`
+  return NUM.format(n)
+}
+
+const DROP_LABELS: Record<string, string> = {
+  system: 'système',
+  tool: 'outils',
+  tool_call: 'appels d’outils',
+  hidden: 'cachés',
+  user_system: 'consignes système',
+  weight0: 'poids nul',
+  commentary: 'commentaires d’outil',
+  analysis: 'analyse',
+  empty: 'sans texte',
+  no_role: 'sans rôle',
+}
+
+function chatGptProgressLine(status: ImportJobStatus, dryRun: boolean): string {
+  const p = status.progress
+  if (p.files_total === 0) return 'lecture de l’export…'
+  return dryRun
+    ? `${NUM.format(p.files_done)}/${NUM.format(p.files_total)} conversation(s) comptée(s)`
+    : `${NUM.format(p.files_done)}/${NUM.format(p.files_total)} conversation(s) — ${NUM.format(p.facts_imported)} souvenir(s)`
+}
+
+/** Bilan lisible d'un import ChatGPT (dry-run ou réel). */
+export function renderChatGptSummary(sum: ChatGptImportSummary, path: string): string {
+  const st = sum.stats
+  const lines: string[] = []
+  const aside = [
+    st.conversations_empty > 0 ? `${NUM.format(st.conversations_empty)} vide(s)` : '',
+    st.conversations_malformed > 0 ? `${NUM.format(st.conversations_malformed)} illisible(s)` : '',
+    st.conversations_duplicate > 0 ? `${NUM.format(st.conversations_duplicate)} en double` : '',
+  ].filter(Boolean)
+  lines.push(
+    `✓ Export lu : ${NUM.format(st.conversations_kept)} conversation(s) gardée(s) sur ${NUM.format(st.conversations_seen)}` +
+      `${aside.length > 0 ? ` (${aside.join(', ')})` : ''}, ${NUM.format(st.files)} fichier(s).`,
+  )
+  const dropped = Object.entries(st.dropped)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6)
+    .map(([k, n]) => `${DROP_LABELS[k] ?? k.replace(/^type:/, '')} ${NUM.format(n)}`)
+  lines.push(
+    `  Messages gardés : ${NUM.format(st.messages_kept)} sur ${NUM.format(st.messages_on_branch)} de la branche affichée` +
+      `${dropped.length > 0 ? ` (écartés : ${dropped.join(', ')})` : ''} ; ${NUM.format(st.nodes_off_branch)} nœud(s) d’autres branches ignoré(s).`,
+  )
+  if (sum.dry_run) {
+    lines.push(
+      `  Fenêtres à extraire : ${NUM.format(sum.windows)} (déjà extraites : ${NUM.format(sum.windows_known)} ; conversations déjà importées : ${NUM.format(sum.conversations_unchanged)}).`,
+    )
+    const est = sum.estimate
+    if (est) {
+      lines.push(
+        `  Jetons estimés : ${tokens(est.input_tokens)} en entrée, ${tokens(est.output_tokens)} en sortie (pire cas ${tokens(est.output_tokens_max)}).`,
+      )
+    }
+    const cost = sum.cost
+    if (!cost) {
+      lines.push('  Coût : aucun moteur d’extraction configuré, impossible à estimer (Réglages).')
+    } else if (cost.usd === null) {
+      lines.push(`  Coût : tarif inconnu pour ${cost.provider}/${cost.model}, impossible à estimer.`)
+    } else {
+      lines.push(
+        `  Coût estimé avec ${cost.provider}/${cost.model} : ${USD.format(cost.usd)} $ (pire cas ${USD.format(cost.usd_max ?? cost.usd)} $), tarifs indicatifs de ${cost.pricing_as_of}.`,
+      )
+    }
+    lines.push('  Hypothèses : 3,7 caractères par jeton, sortie moyenne observée par taille d’extrait ; appels témoins et nouveaux essais non comptés.')
+    lines.push(`  Pour lancer l’import : memoria import chatgpt ${JSON.stringify(path)}`)
+  } else {
+    lines.push(
+      `  ${NUM.format(sum.facts_quarantined)} souvenir(s) mis en attente de revue (${NUM.format(sum.windows)} fenêtre(s) envoyée(s), ` +
+        `${NUM.format(sum.windows_known)} déjà extraite(s), ${NUM.format(sum.facts_skipped_duplicates)} doublon(s) écarté(s), ` +
+        `${NUM.format(sum.conversations_unchanged)} conversation(s) déjà importée(s)).`,
+    )
+    lines.push('  Ils sont DORMANTS : valide-les dans l’écran Revue (« memoria » → Revue) pour les activer.')
+  }
+  for (const note of sum.notes.slice(0, 5)) lines.push(`  · ${note}`)
+  return `${lines.join('\n')}\n`
 }
 
 type ImportStartInput = Parameters<DaemonClient['importStart']>[0]

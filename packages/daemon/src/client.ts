@@ -118,9 +118,14 @@ export class DaemonClient {
     return this.post('/v1/admin/agents_connect', { kind, ...(name ? { name } : {}) })
   }
   async importStart(input: {
-    instance_id: string
-    kind: 'transcripts' | 'legacy'
+    /** Requis pour transcripts et legacy ; facultatif pour chatgpt. */
+    instance_id?: string
+    kind: 'transcripts' | 'legacy' | 'chatgpt'
     legacy_path?: string
+    /** chatgpt : chemin ABSOLU du zip, du dossier ou de conversations.json. */
+    path?: string
+    /** chatgpt : compte et estime sans appel LLM ni écriture. */
+    dry_run?: boolean
     max_windows_per_file?: number
   }): Promise<ImportJobStatus> {
     return this.post('/v1/admin/import_start', input)

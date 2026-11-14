@@ -60,6 +60,8 @@ const PATTERNS: ReadonlyArray<SecretPattern> = [
   { kind: 'twilio', regex: /\b(?:AC|SK)[0-9a-f]{32}(?![0-9a-f])/gd },
   { kind: 'sendgrid', regex: /\bSG\.[A-Za-z0-9_-]{16,32}\.[A-Za-z0-9_-]{16,64}(?![A-Za-z0-9_-])/gd },
   { kind: 'npm-token', regex: /\bnpm_[A-Za-z0-9]{36}(?![A-Za-z0-9])/gd },
+  { kind: 'huggingface', regex: /\bhf_[A-Za-z0-9]{30,}(?![A-Za-z0-9])/gd },
+  { kind: 'gitlab', regex: /\bglpat-[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_-])/gd },
   // Chaîne de connexion avec credentials : proto://user:pass@host
   { kind: 'connection-string', regex: /\b[a-z][a-z0-9+.-]*:\/\/[^\s:/@]+:([^\s:/@]{3,})@[^\s/]+/gid, group: 1 },
   {
@@ -88,12 +90,41 @@ const PATTERNS: ReadonlyArray<SecretPattern> = [
   // suite de chiffres), la somme de contrôle tranche.
   { kind: 'iban', regex: /\b[A-Z]{2}\d{2}(?:[ ]?[A-Z0-9]){11,30}\b/gd, validate: isValidIban },
   { kind: 'payment-card', regex: /\b\d(?:[ -]?\d){12,18}\b/gd, validate: isPaymentCard },
+  // Formes vues dans de vraies conversations, toutes AVANT le générique :
+  // mot de passe en français, `mysql -p<mdp>` collé, `curl -u user:mdp`.
+  {
+    kind: 'mot-de-passe',
+    regex: /\b(?:mot\s+de\s+passe|mdp)\s*[:=]\s*["'«]?\s*(?!\[secret:)([^\s"'`»]{8,})/gid,
+    group: 1,
+    // « mot de passe : identique pour tous » n'est pas un secret : un mot de
+    // passe porte au moins un chiffre ou un signe.
+    validate: v => /[^A-Za-zÀ-ÿ]/.test(v),
+  },
+  {
+    kind: 'cli-password',
+    // `psql -p` est le PORT : seuls mysql, mysqldump et mariadb collent le mot de passe.
+    regex: /\b(?:mysql|mysqldump|mariadb)\b[^\n]*?\s-p(?!\[secret:)([^\s"'`]{3,})/gid,
+    group: 1,
+  },
+  {
+    kind: 'cli-password',
+    regex: /\bcurl\b[^\n]*?\s(?:-u|--user)\s+["']?[^\s:"']+:(?!\[secret:)([^\s"'`@]{3,})/gid,
+    group: 1,
+  },
   {
     kind: 'generic-token',
-    // (?<!\[) : ne pas re-matcher le mot `secret` d'un placeholder `[secret:…]`
-    // déjà posé ; (?!\[secret:) : ne pas capturer un placeholder comme valeur.
-    regex: /(?<!\[)\b(?:password|passwd|pwd|token|secret|api[_-]?key|apikey)["']?\s*[:=]\s*["']?(?!\[secret:)([^\s"'`]{12,})/gid,
+    // Mot-clé seul ou en fin de nom de variable (DB_PASSWORD, access_token,
+    // client_secret, MY_API_TOKEN) : `_` est un caractère de mot, un `\b` devant
+    // le mot-clé laissait donc passer tous les .env collés.
+    // (?<![\[A-Za-z0-9]) : ne pas re-matcher le mot `secret` d'un placeholder
+    // `[secret:…]` déjà posé ; (?!\[secret:) : ne pas capturer un placeholder.
+    regex:
+      /(?<![[A-Za-z0-9])(?:[A-Za-z0-9]+[_-])*(?:password|passwd|pwd|token|secret|api[_-]?key|apikey)["']?\s*[:=]\s*["']?(?!\[secret:)([^\s"'`]{12,})/gid,
     group: 1,
+    // Du code, pas une valeur : `process.env.X`, `os.environ[…]`, gabarits
+    // `${…}` / `{{…}}`, appels de fonction. Le nom de variable est justement un
+    // fait de configuration utile au LLM, et ce n'est pas un secret à mettre au coffre.
+    validate: v => !/^(?:process\.env\.|os\.environ|\$\{|\{\{)|\(/.test(v),
   },
 ]
 

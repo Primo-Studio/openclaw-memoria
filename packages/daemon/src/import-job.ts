@@ -14,11 +14,46 @@ import DatabaseCtor from 'better-sqlite3'
 import { mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { importLegacyDb, nowISO, type Memoria } from '@memoria/core'
+import {
+  chatGptUnitsAsync,
+  estimateExtractionCost,
+  importLegacyDb,
+  nowISO,
+  readChatGptExport,
+  type ChatGptStats,
+  type ExtractionCost,
+  type ExtractionEstimate,
+  type Memoria,
+} from '@memoria/core'
 
 /** `interrupted` : le daemon s'est arrêté (stop, mise à jour, crash) pendant le job. */
 export type ImportJobState = 'idle' | 'running' | 'done' | 'error' | 'interrupted'
-export type ImportJobKind = 'transcripts' | 'legacy'
+export type ImportJobKind = 'transcripts' | 'legacy' | 'chatgpt'
+
+/**
+ * Bilan d'un import ChatGPT (dry-run ou réel) : ce que l'export contenait et
+ * ce que l'extraction a coûté ou coûterait.
+ */
+export interface ChatGptImportSummary {
+  dry_run: boolean
+  /** Instance ChatGPT visée (null : dry-run avant tout import, rien n'est créé). */
+  instance_id: string | null
+  stats: ChatGptStats
+  /** Fenêtres à extraire (dry-run) ou envoyées au LLM (import). */
+  windows: number
+  /** Fenêtres déjà extraites lors d'un import précédent. */
+  windows_known: number
+  /** Conversations déjà importées et inchangées. */
+  conversations_unchanged: number
+  /** Dry-run : jetons estimés (aucun appel LLM). */
+  estimate: ExtractionEstimate | null
+  /** Dry-run : coût estimé avec le modèle d'extraction configuré (null : aucun modèle configuré). */
+  cost: ExtractionCost | null
+  facts_extracted: number
+  facts_quarantined: number
+  facts_skipped_duplicates: number
+  notes: string[]
+}
 
 export interface ImportJobProgress {
   files_done: number
@@ -37,6 +72,8 @@ export interface ImportJobStatus {
   errors: string[]
   started_at: string | null
   finished_at: string | null
+  /** Import ChatGPT : bilan (rempli à la fin du job). */
+  summary?: ChatGptImportSummary | null
 }
 
 function idleStatus(): ImportJobStatus {
@@ -74,7 +111,12 @@ export class ImportJobRunner {
 
   /** Copie défensive — le statut interne ne fuit jamais par référence. */
   get current(): ImportJobStatus {
-    return { ...this.status, progress: { ...this.status.progress }, errors: [...this.status.errors] }
+    return {
+      ...this.status,
+      progress: { ...this.status.progress },
+      errors: [...this.status.errors],
+      ...(this.status.summary ? { summary: structuredClone(this.status.summary) } : {}),
+    }
   }
 
   get running(): boolean {
@@ -104,6 +146,61 @@ export class ImportJobRunner {
       })
       .catch((err: unknown) => this.fail(`import transcripts : ${(err as Error).message}`))
     return this.current
+  }
+
+  /**
+   * Import de l'export ChatGPT (zip, dossier ou conversations.json). Lecture
+   * en flux puis même chaîne que les transcripts, en arrière-plan. Dry-run :
+   * aucun appel LLM, aucune écriture, aucune instance créée.
+   */
+  startChatGpt(input: { path: string; instanceId?: string; dryRun?: boolean; maxWindowsPerFile?: number }): ImportJobStatus {
+    this.begin('chatgpt', input.instanceId ?? null, 0)
+    this.inFlight = this.runChatGpt(input).catch((err: unknown) => this.fail(`import ChatGPT : ${(err as Error).message}`))
+    return this.current
+  }
+
+  private async runChatGpt(input: { path: string; instanceId?: string; dryRun?: boolean; maxWindowsPerFile?: number }): Promise<void> {
+    const dryRun = input.dryRun === true
+    const read = await readChatGptExport(input.path)
+    if (!this.running) return
+    const units = await chatGptUnitsAsync(read.conversations)
+    this.status.progress = { files_done: 0, files_total: units.length, facts_imported: 0 }
+    this.persist()
+
+    // Toujours la même instance ; créée au premier VRAI import seulement.
+    let instanceId = input.instanceId ?? this.memoria.findChatGptInstance()
+    if (!instanceId && !dryRun) instanceId = this.memoria.ensureChatGptInstance()
+    this.status.instance_id = instanceId ?? null
+
+    const report = await this.memoria.importChatGpt(instanceId ?? null, units, {
+      dryRun,
+      maxWindowsPerFile: input.maxWindowsPerFile,
+      onProgress: p => {
+        if (!this.running) return
+        this.status.progress = { files_done: p.filesDone, files_total: p.filesTotal, facts_imported: p.factsImported }
+        this.persist()
+      },
+    })
+    if (!this.running) return
+    const model = dryRun ? await this.memoria.extractionModel() : null
+    const estimate = report.estimate ?? null
+    this.status.summary = {
+      dry_run: dryRun,
+      instance_id: instanceId ?? null,
+      stats: read.stats,
+      windows: report.windows,
+      windows_known: report.windows_skipped_known,
+      conversations_unchanged: report.files_skipped_already_imported,
+      estimate,
+      cost: estimate && model ? estimateExtractionCost(estimate, model.provider, model.model) : null,
+      facts_extracted: report.facts_extracted,
+      facts_quarantined: report.facts_quarantined,
+      facts_skipped_duplicates: report.facts_skipped_duplicates,
+      // Les notes par conversation (« dry-run … ») noieraient le reste : on garde le général.
+      notes: report.notes.filter(n => !n.startsWith('dry-run ') && !n.startsWith('déjà importé')).slice(0, 50),
+    }
+    this.status.errors = [...read.errors, ...report.errors]
+    this.finish({ files_done: units.length, files_total: units.length, facts_imported: report.facts_quarantined })
   }
 
   /** Import d'une base legacy OpenClaw (snapshot → quarantaine → adoption). */
@@ -165,7 +262,7 @@ export class ImportJobRunner {
     }
   }
 
-  private begin(kind: ImportJobKind, instanceId: string, filesTotal: number): void {
+  private begin(kind: ImportJobKind, instanceId: string | null, filesTotal: number): void {
     if (this.status.state === 'running') {
       // défense en profondeur — la route vérifie déjà et renvoie 409
       throw new Error('un import est déjà en cours')
@@ -179,6 +276,7 @@ export class ImportJobRunner {
       errors: [],
       started_at: nowISO(),
       finished_at: null,
+      summary: null,
     }
     this.persist()
   }

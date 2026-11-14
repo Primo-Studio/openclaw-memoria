@@ -145,6 +145,37 @@ describe('données financières (somme de contrôle)', () => {
   })
 })
 
+describe('formes vues dans de vraies conversations (valeurs fictives)', () => {
+  it.each([
+    ['jeton dans une URL', 'https://api.exemple.test/v1?access_token=Zq8vN3kLmP0aRt7Y&x=1', 'Zq8vN3kLmP0aRt7Y&x=1', 'generic-token'],
+    ['.env : DB_PASSWORD', 'export DB_PASSWORD=Fic7ifMotDePasse99', 'Fic7ifMotDePasse99', 'generic-token'],
+    ['.env : STRIPE_SECRET', 'STRIPE_SECRET=AbCdEfGh12345678', 'AbCdEfGh12345678', 'generic-token'],
+    ['.env : MY_API_TOKEN', 'MY_API_TOKEN="qwertyuiop123456"', 'qwertyuiop123456', 'generic-token'],
+    ['client_secret', 'client_secret: zzzz9999yyyy8888', 'zzzz9999yyyy8888', 'generic-token'],
+    ['mot de passe en français', 'le mot de passe : Soleil2026!x', 'Soleil2026!x', 'mot-de-passe'],
+    ['mdp', 'mdp = Fict1f-Pass', 'Fict1f-Pass', 'mot-de-passe'],
+    ['mysql -p collé', 'mysql -u root -pS3cretFictif base', 'S3cretFictif', 'cli-password'],
+    ['curl -u', 'curl -u admin:Fictif123 https://exemple.test', 'Fictif123', 'cli-password'],
+    ['Hugging Face', 'clé hf_' + 'AbCdEfGhIjKlMnOpQrStUvWxYz012345 ok', 'hf_AbCdEfGhIjKlMnOpQrStUvWxYz012345', 'huggingface'],
+    ['GitLab', 'glpat-' + 'AbCdEfGhIjKlMnOpQrSt fin', 'glpat-AbCdEfGhIjKlMnOpQrSt', 'gitlab'],
+  ])('%s', (_label, text, value, kind) => expectRedacted(text, value, kind))
+
+  it('du code qui NOMME un secret n’est pas masqué', () => {
+    const samples = [
+      'const apiKey = process.env.OPENAI_API_KEY',
+      'token = getToken(request.headers)',
+      'secret: process.env.JWT_SECRET',
+      'API_TOKEN=${API_TOKEN_FROM_VAULT}',
+      'le mot de passe : identique partout',
+      'psql -h localhost -p5432 base',
+    ]
+    for (const s of samples) {
+      const r = redactor.redact(s)
+      expect(r.text, `faux positif sur : ${s}`).toBe(s)
+    }
+  })
+})
+
 describe('non-régression du gate', () => {
   it('les faux positifs historiques le restent', () => {
     const samples = [

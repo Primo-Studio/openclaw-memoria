@@ -12,7 +12,7 @@
 
 import { translate } from './i18n'
 
-export type AgentType = 'claude-code' | 'codex' | 'openclaw' | 'generic'
+export type AgentType = 'claude-code' | 'codex' | 'openclaw' | 'chatgpt' | 'generic'
 
 export interface AssistantInstance {
   id: string
@@ -304,13 +304,15 @@ export async function connectAgent(kind: DetectedAgentKind, name?: string): Prom
 export interface ImportJobStatus {
   /** `interrupted` : le daemon s'est arrêté (stop, mise à jour, crash) pendant le job — message dans `error`. */
   state: 'idle' | 'running' | 'done' | 'error' | 'interrupted'
-  kind: 'transcripts' | 'legacy' | null
+  kind: 'transcripts' | 'legacy' | 'chatgpt' | null
   instance_id: string | null
   progress: { files_done: number; files_total: number; facts_imported: number }
   error: string | null
   errors: string[]
   started_at: string | null
   finished_at: string | null
+  /** Import ChatGPT (`memoria import chatgpt`) : bilan, forme détaillée côté daemon (ChatGptImportSummary). */
+  summary?: Record<string, unknown> | null
 }
 
 /** Démarre un job d'import (un seul à la fois — 409 sinon). */

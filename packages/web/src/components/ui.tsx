@@ -98,6 +98,7 @@ const AGENT_TYPE_LABELS: Record<string, string> = {
   codex: 'Codex',
   openclaw: 'OpenClaw',
   cursor: 'Cursor',
+  chatgpt: 'ChatGPT',
   robot: 'Robot',
 }
 

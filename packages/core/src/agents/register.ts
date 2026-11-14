@@ -19,7 +19,7 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-export type HostKind = 'claude-code' | 'codex' | 'openclaw' | 'generic'
+export type HostKind = 'claude-code' | 'codex' | 'openclaw' | 'chatgpt' | 'generic'
 
 /**
  * Accès aux CLI des hôtes (claude / openclaw), INJECTABLE.
@@ -360,6 +360,14 @@ export function autoRegister(host: string, instanceId: string, opts: RegisterOpt
       return registerCodex(instanceId)
     case 'openclaw':
       return registerOpenClaw(instanceId, opts)
+    case 'chatgpt':
+      // ChatGPT tourne chez OpenAI : aucun serveur MCP local à brancher. Son
+      // historique arrive par l'export officiel.
+      return {
+        host: 'chatgpt',
+        registered: false,
+        detail: 'ChatGPT ne se connecte pas à Memoria : importe son historique avec « memoria import chatgpt <export.zip> ».',
+      }
     default:
       return { host: 'generic', registered: false, detail: `Type « ${host} » : enregistre le serveur MCP manuellement (memoria-mcp serve --instance ${instanceId}).` }
   }
@@ -373,6 +381,8 @@ export function autoUnregister(host: string, opts: CliRunner & { openclawDir?: s
       return unregisterCodex()
     case 'openclaw':
       return unregisterOpenClaw(opts)
+    case 'chatgpt':
+      return { host: 'chatgpt', registered: false, detail: 'Rien à nettoyer : ChatGPT n’a pas de serveur MCP local.' }
     default:
       return { host: 'generic', registered: false, detail: 'Rien à nettoyer automatiquement pour ce type.' }
   }

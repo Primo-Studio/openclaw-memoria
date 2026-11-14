@@ -1368,6 +1368,7 @@ export const es: Messages = {
   'fact.category.chronologie': 'Cronología',
   'fact.category.identity': 'Identidad',
   'fact.category.statement': 'Hecho',
+  'fact.category.idea': 'Idea',
   'fact.topics_more': '+{count}',
   'fact.topics_more_title': 'Otros temas: {list}',
   // Catégories de souvenir renvoyées en anglais par le moteur : on les traduit.

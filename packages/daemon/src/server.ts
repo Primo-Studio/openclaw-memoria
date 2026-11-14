@@ -12,8 +12,8 @@
  * thread Node → zéro contention inter-process par construction.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
-import { existsSync, mkdirSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { existsSync, mkdirSync, statSync } from 'node:fs'
+import { isAbsolute, join, resolve } from 'node:path'
 import { timingSafeEqual } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import {
@@ -25,6 +25,7 @@ import {
   formatRecallBlocks,
   formatRecallOpenClaw,
   RegexRedactor,
+  accessErrorMessage,
   autoRegister,
   autostartStatus,
   collectTranscriptFiles,
@@ -296,6 +297,46 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     }
 
     throw new HttpError(404, `route inconnue : ${route}`)
+  }
+
+  /**
+   * Import de l'export ChatGPT (POST import_start, kind=chatgpt). Champs :
+   * `path` (absolu : zip, dossier ou conversations.json), `dry_run`,
+   * `instance_id` (facultatif, sinon l'instance ChatGPT de la machine, créée
+   * au premier vrai import), `max_windows_per_file` (facultatif ; défaut :
+   * aucun plafond, le surplus serait reporté et jamais perdu).
+   */
+  async function startChatGptImport(body: Record<string, unknown>, instanceId: string) {
+    const path = typeof body['path'] === 'string' ? body['path'] : ''
+    if (!path) throw new HttpError(400, 'path requis : le .zip de l’export ChatGPT, son dossier décompressé, ou conversations.json')
+    if (!isAbsolute(path)) throw new HttpError(400, `chemin absolu attendu (reçu « ${path} »)`)
+    try {
+      statSync(path)
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      throw new HttpError(code === 'ENOENT' ? 404 : code === 'EPERM' || code === 'EACCES' ? 403 : 400, accessErrorMessage(path, err))
+    }
+    const dryRun = body['dry_run'] === true
+    if (instanceId) {
+      const agent = memoria.listAgents().find(a => a.instance.id === instanceId)
+      if (!agent) throw new HttpError(404, `instance inconnue : ${instanceId}`)
+      if (agent.instance.revoked_at !== null) throw new HttpError(400, 'instance révoquée — choisis une instance ChatGPT active')
+      if (agent.assistant_type !== 'chatgpt') {
+        throw new HttpError(400, `l'instance ${instanceId} est de type « ${agent.assistant_type} » : l'export ChatGPT va dans une instance chatgpt`)
+      }
+    }
+    // Le dry-run n'appelle aucun LLM : pas besoin qu'il soit joignable.
+    if (!dryRun && !(await memoria.hasExtraction())) {
+      throw new HttpError(422, 'Configure d’abord un moteur d’intelligence (Réglages) — l’import de conversations a besoin d’un LLM d’extraction.')
+    }
+    const rawMax = body['max_windows_per_file']
+    let maxWindowsPerFile: number | undefined
+    if (rawMax !== undefined && rawMax !== null) {
+      const n = Number(rawMax)
+      if (!Number.isFinite(n) || n < 1) throw new HttpError(400, 'max_windows_per_file doit être un entier ≥ 1')
+      maxWindowsPerFile = Math.floor(n)
+    }
+    return importJobs.startChatGpt({ path, dryRun, ...(instanceId ? { instanceId } : {}), maxWindowsPerFile })
   }
 
   async function handleAdmin(route: string, url: URL, req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -1074,13 +1115,17 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         const body = await readJson(req)
         const instanceId = String(body['instance_id'] ?? '')
         const kind = String(body['kind'] ?? '')
-        if (!instanceId) throw new HttpError(400, 'instance_id requis')
-        if (kind !== 'transcripts' && kind !== 'legacy') {
-          throw new HttpError(400, `kind inconnu : « ${kind} » (attendu : transcripts | legacy)`)
+        if (kind !== 'transcripts' && kind !== 'legacy' && kind !== 'chatgpt') {
+          throw new HttpError(400, `kind inconnu : « ${kind} » (attendu : transcripts | legacy | chatgpt)`)
         }
         if (importJobs.running) {
           throw new HttpError(409, 'un import est déjà en cours — attends sa fin (GET /v1/admin/import_status)')
         }
+        if (kind === 'chatgpt') {
+          sendJson(res, 200, await startChatGptImport(body, instanceId))
+          return
+        }
+        if (!instanceId) throw new HttpError(400, 'instance_id requis')
         const agent = memoria.listAgents().find(a => a.instance.id === instanceId)
         if (!agent) throw new HttpError(404, `instance inconnue : ${instanceId}`)
         if (agent.instance.revoked_at !== null) {

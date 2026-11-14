@@ -49,7 +49,23 @@
  *  - dryRun : parse + compte ce qu'un vrai import enverrait, AUCUNE écriture ;
  *  - sinceDate : un passage qui a écarté des tours ne scelle jamais le fichier
  *    « complet » : un import ultérieur, sans date ou avec une date plus
- *    ancienne, le reprend (les fenêtres déjà extraites restent sautées).
+ *    ancienne, le reprend (les fenêtres déjà extraites restent sautées) ;
+ *  - UNITÉS DÉJÀ PARSÉES (export ChatGPT, `units`) : même chaîne qu'un
+ *    fichier, mais une conversation = une unité à clé stable (`chatgpt:<id>`),
+ *    hash = contenu retenu. Une unité inchangée (même hash) est sautée sans
+ *    rien relire ; pas de plafond qui ignore le début d'une conversation (le
+ *    surplus est reporté, jamais perdu) ; pas d'attente de « conversation en
+ *    cours » (un export est un instantané) ;
+ *  - SECRETS MASQUÉS AVANT LE LLM (gate dur §9, comme la capture) : le texte
+ *    envoyé pour chaque fenêtre, quel que soit le format, passe par le même
+ *    Redactor que la capture ; une clé devient `[secret:<nom>]` et sa valeur
+ *    part au coffre (vrai import seulement). Le hash de fenêtre, lui, est
+ *    calculé sur le texte brut, comme avant : masquer ne relance rien ;
+ *  - AUTEUR DES TOURS (Claude Code) : seul ce que l'humain a tapé est présenté
+ *    au LLM comme `[user]` (messages en file d'attente compris) ; les
+ *    notifications, résumés de compaction, contenus injectés, messages d'autres
+ *    sessions et consignes d'un agent parent sont étiquetés, ou réduits à leur
+ *    étiquette. Même règle : le hash de fenêtre reste celui du découpage brut.
  *
  * NB : ce module n'écrit JAMAIS un fait actif. La promotion vers `active` passe
  * exclusivement par la revue gouvernée (Memoria.reviewDecision).
@@ -60,14 +76,18 @@ import { basename } from 'node:path'
 import { ContentStore } from '../storage/content.js'
 import { findDuplicate } from '../engine/selective.js'
 import { parseFactArray } from '../engine/capture.js'
+import { RegexRedactor } from '../secrets/redaction.js'
 import { factNormHash, newId, nowISO, sha256Hex } from '../util.js'
 import {
   detectTranscriptFormat,
   parseTranscript,
   type TranscriptFormat,
   type Turn,
+  type TurnSource,
 } from './transcript-parsers.js'
+import { addWindowToEstimate, emptyEstimate, type ExtractionEstimate } from './extraction-estimate.js'
 import type { LlmProvider } from '../llm/provider.js'
+import type { DetectedSecret, Redactor } from '../secrets/types.js'
 import type { Fact, StoreFactInput } from '../types.js'
 
 /**
@@ -84,12 +104,46 @@ export interface ImportTranscriptsMemoria {
   registry: { getScopeByName(name: string): { id: string } | null }
 }
 
+/**
+ * Conversation déjà parsée, importée comme un fichier (export ChatGPT). Sa clé
+ * tient lieu de chemin dans transcript_file_state et memory_sources : elle
+ * doit être STABLE d'un export à l'autre (jamais un chemin temporaire).
+ */
+export interface TranscriptUnit {
+  /** Clé stable (`chatgpt:<id de conversation>`). */
+  key: string
+  /** Libellé court des notes (titre de la conversation). */
+  label: string
+  /** Format consigné dans la provenance (`chatgpt`). */
+  format: string
+  /** Tours retenus, dans l'ordre. */
+  turns: Turn[]
+  /** Hash du contenu retenu : idempotence (index UNIQUE de memory_sources), préfixé par le format. */
+  sourceHash: string
+  /** Taille notée dans l'état (caractères retenus). */
+  size: number
+  /** Date notée dans l'état (dernière mise à jour de la conversation, ms). */
+  mtimeMs: number
+  /** Provenance ajoutée aux métadonnées de la source (titre, dates…). */
+  metadata?: Record<string, unknown>
+  /** Contexte placé avant chaque extrait envoyé au LLM. Hors hash de fenêtre : un titre renommé ne relance rien. */
+  context?: string
+}
+
 export interface ImportTranscriptsInput {
   /** Chemins absolus des fichiers de transcript à importer. */
   files: string[]
+  /** Conversations déjà parsées (export ChatGPT), traitées après les fichiers. */
+  units?: TranscriptUnit[]
   memoria: ImportTranscriptsMemoria
-  /** assistant_instance_id cible (scope privé). */
-  instanceId: string
+  /**
+   * assistant_instance_id cible (scope privé). null : seulement en dry-run,
+   * quand l'instance n'existe pas encore. Rien n'est alors connu : tout compte
+   * comme nouveau, et rien n'est créé.
+   */
+  instanceId: string | null
+  /** Prompt système d'extraction (défaut : conversations avec un assistant de code). */
+  systemPrompt?: string
   /** LLM d'extraction. null/indisponible → 0 fait + note 'no-llm' (pas d'invention). */
   extraction: LlmProvider | null
   /** Ne garder que les tours à/après cette date ISO (filtre les vieilles convs). */
@@ -105,6 +159,18 @@ export interface ImportTranscriptsInput {
   tailQuietMs?: number
   /** Parse + compte sans AUCUNE écriture. */
   dryRun?: boolean
+  /**
+   * Gate dur secrets appliqué au texte de chaque fenêtre AVANT l'envoi au LLM
+   * (le même que la capture : passer celui du moteur). Absent : un
+   * RegexRedactor neuf, jamais d'envoi en clair faute de câblage.
+   */
+  redactor?: Redactor
+  /**
+   * Coffre des secrets masqués (vrai import seulement, jamais en dry-run), pour
+   * qu'un `[secret:<nom>]` repris dans un fait pointe vers une valeur. Absent :
+   * la valeur est seulement retirée du texte, elle n'est conservée nulle part.
+   */
+  secretSink?: (secret: DetectedSecret) => void
   /**
    * Progression (job d'import du daemon, CLI) : appelé après CHAQUE fichier,
    * y compris ceux ignorés/en échec. Une exception du callback est loggée,
@@ -128,19 +194,39 @@ export interface ImportTranscriptsReport {
   windows: number
   /** Fenêtres déjà extraites lors d'un import précédent : aucun appel LLM. */
   windows_skipped_known: number
+  /**
+   * Fenêtres de `windows` dont le texte contenait au moins un secret (clé,
+   * jeton, mot de passe), masqué avant l'envoi au LLM. En dry-run : celles
+   * qu'un vrai import enverrait.
+   */
+  windows_with_secrets: number
   facts_extracted: number
   facts_quarantined: number
   facts_skipped_duplicates: number
+  /** Tours retenus (après le filtre de date) dans les fichiers et unités lus. */
+  turns: number
+  /**
+   * Dry-run seulement : volume des fenêtres comptées dans `windows`, et jetons
+   * estimés (aucun appel LLM). Voir extraction-estimate.ts pour les hypothèses.
+   */
+  estimate?: ExtractionEstimate
   errors: string[]
   notes: string[]
   dry_run: boolean
 }
 
-/** Prompt système dédié transcripts (dérivé de EXTRACTION_SYSTEM, spec §7.2). */
-const TRANSCRIPT_EXTRACTION_SYSTEM = `You extract DURABLE facts from an excerpt of a conversation between a user and a coding assistant, for a long-term memory.
+/**
+ * Prompt système dédié transcripts (dérivé de EXTRACTION_SYSTEM, spec §7.2).
+ * La règle d'auteur répond à un défaut mesuré : le LLM écrivait « L'utilisateur
+ * recommande… » pour une idée de l'assistant. Gardée courte : la longueur du
+ * prompt système pèse sur chaque appel et sur l'estimation de coût.
+ */
+export const TRANSCRIPT_EXTRACTION_SYSTEM = `You extract DURABLE facts from an excerpt of a conversation between a user and a coding assistant, for a long-term memory.
 Keep ONLY what lasts and can be reused: user preferences, decisions and their rationale, exact configurations, project conventions, lessons learned from mistakes, learned processes.
 Extract NOTHING ephemeral: passing state of a one-off task, pleasantries, unanswered questions, narration ("I am reading the file"), detail that is true only once.
 Each fact must be SELF-CONTAINED (understandable alone) and carry something concrete (name, version, command, path, decision).
+Each line starts with its author in brackets. Only [user] and [user, …] lines were written by the human user; any other label (assistant, notification, summary, system, another agent) was not.
+For an idea, recommendation or decision, name its real author: "The user…" only if a [user] line says it, otherwise "The assistant proposed…" (add that the user approved it only if a [user] line shows it). Never guess an author.
 Write every fact in the SAME LANGUAGE as the conversation. Never translate it.
 Reply with a JSON object ONLY, no surrounding text:
 {"facts": [{"fact": "self-contained, precise statement", "category": "preference|decision|config|error|process|general", "confidence": 0.0-1.0}]}
@@ -171,9 +257,12 @@ function emptyReport(dryRun: boolean): ImportTranscriptsReport {
     files_incomplete: 0,
     windows: 0,
     windows_skipped_known: 0,
+    windows_with_secrets: 0,
     facts_extracted: 0,
     facts_quarantined: 0,
     facts_skipped_duplicates: 0,
+    turns: 0,
+    ...(dryRun ? { estimate: emptyEstimate() } : {}),
     errors: [],
     notes: [],
     dry_run: dryRun,
@@ -209,10 +298,123 @@ function isOpenWindow(window: ConversationWindow): boolean {
   return window.turns.length < MAX_TURNS_PER_WINDOW && chars < MAX_CHARS_PER_WINDOW
 }
 
-/** Prompt utilisateur d'une fenêtre (rôles préservés pour le contexte). */
+const WINDOW_HEAD = 'Extrait de conversation :\n'
+const WINDOW_TAIL = '\n\nObjet JSON {"facts": [...]} des faits durables :'
+
+/**
+ * IDENTITÉ d'une fenêtre : son hash identifie la fenêtre dans
+ * transcript_window_state. Ne pas le changer (ni le texte des tours, ni leur
+ * rôle, ni ce gabarit), sinon toutes les fenêtres déjà extraites repartiraient
+ * au LLM (ticket #27). Ce n'est PLUS le texte envoyé au LLM : voir llmPrompt.
+ */
 function windowPrompt(window: ConversationWindow): string {
   const lines = window.turns.map(t => `- [${t.role}] ${t.text}`)
-  return `Extrait de conversation :\n${lines.join('\n')}\n\nObjet JSON {"facts": [...]} des faits durables :`
+  return `${WINDOW_HEAD}${lines.join('\n')}${WINDOW_TAIL}`
+}
+
+/** Étiquette des messages tapés pendant que l'assistant travaillait. */
+const QUEUED_LABEL = 'user, sent while the assistant was working'
+
+/**
+ * Comment présenter au LLM un tour qui n'est pas de l'humain : étiquette, et
+ * longueur gardée (0 = étiquette seule). Les résumés de compaction et les
+ * contenus injectés reprennent ce qui est déjà ailleurs (fenêtres précédentes,
+ * documentation d'une compétence) : seule l'étiquette reste. Une notification
+ * de tâche garde son résumé, pas le résultat complet du sous-agent, déjà
+ * extrait de la transcription du sous-agent elle-même.
+ */
+const SOURCE_RENDER: Record<TurnSource, { label: string; keep: number }> = {
+  notification: { label: 'task notification, not written by the user', keep: 400 },
+  summary: { label: 'summary of the earlier conversation, written by the assistant (omitted)', keep: 0 },
+  system: { label: 'system content injected into the conversation, not written by the user (omitted)', keep: 0 },
+  command: { label: 'local command or its output', keep: 300 },
+  peer: { label: 'message from another agent session, not the user', keep: 1500 },
+  scheduled: { label: 'scheduled task prompt, sent automatically', keep: 600 },
+  orchestrator: { label: 'instructions from the agent that launched this sub-agent, not the user', keep: 2500 },
+}
+
+/**
+ * Texte abrégé, avec marqueur visible (jamais de coupe muette). Ne coupe
+ * jamais au milieu d'un `[secret:…]` : la coupe recule avant le placeholder.
+ */
+function excerpt(text: string, max: number): string {
+  if (text.length <= max) return text
+  let cut = max
+  const open = text.lastIndexOf('[secret:', cut)
+  if (open !== -1 && text.indexOf(']', open) >= cut) cut = open
+  return `${text.slice(0, cut)}…[abrégé]`
+}
+
+/**
+ * `mask` est appliqué au corps ENTIER, AVANT la coupe : coupé d'abord, un
+ * secret perd ce qui le suit (« @hôte » d'une URL, fin d'un jeton) et le motif
+ * ne le reconnaît plus, alors que sa valeur partirait en clair.
+ */
+function renderSourcedTurn(turn: Turn, source: TurnSource, mask: (text: string) => string): string {
+  const { label, keep } = SOURCE_RENDER[source]
+  if (keep === 0) return `- [${label}]`
+  let body = turn.text
+  if (source === 'notification') {
+    const summary = /<summary>([\s\S]*?)<\/summary>/.exec(body)?.[1]?.trim()
+    body = summary ? summary : body.replace(/<result>[\s\S]*?(?:<\/result>|$)/, '')
+  }
+  return `- [${label}] ${excerpt(mask(body.trim()), keep)}`
+}
+
+/**
+ * Texte de la fenêtre pour le LLM : chaque tour avec son auteur réel. Un tour
+ * de l'humain ou de l'assistant s'écrit exactement comme dans windowPrompt :
+ * une fenêtre sans tour étiqueté ni message en file donne le même texte.
+ */
+const TRUNCATION_MARK = '…[tronqué]'
+
+/**
+ * Tour coupé par le parseur (MAX_TURN_CHARS, avant le hash, donc avant tout
+ * masquage) : une clé à cheval sur la coupe perd sa fin, n'est plus reconnue
+ * et son début partirait en clair. On retire le dernier mot avant le marqueur,
+ * dans le texte envoyé au LLM seulement (le hash ne bouge pas).
+ */
+function dropCutWord(text: string): string {
+  if (!text.endsWith(TRUNCATION_MARK)) return text
+  const body = text.slice(0, -TRUNCATION_MARK.length)
+  const cut = body.search(/\s\S*$/)
+  return `${cut > 0 ? body.slice(0, cut) : ''}${TRUNCATION_MARK}`
+}
+
+function llmWindowText(window: ConversationWindow, mask: (text: string) => string): string {
+  const lines: string[] = []
+  for (const raw of window.turns) {
+    const t = raw.text.endsWith(TRUNCATION_MARK) ? { ...raw, text: dropCutWord(raw.text) } : raw
+    for (const q of t.queuedBefore ?? []) lines.push(`- [${QUEUED_LABEL}] ${q}`)
+    lines.push(t.source && t.role === 'user' ? renderSourcedTurn(t, t.source, mask) : `- [${t.role}] ${t.text}`)
+    for (const q of t.queuedAfter ?? []) lines.push(`- [${QUEUED_LABEL}] ${q}`)
+  }
+  return `${WINDOW_HEAD}${lines.join('\n')}${WINDOW_TAIL}`
+}
+
+/**
+ * Ce que reçoit vraiment le LLM : le contexte de l'unité (titre, date) puis la
+ * fenêtre, et AUCUN secret en clair. Les tours abrégés sont masqués avant leur
+ * coupe, puis le texte entier l'est (tours de l'humain, file d'attente,
+ * contexte). Seuls comptent les secrets dont le placeholder figure dans le
+ * texte final : ceux d'un passage omis ou coupé ne partent pas.
+ */
+function maskedLlmPrompt(
+  window: ConversationWindow,
+  context: string | undefined,
+  maskPrompt: FileContext['maskPrompt'],
+): { text: string; secrets: DetectedSecret[] } {
+  const found: DetectedSecret[] = []
+  const maskBody = (text: string): string => {
+    const r = maskPrompt(text)
+    found.push(...r.secrets)
+    return r.text
+  }
+  const body = llmWindowText(window, maskBody)
+  const final = maskPrompt(context ? `${context}\n${body}` : body)
+  const sent = new Map<string, DetectedSecret>()
+  for (const s of [...found, ...final.secrets]) if (final.text.includes(`[secret:${s.name}]`)) sent.set(s.name, s)
+  return { text: final.text, secrets: [...sent.values()] }
 }
 
 /**
@@ -239,6 +441,21 @@ export async function importTranscripts(input: ImportTranscriptsInput): Promise<
   const report = emptyReport(input.dryRun ?? false)
   const maxWindows = input.maxWindowsPerFile ?? DEFAULT_MAX_WINDOWS
   const tailQuietMs = input.tailQuietMs ?? DEFAULT_TAIL_QUIET_MS
+  const systemPrompt = input.systemPrompt ?? TRANSCRIPT_EXTRACTION_SYSTEM
+  const units = input.units ?? []
+
+  // Dry-run SANS instance (export ChatGPT jamais importé) : aucune base à lire,
+  // tout compte comme nouveau. Hors dry-run, une instance est obligatoire.
+  if (input.instanceId === null) {
+    if (!report.dry_run) {
+      const msg = 'instance cible manquante : seul un dry-run peut tourner sans instance'
+      console.warn(`[memoria] import transcripts : ${msg}`)
+      report.errors.push(msg)
+      return report
+    }
+    await runFiles(input, report, null, { scopeId: '', maxWindows, tailQuietMs, systemPrompt, units })
+    return report
+  }
 
   const privateScope = input.memoria.registry.getScopeByName(`private:${input.instanceId}`)
   if (!privateScope) {
@@ -249,98 +466,144 @@ export async function importTranscripts(input: ImportTranscriptsInput): Promise<
   }
   const scopeId = privateScope.id
 
-  // Sans LLM : on le dit franchement et on s'arrête (aucune invention de faits).
-  const llmReady = input.extraction !== null && (await safeIsAvailable(input.extraction, report))
-  if (!llmReady) {
-    report.notes.push('no-llm : aucun LLM d’extraction disponible — 0 fait extrait (aucune invention)')
-  }
-
   // Une seule connexion à la DB privée pour tout le run (better-sqlite3 WAL).
   const dbPath = input.memoria.paths.assistantDb(input.instanceId)
   const store = new ContentStore(dbPath)
-
   try {
-    // Dédup persistante : fait déjà présent dans le scope privé, TOUS états
-    // (supersédés inclus). Par l'index facts.norm_hash : précharger le texte de
-    // tous les faits lisait la table entière sur disque au début de chaque
-    // import (3 s de blocage à froid sur 67 000 faits, ticket #27).
-    // Rattrapage des lignes sans hash : seulement pour un VRAI import (le
-    // dry-run promet « aucune écriture », et sans LLM alreadyStored n'est jamais
-    // appelé). Une seule transaction : un commit par ligne coûtait 10 fois plus.
-    // « AND norm_hash IS NULL » : ne jamais écraser un hash posé entre la
-    // lecture et l'écriture par un autre chemin (capture, synchro).
-    if (!report.dry_run && llmReady) {
-      const unhashed = store.db
-        .prepare('SELECT id, fact FROM facts WHERE scope_id = ? AND norm_hash IS NULL')
-        .all(scopeId) as Array<{ id: string; fact: string }>
-      if (unhashed.length > 0) {
-        const setHash = store.db.prepare('UPDATE facts SET norm_hash = ? WHERE id = ? AND norm_hash IS NULL')
-        store.db.transaction(() => {
-          for (const row of unhashed) setHash.run(factNormHash(row.fact), row.id)
-        })()
-      }
-    }
-    const knownStmt = store.db.prepare('SELECT 1 FROM facts WHERE scope_id = ? AND norm_hash = ? LIMIT 1')
-    const alreadyStored = (factText: string): boolean => knownStmt.get(scopeId, factNormHash(factText)) !== undefined
-    const seenInRun = new Set<string>()
-    const breaker: LlmBreaker = { streak: 0, probeFailed: false, open: false, filesLeft: 0 }
-
-    let filesDone = 0
-    for (const file of input.files) {
-      try {
-        await importOneFile(file, {
-          input,
-          report,
-          store,
-          scopeId,
-          maxWindows,
-          tailQuietMs,
-          llmReady,
-          alreadyStored,
-          seenInRun,
-          breaker,
-        })
-      } catch (err) {
-        // Erreur INATTENDUE sur un fichier : visible, jamais avalée, on continue.
-        const msg = `fichier « ${file} » : ${(err as Error).message}`
-        console.warn(`[memoria] import transcripts : ${msg}`)
-        report.errors.push(msg)
-      }
-      filesDone++
-      // Rendre la main à la boucle d'événements entre deux fichiers : un lot de
-      // fichiers déjà connus ne fait aucun appel réseau, donc aucun `await` réel
-      // — sans ça le daemon ne sert plus aucune requête pendant tout le lot.
-      await yieldToEventLoop()
-      notifyProgress(input.onProgress, {
-        filesDone,
-        filesTotal: input.files.length,
-        factsImported: report.facts_quarantined,
-      })
-    }
-    if (breaker.open) {
-      const note = `coupe-circuit : ${LLM_CIRCUIT_BREAKER_FAILURES} échecs d'affilée (LLM en panne, quota, réponses illisibles ou écriture refusée), extraction arrêtée ; ${breaker.filesLeft} fichier(s) laissé(s) intact(s), tout repart au prochain import`
-      report.notes.push(note)
-      console.warn(`[memoria] import transcripts : ${note}`)
-    }
+    await runFiles(input, report, store, { scopeId, maxWindows, tailQuietMs, systemPrompt, units })
   } finally {
     store.close()
   }
-
   return report
+}
+
+/**
+ * Boucle commune fichiers + unités. `store` null : dry-run sans instance
+ * (aucune lecture ni écriture de base).
+ */
+async function runFiles(
+  input: ImportTranscriptsInput,
+  report: ImportTranscriptsReport,
+  store: ContentStore | null,
+  opts: { scopeId: string; maxWindows: number; tailQuietMs: number; systemPrompt: string; units: TranscriptUnit[] },
+): Promise<void> {
+  const { scopeId, maxWindows, tailQuietMs, systemPrompt, units } = opts
+
+  // Sans LLM : on le dit franchement et on s'arrête (aucune invention de faits).
+  // Le dry-run ne sonde pas le LLM : il promet zéro appel (une sonde OpenAI
+  // passe par le réseau), il compte ce qu'un vrai import enverrait.
+  const llmReady = !report.dry_run && input.extraction !== null && (await safeIsAvailable(input.extraction, report))
+  if (!llmReady && !report.dry_run) {
+    report.notes.push('no-llm : aucun LLM d’extraction disponible — 0 fait extrait (aucune invention)')
+  }
+
+  // Dédup persistante : fait déjà présent dans le scope privé, TOUS états
+  // (supersédés inclus). Par l'index facts.norm_hash : précharger le texte de
+  // tous les faits lisait la table entière sur disque au début de chaque
+  // import (3 s de blocage à froid sur 67 000 faits, ticket #27).
+  // Rattrapage des lignes sans hash : seulement pour un VRAI import (le
+  // dry-run promet « aucune écriture », et sans LLM alreadyStored n'est jamais
+  // appelé). Une seule transaction : un commit par ligne coûtait 10 fois plus.
+  // « AND norm_hash IS NULL » : ne jamais écraser un hash posé entre la
+  // lecture et l'écriture par un autre chemin (capture, synchro).
+  if (store && !report.dry_run && llmReady) {
+    const unhashed = store.db
+      .prepare('SELECT id, fact FROM facts WHERE scope_id = ? AND norm_hash IS NULL')
+      .all(scopeId) as Array<{ id: string; fact: string }>
+    if (unhashed.length > 0) {
+      const setHash = store.db.prepare('UPDATE facts SET norm_hash = ? WHERE id = ? AND norm_hash IS NULL')
+      store.db.transaction(() => {
+        for (const row of unhashed) setHash.run(factNormHash(row.fact), row.id)
+      })()
+    }
+  }
+  const knownStmt = store?.db.prepare('SELECT 1 FROM facts WHERE scope_id = ? AND norm_hash = ? LIMIT 1')
+  const alreadyStored = (factText: string): boolean =>
+    knownStmt !== undefined && knownStmt.get(scopeId, factNormHash(factText)) !== undefined
+  const seenInRun = new Set<string>()
+  const breaker: LlmBreaker = { streak: 0, probeFailed: false, open: false, filesLeft: 0 }
+  const redactor = input.redactor ?? new RegexRedactor()
+  const ctx: FileContext = {
+    input,
+    report,
+    store,
+    scopeId,
+    maxWindows,
+    tailQuietMs,
+    llmReady,
+    systemPrompt,
+    alreadyStored,
+    seenInRun,
+    breaker,
+    maskPrompt: prompt => {
+      const result = redactor.redact(prompt)
+      return { text: result.text, secrets: result.found }
+    },
+  }
+
+  const filesTotal = input.files.length + units.length
+  let filesDone = 0
+  const afterOne = async (): Promise<void> => {
+    filesDone++
+    // Rendre la main à la boucle d'événements entre deux fichiers : un lot de
+    // fichiers déjà connus ne fait aucun appel réseau, donc aucun `await` réel
+    // — sans ça le daemon ne sert plus aucune requête pendant tout le lot.
+    await yieldToEventLoop()
+    notifyProgress(input.onProgress, { filesDone, filesTotal, factsImported: report.facts_quarantined })
+  }
+  for (const file of input.files) {
+    try {
+      await importOneFile(file, ctx)
+    } catch (err) {
+      // Erreur INATTENDUE sur un fichier : visible, jamais avalée, on continue.
+      const msg = `fichier « ${file} » : ${(err as Error).message}`
+      console.warn(`[memoria] import transcripts : ${msg}`)
+      report.errors.push(msg)
+    }
+    await afterOne()
+  }
+  for (const unit of units) {
+    try {
+      await importOneUnit(unit, ctx)
+    } catch (err) {
+      const msg = `conversation « ${unit.label} » (${unit.key}) : ${(err as Error).message}`
+      console.warn(`[memoria] import transcripts : ${msg}`)
+      report.errors.push(msg)
+    }
+    await afterOne()
+  }
+  if (breaker.open) {
+    const note = `coupe-circuit : ${LLM_CIRCUIT_BREAKER_FAILURES} échecs d'affilée (LLM en panne, quota, réponses illisibles ou écriture refusée), extraction arrêtée ; ${breaker.filesLeft} fichier(s) laissé(s) intact(s), tout repart au prochain import`
+    report.notes.push(note)
+    console.warn(`[memoria] import transcripts : ${note}`)
+  }
+  // En tête des notes : le CLI n'en affiche que les premières, et le dry-run
+  // sert justement à voir ce qui partirait au modèle.
+  if (report.windows_with_secrets > 0) {
+    report.notes.unshift(
+      report.dry_run
+        ? `secrets : ${report.windows_with_secrets} fenêtre(s) à envoyer contiennent un secret (clé, jeton, mot de passe) ; il sera masqué ([secret:…]) avant l'envoi au modèle`
+        : `secrets : ${report.windows_with_secrets} fenêtre(s) contenaient un secret (clé, jeton, mot de passe), masqué ([secret:…]) avant l'envoi au modèle`,
+    )
+  }
 }
 
 interface FileContext {
   input: ImportTranscriptsInput
   report: ImportTranscriptsReport
-  store: ContentStore
+  /** null : dry-run sans instance, rien n'est connu ni écrit. */
+  store: ContentStore | null
   scopeId: string
   maxWindows: number
   tailQuietMs: number
   llmReady: boolean
+  systemPrompt: string
   /** Le fait (texte normalisé) existe-t-il déjà dans le scope privé, tous états ? */
   alreadyStored: (factText: string) => boolean
   seenInRun: Set<string>
   breaker: LlmBreaker
+  /** Gate dur secrets du texte envoyé au LLM (jamais de l'entrée du hash de fenêtre). */
+  maskPrompt: (prompt: string) => { text: string; secrets: DetectedSecret[] }
 }
 
 /** État du LLM sur tout le run : distingue une panne d'une fenêtre indigeste. */
@@ -378,7 +641,8 @@ interface FileStateRow {
   failed_windows: string
 }
 
-function readFileState(store: ContentStore, path: string): FileStateRow | undefined {
+function readFileState(store: ContentStore | null, path: string): FileStateRow | undefined {
+  if (!store) return undefined
   return store.db
     .prepare(
       'SELECT size, mtime_ms, source_hash, complete, attempts, windows_total, failed_windows FROM transcript_file_state WHERE path = ?',
@@ -509,8 +773,57 @@ async function classifyFailure(
   return kind
 }
 
+/**
+ * Une unité de travail, fichier ou conversation, une fois son contenu en main.
+ * `parse` rend les tours (null : format inconnu). `live` : un fichier qui peut
+ * encore grandir (conversation en cours) ; faux pour un export, instantané figé.
+ */
+interface LoadedUnit {
+  key: string
+  label: string
+  size: number
+  mtimeMs: number
+  sourceHash: string
+  state: FileStateRow | undefined
+  canRetryNow: boolean
+  live: boolean
+  parse: () => { format: string; turns: Turn[] } | null
+  context?: string
+  metadata?: Record<string, unknown>
+}
+
+/**
+ * Porte d'entrée commune : coupe-circuit, raccourci « inchangé ». Rend null si
+ * l'unité est écartée sans être lue, sinon si un nouvel essai est permis.
+ */
+function gate(
+  ctx: FileContext,
+  state: FileStateRow | undefined,
+  unchanged: boolean,
+  label: string,
+): { canRetryNow: boolean } | null {
+  const { report, llmReady, breaker } = ctx
+  const retryable = state !== undefined && state.complete === 0 && state.attempts < MAX_FILE_ATTEMPTS
+  // COUPE-CIRCUIT OUVERT : le LLM ne répond plus. Tout fichier qui aurait
+  // demandé une extraction est laissé tel quel (ni lu, ni état, ni essai) :
+  // il repartira au prochain import.
+  if (breaker.open && !(unchanged && !retryable)) {
+    breaker.filesLeft++
+    return null
+  }
+  // Un retry exige un LLM. Le dry-run laisse passer aussi (lecture seule) :
+  // il doit annoncer les fenêtres restantes qu'un vrai import enverrait.
+  const canRetryNow = retryable && (llmReady || report.dry_run)
+  if (unchanged && !canRetryNow) {
+    report.files_skipped_already_imported++
+    report.notes.push(`déjà importé (inchangé) : ${label} — re-import = 0 nouveau`)
+    return null
+  }
+  return { canRetryNow }
+}
+
 async function importOneFile(file: string, ctx: FileContext): Promise<void> {
-  const { input, report, store, scopeId, maxWindows, tailQuietMs, llmReady, alreadyStored, seenInRun, breaker } = ctx
+  const { report, store } = ctx
 
   let size: number
   let mtimeMs: number
@@ -529,22 +842,8 @@ async function importOneFile(file: string, ctx: FileContext): Promise<void> {
   // hacher 5,4 Go bloquait le daemon).
   const state = readFileState(store, file)
   const unchanged = state !== undefined && state.size === size && state.mtime_ms === mtimeMs
-  const retryable = state !== undefined && state.complete === 0 && state.attempts < MAX_FILE_ATTEMPTS
-  // COUPE-CIRCUIT OUVERT : le LLM ne répond plus. Tout fichier qui aurait
-  // demandé une extraction est laissé tel quel (ni lu, ni état, ni essai) :
-  // il repartira au prochain import.
-  if (breaker.open && !(unchanged && !retryable)) {
-    breaker.filesLeft++
-    return
-  }
-  // Un retry exige un LLM. Le dry-run laisse passer aussi (lecture seule) :
-  // il doit annoncer les fenêtres restantes qu'un vrai import enverrait.
-  const canRetryNow = retryable && (llmReady || report.dry_run)
-  if (unchanged && !canRetryNow) {
-    report.files_skipped_already_imported++
-    report.notes.push(`déjà importé (inchangé) : ${basename(file)} — re-import = 0 nouveau`)
-    return
-  }
+  const open = gate(ctx, state, unchanged, basename(file))
+  if (!open) return
 
   let content: string
   try {
@@ -556,22 +855,66 @@ async function importOneFile(file: string, ctx: FileContext): Promise<void> {
     return
   }
 
-  const sourceHash = sha256Hex(content)
+  await importLoaded(ctx, {
+    key: file,
+    label: basename(file),
+    size,
+    mtimeMs,
+    sourceHash: sha256Hex(content),
+    state,
+    canRetryNow: open.canRetryNow,
+    live: true,
+    parse: () => {
+      const firstLines = content.slice(0, 65_536).split(/\r?\n/).slice(0, 12).join('\n')
+      const format: TranscriptFormat = detectTranscriptFormat(file, firstLines)
+      return format === 'unknown' ? null : { format, turns: parseTranscript(format, content) }
+    },
+  })
+}
+
+/**
+ * Conversation déjà parsée (export ChatGPT). « Inchangée » = même hash que
+ * l'état enregistré : son contenu est déjà en mémoire, rien à relire.
+ */
+async function importOneUnit(unit: TranscriptUnit, ctx: FileContext): Promise<void> {
+  const state = readFileState(ctx.store, unit.key)
+  const unchanged = state !== undefined && state.source_hash === unit.sourceHash
+  const open = gate(ctx, state, unchanged, unit.label)
+  if (!open) return
+  await importLoaded(ctx, {
+    key: unit.key,
+    label: unit.label,
+    size: unit.size,
+    mtimeMs: unit.mtimeMs,
+    sourceHash: unit.sourceHash,
+    state,
+    canRetryNow: open.canRetryNow,
+    live: false,
+    parse: () => ({ format: unit.format, turns: unit.turns }),
+    context: unit.context,
+    metadata: unit.metadata,
+  })
+}
+
+async function importLoaded(ctx: FileContext, u: LoadedUnit): Promise<void> {
+  const { input, report, store, scopeId, maxWindows, tailQuietMs, llmReady, alreadyStored, seenInRun, breaker } = ctx
+  const { key, label, size, mtimeMs, sourceHash, state, canRetryNow } = u
+
   // Retry = même contenu qu'au passage incomplet (sinon c'est un nouveau contenu).
   const isRetry = canRetryNow && state!.source_hash === sourceHash
 
   // IDEMPOTENCE : ce contenu exact déjà importé → SKIP (0 nouveau).
-  const already = store.db
+  const already = store?.db
     .prepare("SELECT id FROM memory_sources WHERE source_hash = ? AND source_type = 'transcript'")
     .get(sourceHash) as { id: string } | undefined
   if (already && !isRetry) {
     report.files_skipped_already_imported++
-    report.notes.push(`déjà importé (hash) : ${basename(file)} — re-import = 0 nouveau`)
+    report.notes.push(`déjà importé (hash) : ${label} — re-import = 0 nouveau`)
     // Mémoriser taille + date : au prochain passage, plus aucune lecture. Un état
     // « incomplet » du même contenu (retry en attente d'un LLM) est conservé.
-    if (!report.dry_run) {
+    if (store && !report.dry_run) {
       const pending = state !== undefined && state.source_hash === sourceHash && state.complete === 0
-      writeFileState(store, file, {
+      writeFileState(store, key, {
         size,
         mtimeMs,
         sourceHash,
@@ -586,24 +929,25 @@ async function importOneFile(file: string, ctx: FileContext): Promise<void> {
 
   /** Fichier sans rien à extraire, quel que soit le LLM : on ne le relira plus. */
   const markComplete = (): void => {
-    if (report.dry_run) return
-    writeFileState(store, file, { size, mtimeMs, sourceHash, complete: true, attempts: 0, windowsTotal: 0 })
+    if (!store || report.dry_run) return
+    writeFileState(store, key, { size, mtimeMs, sourceHash, complete: true, attempts: 0, windowsTotal: 0 })
   }
 
-  const firstLines = content.slice(0, 65_536).split(/\r?\n/).slice(0, 12).join('\n')
-  const format: TranscriptFormat = detectTranscriptFormat(file, firstLines)
-  if (format === 'unknown') {
-    report.notes.push(`format non reconnu, ignoré : ${basename(file)}`)
+  const parsed = u.parse()
+  if (!parsed) {
+    report.notes.push(`format non reconnu, ignoré : ${label}`)
     markComplete()
     return
   }
+  const { format } = parsed
 
   report.files_read++
 
-  const allTurns = parseTranscript(format, content)
+  const allTurns = parsed.turns
   const turns = filterSince(allTurns, input.sinceDate)
+  report.turns += turns.length
   if (turns.length === 0) {
-    report.notes.push(`aucun tour exploitable (${format}) : ${basename(file)}`)
+    report.notes.push(`aucun tour exploitable (${format}) : ${label}`)
     // Vidé par le filtre sinceDate : on ne mémorise rien, un import avec une
     // date plus ancienne doit pouvoir le reprendre.
     if (allTurns.length === 0) markComplete()
@@ -611,7 +955,8 @@ async function importOneFile(file: string, ctx: FileContext): Promise<void> {
   }
 
   const windows = buildWindows(turns)
-  const isDone = store.db.prepare('SELECT 1 FROM transcript_window_state WHERE window_hash = ?')
+  const isDoneStmt = store?.db.prepare('SELECT 1 FROM transcript_window_state WHERE window_hash = ?')
+  const isDone = { get: (hash: string): unknown => isDoneStmt?.get(hash) }
 
   // ÉTAT DE CHAQUE FENÊTRE : déjà extraite (conversation qui a grandi depuis)
   // → aucun appel LLM. Sans ça le LLM reformule les mêmes faits à chaque import
@@ -651,7 +996,23 @@ async function importOneFile(file: string, ctx: FileContext): Promise<void> {
   // du premier import (vieux historique) : on ne le ressort pas. Après un
   // passage filtré par sinceDate, pas de repère : ce qui précède n'a jamais
   // été lu.
-  let anchor = prev.partial ? -1 : hashes.findIndex((h, i) => done[i] || toResume(h))
+  // transcript_window_state est COMMUN à toute l'instance : une fenêtre
+  // « déjà extraite » peut venir d'un AUTRE fichier ou d'une autre
+  // conversation (même texte collé, même rappel système en fin de
+  // sous-agent : mesuré sur 128 fichiers réels sur 1 736). Le repère n'a donc
+  // de sens que si un passage précédent de CETTE unité a pu écarter du vieil
+  // historique. Pas de repère :
+  //  - pour une conversation d'export (instantané figé, rien n'est jamais
+  //    écarté : le repère ne pouvait que sauter son début, puis la sceller) ;
+  //  - pour un fichier jamais traité (aucun état), ou dont aucun passage n'a
+  //    dépassé le plafond (windows_total ≤ maxWindows, fichier importé tout
+  //    jeune compris) : rien n'a été écarté, une fenêtre connue placée avant
+  //    les autres vient forcément d'ailleurs. Limite : un import ultérieur avec
+  //    un plafond plus grand peut ressortir l'historique écarté, au plus la
+  //    taille de ce plafond.
+  const firstKnown = hashes.findIndex((h, i) => done[i] || toResume(h))
+  const nothingSetAside = state === undefined || state.windows_total <= maxWindows
+  let anchor = prev.partial || !u.live || nothingSetAside ? -1 : firstKnown
   // Anciens index intraduisibles (le fichier a changé depuis) : on repart comme
   // l'ancien code, des `maxWindows` dernières fenêtres, sinon une fenêtre en
   // échec placée avant les fenêtres réussies ne serait plus jamais rejouée.
@@ -661,7 +1022,13 @@ async function importOneFile(file: string, ctx: FileContext): Promise<void> {
   // une conversation importée toute jeune (une fenêtre encore ouverte, dont le
   // hash change dès qu'elle grandit) qui dépasse ensuite le plafond. Ses
   // fenêtres sont nouvelles, pas du vieil historique : reportées, pas ignorées.
-  const tracked = anchor !== -1 || (state !== undefined && (prev.partial || state.windows_total <= maxWindows))
+  // Une conversation d'export n'a pas de « vieil historique » à sacrifier : son
+  // surplus est toujours reporté, jamais ignoré (le début d'une conversation
+  // est souvent là où naît l'idée).
+  // Un fichier jamais traité n'est pas « suivi », même si l'une de ses
+  // fenêtres est connue : elle peut venir d'un autre fichier.
+  const tracked =
+    !u.live || (state !== undefined && (anchor !== -1 || prev.partial || state.windows_total <= maxWindows))
   let todo: number[] = []
   for (let i = Math.max(anchor, 0); i < windows.length; i++) if (!done[i]) todo.push(i)
 
@@ -672,6 +1039,7 @@ async function importOneFile(file: string, ctx: FileContext): Promise<void> {
   // conversation est encore en cours, et un premier import doit rendre ses faits.
   const tail = windows.length - 1
   const tailDeferred =
+    u.live &&
     state !== undefined &&
     tailQuietMs > 0 &&
     todo.at(-1) === tail &&
@@ -691,35 +1059,50 @@ async function importOneFile(file: string, ctx: FileContext): Promise<void> {
     let note: string
     if (tracked) {
       postponed = over
-      note = `${basename(file)} : ${over.length} fenêtre(s) reportée(s) au prochain import (cap ${maxWindows})`
+      note = `${label} : ${over.length} fenêtre(s) reportée(s) au prochain import (cap ${maxWindows})`
     } else {
-      note = `${basename(file)} : ${over.length} fenêtre(s) ancienne(s) ignorée(s) (cap ${maxWindows}) — gardé les plus récentes`
+      note = `${label} : ${over.length} fenêtre(s) ancienne(s) ignorée(s) (cap ${maxWindows}) — gardé les plus récentes`
     }
     report.notes.push(note)
     console.warn(`[memoria] import transcripts : ${note}`)
   }
   if (tailDeferred) {
-    report.notes.push(`${basename(file)} : conversation en cours, dernière fenêtre (incomplète) différée jusqu'au repos du fichier`)
+    report.notes.push(`${label} : conversation en cours, dernière fenêtre (incomplète) différée jusqu'au repos du fichier`)
   }
+
+  /**
+   * Texte RÉELLEMENT envoyé au LLM pour une fenêtre : auteurs étiquetés puis
+   * secrets masqués. Jamais l'entrée du hash (windowPrompt, texte brut).
+   */
+  const promptFor = (i: number): { text: string; secrets: DetectedSecret[] } => maskedLlmPrompt(windows[i]!, u.context, ctx.maskPrompt)
 
   // dryRun : on compte ce qu'un vrai import enverrait, on n'écrit / n'extrait rien.
   if (report.dry_run) {
     report.windows += todo.length
     report.windows_skipped_known += known
-    report.notes.push(`dry-run ${basename(file)} (${format}) : ${todo.length} fenêtre(s) — AUCUNE écriture`)
+    for (const [n, i] of todo.entries()) {
+      // Un très gros fichier fait des milliers de fenêtres à masquer : on rend la main.
+      if (n > 0 && n % 200 === 0) await yieldToEventLoop()
+      const prompt = promptFor(i)
+      if (prompt.secrets.length > 0) report.windows_with_secrets++
+      if (report.estimate) addWindowToEstimate(report.estimate, ctx.systemPrompt.length + prompt.text.length, ctx.systemPrompt.length)
+    }
+    report.notes.push(`dry-run ${label} (${format}) : ${todo.length} fenêtre(s) — AUCUNE écriture`)
     return
   }
 
   // Sans LLM : aucune extraction possible — fenêtres comptées, 0 fait.
-  if (!llmReady) {
+  // (`store` et l'instance manquent seulement en dry-run, déjà sorti plus haut.)
+  if (!llmReady || !store || input.instanceId === null) {
     report.windows += todo.length
     report.windows_skipped_known += known
     return
   }
+  const instanceId = input.instanceId
 
   report.windows_skipped_known += known
   if (isRetry && todo.length > 0) {
-    report.notes.push(`nouvel essai ${basename(file)} : ${todo.length} fenêtre(s) restant du passage précédent`)
+    report.notes.push(`nouvel essai ${label} : ${todo.length} fenêtre(s) restant du passage précédent`)
   }
 
   // Provenance : 1 memory_sources par fichier (créée à la 1re écriture utile).
@@ -735,10 +1118,10 @@ async function importOneFile(file: string, ctx: FileContext): Promise<void> {
       )
       .run(
         sourceId,
-        file,
+        key,
         sourceHash,
         nowISO(),
-        JSON.stringify({ format, turns: turns.length, windows: windows.length }),
+        JSON.stringify({ ...u.metadata, format, turns: turns.length, windows: windows.length }),
       )
     return sourceId
   }
@@ -766,7 +1149,7 @@ async function importOneFile(file: string, ctx: FileContext): Promise<void> {
     // encore en échec (toujours sous MAX_FILE_ATTEMPTS, une fenêtre abandonnée
     // sortant de la liste). Les états d'avant, bloqués à MAX, restent écartés.
     const attempts = Math.max(0, ...[...failed.values()].map(t => t[0]))
-    writeFileState(store, file, {
+    writeFileState(store, key, {
       size,
       mtimeMs,
       sourceHash,
@@ -810,12 +1193,12 @@ async function importOneFile(file: string, ctx: FileContext): Promise<void> {
       // agent — même règle que la capture (knownElsewhere).
       if (
         findDuplicate(store, scopeId, item.fact) ||
-        input.memoria.findKnownDuplicate(input.instanceId, item.fact, { includePrivate: false }) !== null
+        input.memoria.findKnownDuplicate(instanceId, item.fact, { includePrivate: false }) !== null
       ) {
         report.facts_skipped_duplicates++
         continue
       }
-      quarantineFact(ctx, ensureSource(), item)
+      quarantineFact(ctx, store, instanceId, ensureSource(), item)
       // Noté « vu » APRÈS l'écriture : si elle jette, le fait repart au retry.
       seenInRun.add(hash)
       report.facts_quarantined++
@@ -826,19 +1209,23 @@ async function importOneFile(file: string, ctx: FileContext): Promise<void> {
   let blamedOnOutage = 0
   let abandoned = 0
   for (const index of todo) {
-    const window = windows[index]!
     const windowHash = hashes[index]!
     if (breaker.open) {
       keepForLater(windowHash)
       continue
     }
     report.windows++
+    const prompt = promptFor(index)
+    if (prompt.secrets.length > 0) {
+      report.windows_with_secrets++
+      vaultSecrets(ctx, prompt.secrets, label)
+    }
     const failure: { message?: string } = {}
-    const facts = await extractWindow(input.extraction!, window, report, file, failure)
+    const facts = await extractWindow(input.extraction!, ctx.systemPrompt, prompt.text, report, label, failure)
     let kind: FailureKind
     if (facts === null) {
       // Appel en échec ou réponse illisible : la fenêtre, ou le LLM en général ?
-      kind = await classifyFailure(breaker, () => probeLlm(input.extraction!), {
+      kind = await classifyFailure(breaker, () => probeLlm(input.extraction!, ctx.systemPrompt), {
         knownOutage: /\b429\b/.test(failure.message ?? ''),
       })
     } else {
@@ -855,7 +1242,7 @@ async function importOneFile(file: string, ctx: FileContext): Promise<void> {
         // Avant, l'exception sortait du fichier sans rien compter : une
         // écriture qui échoue toujours renvoyait la fenêtre au LLM à chaque
         // import, sans borne.
-        const msg = `écriture des faits d'une fenêtre en échec (${basename(file)}) : ${(err as Error).message}`
+        const msg = `écriture des faits d'une fenêtre en échec (${label}) : ${(err as Error).message}`
         console.warn(`[memoria] import transcripts : ${msg}`)
         report.errors.push(msg)
         kind = await classifyFailure(breaker, null)
@@ -883,10 +1270,10 @@ async function importOneFile(file: string, ctx: FileContext): Promise<void> {
     const parts: string[] = []
     if (blamedOnWindow > 0) parts.push(`${blamedOnWindow} fenêtre(s) en échec, essai compté (${MAX_FILE_ATTEMPTS} au plus par fenêtre)`)
     if (blamedOnOutage > 0) parts.push(`${blamedOnOutage} fenêtre(s) en échec pendant une panne, essai non compté`)
-    report.notes.push(`${basename(file)} : ${parts.join(' ; ')}`)
+    report.notes.push(`${label} : ${parts.join(' ; ')}`)
   }
   if (abandoned > 0) {
-    const note = `${basename(file)} : ${abandoned} fenêtre(s) toujours en échec : abandon, plus de nouvel essai`
+    const note = `${label} : ${abandoned} fenêtre(s) toujours en échec : abandon, plus de nouvel essai`
     report.notes.push(note)
     console.warn(`[memoria] import transcripts : ${note}`)
   }
@@ -928,22 +1315,23 @@ function errorDetail(err: unknown): string {
  */
 async function extractWindow(
   extraction: LlmProvider,
-  window: ConversationWindow,
+  system: string,
+  prompt: string,
   report: ImportTranscriptsReport,
-  file: string,
+  label: string,
   failure?: { message?: string },
 ): Promise<ExtractedFact[] | null> {
   try {
     const raw = await extraction.complete({
-      system: TRANSCRIPT_EXTRACTION_SYSTEM,
-      prompt: windowPrompt(window),
+      system,
+      prompt,
       json: true,
       maxTokens: 1024,
       temperature: 0.1,
     })
     return parseFactArray(raw)
   } catch (err) {
-    const msg = `extraction de fenêtre en échec (${basename(file)}) : ${errorDetail(err)}`
+    const msg = `extraction de fenêtre en échec (${label}) : ${errorDetail(err)}`
     console.warn(`[memoria] import transcripts : ${msg}`)
     report.errors.push(msg)
     if (failure) failure.message = errorDetail(err)
@@ -959,10 +1347,10 @@ async function extractWindow(
  * tous les appels » selon le cas. Mêmes réglages que l'extraction, pour
  * échouer comme elle si la cause est générale.
  */
-async function probeLlm(extraction: LlmProvider): Promise<boolean> {
+async function probeLlm(extraction: LlmProvider, system: string): Promise<boolean> {
   try {
     const raw = await extraction.complete({
-      system: TRANSCRIPT_EXTRACTION_SYSTEM,
+      system,
       prompt: windowPrompt({ turns: [{ role: 'user', text: 'ok' }] }),
       json: true,
       maxTokens: 1024,
@@ -977,14 +1365,39 @@ async function probeLlm(extraction: LlmProvider): Promise<boolean> {
 }
 
 /**
+ * Secrets masqués d'une fenêtre envoyée au LLM → coffre (comme la capture),
+ * pour qu'un `[secret:<nom>]` repris dans un fait pointe vers sa valeur. Le
+ * masquage a déjà eu lieu : un coffre qui refuse n'expose rien, la valeur
+ * n'est simplement pas conservée (erreur consignée, sans la valeur).
+ */
+function vaultSecrets(ctx: FileContext, secrets: DetectedSecret[], label: string): void {
+  const sink = ctx.input.secretSink
+  if (!sink) return
+  for (const secret of secrets) {
+    try {
+      sink(secret)
+    } catch (err) {
+      const msg = `secret « ${secret.name} » (${secret.kind}) masqué mais non conservé au coffre (${label}) : ${hideValue((err as Error)?.message ?? String(err), secret.value)}`
+      console.warn(`[memoria] import transcripts : ${msg}`)
+      ctx.report.errors.push(msg)
+    }
+  }
+}
+
+/** Défense : une valeur de secret ne sort jamais dans un message. */
+function hideValue(message: string, value: string): string {
+  return value.length > 0 ? message.split(value).join('[secret]') : message
+}
+
+/**
  * Écrit un fait extrait en QUARANTAINE : storeFact privé → dormant → ligne
  * memory_import_items 'pending'. Reproduit le mécanisme review-first de
  * memoria.storeCaptured (mais source 'transcript' + provenance fichier).
  */
-function quarantineFact(ctx: FileContext, sourceId: string, item: ExtractedFact): void {
-  const { input, store, scopeId } = ctx
+function quarantineFact(ctx: FileContext, store: ContentStore, instanceId: string, sourceId: string, item: ExtractedFact): void {
+  const { input, scopeId } = ctx
   const fact = input.memoria.storeFact({
-    instance: input.instanceId,
+    instance: instanceId,
     content: item.fact,
     category: item.category,
     confidence: item.confidence,

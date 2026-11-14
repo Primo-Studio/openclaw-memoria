@@ -7,7 +7,11 @@
 // Identités & gouvernance (registry.sqlite)
 // ---------------------------------------------------------------------------
 
-export type AssistantType = 'claude-code' | 'codex' | 'openclaw' | 'cursor' | 'robot' | 'generic'
+/**
+ * `chatgpt` : historique ChatGPT importé depuis l'export officiel (zip). Aucun
+ * serveur MCP local, aucune capture en direct : seulement `memoria import chatgpt`.
+ */
+export type AssistantType = 'claude-code' | 'codex' | 'openclaw' | 'cursor' | 'chatgpt' | 'robot' | 'generic'
 
 export type OrgType = 'own_company' | 'client' | 'vendor' | 'partner'
 

@@ -6,6 +6,8 @@
  *  - Codex rollout : ~/.codex/sessions/.../rollout-*.jsonl + archived_sessions/ ;
  *  - Codex history : ~/.codex/history.jsonl (prompts user seuls) ;
  *  - Markdown      : fichier .md découpé en sections de titre `##`.
+ * L'export ChatGPT (un tableau JSON de conversations en arbre) a son propre
+ * lecteur : chatgpt-export.ts.
  *
  * Robustesse (règle du projet « aucun mort silencieux ») :
  *  - une ligne JSON invalide est IGNORÉE (jamais de throw qui ferait perdre tout
@@ -15,12 +17,52 @@
  *  - AUCUN catch muet : toute erreur inattendue passe par console.warn.
  */
 
+/**
+ * Auteur réel d'un tour `user` qui n'a PAS été écrit par l'humain (Claude
+ * Code). Mesuré sur de vraies sessions : la plupart des caractères « user »
+ * sont des notifications de tâches, des résumés de compaction écrits par
+ * l'assistant, du contenu injecté (compétences, rappels, sorties de commande),
+ * des messages d'autres sessions ou, dans un sous-agent, la consigne de l'agent
+ * qui l'a lancé. Sans cette étiquette, le LLM d'extraction prête à
+ * l'utilisateur les idées de l'assistant.
+ *
+ * NE SERT QU'AU TEXTE ENVOYÉ AU LLM. `role` et `text` restent exactement ceux
+ * d'avant : ils forment le hash des fenêtres (transcript_window_state), et le
+ * changer renverrait au LLM toutes les fenêtres déjà extraites.
+ */
+export type TurnSource =
+  /** `<task-notification>` : fin d'une tâche de fond, résultat d'un sous-agent. */
+  | 'notification'
+  /** Résumé de compaction (« This session is being continued… »), écrit par l'assistant. */
+  | 'summary'
+  /** Contenu injecté : isMeta, `<system-reminder>`, compétence chargée, image, limite d'usage, interruption. */
+  | 'system'
+  /** Commande locale ou sa sortie (`<command-name>`, `<local-command-stdout>`, `<bash-input>`…). */
+  | 'command'
+  /** Message relayé d'une autre session d'agent. */
+  | 'peer'
+  /** Invite d'une tâche programmée, rejouée automatiquement. */
+  | 'scheduled'
+  /** Dans un sous-agent : consigne de l'agent qui l'a lancé (elle peut relayer l'utilisateur). */
+  | 'orchestrator'
+
 /** Tour de conversation normalisé — la sortie commune de tous les parsers. */
 export interface Turn {
   role: 'user' | 'assistant'
   text: string
   /** Timestamp ISO si la source en porte un (sert au filtre sinceDate). */
   ts?: string
+  /** Auteur réel d'un tour `user` qui n'est pas l'humain. Absent : l'humain (ou l'assistant). Hors hash de fenêtre. */
+  source?: TurnSource
+  /**
+   * Messages que l'utilisateur a tapés pendant que l'assistant travaillait
+   * (file d'attente de Claude Code), livrés juste avant ce tour. Ils ne sont
+   * pas des tours : en ajouter déplacerait les frontières des fenêtres, donc
+   * leurs hash. Hors hash de fenêtre.
+   */
+  queuedBefore?: string[]
+  /** Idem, livrés après le dernier tour du fichier (aucun tour ne les suit encore). */
+  queuedAfter?: string[]
 }
 
 export type TranscriptFormat = 'claude-code' | 'codex-rollout' | 'codex-history' | 'markdown' | 'unknown'
@@ -34,6 +76,9 @@ function truncate(text: string, where: string): string {
   console.warn(`[memoria] transcript : tour tronqué (${text.length} → ${MAX_TURN_CHARS} chars) [${where}]`)
   return `${text.slice(0, MAX_TURN_CHARS)}…[tronqué]`
 }
+
+/** Même plafond pour les parsers hors de ce fichier (export ChatGPT). */
+export const truncateTurnText = truncate
 
 /** Découpe un contenu JSONL en lignes non vides (CRLF/LF tolérés). */
 function jsonlLines(content: string): string[] {
@@ -86,11 +131,67 @@ function isSystemNoise(text: string): boolean {
 
 const CLAUDE_TEXT_BLOCKS = new Set(['text'])
 
+/** Balises des commandes locales et de leur sortie (tapées par l'humain, mais pas un message). */
+const CLAUDE_COMMAND_TAGS = /^<(?:command-name|command-message|command-args|local-command-stdout|local-command-stderr|bash-input|bash-stdout|bash-stderr)>/
+
+/**
+ * Auteur réel d'un tour `user` de Claude Code, undefined si c'est l'humain.
+ * Champs d'abord (versions récentes : isCompactSummary, isMeta, origin.kind,
+ * turnOrigin, isSidechain), puis le début du texte pour les lignes plus
+ * anciennes, qui n'ont pas ces champs.
+ */
+function claudeUserSource(obj: Record<string, unknown>, text: string): TurnSource | undefined {
+  const origin = isRecord(obj['origin']) ? obj['origin']['kind'] : undefined
+  const turnOrigin = obj['turnOrigin']
+  if (obj['isCompactSummary'] === true || text.startsWith('This session is being continued from a previous conversation')) {
+    return 'summary'
+  }
+  if (origin === 'task-notification' || turnOrigin === 'task_notification' || text.startsWith('<task-notification>')) {
+    return 'notification'
+  }
+  if (origin === 'peer' || turnOrigin === 'peer' || text.startsWith('Another Claude session sent a message')) return 'peer'
+  if (turnOrigin === 'scheduled' || typeof obj['scheduledTaskId'] === 'string') return 'scheduled'
+  if (origin === 'coordinator') return 'orchestrator'
+  if (obj['isMeta'] === true || origin === 'auto-continuation' || turnOrigin === 'auto_continuation') return 'system'
+  if (CLAUDE_COMMAND_TAGS.test(text)) return 'command'
+  if (/^<(?:system-reminder|local-command-caveat)>/.test(text) || text.startsWith('[Request interrupted by user')) return 'system'
+  // Sous-agent (fichier « sidechain ») : l'humain n'y écrit jamais, ses tours
+  // `user` viennent de l'agent qui l'a lancé.
+  if (obj['isSidechain'] === true && origin !== 'human') return 'orchestrator'
+  return undefined
+}
+
+/**
+ * Message tapé par l'humain pendant que l'assistant travaillait. Claude Code le
+ * livre au milieu du tour en cours sous forme de pièce jointe `queued_command`,
+ * jamais comme un tour `user` : sans ça il était perdu. Les autres entrées de
+ * la file (notifications de tâches, messages d'autres sessions) sont écartées.
+ */
+function claudeQueuedHumanPrompt(obj: Record<string, unknown>): string | null {
+  if (obj['type'] !== 'attachment' || obj['isSidechain'] === true) return null
+  const a = obj['attachment']
+  if (!isRecord(a) || a['type'] !== 'queued_command' || a['commandMode'] !== 'prompt' || a['isMeta'] === true) return null
+  const origin = isRecord(a['origin']) ? a['origin']['kind'] : undefined
+  if (origin !== undefined && origin !== 'human') return null
+  const text = blocksToText(a['prompt'], CLAUDE_TEXT_BLOCKS)
+  if (!text || claudeUserSource({}, text) !== undefined) return null
+  return truncate(text, 'claude-code')
+}
+
 export function parseClaudeCodeTranscript(content: string): Turn[] {
   const turns: Turn[] = []
+  /** Textes des tours écrits par l'humain : un message en file déjà présent comme tour n'est pas doublé. */
+  const humanTexts = new Set<string>()
+  /** Messages en file vus depuis le dernier tour : rattachés au tour suivant. */
+  let queued: string[] = []
   for (const line of jsonlLines(content)) {
     const obj = safeParseLine(line, 'claude-code')
     if (!isRecord(obj)) continue
+    const queuedPrompt = claudeQueuedHumanPrompt(obj)
+    if (queuedPrompt !== null) {
+      queued.push(queuedPrompt)
+      continue
+    }
     const role = asRole(obj['type'])
     if (!role) continue // summary / system / file-history-snapshot…
     const message = obj['message']
@@ -98,7 +199,26 @@ export function parseClaudeCodeTranscript(content: string): Turn[] {
     const text = blocksToText(message['content'], CLAUDE_TEXT_BLOCKS)
     if (!text) continue
     const ts = typeof obj['timestamp'] === 'string' ? (obj['timestamp'] as string) : undefined
-    turns.push({ role, text: truncate(text, 'claude-code'), ...(ts ? { ts } : {}) })
+    const turn: Turn = { role, text: truncate(text, 'claude-code'), ...(ts ? { ts } : {}) }
+    if (role === 'user') {
+      const source = claudeUserSource(obj, text)
+      if (source) turn.source = source
+      else humanTexts.add(turn.text)
+    }
+    if (queued.length > 0) {
+      turn.queuedBefore = queued
+      queued = []
+    }
+    turns.push(turn)
+  }
+  const last = turns.at(-1)
+  if (queued.length > 0 && last) last.queuedAfter = queued
+  for (const turn of turns) {
+    for (const key of ['queuedBefore', 'queuedAfter'] as const) {
+      const kept = turn[key]?.filter(q => !humanTexts.has(q))
+      if (kept && kept.length > 0) turn[key] = kept
+      else delete turn[key]
+    }
   }
   return turns
 }

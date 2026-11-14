@@ -14,6 +14,11 @@ import { homedir, hostname } from 'node:os'
 import { basename, join } from 'node:path'
 import { cliInstalled } from './register.js'
 
+/**
+ * Agents repérables sur la machine. ChatGPT n'en fait pas partie : rien de lui
+ * n'est installé ici, et on ne surveille pas Téléchargements. Son export
+ * s'importe à la demande (`memoria import chatgpt`).
+ */
 export type DetectableAgentKind = 'claude-code' | 'codex' | 'openclaw' | 'cursor'
 
 export interface DetectedLegacyDb {
