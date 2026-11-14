@@ -3483,6 +3483,8 @@ export class Memoria {
 
     let deleted = 0
     let matched = 0
+    /** Ids effacés, toutes bases confondues : leurs originaux sont rendus ensuite. */
+    const gone = new Set<string>()
     for (const entry of this.registry.listDbs()) {
       if (entry.kind === 'registry' || !existsSync(entry.path)) continue
       const store = this.openContent(entry.path)
@@ -3526,42 +3528,57 @@ export class Memoria {
         .prepare(`SELECT COUNT(*) AS n FROM facts WHERE id IN (${ids.map(() => '?').join(',')})`)
         .get(...ids) as { n: number }
       matched += present.n
-      if (filter.dry_run) continue
+      if (filter.dry_run || present.n === 0) continue
       // Nettoyer thèmes, récurrences, graphe et amas AVANT le hard-delete
       // (ils lisent encore le fait) : voir purgeDerived.
-      if (present.n > 0) this.purgeDerived(store, ids)
-      // Oublier un REMPLAÇANT (correction, fusion, consolidation) rend la
-      // parole à l'original : sinon il restait `superseded_by = <id disparu>`,
-      // invisible au recall à jamais — la chaîne cassée du legacy « split: ».
-      // Dans TOUTES les bases, même celles où le remplaçant n'est pas : après
-      // shareFacts, le remplaçant vit dans la base partagée et l'original
-      // reste dans la base privée.
-      const ph = ids.map(() => '?').join(',')
-      const restoredIds = (
-        store.db.prepare(`SELECT id FROM facts WHERE superseded_by IN (${ph})`).all(...ids) as Array<{ id: string }>
-      ).map(r => r.id)
-      const restored = store.db
-        .prepare(`UPDATE facts SET superseded = 0, superseded_by = NULL, updated_at = ? WHERE superseded_by IN (${ph})`)
-        .run(nowISO(), ...ids).changes
-      // La supersession l'avait sorti du graphe : sans marqueur, le passage
-      // suivant le relie de nouveau.
-      if (restoredIds.length > 0) {
-        store.db.prepare('DELETE FROM fact_cognition WHERE fact_id IN (SELECT value FROM json_each(?))').run(JSON.stringify(restoredIds))
-      }
-      const n = present.n > 0 ? store.hardDeleteFacts(ids) : 0
+      this.purgeDerived(store, ids)
+      const n = store.hardDeleteFacts(ids)
       deleted += n
-      if (n === 0 && restored === 0) continue
-      // Faits des thèmes supprimés, originaux rendus : à ranger et relier de nouveau.
-      this.scheduleCognition()
+      if (n === 0) continue
+      for (const id of ids) gone.add(id)
       this.registry.audit({
         actor_type: 'user',
         actor_id: 'local',
         action: 'forget',
         target_id_hash: sha256Hex(ids.slice().sort().join(',')),
         scope_id: filter.scope_id ?? null,
-        reason: `deleted=${n} restored=${restored}`,
+        reason: `deleted=${n}`,
       })
     }
+    if (gone.size === 0) return { deleted, matched }
+
+    // Oublier un REMPLAÇANT (correction, fusion, consolidation) rend la parole
+    // à l'original : sinon il restait `superseded_by = <id disparu>`, invisible
+    // au recall à jamais — la chaîne cassée du legacy « split: ». Passe à part,
+    // APRÈS les suppressions et sur TOUTES les bases : après shareFacts, le
+    // remplaçant vit dans la base partagée et l'original reste dans la base
+    // privée, où un oubli par requête ne trouvait pas l'id du remplaçant.
+    const goneJson = JSON.stringify([...gone])
+    for (const entry of this.registry.listDbs()) {
+      if (entry.kind === 'registry' || !existsSync(entry.path)) continue
+      const store = this.openContent(entry.path)
+      const restoredIds = (
+        store.db.prepare('SELECT id FROM facts WHERE superseded_by IN (SELECT value FROM json_each(?))').all(goneJson) as Array<{ id: string }>
+      ).map(r => r.id)
+      if (restoredIds.length === 0) continue
+      const restoredJson = JSON.stringify(restoredIds)
+      store.db
+        .prepare('UPDATE facts SET superseded = 0, superseded_by = NULL, updated_at = ? WHERE id IN (SELECT value FROM json_each(?))')
+        .run(nowISO(), restoredJson)
+      // La supersession l'avait sorti du graphe : sans marqueur, le passage
+      // suivant le relie de nouveau.
+      store.db.prepare('DELETE FROM fact_cognition WHERE fact_id IN (SELECT value FROM json_each(?))').run(restoredJson)
+      this.registry.audit({
+        actor_type: 'user',
+        actor_id: 'local',
+        action: 'forget',
+        target_id_hash: sha256Hex([...gone].sort().join(',')),
+        scope_id: filter.scope_id ?? null,
+        reason: `restored=${restoredIds.length}`,
+      })
+    }
+    // Faits des thèmes supprimés, originaux rendus : à ranger et relier de nouveau.
+    this.scheduleCognition()
     return { deleted, matched }
   }
 

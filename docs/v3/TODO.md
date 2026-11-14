@@ -613,8 +613,10 @@ OpenClaw : déjà branché (adaptateur).
 **Restes connus** : le bouton Pause de l'interface ne suspend pas la cognition ; `shareFacts` et la
 synchro ne nettoient ni thèmes ni graphe ; `patterns.ts` ne filtre pas les faits critical ; une base
 réelle a 100 faits dont `superseded_by` pointe vers un id absent (antérieur). Sur les bases réelles,
-le graphe trouve 8 voisins mais le seuil de pertinence les écarte tous (score 0,5) : à revoir avec le
-classement.
+en rappel hybride, la plupart des voisins du graphe sont déjà trouvés par le sens ; les 0 à 4 qui
+restent par question passent sans seuil mais le seuil par défaut les écarte (score du lien divisé
+par deux) : à revoir avec le classement. Un agent dont la base parle peu d'un sujet (Koda) reçoit
+surtout des faits partagés : ses propres faits sont moins bien notés, ce n'est pas le budget.
 
 **Demande du 08/11** : l'information doit arriver à l'agent structurée (sens, temps, confiance, liens entre
 sujets), pas comme une liste plate ; l'agent doit pouvoir dire ce que ce format lui apporte.

@@ -292,7 +292,10 @@ describe('3. graphe nettoyé à l’oubli et à chaque supersession', () => {
     expect(entitiesOf(original.id)).toBeGreaterThan(0)
   })
 
-  it('remplaçant partagé puis oublié : l’original, resté dans la base privée, redevient rappelable', () => {
+  it.each([
+    ['par ids', (id: string) => ({ ids: [id] })],
+    ['par requête', () => ({ query: 'serveur Ventoux depuis mars', confirm_bulk: true })],
+  ])('remplaçant partagé puis oublié %s : l’original, resté dans la base privée, redevient rappelable', (_label, filterFor) => {
     const target = m.registry.listScopes().find(s => s.type !== 'private' && s.type !== 'legacy_to_review')
     expect(target).toBeDefined()
     const original = m.storeFact({ instance, content: 'Le serveur Ventoux est loué chez Brumehost' })
@@ -300,7 +303,7 @@ describe('3. graphe nettoyé à l’oubli et à chaque supersession', () => {
     expect(m.shareFacts([replacement!.id], target!.id).shared).toBe(1)
     expect(n('SELECT COUNT(*) AS n FROM facts WHERE id = ?', replacement!.id)).toBe(0) // déplacé
 
-    m.forget({ ids: [replacement!.id] })
+    expect(m.forget(filterFor(replacement!.id)).deleted).toBe(1)
     const row = db().prepare('SELECT superseded, superseded_by FROM facts WHERE id = ?').get(original.id)
     expect(row).toEqual({ superseded: 0, superseded_by: null })
     expect(m.recall({ instance, query: 'serveur Ventoux' }).items.map(i => i.id)).toContain(original.id)
