@@ -94,7 +94,7 @@ describe('repérage sans boucle figée', () => {
 })
 
 describe('repérage par fenêtres : mêmes faits, même ordre', () => {
-  it('fenêtres entièrement triées et trou de rowid plus large qu’une fenêtre : chaque fait à trier est vu une fois, dans l’ordre', async () => {
+  it('fenêtres entièrement triées et trou de rowid plus large qu’une fenêtre : chaque fait à trier est vu une fois', async () => {
     env = setupTriage()
     const db = env.db()
     const W = SCAN_WINDOW
@@ -128,5 +128,40 @@ describe('repérage par fenêtres : mêmes faits, même ordre', () => {
     // Chaque copie à trier part une seule fois au LLM (l'ordre d'envoi suit le chargement par lot, pas le repérage).
     const sent = env.llm.prompts.flatMap(p => [...p.matchAll(/\(copie (\d+)\)/g)].map(m => Number(m[1])))
     expect(sent.sort((a, b) => a - b)).toEqual([4, 4 * W + 9, 4 * W + 899, 5 * W])
+  }, 60_000)
+
+  it('un fait rangé pendant la cession qui suit la dernière fenêtre est trié dans le même passage', async () => {
+    env = setupTriage()
+    const db = env.db()
+    for (let i = 0; i < 5; i++) seedPending(env, `Le fait fictif numéro ${i} du jardin partagé de la rue des Lilas`)
+    // Juste après la première lecture « dormant » du repérage, un fait arrive (store_fact servi pendant la cession).
+    const origPrepare = db.prepare.bind(db)
+    let lateId: string | null = null
+    ;(db as unknown as { prepare: (sql: string) => unknown }).prepare = (sql: string) => {
+      const st = origPrepare(sql) as unknown as { all: (...a: unknown[]) => unknown[] }
+      if (sql.includes('AS source_id') && sql.includes('LEFT JOIN fact_triage t')) {
+        const origAll = st.all.bind(st)
+        st.all = (...args: unknown[]) => {
+          const r = origAll(...args)
+          if (lateId === null && args.includes('dormant')) {
+            lateId = ''
+            setImmediate(() => {
+              lateId = seedPending(env!, 'Un fait fictif arrivé pendant le repérage, à propos de la serre de Zorba')
+            })
+          }
+          return r
+        }
+      }
+      return st
+    }
+    try {
+      const res = await env.m.triage.run()
+      expect(res.state).toBe('done')
+    } finally {
+      ;(db as unknown as { prepare: unknown }).prepare = origPrepare
+    }
+    expect(lateId).toBeTruthy()
+    const row = db.prepare('SELECT genre FROM fact_triage WHERE fact_id = ?').get(lateId) as { genre: string | null } | undefined
+    expect(row?.genre ?? null).not.toBeNull()
   }, 60_000)
 })

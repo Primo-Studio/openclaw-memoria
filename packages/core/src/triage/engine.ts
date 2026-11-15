@@ -349,15 +349,18 @@ class DbPass {
                AND (t.prompt_version IS NULL OR t.prompt_version != ?)))
        ORDER BY f.rowid`,
     )
-    // Fin relue à chaque fenêtre : un fait ajouté pendant le repérage est vu, comme avant.
+    // Chaque fenêtre s'arrête au max relu APRÈS la cession précédente : un fait ajouté pendant le
+    // repérage (rowid plus grand) tombe dans une fenêtre suivante et il est vu, comme avant.
     // Une fenêtre vide (faits tous déjà triés) n'arrête jamais le repérage.
-    for (let last = 0; last < maxFactRowid(this.db); last += SCAN_WINDOW) {
-      const rows = stmt.all(last, last + SCAN_WINDOW, phase, this.ctx.reclassify ? 1 : 0, TRIAGE_PROMPT_VERSION) as Array<{
+    for (let last = 0, top = maxFactRowid(this.db); last < top; top = maxFactRowid(this.db)) {
+      const hi = Math.min(last + SCAN_WINDOW, top)
+      const rows = stmt.all(last, hi, phase, this.ctx.reclassify ? 1 : 0, TRIAGE_PROMPT_VERSION) as Array<{
         rid: number
         id: string
         source_id: string | null
       }>
       for (const r of rows) out.push({ id: r.id, source_id: r.source_id })
+      last = hi
       await yieldToEventLoop()
       // Pause, annulation ou fermeture pendant le repérage : arrêt propre, pas une requête sur une base fermée.
       this.checkStop()
@@ -1076,8 +1079,9 @@ export async function countPending(
        ORDER BY f.rowid`,
     )
     // Mêmes fenêtres de rowid que le repérage du passage (voir SCAN_WINDOW).
-    for (let last = 0; last < maxFactRowid(store.db); last += SCAN_WINDOW) {
-      const params: Record<string, unknown> = { last, hi: last + SCAN_WINDOW, reclassify: opts.reclassify ? 1 : 0, version: TRIAGE_PROMPT_VERSION }
+    for (let last = 0, top = maxFactRowid(store.db); last < top; top = maxFactRowid(store.db)) {
+      const hi = Math.min(last + SCAN_WINDOW, top)
+      const params: Record<string, unknown> = { last, hi, reclassify: opts.reclassify ? 1 : 0, version: TRIAGE_PROMPT_VERSION }
       if (opts.embeddingsModel) params.model = opts.embeddingsModel
       const rows = stmt.all(params) as Array<{ rid: number; fact: string; lifecycle_state: string; has_vector: number }>
       // Le filtre sensible est synchrone : une page de 5 000 faits figeait la boucle ~350 ms (mesuré le 15/11).
@@ -1093,6 +1097,7 @@ export async function countPending(
         out.chars += r.fact.length
         if (opts.embeddingsModel && !r.has_vector) out.facts_to_embed++
       }
+      last = hi
       await yieldToEventLoop()
     }
   }
