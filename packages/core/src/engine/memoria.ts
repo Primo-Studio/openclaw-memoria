@@ -3391,12 +3391,11 @@ export class Memoria {
    * Nombre d'items de la file de revue, toutes bases : même périmètre que
    * listReview (REVIEW_QUEUE_FROM), sans plafond, sans tri ni thèmes. Sert le
    * badge « Revue » de l'interface, relu toutes les 20 s : il lisait la liste
-   * entière (150 à 353 ms de boucle figée, règle n°27). Le COUNT parcourt
-   * l'index partiel idx_import_items_pending (couvrant pour les jointures) ;
-   * reste une recherche dans l'index de `facts.id` par item, gardée pour que
-   * le compte égale la liste (un fait oublié laisse son item `pending`). Sur
-   * 72 538 items (copie de la plus grosse base) : ~36 ms à chaud, ~134 ms à
-   * connexion neuve, contre 48 et 415 ms sans l'index, 120 et 510 ms la liste.
+   * entière (150 à 353 ms de boucle figée, règle n°27). Le COUNT garde la
+   * recherche dans l'index de `facts.id` par item, pour que le compte égale la
+   * liste (un fait oublié laisse son item `pending`). Sur 72 737 items (copie
+   * de la plus grosse base) : 40 à 65 ms en régime établi, contre 110 à 159 ms
+   * pour la liste de 100.
    */
   countReview(): number {
     this.assertOpen()

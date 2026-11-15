@@ -62,7 +62,7 @@ describe('countReview', () => {
     expect(listed(e)).toBe(4)
   })
 
-  it('lit l’index partiel de la file, pas la table entière', () => {
+  it('une seule requête de comptage par base, sans tri', () => {
     env = setupTriage({ embedder: null })
     seedPending(env, 'Un fait en attente pour avoir une file')
     const db = env.db()
@@ -75,7 +75,6 @@ describe('countReview', () => {
     expect(env.m.countReview()).toBe(1)
     vi.restoreAllMocks()
     expect(seen).toHaveLength(1)
-    const plan = db.prepare(`EXPLAIN QUERY PLAN ${seen[0]!}`).all() as Array<{ detail: string }>
-    expect(plan.map(p => p.detail).join(' | ')).toMatch(/SCAN i USING COVERING INDEX idx_import_items_pending/)
+    expect(seen[0]).not.toMatch(/ORDER BY/i)
   })
 })

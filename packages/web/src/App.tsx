@@ -4,7 +4,7 @@
  * (app/Shell.tsx).
  */
 import { useCallback, useEffect, useState } from 'react'
-import { getAgents, getReviewCount, hasToken } from './api'
+import { getAgents, getReview, getReviewCount, hasToken } from './api'
 import { Spinner } from './components/ui'
 import { Toaster } from './components/ui/sonner'
 import { hasLiveAgent } from './lib/agents'
@@ -62,7 +62,12 @@ export function App() {
   // une file de 72 000 éléments, et le badge plafonnait à 100.
   useEffect(() => {
     if (!authed) return
-    const load = () => getReviewCount().then(setReviewCount).catch(() => {})
+    // Ancien daemon (pas encore la route du compte) : retombe sur la liste, comme avant.
+    const load = () =>
+      getReviewCount()
+        .catch(() => getReview().then(items => items.length))
+        .then(setReviewCount)
+        .catch(() => {})
     load()
     const id = window.setInterval(load, 20000)
     return () => window.clearInterval(id)

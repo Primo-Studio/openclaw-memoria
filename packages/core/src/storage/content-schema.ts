@@ -462,23 +462,7 @@ export const contentMigrations: Migration[] = [
       db.prepare(`INSERT OR IGNORE INTO meta (key, value) VALUES ('${RECALL_FTS_STATE_KEY}', '0')`).run()
     },
   },
-  {
-    version: 101,
-    name: 'content-import-items-pending-index',
-    up(db) {
-      // BADGE « REVUE » (règle n°27, 15/11) : l'interface comptait la file en
-      // téléchargeant la liste toutes les 20 s, soit un balayage complet de
-      // memory_import_items (72 538 en attente, aucun index sur status), tri et
-      // thèmes : 150 à 353 ms à chaque fois. Le comptage seul
-      // (Memoria.countReview) lit cet index partiel, couvrant pour les deux
-      // jointures de la file : 415 → 134 ms à connexion neuve, 48 → 36 ms à
-      // chaud. Création, une fois : 55-60 ms à chaud, 133 ms sur une copie
-      // fraîche de la plus grosse base (72 538 items en attente).
-      db.exec(
-        `CREATE INDEX IF NOT EXISTS idx_import_items_pending
-           ON memory_import_items(target_memory_id, source_id)
-           WHERE status = 'pending' AND target_type = 'fact'`,
-      )
-    },
-  },
+  // Pas d'index partiel sur memory_import_items pour le badge « Revue » : sa
+  // création figeait le premier boot 220 à 430 ms sur la plus grosse base, pour
+  // 10 à 30 ms gagnés par compte (relecture du 15/11). Le COUNT seul suffit.
 ]
