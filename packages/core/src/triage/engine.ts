@@ -982,7 +982,10 @@ export async function countPending(
       if (opts.embeddingsModel) params.model = opts.embeddingsModel
       const rows = stmt.all(params) as Array<{ rid: number; fact: string; lifecycle_state: string; has_vector: number }>
       if (rows.length === 0) break
+      // Le filtre sensible est synchrone : une page de 5 000 faits figeait la boucle ~350 ms (mesuré le 15/11).
+      const slice = slicer()
       for (const r of rows) {
+        await slice()
         out.facts_pending++
         if (r.lifecycle_state === 'active') out.facts_active++
         if (isSensitive(r.fact)) {
