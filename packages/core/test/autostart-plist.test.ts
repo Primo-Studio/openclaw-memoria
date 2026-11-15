@@ -31,3 +31,11 @@ describe('storageRootFromPlist', () => {
     expect(storageRootFromPlist('<string>--storage-root</string>')).toBeNull()
   })
 })
+
+describe('priorité du service', () => {
+  it('Standard, jamais Background : le daemon répond en direct aux IA (15/11 : boucle figée près d’1 s sur les cœurs d’efficacité)', () => {
+    const xml = buildPlist({ label: 'fr.primo-studio.memoria', programArguments: ['/usr/bin/node', 'bin.js'] })
+    expect(xml).toMatch(/<key>ProcessType<\/key>\s*<string>Standard<\/string>/)
+    expect(xml).not.toContain('Background')
+  })
+})

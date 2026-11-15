@@ -86,7 +86,15 @@ function xmlEscape(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
-/** Exporté pour les tests : vérifier le plist sans écrire dans ~/Library. */
+/**
+ * Exporté pour les tests : vérifier le plist sans écrire dans ~/Library.
+ *
+ * ProcessType « Standard », pas « Background » : le daemon répond en direct aux
+ * IA (recall, capture). En « Background », macOS le cantonne aux cœurs
+ * d'efficacité partagés avec tous les services de fond (2 sur un M1 Max) : une
+ * requête de 3 ms y prenait jusqu'à 700 ms, et la boucle se figeait près d'1 s
+ * (mesuré le 15/11).
+ */
 export function buildPlist(spec: Required<Pick<AutostartSpec, 'label'>> & AutostartSpec): string {
   const args = spec.programArguments.map(a => `      <string>${xmlEscape(a)}</string>`).join('\n')
   const logDir = spec.logDir ?? join(homedir(), 'Library', 'Logs')
@@ -117,7 +125,7 @@ ${wd}  <key>RunAtLoad</key>
     <false/>
   </dict>
   <key>ProcessType</key>
-  <string>Background</string>
+  <string>Standard</string>
   <key>StandardOutPath</key>
   <string>${xmlEscape(out)}</string>
   <key>StandardErrorPath</key>
