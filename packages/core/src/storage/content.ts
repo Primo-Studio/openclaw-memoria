@@ -14,6 +14,7 @@ import { feedbackMigrations } from '../cognition/feedback.js'
 import { clusterMigrations } from '../cognition/clusters.js'
 import { selfObservationMigrations } from '../cognition/self-observation.js'
 import { revisionMigrations } from '../cognition/revision.js'
+import { triageMigrations } from '../triage/schema.js'
 import { loadVecExtension, purgeFactVectors } from '../vector/vec-table.js'
 import { factNormHash, fromJsonArray, newId, nowISO, toJson } from '../util.js'
 import type { Fact, LifecycleState, Sensitivity, Visibility, WalEntry } from '../types.js'
@@ -174,6 +175,7 @@ export class ContentStore {
       ...clusterMigrations,
       ...selfObservationMigrations,
       ...revisionMigrations,
+      ...triageMigrations,
     ])
   }
 

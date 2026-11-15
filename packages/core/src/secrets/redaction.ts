@@ -94,10 +94,34 @@ const PATTERNS: ReadonlyArray<SecretPattern> = [
   // mot de passe en français, `mysql -p<mdp>` collé, `curl -u user:mdp`.
   {
     kind: 'mot-de-passe',
-    regex: /\b(?:mot\s+de\s+passe|mdp)\s*[:=]\s*["'«]?\s*(?!\[secret:)([^\s"'`»]{8,})/gid,
+    // « mot de passe : X », « mot-de-passe = X », « motdepasse : X », et la
+    // tournure parlée « le mot de passe du NAS est X ».
+    regex:
+      /\b(?:mots?[\s_-]*de[\s_-]*passe|motdepasse|mdp)\b(?:\s*[:=]\s*|[^\n:=.]{0,40}?\s(?:est|vaut|c'est)\s+)["'«]?\s*(?!\[secret:)([^\s"'`»]{8,})/gid,
     group: 1,
-    // « mot de passe : identique pour tous » n'est pas un secret : un mot de
-    // passe porte au moins un chiffre ou un signe.
+    // « mot de passe : identique pour tous » ou « le mot de passe est changé »
+    // ne sont pas des secrets : un mot de passe porte au moins un chiffre ou un signe.
+    validate: v => /[^A-Za-zÀ-ÿ]/.test(v) && !looksLikeCode(v),
+  },
+  {
+    kind: 'mot-de-passe',
+    // « password » anglais : le générique prend `password: X` dès 12 signes ;
+    // ici les valeurs courtes (8 à 11) et la tournure « password is X ».
+    regex: /\b(?:password|passwd)\b\s*[:=]\s*["']?(?!\[secret:)([^\s"'`]{8,11})(?![^\s"'`])/gid,
+    group: 1,
+    validate: v => /[^A-Za-zÀ-ÿ]/.test(v) && !looksLikeCode(v),
+  },
+  {
+    kind: 'mot-de-passe',
+    regex: /\b(?:password|passwd)\b[^\n:=.]{0,40}?\s(?:is|est)\s+["']?(?!\[secret:)([^\s"'`]{8,})/gid,
+    group: 1,
+    validate: v => /[^A-Za-zÀ-ÿ]/.test(v) && !looksLikeCode(v),
+  },
+  {
+    kind: 'mot-de-passe',
+    // « login zorba / pass X » : identifiant puis « pass » sans séparateur.
+    regex: /\b(?:login|user(?:name)?|identifiants?)\b[^\n]{0,40}?\bpass(?:wd)?\b\s*[:=]?\s*["']?(?!\[secret:)([^\s"'`]{8,})/gid,
+    group: 1,
     validate: v => /[^A-Za-zÀ-ÿ]/.test(v),
   },
   {
@@ -124,9 +148,14 @@ const PATTERNS: ReadonlyArray<SecretPattern> = [
     // Du code, pas une valeur : `process.env.X`, `os.environ[…]`, gabarits
     // `${…}` / `{{…}}`, appels de fonction. Le nom de variable est justement un
     // fait de configuration utile au LLM, et ce n'est pas un secret à mettre au coffre.
-    validate: v => !/^(?:process\.env\.|os\.environ|\$\{|\{\{)|\(/.test(v),
+    validate: v => !looksLikeCode(v),
   },
 ]
+
+/** Une référence de code (`process.env.X`, gabarit, appel), pas une valeur secrète. */
+function looksLikeCode(v: string): boolean {
+  return /^(?:process\.env\.|os\.environ|\$\{|\{\{)|\(/.test(v)
+}
 
 export class RegexRedactor implements Redactor {
   redact(text: string): RedactionResult {

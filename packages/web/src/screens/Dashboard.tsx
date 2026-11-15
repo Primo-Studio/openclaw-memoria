@@ -9,10 +9,23 @@
  * chargement / erreur / vide — voir UI-GUIDE.md.
  */
 import { useState } from 'react'
-import { Bot, Brain, ChevronDown, CircleAlert, CircleCheck, Database, Inbox, TriangleAlert } from 'lucide-react'
-import { getDoctor, getLlmHealth, getOverview, getStats, type AgentOverview, type DoctorDatabase, type DoctorReport, type LlmHealth, type Stats } from '../api'
+import { Bot, Brain, ChevronDown, CircleAlert, CircleCheck, Database, Inbox, Lightbulb, TriangleAlert } from 'lucide-react'
+import {
+  getDoctor,
+  getLlmHealth,
+  getOverview,
+  getStats,
+  getTriageStats,
+  type AgentOverview,
+  type DoctorDatabase,
+  type DoctorReport,
+  type LlmHealth,
+  type Stats,
+  type TriageStats,
+} from '../api'
 import { MemRefreshButton } from '../components/MemRefreshButton'
-import { MemScreenLink } from '../components/MemScreenLink'
+import { MemScreenButton, MemScreenLink } from '../components/MemScreenLink'
+import { pendingToValidate } from '../lib/triage'
 import { useDirectory } from '../components/memory-names'
 import {
   DataTable,
@@ -59,14 +72,16 @@ function warningTarget(warning: string): ScreenId | null {
 export function Dashboard({ onConnect, onConfigure }: { onConnect: () => void; onConfigure?: () => void }) {
   const { t } = useT()
   const { state, reload } = useLoad(async () => {
-    const [stats, doctor, overview, llmHealth] = await Promise.all([
+    const [stats, doctor, overview, llmHealth, triage] = await Promise.all([
       getStats(),
       getDoctor(),
       getOverview().catch(() => []),
       // route « contrat » : absente sur un vieux service → pas de bannière
       getLlmHealth().catch(() => null),
+      // Tri des souvenirs : absent d'un service plus ancien → pas de carte, jamais une erreur d'accueil.
+      getTriageStats().catch(() => null),
     ])
-    return { stats, doctor, overview, llmHealth }
+    return { stats, doctor, overview, llmHealth, triage }
   })
 
   return (
@@ -91,6 +106,7 @@ export function Dashboard({ onConnect, onConfigure }: { onConnect: () => void; o
           doctor={state.data.doctor}
           overview={state.data.overview}
           llmHealth={state.data.llmHealth}
+          triage={state.data.triage}
           onConnect={onConnect}
           onConfigure={onConfigure}
         />
@@ -120,6 +136,7 @@ function DashboardBody({
   doctor,
   overview,
   llmHealth,
+  triage,
   onConnect,
   onConfigure,
 }: {
@@ -127,6 +144,7 @@ function DashboardBody({
   doctor: DoctorReport
   overview: AgentOverview[]
   llmHealth: LlmHealth | null
+  triage: TriageStats | null
   onConnect: () => void
   onConfigure?: () => void
 }) {
@@ -155,6 +173,8 @@ function DashboardBody({
           icon={<Inbox className="size-4" />}
         />
       </div>
+
+      <TriageSummary stats={triage} />
 
       {stats.instances === 0 && (
         <EmptyState
@@ -217,6 +237,34 @@ function DashboardBody({
 
       <StorageDetails doctor={doctor} />
     </div>
+  )
+}
+
+/**
+ * Lien vers le Tri des souvenirs : ce qui attend une validation (dont les
+ * idées) et ce qui n'est pas encore trié. Rien quand la mémoire est vide.
+ */
+function TriageSummary({ stats }: { stats: TriageStats | null }) {
+  const { t } = useT()
+  if (!stats || stats.facts_total === 0) return null
+  const pending = pendingToValidate(stats)
+  const ideas = stats.by_genre['idee']?.pending ?? 0
+  return (
+    <Card size="sm">
+      <CardContent className="flex flex-wrap items-center gap-3">
+        <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-primary" aria-hidden="true">
+          <Lightbulb className="size-4" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="font-medium">{t('dashboard.triage.title')}</div>
+          <p className="text-sm text-muted-foreground">
+            {t('dashboard.triage.body', { pending: formatNumber(pending), ideas: formatNumber(ideas) })}
+            {stats.untriaged > 0 && ` ${t('dashboard.triage.untriaged', { count: formatNumber(stats.untriaged) })}`}
+          </p>
+        </div>
+        <MemScreenButton screen="triage" label={t('dashboard.triage.open')} />
+      </CardContent>
+    </Card>
   )
 }
 

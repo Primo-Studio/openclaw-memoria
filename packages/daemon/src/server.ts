@@ -40,6 +40,7 @@ import {
   resolveStorageRoot,
   saveCredentials,
   serveInvocation,
+  runUserMessagesPass,
   type AssistantType,
   type AutostartSpec,
   type AutostartStatus,
@@ -57,6 +58,21 @@ import {
 } from '@memoria/core'
 import { OllamaPullJob } from './ollama-pull.js'
 import { ImportJobRunner } from './import-job.js'
+import { HttpError } from './http-error.js'
+import {
+  TriageStatsCache,
+  UserMessagesJob,
+  encodeTriageCursor,
+  ideasInputFrom,
+  mapTriageErrors,
+  stylesQueryFrom,
+  triageCorrectionFrom,
+  triageListQuery,
+  triagePromoteFrom,
+  triageRunOptionsFrom,
+  triageVerdictFrom,
+  userMessagesOptionsFrom,
+} from './triage-routes.js'
 import { currentVersion, lastBuiltSha, pullAndBuild, repoRoot, scheduleAutostartHandover, scheduleRestart } from './update.js'
 import { findUiDist, serveUi } from './static.js'
 import { acquireLock, clearDaemonState, lockHolderPid, writeDaemonState, type DaemonState } from './state.js'
@@ -160,15 +176,6 @@ export class DaemonLockHeldError extends Error {
   }
 }
 
-class HttpError extends Error {
-  constructor(
-    readonly status: number,
-    message: string,
-  ) {
-    super(message)
-  }
-}
-
 export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaemon> {
   // Le verrou AVANT l'ouverture des DB : un second daemon qui perd la course ne
   // doit jamais avoir touché SQLite (ni rejoué le WAL) — Memoria.init ouvre les
@@ -186,6 +193,34 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     throw err
   }
   const importJobs = new ImportJobRunner(memoria, join(storageRoot, 'import-status.json'))
+  // Passe sur les messages de l'utilisateur : le moteur ne l'importe jamais,
+  // c'est l'hôte qui la branche (triage/user-messages.ts). Un job à la fois.
+  memoria.registerUserMessagesPass(runUserMessagesPass)
+  const messagesJob = new UserMessagesJob()
+  /** Un tri (passage ou passe sur les messages) tourne : la mise à jour le couperait net. */
+  const triageBusy = (): boolean => memoria.triage.status().state === 'running' || messagesJob.running
+  /**
+   * Compteurs du tri : une lecture groupée de fact_triage, par tranches avec
+   * retour à la boucle d'événements (moins de 20 ms d'un tenant sur 70 000
+   * faits fictifs ; une dizaine de COUNT bloquaient 500 à 580 ms avant).
+   * Gardés par instance (voir TriageStatsCache), vidés à chaque action sur le tri.
+   */
+  const triageStatsCache = new TriageStatsCache({
+    compute: instance => memoria.triage.statsAsync(instance ? { instance } : {}),
+    stamp: () => {
+      const run = memoria.triage.status()
+      const messages = messagesJob.current()
+      return {
+        key: `${run.run_id}:${run.state}:${run.finished_at}|${messages.status}:${messages.finished_at}`,
+        running: run.state === 'running' || messagesJob.running,
+      }
+    },
+  })
+  const invalidateTriageStats = (): void => triageStatsCache.invalidate()
+  /** Instance passée en filtre : inconnue → 404 (sinon la liste revenait vide sans rien dire). */
+  const assertKnownInstance = (instanceId: string | undefined): void => {
+    if (instanceId && !memoria.registry.getInstance(instanceId)) throw new HttpError(404, `instance inconnue : ${instanceId}`)
+  }
   // Rattrapage de cognition : un seul à la fois, état gardé en mémoire (il
   // repart de zéro au redémarrage, comme le travail lui-même, qui est idempotent).
   let cognitionCatchup: CognitionCatchupState = {
@@ -495,6 +530,92 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         const instance = url.searchParams.get('instance')
         if (!instance) throw new HttpError(400, 'instance requise')
         sendJson(res, 200, { clusters: memoria.listClusters(instance) })
+        return
+      }
+      // ------------------------------------------------ tri des souvenirs (triage-routes.ts)
+      // Le passage tourne dans le moteur et rend la main dès son démarrage :
+      // 202 tout de suite, progression par le GET. Jamais lancé tout seul.
+      case 'POST /v1/admin/triage/run': {
+        const opts = triageRunOptionsFrom(await readJson(req))
+        assertKnownInstance(opts.instance)
+        const started = await mapTriageErrors(() => memoria.triage.start(opts))
+        if (!opts.dryRun) invalidateTriageStats()
+        sendJson(res, 202, started)
+        return
+      }
+      case 'GET /v1/admin/triage/run': {
+        // Lecture seule : les compteurs gardés ne sont PAS vidés ici (l'écran
+        // interroge l'état chaque seconde) ; pendant un passage ils ne vivent
+        // que TRIAGE_STATS_RUNNING_TTL_MS, et sa fin les recalcule.
+        sendJson(res, 200, memoria.triage.status())
+        return
+      }
+      case 'DELETE /v1/admin/triage/run': {
+        // Arrêt entre deux lots (passage ou passe sur les messages) : ce qui est trié le reste.
+        sendJson(res, 200, { cancelled: memoria.triage.cancel() })
+        return
+      }
+      case 'GET /v1/admin/triage': {
+        const { filter, cursor, limit } = triageListQuery(url)
+        assertKnownInstance(filter.instance)
+        const page = await mapTriageErrors(() => memoria.triage.list(filter, { cursor, limit }))
+        sendJson(res, 200, { items: page.items, next_cursor: encodeTriageCursor(page.next_cursor) })
+        return
+      }
+      case 'GET /v1/admin/triage/stats': {
+        const instance = url.searchParams.get('instance') || undefined
+        assertKnownInstance(instance)
+        sendJson(res, 200, await mapTriageErrors(() => triageStatsCache.get(instance)))
+        return
+      }
+      case 'POST /v1/admin/triage/promote': {
+        const opts = triagePromoteFrom(await readJson(req))
+        assertKnownInstance(opts.filter?.instance)
+        const promoted = await mapTriageErrors(() => mapEngineErrors(() => memoria.triage.promote(opts)))
+        invalidateTriageStats()
+        sendJson(res, 200, promoted)
+        return
+      }
+      case 'POST /v1/admin/triage/correct': {
+        const correction = triageCorrectionFrom(await readJson(req))
+        const result = await mapTriageErrors(() => memoria.triage.correct(correction))
+        invalidateTriageStats()
+        if (!result.updated) throw new HttpError(404, `fait inconnu : ${correction.fact_id}`)
+        sendJson(res, 200, result)
+        return
+      }
+      case 'POST /v1/admin/triage/verdict': {
+        const { factIds, verdict } = triageVerdictFrom(await readJson(req))
+        const marked = await mapTriageErrors(() => memoria.triage.setVerdict(factIds, verdict))
+        invalidateTriageStats()
+        sendJson(res, 200, marked)
+        return
+      }
+      case 'POST /v1/admin/triage/messages': {
+        const opts = userMessagesOptionsFrom(await readJson(req))
+        // Mêmes refus que le moteur, vérifiés AVANT de lancer : le moteur ne les
+        // lève qu'après une sonde du profil, quand la réponse serait déjà partie.
+        const busy = (): void => {
+          if (triageBusy()) throw new HttpError(409, 'un tri est déjà en cours (GET /v1/admin/triage/run ou /v1/admin/triage/messages)')
+        }
+        busy()
+        if (!opts.dryRun && !memoria.isEnabled()) {
+          throw new HttpError(423, 'Memoria est en pause : la passe sur les messages est refusée. Réactive Memoria pour la lancer.')
+        }
+        if (!opts.dryRun && !(await memoria.hasExtraction())) {
+          throw new HttpError(422, 'aucun LLM d’extraction disponible : configure d’abord un moteur d’intelligence (Réglages)')
+        }
+        busy() // après le dernier await : deux POST simultanés ne lancent jamais deux passes
+        if (!opts.dryRun) invalidateTriageStats()
+        sendJson(res, 202, messagesJob.start(memoria, opts))
+        return
+      }
+      case 'GET /v1/admin/triage/messages': {
+        sendJson(res, 200, messagesJob.current())
+        return
+      }
+      case 'DELETE /v1/admin/triage/messages': {
+        sendJson(res, 200, { cancelled: messagesJob.running ? memoria.triage.cancel() : false })
         return
       }
       // Rattrapage de cognition : relie au graphe et aux thèmes les faits
@@ -1263,6 +1384,10 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         if (importJobs.running) {
           throw new HttpError(409, 'un import est en cours — attends sa fin (GET /v1/admin/import_status) avant de mettre à jour')
         }
+        // Même règle pour le tri : le redémarrage le couperait au milieu d'un lot.
+        if (triageBusy()) {
+          throw new HttpError(409, 'un tri des souvenirs est en cours : attends sa fin (GET /v1/admin/triage/run) ou arrête-le avant de mettre à jour')
+        }
         const result = await updater.pullAndBuild()
         sendJson(res, 200, result)
         // Redémarrage planifié APRÈS l'envoi de la réponse, dès qu'un build a eu
@@ -1418,6 +1543,20 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
           body['used'],
         )
         sendJson(res, 200, result)
+        return
+      }
+      case 'POST /v1/memory/ideas': {
+        // Idées, décisions… VALIDÉES lisibles par cet agent (mêmes filtres que le
+        // rappel : scopes, sensibilité, client). Les faits en attente ne sont
+        // jamais rendus, seulement leur nombre par genre.
+        const { filter, activeContext } = ideasInputFrom(await readJson(req))
+        sendJson(res, 200, await mapTriageErrors(() => mapEngineErrors(() => memoria.triage.ideasForInstance(instanceId, filter, activeContext))))
+        return
+      }
+      case 'POST /v1/memory/styles': {
+        // Styles d'échange VALIDÉS d'une personne (absent : le propriétaire).
+        const query = stylesQueryFrom(await readJson(req))
+        sendJson(res, 200, await mapTriageErrors(() => mapEngineErrors(() => memoria.triage.stylesForInstance(instanceId, query))))
         return
       }
       case 'POST /v1/memory/identify_interlocutor': {
@@ -1762,6 +1901,8 @@ const PAUSED_MEMORY_RESPONSES: Record<string, Record<string, unknown>> = {
   'POST /v1/memory/expiry': { updated: false },
   'POST /v1/memory/identify_interlocutor': { match: null },
   'POST /v1/memory/identify_or_create_interlocutor': { match: null },
+  'POST /v1/memory/ideas': { items: [], pending_counts: {} },
+  'POST /v1/memory/styles': { person_id: null, items: [] },
 }
 
 /**

@@ -32,6 +32,7 @@ import { ImportChatGptCommand, ImportCommand } from './commands/import.js'
 import { InitCommand } from './commands/init.js'
 import { PairCommand } from './commands/pair.js'
 import { StatsCommand } from './commands/stats.js'
+import { TriageCancelCommand, TriageRunCommand, TriageStatusCommand } from './commands/triage.js'
 import { UiCommand } from './commands/ui.js'
 
 export const CLI_VERSION = '0.1.0'
@@ -55,6 +56,9 @@ export {
   StartCommand,
   StatsCommand,
   StopCommand,
+  TriageCancelCommand,
+  TriageRunCommand,
+  TriageStatusCommand,
   UiCommand,
 }
 
@@ -172,5 +176,8 @@ export function buildCli(): Cli {
   cli.register(SyncRevokeCommand)
   cli.register(SyncLeaveCommand)
   cli.register(CognitionCatchupCommand)
+  cli.register(TriageRunCommand)
+  cli.register(TriageStatusCommand)
+  cli.register(TriageCancelCommand)
   return cli
 }

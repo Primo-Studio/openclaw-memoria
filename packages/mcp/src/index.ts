@@ -42,12 +42,16 @@ export {
   compactStoredFact,
   compactRecall,
   compactInterlocutor,
+  compactIdeas,
+  ideasAuthorFilter,
+  GET_CONTEXT_STYLES_LIMIT,
 } from './serve.js'
 export type {
   BuildServerOptions,
   BuiltServer,
   CaptureMessage,
   DaemonGateway,
+  IdeasArgs,
   ServeOptions,
   StoreScope,
   ToolHandlers,

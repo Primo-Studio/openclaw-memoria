@@ -31,7 +31,7 @@ const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
 
 // Routes = identifiants d'écran de packages/web/src/app/nav.ts (hash #/<id>).
 const ROUTES = [
-  'dashboard', 'agents', 'memory', 'review', 'themes', 'map',
+  'dashboard', 'agents', 'memory', 'review', 'triage', 'themes', 'map',
   'persons', 'patterns', 'procedures', 'revisions', 'sharing', 'vault', 'audit', 'maintenance', 'system', 'docs', 'settings',
 ]
 const VIEWPORTS = [
@@ -63,7 +63,10 @@ const KNOWN_ENTITIES = [
 
 class FakeExtraction {
   name = 'fake'
-  model = 'demo-extractor'
+  // Nom au TARIF CONNU (préfixe gpt-4o-mini) : le tri refuse de démarrer quand
+  // le prix d'un modèle est inconnu, et l'écran Tri affiche une dépense
+  // plausible. Aucun appel réseau : ce fournisseur ne parle à personne.
+  model = 'gpt-4o-mini-apercu'
   calls = 0
   isAvailable() {
     return Promise.resolve(true)
@@ -75,7 +78,9 @@ class FakeExtraction {
     this.calls++
     const system = opts.system ?? ''
     let text
-    if (system.includes('extract the entities')) {
+    if (system.includes('Tu tries des souvenirs')) {
+      text = JSON.stringify({ items: triageItems(opts.prompt) })
+    } else if (system.includes('extract the entities')) {
       const fact = (opts.prompt.match(/Fact: "([\s\S]*)"/) ?? [])[1] ?? opts.prompt
       const entities = KNOWN_ENTITIES.filter(([name]) => fact.includes(name)).map(([name, type]) => ({ name, type }))
       const relations = entities.length >= 2 ? [{ from: entities[0].name, to: entities[1].name, type: 'related_to' }] : []
@@ -102,6 +107,123 @@ class FakeExtraction {
     }
   }
 }
+
+// ------------------------------------------------------------ tri (faux classement)
+
+/** Genre d'un souvenir de démo : mots-clés, puis catégorie d'origine. */
+function demoGenre(text, cat) {
+  if (/salaire|paie/i.test(text)) return 'fait'
+  if (/tests passent|commit du correctif/i.test(text)) return 'ephemere'
+  if (/^idée|créer une application|proposer aux clients|série de vidéos|vendre un forfait/i.test(text)) return 'idee'
+  if (/écrit des messages/i.test(text)) return 'style'
+  if (/^leçon/i.test(text) || cat === 'error') return 'lecon'
+  if (/^le \d+ \w+ \d{4}/i.test(text)) return 'chronologie'
+  if (/est mieux indexé|se dessine dans le navigateur/i.test(text)) return 'savoir'
+  if (cat === 'decision' || /a été décidé|reste hébergé/i.test(text)) return 'decision'
+  if (cat === 'process' || /^pour publier/i.test(text)) return 'process'
+  if (cat === 'preference' || /préfère/i.test(text)) return 'preference'
+  return 'fait'
+}
+
+const DEMO_IDEA_TITLES = [
+  [/jardins partagés/, 'app', 'App de planification des semis'],
+  [/tableau de bord des devis/, 'outil', 'Tableau de bord des devis signés'],
+  [/série de vidéos/, 'contenu', 'Série vidéo sur les métiers du chantier'],
+  [/forfait annuel/, 'business', 'Forfait de maintenance pour associations'],
+]
+
+/** Réponse au prompt de tri (une entrée par ligne `{"n":…,"cat":…,"texte":…}`). */
+function triageItems(prompt) {
+  const items = []
+  for (const line of prompt.split('\n').slice(1)) {
+    let e
+    try {
+      e = JSON.parse(line)
+    } catch {
+      continue
+    }
+    const genre = demoGenre(e.texte, e.cat)
+    const idea = DEMO_IDEA_TITLES.find(([re]) => re.test(e.texte))
+    const entites = KNOWN_ENTITIES.filter(([name]) => e.texte.includes(name)).map(([name]) => name).slice(0, 4)
+    items.push({
+      n: e.n,
+      utile_3_mois: genre !== 'ephemere',
+      genre,
+      ...(genre === 'idee' ? { sous_type: idea?.[1] ?? 'autre', titre: idea?.[2] ?? e.texte.split(/\s+/).slice(0, 6).join(' '), auteur: 'owner' } : {}),
+      ...(genre === 'decision' ? { auteur: 'owner' } : {}),
+      ...(genre === 'style' || genre === 'preference' ? { personne: 'owner' } : {}),
+      rubriques: genre === 'ephemere' ? [] : /devis|client|mairie/i.test(e.texte) ? ['clients', 'vente'] : /site|app|application/i.test(e.texte) ? ['app'] : ['projet'],
+      durabilite: genre === 'ephemere' ? 0 : 2,
+      importance: genre === 'ephemere' ? 0 : genre === 'idee' || genre === 'decision' ? 3 : 2,
+      autonome: true,
+      projet: /Mémo Chantier/.test(e.texte) ? 'Mémo Chantier' : /Atelier Verso|site/i.test(e.texte) ? 'Site de l’atelier' : /jardins/.test(e.texte) ? 'Jardins partagés' : null,
+      entites,
+    })
+  }
+  return items
+}
+
+/**
+ * Conversations FICTIVES (format Claude Code) : le tri y lit la date de la
+ * conversation et vérifie l'auteur d'une idée dans les vrais messages.
+ */
+const DEMO_SESSIONS = [
+  {
+    file: 'session-semis.jsonl',
+    turns: [
+      ['user', '2026-09-03T08:12:00.000Z', 'Et si on créait une application qui aide les jardins partagés à planifier leurs semis ? Je vois bien un calendrier par parcelle.'],
+      ['assistant', '2026-09-03T08:13:00.000Z', 'Bonne piste : un calendrier par parcelle et des rappels de semis.'],
+      ['user', '2026-09-03T08:20:00.000Z', 'Les tests passent après le correctif du bouton d’envoi, on peut continuer.'],
+    ],
+    facts: [
+      'Créer une application qui aide les jardins partagés à planifier leurs semis.',
+      'Les tests passent après le correctif du bouton d’envoi.',
+      'Claire écrit des messages courts et directs, et attend une réponse en trois lignes au plus.',
+    ],
+  },
+  {
+    file: 'session-devis.jsonl',
+    turns: [
+      ['user', '2026-09-21T14:02:00.000Z', 'Comment mieux suivre les devis signés ?'],
+      ['assistant', '2026-09-21T14:03:00.000Z', 'Je propose aux clients un tableau de bord des devis signés, mis à jour chaque lundi, avec le montant restant à facturer.'],
+      ['user', '2026-09-21T14:05:00.000Z', 'Oui, vas-y. Et les devis importants passent par une relecture à deux avant l’envoi.'],
+    ],
+    facts: [
+      'Proposer aux clients un tableau de bord des devis signés, mis à jour chaque lundi.',
+      'Les devis importants passent par une relecture à deux avant l’envoi.',
+      'Pour publier une démo, exporter la maquette, la vérifier sur téléphone, puis l’envoyer par lien privé.',
+    ],
+  },
+  {
+    file: 'session-site.jsonl',
+    turns: [
+      ['user', '2026-10-08T09:30:00.000Z', 'On garde Vercel pour le site de l’Atelier Verso, pas de migration cette année.'],
+      ['assistant', '2026-10-08T09:31:00.000Z', 'Noté. Autre idée : vendre un forfait annuel de maintenance des sites aux associations.'],
+    ],
+    facts: [
+      'Le site de l’Atelier Verso reste hébergé sur Vercel : pas de migration cette année.',
+      'Vendre un forfait annuel de maintenance des sites aux associations.',
+      'Un site vitrine pré-rendu au build est mieux indexé qu’une application qui se dessine dans le navigateur.',
+      'Le salaire brut de l’apprenti fictif est de 1 200 euros par mois.',
+    ],
+  },
+  {
+    file: 'session-videos.jsonl',
+    turns: [
+      ['user', '2026-10-27T17:45:00.000Z', 'Idée : une série de vidéos courtes sur les métiers du chantier pour les réseaux sociaux.'],
+      ['assistant', '2026-10-27T17:46:00.000Z', 'Très bien, je note la série et je reprends l’idée des jardins partagés.'],
+      ['user', '2026-10-27T17:50:00.000Z', 'Oui, créer une application qui aide les jardins partagés à planifier les semis, je veux toujours le faire.'],
+    ],
+    facts: [
+      'Lancer une série de vidéos courtes sur les métiers du chantier pour les réseaux sociaux.',
+      'Créer une application qui aide les jardins partagés à planifier les semis.',
+      'Idée : créer une application qui aide les jardins partagés à planifier leurs semis.',
+      'Leçon : une maquette envoyée sans relecture sur téléphone a dû être refaite ; toujours vérifier à 390 px.',
+      'Le 14 octobre 2026, la maquette du salon du livre a été présentée à la mairie de Belleville.',
+      'Commit du correctif de mise en page poussé sur la branche.',
+    ],
+  },
+]
 
 // ------------------------------------------------------------ données de démo
 
@@ -189,11 +311,12 @@ const REVIEW_TURNS = [
 // ------------------------------------------------------------ script
 
 function parseArgs(argv) {
-  const out = { screenshot: null }
+  const out = { screenshot: null, routes: null }
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--screenshot') out.screenshot = resolve(argv[++i] ?? '')
+    else if (argv[i] === '--routes') out.routes = (argv[++i] ?? '').split(',').filter(r => ROUTES.includes(r))
     else if (argv[i] === '--help' || argv[i] === '-h') {
-      console.log('usage : node scripts/ui-preview.mjs [--screenshot DOSSIER]')
+      console.log('usage : node scripts/ui-preview.mjs [--screenshot DOSSIER] [--routes dashboard,triage]')
       process.exit(0)
     }
   }
@@ -207,7 +330,8 @@ function parseArgs(argv) {
  */
 class FakeEmbeddings {
   name = 'fake'
-  model = 'apercu-sac-de-mots'
+  // Préfixe au tarif connu, pour la même raison que le faux moteur d'extraction.
+  model = 'text-embedding-3-small-apercu'
   dimensions = 48
   isAvailable() {
     return Promise.resolve(true)
@@ -238,6 +362,12 @@ async function main() {
   const { startDaemon } = await import(DAEMON_DIST)
 
   const root = mkdtempSync(join(tmpdir(), 'memoria-ui-preview-'))
+  // Racines des transcriptions lues par le tri : DANS le stockage temporaire.
+  // Sans elles, le tri lirait les vraies sessions (~/.claude, ~/.codex).
+  writeFileSync(
+    join(root, 'config.toml'),
+    `[triage]\nclaude_projects_dir = "${join(root, 'claude-projects')}"\narchive_dir = "${join(root, 'archive')}"\ncodex_sessions_dir = "${join(root, 'codex')}"\ncodex_history_file = "${join(root, 'codex-history.jsonl')}"\n`,
+  )
   const fake = new FakeExtraction()
   const noAutostart = { supported: false, installed: false, loaded: false, running: false, pid: null, runs: 0, last_exit_code: null, plistPath: join(root, 'fake.plist') }
   const daemon = await startDaemon({
@@ -276,7 +406,7 @@ async function main() {
   process.on('SIGTERM', () => void shutdown().then(() => process.exit(0)))
 
   try {
-    await seed(memoria, fake)
+    await seed(memoria, fake, root)
     // Carte : vecteurs puis positions calculés AVANT les captures (sinon l'écran
     // est pris en plein calcul).
     await memoria.indexEmbeddings()
@@ -288,7 +418,7 @@ async function main() {
     console.log(`  appels au faux moteur d’extraction : ${fake.calls}`)
 
     if (args.screenshot) {
-      await screenshots(args.screenshot, state)
+      await screenshots(args.screenshot, state, args.routes ?? ROUTES)
       await shutdown()
       return
     }
@@ -301,7 +431,7 @@ async function main() {
   }
 }
 
-async function seed(memoria, fake) {
+async function seed(memoria, fake, root) {
   const instances = []
   for (const a of AGENTS) {
     const paired = memoria.pairAssistant({ type: a.type, display_name: a.name })
@@ -353,10 +483,60 @@ async function seed(memoria, fake) {
       console.warn('bootstrapExpertise :', err.message)
     }
   }
+  await seedTriage(memoria, instances[0], root)
   const rev = await memoria.proposeRevisions(instances[0])
   const review = memoria.listReview().length
   const stats = memoria.stats()
   console.log(`Démo : ${stats.facts} faits · ${stats.instances} agents · ${review} en revue · ${rev.proposed} révision(s) · ${fake.calls} appels LLM simulés`)
+}
+
+/**
+ * Tri des souvenirs : quatre conversations fictives sur disque, leurs faits
+ * EN ATTENTE (comme un import de transcription), puis un VRAI passage de tri
+ * avec le faux moteur. Accès internes du moteur (openContent) : script de
+ * démonstration seulement, sur un stockage jetable.
+ */
+async function seedTriage(memoria, instance, root) {
+  const dir = join(root, 'claude-projects', '-demo-atelier')
+  mkdirSync(dir, { recursive: true })
+  const db = memoria.openContent(memoria.registry.dbForInstance(instance).path).db
+  const ids = {}
+  for (const session of DEMO_SESSIONS) {
+    const path = join(dir, session.file)
+    const lines = [JSON.stringify({ type: 'summary', summary: 'Session de démonstration' })]
+    for (const [role, ts, text] of session.turns) {
+      lines.push(
+        JSON.stringify(
+          role === 'user'
+            ? { type: 'user', timestamp: ts, message: { role: 'user', content: text } }
+            : { type: 'assistant', timestamp: ts, message: { role: 'assistant', content: [{ type: 'text', text }] } },
+        ),
+      )
+    }
+    writeFileSync(path, lines.join('\n') + '\n')
+    const sourceId = `demo-src-${session.file}`
+    db.prepare(
+      `INSERT INTO memory_sources (id, source_type, source_path, source_hash, imported_at, metadata) VALUES (?, 'transcript', ?, ?, ?, '{}')`,
+    ).run(sourceId, path, `demo:${session.file}`, '2026-11-01T10:00:00.000Z')
+    for (const content of session.facts) {
+      const fact = memoria.storeFact({ instance, content, source: 'transcript-import' })
+      db.prepare("UPDATE facts SET lifecycle_state = 'dormant' WHERE id = ?").run(fact.id)
+      db.prepare(
+        `INSERT INTO memory_import_items (id, source_id, target_memory_id, target_type, proposed_scope_id, status, confidence)
+         VALUES (?, ?, ?, 'fact', ?, 'pending', 0.8)`,
+      ).run(`demo-item-${fact.id}`, sourceId, fact.id, fact.scope_id)
+      ids[content] = fact.id
+    }
+  }
+  memoria.triage.retryDelayMs = 0
+  const run = await memoria.triage.run({ budgetUsd: 1 })
+  // Une idée validée, une décision validée et une idée d'un collègue : l'écran montre les trois états.
+  const vercel = ids['Le site de l’Atelier Verso reste hébergé sur Vercel : pas de migration cette année.']
+  const series = ids['Lancer une série de vidéos courtes sur les métiers du chantier pour les réseaux sociaux.']
+  memoria.triage.promote({ fact_ids: [vercel, series] })
+  const samuel = memoria.createPerson({ display_name: 'Samuel', relation: 'équipe : CMS et SEO' })
+  memoria.triage.correct({ fact_id: ids['Vendre un forfait annuel de maintenance des sites aux associations.'], auteur: `person:${samuel.id}` })
+  console.log(`Tri de démo : ${run.state}, ${run.facts_done} souvenirs triés, ${run.llm_calls} appels simulés, ${run.spent_usd.toFixed(4)} $`)
 }
 
 /**
@@ -370,7 +550,7 @@ async function seed(memoria, fake) {
  * 500 px, donc pas le vrai rendu mobile. L'émulation d'appareil
  * (Emulation.setDeviceMetricsOverride) donne le vrai viewport 390×844.
  */
-async function screenshots(dir, state) {
+async function screenshots(dir, state, routes = ROUTES) {
   if (!existsSync(CHROME)) throw new Error(`Chrome introuvable : ${CHROME}`)
   mkdirSync(dir, { recursive: true })
   const profile = mkdtempSync(join(tmpdir(), 'memoria-chrome-'))
@@ -379,7 +559,7 @@ async function screenshots(dir, state) {
     ['--headless=new', '--disable-gpu', '--hide-scrollbars', '--no-first-run', '--no-default-browser-check', `--user-data-dir=${profile}`, '--remote-debugging-port=0', '--window-size=1280,900', 'about:blank'],
     { stdio: ['ignore', 'ignore', 'pipe'] },
   )
-  const total = ROUTES.length * THEMES.length * VIEWPORTS.length
+  const total = routes.length * THEMES.length * VIEWPORTS.length
   let n = 0
   try {
     const wsUrl = await new Promise((resolve, reject) => {
@@ -394,7 +574,7 @@ async function screenshots(dir, state) {
     })
     const cdp = await Cdp.connect(wsUrl)
     try {
-      for (const route of ROUTES) {
+      for (const route of routes) {
         for (const theme of THEMES) {
           for (const vp of VIEWPORTS) {
             const file = join(dir, `${route}-${theme}-${vp.name}.png`)

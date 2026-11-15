@@ -467,6 +467,7 @@ function tabGroups(t: Translate): Array<{ title: string; tabs: Array<{ title: st
       title: t('docs.tabs.group.control'),
       tabs: [
         { title: t('docs.tabs.review.label'), body: t('docs.tabs.review.goal'), points: [t('docs.tabs.review.detail.1'), t('docs.tabs.review.detail.2')] },
+        { title: t('docs.tabs.triage.label'), body: t('docs.tabs.triage.goal'), points: [t('docs.tabs.triage.detail.1'), t('docs.tabs.triage.detail.2')] },
         {
           title: t('docs.tabs.revisions.label'),
           body: t('docs.tabs.revisions.goal'),

@@ -15,6 +15,7 @@ import { Dashboard } from './screens/Dashboard'
 import { Agents } from './screens/Agents'
 import { Memory } from './screens/Memory'
 import { Review } from './screens/Review'
+import { Triage } from './screens/Triage'
 import { Themes } from './screens/Themes'
 import { MemoryMapScreen } from './screens/MemoryMap'
 import { AgentView } from './screens/AgentView'
@@ -105,6 +106,7 @@ export function App() {
       {screen === 'patterns' && <Patterns />}
       {screen === 'procedures' && <Procedures />}
       {screen === 'review' && <Review />}
+      {screen === 'triage' && <Triage />}
       {screen === 'revisions' && <Revisions />}
       {screen === 'maintenance' && <Maintenance />}
       {screen === 'sharing' && <Sharing />}

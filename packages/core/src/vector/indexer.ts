@@ -42,12 +42,14 @@ export class EmbeddingIndexer {
    * d'import ou capture review-first, pas encore approuvé) n'est pas embeddé :
    * l'envoyer au cloud avant la revue coûtait pour rien — et son vecteur était
    * effacé s'il était rejeté. L'approbation le rend `active`, donc éligible.
+   * Un fait `critical` (paie validée à la main, par exemple) n'est jamais
+   * envoyé au fournisseur de vecteurs : il est gardé, invisible au rappel.
    */
   pendingFacts(limit = this.batchSize): Array<{ id: string; fact: string }> {
     return this.store.db
       .prepare(
         `SELECT f.id, f.fact FROM facts f
-         WHERE f.superseded = 0 AND f.lifecycle_state = 'active'
+         WHERE f.superseded = 0 AND f.lifecycle_state = 'active' AND f.sensitivity != 'critical'
            AND NOT EXISTS (
              SELECT 1 FROM embeddings e
              WHERE e.owner_type = 'fact' AND e.owner_id = f.id AND e.model = ?
@@ -62,7 +64,7 @@ export class EmbeddingIndexer {
     const r = this.store.db
       .prepare(
         `SELECT COUNT(*) AS c FROM facts f
-         WHERE f.superseded = 0 AND f.lifecycle_state = 'active'
+         WHERE f.superseded = 0 AND f.lifecycle_state = 'active' AND f.sensitivity != 'critical'
            AND NOT EXISTS (
              SELECT 1 FROM embeddings e
              WHERE e.owner_type = 'fact' AND e.owner_id = f.id AND e.model = ?

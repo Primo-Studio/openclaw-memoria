@@ -200,7 +200,7 @@ export function hasToken(): boolean {
   return adminToken() !== null
 }
 
-async function request<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
+async function request<T>(method: 'GET' | 'POST' | 'DELETE', path: string, body?: unknown): Promise<T> {
   const token = adminToken()
   if (!token) {
     // Message traduit : il remonte tel quel dans l'UI via humanError().
@@ -1420,4 +1420,211 @@ export function isOldServiceError(err: unknown): boolean {
 export async function previewRecall(instance: string, query: string, agentType?: string): Promise<RecallPreview> {
   const raw = await request<unknown>('POST', '/v1/admin/recall_preview', { instance, query })
   return normalizeRecallPreview(raw, { instance, query, ...(agentType ? { agentType } : {}) })
+}
+
+
+// ------------------------------------------------------------ tri des souvenirs
+
+/*
+ * Miroir des types du tri (core/triage/types.ts) et des routes
+ * /v1/admin/triage/* (daemon/triage-routes.ts). Le curseur de pagination est
+ * OPAQUE : on renvoie tel quel le `next_cursor` de la page précédente.
+ */
+
+export const TRIAGE_GENRES = ['idee', 'decision', 'process', 'lecon', 'preference', 'style', 'savoir', 'fait', 'chronologie', 'ephemere'] as const
+export type TriageGenre = (typeof TRIAGE_GENRES)[number]
+export const TRIAGE_SOUS_TYPES = ['app', 'business', 'contenu', 'outil', 'amelioration', 'autre'] as const
+export type TriageSousType = (typeof TRIAGE_SOUS_TYPES)[number]
+export const TRIAGE_RUBRIQUES = [
+  'clients', 'vente', 'rh', 'erreurs', 'outils', 'savoir_entreprise', 'projet', 'app', 'contenu', 'finance', 'juridique', 'infra',
+] as const
+export type TriageRubrique = (typeof TRIAGE_RUBRIQUES)[number]
+export type TriageAuteurSource = 'message' | 'llm' | 'inconnu'
+export type TriageDateSource = 'fichier' | 'archive' | 'etat' | 'metadata' | 'creation' | 'import' | 'inconnu'
+
+/** Une ligne de la liste d'administration (TriageListItem). */
+export interface TriageItem {
+  fact_id: string
+  text: string
+  category: string
+  genre: TriageGenre | null
+  sous_type: TriageSousType | null
+  rubriques: TriageRubrique[]
+  person_id: string | null
+  /** `owner`, `inconnu`, `ia:<agent>`, `person:<id>`, ou null (non classé). */
+  auteur: string | null
+  auteur_source: TriageAuteurSource
+  approuve_par_owner: boolean
+  importance: number | null
+  projet: string | null
+  titre: string | null
+  citation: string | null
+  entites: string[]
+  conversation_at: string | null
+  conversation_at_source: TriageDateSource
+  amas_size: number
+  sensible: boolean
+  verdict: 'faux' | null
+  llm_failures: number
+  validated: boolean
+  source_db: string
+  instance_id: string | null
+  source_path: string | null
+}
+
+/** Filtre de la liste (noms des paramètres de GET /v1/admin/triage). */
+export interface TriageFilter {
+  genre?: TriageGenre[]
+  sous_type?: TriageSousType
+  /** `owner`, `ia`, `person`, `inconnu` ou une valeur exacte. */
+  auteur?: string
+  rubrique?: TriageRubrique
+  projet?: string
+  importance_min?: number
+  q?: string
+  instance?: string
+  validated?: boolean
+  sensible?: boolean
+  include_faux?: boolean
+  since?: string
+  until?: string
+}
+
+export interface TriagePage {
+  items: TriageItem[]
+  next_cursor: string | null
+}
+
+/** Paramètres d'URL d'un filtre (pur, testable) : seuls les champs renseignés partent. */
+export function triageQuery(filter: TriageFilter, page: { cursor?: string | null; limit?: number } = {}): string {
+  const p = new URLSearchParams()
+  if (filter.genre && filter.genre.length > 0) p.set('genre', filter.genre.join(','))
+  if (filter.sous_type) p.set('sous_type', filter.sous_type)
+  if (filter.auteur) p.set('auteur', filter.auteur)
+  if (filter.rubrique) p.set('rubrique', filter.rubrique)
+  if (filter.projet?.trim()) p.set('projet', filter.projet.trim())
+  if (typeof filter.importance_min === 'number') p.set('importance_min', String(filter.importance_min))
+  if (filter.q?.trim()) p.set('q', filter.q.trim())
+  if (filter.instance) p.set('instance', filter.instance)
+  if (typeof filter.validated === 'boolean') p.set('validated', String(filter.validated))
+  if (typeof filter.sensible === 'boolean') p.set('sensible', String(filter.sensible))
+  if (filter.include_faux) p.set('include_faux', 'true')
+  if (filter.since) p.set('since', filter.since)
+  if (filter.until) p.set('until', filter.until)
+  if (page.limit) p.set('limit', String(page.limit))
+  if (page.cursor) p.set('cursor', page.cursor)
+  const qs = p.toString()
+  return qs ? `?${qs}` : ''
+}
+
+export async function getTriageList(filter: TriageFilter, page: { cursor?: string | null; limit?: number } = {}): Promise<TriagePage> {
+  return request<TriagePage>('GET', `/v1/admin/triage${triageQuery(filter, page)}`)
+}
+
+export interface TriageGenreCount {
+  total: number
+  validated: number
+  pending: number
+}
+
+export interface TriageStats {
+  facts_total: number
+  triaged: number
+  untriaged: number
+  sensible: number
+  failed: number
+  faux: number
+  same_as_active: number
+  amas: number
+  redites: number
+  by_genre: Record<string, TriageGenreCount>
+  by_auteur: Record<string, number>
+}
+
+export async function getTriageStats(): Promise<TriageStats> {
+  return request<TriageStats>('GET', '/v1/admin/triage/stats')
+}
+
+export interface TriageEstimate {
+  facts_pending: number
+  facts_active: number
+  facts_sensible: number
+  facts_to_embed: number
+  llm_facts_max: number
+  llm_calls_max: number
+  cost_usd: number | null
+  provider: string | null
+  model: string | null
+  budget_usd: number
+  within_budget: boolean
+}
+
+export type TriageRunState = 'idle' | 'running' | 'done' | 'cancelled' | 'paused' | 'budget' | 'error' | 'interrupted'
+
+export interface TriageRunStatus {
+  run_id: string | null
+  state: TriageRunState
+  dry_run: boolean
+  started_at: string | null
+  updated_at: string | null
+  finished_at: string | null
+  budget_usd: number
+  spent_usd: number
+  total_spent_usd: number
+  dbs_total: number
+  dbs_done: number
+  facts_done: number
+  classified: number
+  inherited: number
+  sensible: number
+  failed: number
+  llm_calls: number
+  max_block_ms: number | null
+  error: string | null
+  estimate: TriageEstimate | null
+}
+
+export async function getTriageRun(): Promise<TriageRunStatus> {
+  return request<TriageRunStatus>('GET', '/v1/admin/triage/run')
+}
+
+/** Lance un passage (ou une estimation sans aucun appel : `dry_run`). Rend dès le démarrage. */
+export async function startTriageRun(opts: { dry_run?: boolean; budget_usd?: number } = {}): Promise<TriageRunStatus> {
+  return request<TriageRunStatus>('POST', '/v1/admin/triage/run', opts)
+}
+
+export async function cancelTriageRun(): Promise<boolean> {
+  return (await request<{ cancelled: boolean }>('DELETE', '/v1/admin/triage/run')).cancelled
+}
+
+export interface TriagePromoteResult {
+  promoted: number
+  merged_members: number
+  merged_into_active: number
+  skipped_sensitive: number
+  skipped_faux: number
+  already_active: number
+  not_found: number
+  shared: number
+}
+
+/** Valide (→ actif) ; `share` : partagé ensuite avec toutes les IA (espace « user »). */
+export async function promoteTriage(factIds: string[], opts: { share?: boolean } = {}): Promise<TriagePromoteResult> {
+  return request<TriagePromoteResult>('POST', '/v1/admin/triage/promote', { fact_ids: factIds, ...(opts.share ? { share: true } : {}) })
+}
+
+export interface TriageCorrectionInput {
+  fact_id: string
+  genre?: TriageGenre
+  sous_type?: TriageSousType | null
+  sensible?: boolean
+}
+
+export async function correctTriage(c: TriageCorrectionInput): Promise<boolean> {
+  return (await request<{ updated: boolean }>('POST', '/v1/admin/triage/correct', c)).updated
+}
+
+/** Marque faux (le souvenir reste en attente, caché) ou retire la marque (null). */
+export async function setTriageVerdict(factIds: string[], verdict: 'faux' | null): Promise<number> {
+  return (await request<{ updated: number }>('POST', '/v1/admin/triage/verdict', { fact_ids: factIds, verdict })).updated
 }

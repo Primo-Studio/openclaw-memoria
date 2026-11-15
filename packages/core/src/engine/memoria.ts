@@ -91,6 +91,30 @@ import { applyRecallCutoff, buildRecallBlocks, rankEntities } from './recall-for
 import { localMachineId, nextRev } from '../sync/clock.js'
 import { contentHash } from '../sync/merge.js'
 import { SyncEngine } from '../sync/engine.js'
+import { TriageService, type TriageServiceHost } from '../triage/service.js'
+import { copyTriageRows, emptyRow, rowFromDb as rowFromTriageDb, upsertTriageRows } from '../triage/store.js'
+import { dot, float32FromBlob, normalizeVector, numberSignature, quantizeInt8, REDITE_THRESHOLD } from '../triage/dedup.js'
+import { isSensitive as isTriageSensitive } from '../triage/sensitive.js'
+import { knn, listVecTables, vecTableName } from '../vector/vec-table.js'
+import {
+  TRIAGE_PROMPT_VERSION,
+  TriageRefusedError,
+  type IdeaItem,
+  type IdeasFilter,
+  type IdeasResult,
+  type SemanticDuplicate,
+  type StorePendingTriagedInput,
+  type StorePendingTriagedResult,
+  type StylesQuery,
+  type StylesResult,
+  type TriagePromoteOptions,
+  type TriageListFilter,
+  type TriagePromoteResult,
+  type TriageRow,
+  type UserMessageSourceKind,
+  type UserMessagesPassFn,
+} from '../triage/types.js'
+import { filterConditions } from '../triage/store.js'
 import type {
   AssistantInstance,
   AssistantType,
@@ -214,6 +238,134 @@ const CLUSTER_REBUILD_INTERVAL_MS = 24 * 60 * 60 * 1000
 const CLUSTER_AUTO_MAX_FACTS = 3000
 const CLUSTER_CATCHUP_MAX_FACTS = 10_000
 
+/** Faits validés par transaction dans promoteTriaged (une page de l'écran de tri). */
+const PROMOTE_SLICE = 50
+/**
+ * Membres EN ATTENTE d'un amas. `INDEXED BY` : sans lui, le planificateur
+ * part de `idx_facts_lifecycle` (deux égalités) et balaie tous les dormants
+ * (mesuré : 39 ms par fait sur 70 000, 0,05 ms par l'index des amas).
+ */
+export const PROMOTE_MEMBERS_SQL = `SELECT t.fact_id AS id FROM fact_triage t INDEXED BY idx_fact_triage_amas JOIN facts f ON f.id = t.fact_id
+  WHERE t.amas_id = ? AND t.fact_id != ? AND f.lifecycle_state = 'dormant' AND f.superseded = 0 AND f.deleted_at IS NULL`
+/** Genres dont les redites sont cherchées parmi les faits en attente (passe sur les messages). */
+const TRIAGE_VEC_GENRES = "('idee','decision','preference','style','process','lecon')"
+/**
+ * Page de construction du cache des redites : une fenêtre de rowid de
+ * `fact_triage_vectors` (bornée même si peu de lignes passent le filtre).
+ * `CROSS JOIN` fixe l'ordre : sans lui, le planificateur pourrait partir des
+ * dormants de `facts` (même piège que les membres d'amas).
+ */
+export const TRIAGE_VEC_PAGE_SQL = `SELECT v.rowid AS rid, v.fact_id AS id, f.fact AS fact, v.vector AS vector, v.dimensions AS dimensions
+  FROM fact_triage_vectors v CROSS JOIN facts f CROSS JOIN fact_triage t
+  WHERE v.rowid >= ? AND v.rowid < ? AND v.model = ? AND f.id = v.fact_id AND t.fact_id = v.fact_id
+    AND f.superseded = 0 AND f.deleted_at IS NULL AND f.lifecycle_state = 'dormant'
+    AND t.sensible = 0 AND t.genre IN ${TRIAGE_VEC_GENRES}
+  ORDER BY v.rowid DESC`
+/** Largeur d'une page (rowid) : quelques ms de blocage au plus. */
+const TRIAGE_VEC_PAGE = 512
+/** Vecteurs int8 par bloc (ajouts sans recopie). */
+const TRIAGE_VEC_BLOCK = 1024
+/**
+ * Plafond du cache des redites, toutes bases : octets de vecteurs int8.
+ * Le parcours coûte ~1 ms par Mo (mesuré) : 32 Mo ≈ 30 ms au pire par appel,
+ * soit ~21 800 vecteurs de 1 536 d. Au-delà, les plus anciens sont laissés de
+ * côté (le passage du moteur les regroupe de toute façon en amas).
+ */
+const TRIAGE_VEC_MAX_BYTES = 32 * 1024 * 1024
+/** Marge au-delà du plafond pour les faits écrits PENDANT la passe (ses propres redites). */
+const TRIAGE_VEC_APPEND_MARGIN_BYTES = 4 * 1024 * 1024
+
+/**
+ * Vecteurs de tri des faits en attente d'une base, gardés le temps d'une
+ * passe sur les messages : int8 contigus par bloc, norme précalculée, jamais
+ * le texte (relu en base avant de rendre un candidat).
+ */
+interface TriageVecCache {
+  model: string
+  dims: number
+  blocks: Int8Array[]
+  /** 1 / norme du vecteur int8 (0 pour un vecteur nul). */
+  invNorms: number[]
+  /** Composantes [0, split) d'abord ; norme (normée) du reste [split, dims) pour la borne de Cauchy-Schwarz. */
+  split: number
+  restNorms: number[]
+  /** Signature des nombres du texte (garde chiffres) ; null = écarté (relu invalide). */
+  sigs: Array<string | null>
+  ids: string[]
+  count: number
+  /** Pages lues par rowid décroissant : prochaine borne haute (exclue), plus petit rowid à lire. */
+  cursor: number
+  floor: number
+  complete: boolean
+  truncated: boolean
+  /** Construction en cours (arrière-plan), ou null. */
+  building: Promise<void> | null
+}
+
+/** Relecture d'un candidat du cache avant de le rendre comme redite. */
+const TRIAGE_VEC_RECHECK_SQL = `SELECT f.fact AS fact FROM facts f JOIN fact_triage t ON t.fact_id = f.id
+  WHERE f.id = ? AND f.lifecycle_state = 'dormant' AND f.superseded = 0 AND f.deleted_at IS NULL AND t.sensible = 0`
+
+/** Début de la seconde partie d'un vecteur : premier quart arrondi à un multiple de 4 (0 sous 16 d : pas de borne). */
+function triageVecSplit(dims: number): number {
+  return (dims >> 2) & ~3
+}
+
+/**
+ * Candidats du cache au-dessus du seuil, mêmes nombres (signature) que la
+ * requête. Score = requête normée · int8 / norme de l'int8 : le cosinus de
+ * l'ancien calcul (vecteur relu puis normé), sans recopie en float.
+ *
+ * Borne exacte (Cauchy-Schwarz) après le premier quart : le reste du produit
+ * ne dépasse jamais |requête reste| × |vecteur reste|. Un vecteur qui ne peut
+ * plus atteindre le seuil est laissé là, sans redite manquée. Mesuré sur
+ * 21 800 vecteurs denses de 1 536 d : ~26 → ~7 ms.
+ */
+function scanTriageVec(cache: TriageVecCache, v: Float32Array, sig: string, hit: (k: number, score: number) => void): void {
+  const d = cache.dims
+  const dq = cache.split
+  const d4 = d - ((d - dq) % 4)
+  const sigs = cache.sigs
+  const invNorms = cache.invNorms
+  const restNorms = cache.restNorms
+  let vr = 0
+  for (let i = dq; i < d; i++) vr += v[i]! * v[i]!
+  vr = Math.sqrt(vr)
+  // Marge d'arrondi : on ne laisse un vecteur que s'il est franchement sous le seuil.
+  const cut = REDITE_THRESHOLD - 1e-6
+  // Index courant plutôt que `o + i` : mesuré ~25 % plus rapide (V8).
+  for (let b = 0; b < cache.blocks.length; b++) {
+    const data = cache.blocks[b]!
+    const base = b * TRIAGE_VEC_BLOCK
+    const n = Math.min(TRIAGE_VEC_BLOCK, cache.count - base)
+    for (let j = 0, p = 0; j < n; j++, p += d) {
+      const k = base + j
+      if (sigs[k] !== sig) continue
+      let s0 = 0
+      let s1 = 0
+      let s2 = 0
+      let s3 = 0
+      for (let i = 0, q = p; i < dq; i += 4, q += 4) {
+        s0 += data[q]! * v[i]!
+        s1 += data[q + 1]! * v[i + 1]!
+        s2 += data[q + 2]! * v[i + 2]!
+        s3 += data[q + 3]! * v[i + 3]!
+      }
+      const w = invNorms[k]!
+      if ((s0 + s1 + s2 + s3) * w + vr * restNorms[k]! < cut) continue
+      for (let i = dq, q = p + dq; i < d4; i += 4, q += 4) {
+        s0 += data[q]! * v[i]!
+        s1 += data[q + 1]! * v[i + 1]!
+        s2 += data[q + 2]! * v[i + 2]!
+        s3 += data[q + 3]! * v[i + 3]!
+      }
+      for (let i = d4; i < d; i++) s0 += data[p + i]! * v[i]!
+      const score = (s0 + s1 + s2 + s3) * w
+      if (score >= REDITE_THRESHOLD) hit(k, score)
+    }
+  }
+}
+
 /** Options d'un passage de cognition (voir Memoria.processCognition). */
 export interface CognitionPassOptions {
   /** Rattrapage : reprend aussi les faits marqués `backfill` par la migration, sans plafond de lot. */
@@ -255,6 +407,14 @@ export interface CognitionPassResult {
   capped?: boolean
   /** Vrai si le rattrapage a été annulé (cancelCognitionCatchup) : le reste attend le lancement suivant. */
   cancelled?: boolean
+}
+
+/** Source d'un item de revue autre que « capture-review » (passe sur les messages : « user-messages »). */
+interface ReviewSourceSpec {
+  type: string
+  key: string
+  path?: string | null
+  metadata?: Record<string, unknown>
 }
 
 /** Demande de passage en attente : plusieurs appels se fondent en une seule. */
@@ -354,6 +514,10 @@ export class Memoria {
   private readonly clusterEngines = new WeakMap<ContentStore, ClusterEngine>()
   private readonly selfObsEngines = new WeakMap<ContentStore, SelfObservationEngine>()
   private readonly revisionEngines = new WeakMap<ContentStore, RevisionEngine>()
+  /** Tri des souvenirs (voir triage/). */
+  readonly triage: TriageService
+  /** Passe sur les messages de l'utilisateur, branchée par l'hôte (jamais importée ici). */
+  private userMessagesPassFn: UserMessagesPassFn | null = null
 
   private constructor(resolved: ResolvedConfig, opts: MemoriaInitOptions) {
     this.resolved = resolved
@@ -368,6 +532,15 @@ export class Memoria {
     this.secretProvider = opts.secretProvider ?? createSecretProvider(this.paths.secretsDir, { force: opts.secretsVault })
     this.llmOverride = opts.llm
     this.grantDefaultUserWrite()
+    this.triage = new TriageService(this.triageHost())
+  }
+
+  /**
+   * Branche la passe sur les messages de l'utilisateur (`triage/user-messages.ts`).
+   * L'hôte (daemon) l'appelle au démarrage ; le moteur ne l'importe jamais.
+   */
+  registerUserMessagesPass(fn: UserMessagesPassFn): void {
+    this.userMessagesPassFn = fn
   }
 
   /**
@@ -841,7 +1014,14 @@ export class Memoria {
    */
   private storeFactInternal(
     input: StoreFactInput,
-    opts: { nearDup?: boolean; quarantine?: boolean } = {},
+    opts: {
+      nearDup?: boolean
+      quarantine?: boolean
+      /** Source de l'item de revue (défaut : « capture-review » de l'instance). */
+      reviewSource?: ReviewSourceSpec
+      /** Écrit avec le fait, dans la MÊME transaction (ligne de tri). Seulement pour un fait créé. */
+      afterInsert?: (store: ContentStore, fact: Fact) => void
+    } = {},
   ): { fact: Fact; created: boolean } {
     this.assertOpen()
     const instance = this.mustInstance(input.instance)
@@ -933,9 +1113,11 @@ export class Memoria {
         visibility: scope.type === 'private' ? 'private' : 'shared',
         ...provenance,
       })
-      return opts.quarantine ? this.quarantineForReview(store, inserted, instance.id) : inserted
+      const fact = opts.quarantine ? this.quarantineForReview(store, inserted, instance.id, opts.reviewSource) : inserted
+      opts.afterInsert?.(store, fact)
+      return fact
     }
-    const fact = opts.quarantine ? store.db.transaction(insert)() : insert()
+    const fact = opts.quarantine || opts.afterInsert ? store.db.transaction(insert)() : insert()
     this.registry.audit({
       actor_type: 'assistant',
       actor_id: instance.id,
@@ -3101,9 +3283,9 @@ export class Memoria {
    * l'INSERT. Un fait déjà connu (dédup) ne passe jamais ici : le rendre
    * dormant ferait disparaître du recall un souvenir validé.
    */
-  private quarantineForReview(store: ContentStore, fact: Fact, instanceId: string): Fact {
+  private quarantineForReview(store: ContentStore, fact: Fact, instanceId: string, source?: ReviewSourceSpec): Fact {
     store.db.prepare("UPDATE facts SET lifecycle_state = 'dormant' WHERE id = ?").run(fact.id)
-    const sourceId = this.ensureReviewSource(store, instanceId)
+    const sourceId = source ? this.ensureNamedSource(store, source) : this.ensureReviewSource(store, instanceId)
     store.db
       .prepare(
         `INSERT INTO memory_import_items (id, source_id, target_memory_id, target_type, proposed_scope_id, status, confidence)
@@ -3127,6 +3309,21 @@ export class Memoria {
          VALUES (?, 'capture-review', NULL, ?, ?, ?)`,
       )
       .run(id, hash, new Date().toISOString(), JSON.stringify({ instance: instanceId }))
+    return id
+  }
+
+  /** Source nommée (ex. « user-messages » d'une session) : une par clé, créée à la première écriture. */
+  private ensureNamedSource(store: ContentStore, source: ReviewSourceSpec): string {
+    const hash = sha256Hex(`${source.type}:${source.key}`)
+    const existing = store.db.prepare('SELECT id FROM memory_sources WHERE source_hash = ?').get(hash) as { id: string } | undefined
+    if (existing) return existing.id
+    const id = newId()
+    store.db
+      .prepare(
+        `INSERT INTO memory_sources (id, source_type, source_path, source_hash, imported_at, metadata)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(id, source.type, source.path ?? null, hash, nowISO(), JSON.stringify(source.metadata ?? {}))
     return id
   }
 
@@ -3175,6 +3372,8 @@ export class Memoria {
   reviewDecision(itemIds: string[], decision: 'accepted' | 'rejected'): { updated: number } {
     this.assertOpen()
     if (itemIds.length === 0) return { updated: 0 }
+    // Des faits en attente changent d'état : le cache des redites du tri est périmé.
+    this.dropTriageVecCache()
     let updated = 0
     for (const entry of this.registry.listDbs()) {
       if (entry.kind === 'registry' || !existsSync(entry.path)) continue
@@ -3348,6 +3547,8 @@ export class Memoria {
     const targetPath = this.sharedDbPathPublic(scope)
     const target = this.openContent(targetPath)
     this.registry.registerDb({ kind: 'shared', path: targetPath, assistant_instance_id: null, scope_id: scope.id })
+    // Les faits (et leurs vecteurs de tri) changent de base : cache des redites périmé.
+    this.dropTriageVecCache()
 
     const idSet = new Set(factIds)
     let shared = 0
@@ -3383,6 +3584,13 @@ export class Memoria {
       })
       tx()
       const ids = rows.map(r => r.id)
+      // La ligne de tri (et le vecteur de tri) suivent le fait : l'effacement
+      // ci-dessous les emporterait (clé étrangère en cascade).
+      try {
+        copyTriageRows(store.db, target.db, ids)
+      } catch (err) {
+        console.warn('[memoria] partage : lignes de tri non recopiées :', (err as Error).message)
+      }
       const leave = store.db.transaction(() => {
         // Clore les items de revue du fait déplacé : sinon ils restent
         // `pending` en orphelins et une approbation ultérieure répond
@@ -3573,6 +3781,8 @@ export class Memoria {
     if (!hasIds && filter.confirm_bulk !== true) {
       throw new Error('forget : suppression en masse — confirm_bulk requis')
     }
+    // Un fait oublié ne doit plus être rendu comme redite par le cache du tri.
+    this.dropTriageVecCache()
 
     let deleted = 0
     let matched = 0
@@ -4609,9 +4819,650 @@ export class Memoria {
     return out
   }
 
+  // ------------------------------------------------------------------ tri des souvenirs
+
+  /** Modèle de vecteurs vu à la dernière résolution du profil par le tri (redites par le sens). */
+  private triageEmbKey: { model: string; dimensions: number } | null = null
+  /**
+   * Vecteurs de tri des faits en attente, par base (redites de la passe sur
+   * les messages). Construit par pages avant la passe, vidé à sa fin et à
+   * chaque changement des faits en attente (oubli, validation, partage, revue).
+   */
+  private readonly triageVecCache = new Map<string, TriageVecCache>()
+  /** Avertissement « cache tronqué » déjà donné pour ce processus. */
+  private triageVecWarned = false
+
+  /** Accès internes prêtés au service de tri (jamais exposés tels quels). */
+  private triageHost(): TriageServiceHost {
+    return {
+      dbs: instanceId => this.contentDbPathsFor(instanceId).map(path => ({ path, store: this.openContent(path) })),
+      relativeDb: path => relative(this.paths.root, path),
+      profile: async () => {
+        const p = await this.ensureProfile()
+        this.triageEmbKey = p.embeddings ? { model: p.embeddings.model, dimensions: p.embeddings.dimensions } : null
+        return p
+      },
+      redact: text => {
+        const r = this.redactor.redact(text)
+        for (const secret of r.found) this.vaultSecret(secret)
+        return { text: r.text, secrets: r.found.length }
+      },
+      isEnabled: () => this.isEnabled(),
+      isClosed: () => this.closed,
+      getSetting: key => this.registry.getSetting(key),
+      setSetting: (key, value) => this.registry.setSetting(key, value),
+      config: () => this.resolved.config.triage ?? {},
+      configDir: () => dirname(this.resolved.configPath),
+      agentOf: id => this.agentOfInstance(id),
+      persons: () => this.registry.listPersons().map(p => ({ id: p.id, display_name: p.display_name })),
+      audit: (action, reason) =>
+        this.registry.audit({ actor_type: 'user', actor_id: 'local', action, target_id_hash: null, scope_id: null, reason }),
+      promote: opts => this.promoteTriaged(opts),
+      ideas: (id, filter, context) => this.ideasForInstance(id, filter, context),
+      styles: (id, query) => this.stylesForInstance(id, query),
+      storePendingTriaged: input => this.storePendingTriaged(input),
+      resolveInstanceForSource: source => this.resolveInstanceForSource(source),
+      findSemanticDuplicate: (id, text, vector) => this.findSemanticDuplicate(id, text, vector),
+      instanceDb: id => {
+        const path = this.paths.assistantDb(id)
+        return this.registry.getInstance(id) && existsSync(path) ? { path, store: this.openContent(path) } : null
+      },
+      userMessagesPass: () => {
+        const pass = this.userMessagesPassFn
+        if (!pass) return null
+        // Le cache des redites ne vit que le temps de la passe : construit par
+        // pages AVANT (sans figer la boucle d'événements), vidé à la fin.
+        return async (host, opts) => {
+          this.dropTriageVecCache()
+          try {
+            if (!opts.dryRun) await this.warmTriageVecCaches()
+            return await pass(host, opts)
+          } finally {
+            this.dropTriageVecCache()
+          }
+        }
+      },
+    }
+  }
+
+  /** `ia:<agent>` d'une instance : claude, codex, gpt… (type d'assistant, jamais deviné par le LLM). */
+  private agentOfInstance(instanceId: string | null): string {
+    if (!instanceId) return 'autre'
+    const instance = this.registry.getInstance(instanceId)
+    const type = instance ? this.registry.getAssistant(instance.assistant_id)?.type : undefined
+    switch (type) {
+      case 'claude-code':
+        return 'claude'
+      case 'codex':
+        return 'codex'
+      case 'chatgpt':
+        return 'gpt'
+      case 'openclaw':
+      case 'cursor':
+        return type
+      default:
+        return 'autre'
+    }
+  }
+
+  /**
+   * VALIDE des faits triés (→ actifs). Ce n'est pas reviewDecision (qui prend
+   * des items de revue et efface au rejet) :
+   *  - activation + clôture des items de revue + marqueurs de cognition remis
+   *    à zéro, une transaction par tranche de 50 faits ; puis cognition et vecteurs ;
+   *  - sensible = marque de la ligne de tri OU filtre sensible relu sur le
+   *    texte (une ligne créée par une correction, ou triée avant un filtre plus
+   *    large, peut porter sensible = 0), sauf si le propriétaire a levé la
+   *    marque à la main (correction `sensible: false`) ;
+   *  - les membres EN ATTENTE de l'amas sont supersédés vers le représentant
+   *    (traçable, comme mergeFacts), leurs items passent en `duplicate` : le
+   *    rappel ne reçoit pas N quasi-doublons ; un membre déjà actif n'est pas touché ;
+   *  - une redite d'un fait actif est supersédée vers lui au lieu d'être validée ;
+   *  - un secret resté en clair dans un ancien fait est re-masqué avant ;
+   *  - sensibles sautés par défaut (comptés) ; avec `allow_sensitive`, validés
+   *    en sensitivity = 'critical' : gardés, invisibles au rappel ;
+   *  - marqués faux : sautés ;
+   *  - au plus 500 par appel (chaque fait validé peut coûter un appel LLM au
+   *    passage ordinaire de cognition) ; par filtre, éphémères et sensibles exclus.
+   */
+  private promoteTriaged(opts: TriagePromoteOptions): TriagePromoteResult {
+    this.assertOpen()
+    const result: TriagePromoteResult = {
+      promoted: 0,
+      merged_members: 0,
+      merged_into_active: 0,
+      skipped_sensitive: 0,
+      skipped_faux: 0,
+      already_active: 0,
+      not_found: 0,
+      shared: 0,
+      secrets_masked: 0,
+      cognition_calls_estimate: 0,
+    }
+    if (!opts.fact_ids && !opts.filter) throw new TriageRefusedError('bad-request', 'promotion : des ids ou un filtre sont requis')
+    // Les faits en attente changent : les vecteurs gardés pour les redites ne sont plus sûrs.
+    this.dropTriageVecCache()
+    let left = Math.max(1, Math.min(500, Math.floor(opts.max ?? 500)))
+    const wanted = opts.fact_ids ? [...new Set(opts.fact_ids)] : null
+    const seen = new Set<string>()
+    const toShare: string[] = []
+    const now = nowISO()
+    for (const path of this.contentDbPathsFor(wanted ? undefined : opts.filter?.instance)) {
+      if (left <= 0) break
+      const store = this.openContent(path)
+      const db = store.db
+      let rows: Array<Record<string, unknown>>
+      if (wanted) {
+        rows = store.db
+          .prepare(
+            `SELECT f.id AS f_id, f.fact AS f_fact, f.lifecycle_state AS f_state, f.superseded AS f_superseded, t.*
+             FROM facts f LEFT JOIN fact_triage t ON t.fact_id = f.id
+             WHERE f.id IN (SELECT value FROM json_each(?)) AND f.deleted_at IS NULL`,
+          )
+          .all(JSON.stringify(wanted.filter(id => !seen.has(id)))) as Array<Record<string, unknown>>
+      } else {
+        const filter = { ...opts.filter, validated: false }
+        const { where, params } = filterConditions(filter)
+        const genres = filter.genre === undefined ? [] : Array.isArray(filter.genre) ? filter.genre : [filter.genre]
+        if (!genres.includes('ephemere')) where.push("(t.genre IS NULL OR t.genre != 'ephemere')")
+        if (!opts.allow_sensitive) where.push('t.sensible = 0')
+        rows = store.db
+          .prepare(
+            `SELECT f.id AS f_id, f.fact AS f_fact, f.lifecycle_state AS f_state, f.superseded AS f_superseded, t.*
+             FROM fact_triage t JOIN facts f ON f.id = t.fact_id
+             WHERE ${where.join(' AND ')}
+             ORDER BY COALESCE(t.importance, 0) DESC, COALESCE(t.conversation_at, '') DESC LIMIT ?`,
+          )
+          .all(...params, left) as Array<Record<string, unknown>>
+      }
+      // Requêtes préparées une fois par base (et non par fait).
+      const sql = {
+        twin: db.prepare("SELECT id FROM facts WHERE id = ? AND lifecycle_state = 'active' AND superseded = 0 AND deleted_at IS NULL"),
+        supersede: db.prepare('UPDATE facts SET superseded = 1, superseded_by = ?, updated_at = ? WHERE id = ?'),
+        closeItems: db.prepare(
+          `UPDATE memory_import_items SET status = ?, reviewed_by = 'local', reviewed_at = ?
+           WHERE status = 'pending' AND target_memory_id = ?`,
+        ),
+        mask: db.prepare('UPDATE facts SET fact = ?, norm_hash = ?, updated_at = ? WHERE id = ?'),
+        critical: db.prepare("UPDATE facts SET sensitivity = 'critical' WHERE id = ?"),
+        activate: db.prepare("UPDATE facts SET lifecycle_state = 'active', updated_at = ? WHERE id = ?"),
+        members: db.prepare(PROMOTE_MEMBERS_SQL),
+      }
+      const activated: string[] = []
+      // Une transaction par tranche ; compteurs et listes de la tranche fusionnés
+      // seulement après son commit (un échec n'en laisse rien dans le résultat).
+      for (let start = 0; start < rows.length && left > 0; start += PROMOTE_SLICE) {
+        const slice = rows.slice(start, start + PROMOTE_SLICE)
+        const outcome = db.transaction(() => {
+          const out = {
+            counts: { promoted: 0, merged_members: 0, merged_into_active: 0, skipped_sensitive: 0, skipped_faux: 0, already_active: 0, not_found: 0, secrets_masked: 0 },
+            seen: [] as string[],
+            activated: [] as string[],
+            share: [] as string[],
+            used: 0,
+          }
+          const sliceSeen = new Set<string>()
+          for (const r of slice) {
+            if (left - out.used <= 0) break
+            const id = String(r.f_id)
+            // Membre supersédé plus tôt dans cet appel : les lignes ont été lues avant.
+            if (seen.has(id) || sliceSeen.has(id)) continue
+            sliceSeen.add(id)
+            out.seen.push(id)
+            const triage = r.fact_id ? rowFromTriageDb(r) : null
+            if (Number(r.f_superseded) === 1) {
+              out.counts.not_found++
+              continue
+            }
+            if (r.f_state === 'active') {
+              out.counts.already_active++
+              continue
+            }
+            if (r.f_state !== 'dormant') {
+              out.counts.not_found++
+              continue
+            }
+            if (triage?.verdict === 'faux') {
+              out.counts.skipped_faux++
+              continue
+            }
+            const text = String(r.f_fact)
+            const ownerLifted = triage !== null && !triage.sensible && triage.corrected_fields.includes('sensible')
+            const sensible = triage?.sensible === true || (!ownerLifted && isTriageSensitive(text))
+            if (sensible && !opts.allow_sensitive) {
+              out.counts.skipped_sensitive++
+              continue
+            }
+            out.used++
+            const twin = triage?.same_as_active ? (sql.twin.get(triage.same_as_active) as { id: string } | undefined) : undefined
+            if (twin) {
+              sql.supersede.run(twin.id, now, id)
+              sql.closeItems.run('duplicate', now, id)
+              out.counts.merged_into_active++
+              continue
+            }
+            if (triage?.secret_found) {
+              const masked = this.redactBeforeStore(text)
+              if (masked !== text) {
+                sql.mask.run(masked, factNormHash(masked), now, id)
+                out.counts.secrets_masked++
+              }
+            }
+            if (sensible) sql.critical.run(id)
+            sql.activate.run(now, id)
+            sql.closeItems.run('accepted', now, id)
+            resetBackfillMarkers(store, [id])
+            out.activated.push(id)
+            out.share.push(id)
+            out.counts.promoted++
+            // Membres de l'amas encore en attente : supersédés vers le représentant validé.
+            for (const m of sql.members.all(id, id) as Array<{ id: string }>) {
+              sql.supersede.run(id, now, m.id)
+              sql.closeItems.run('duplicate', now, m.id)
+              sliceSeen.add(m.id)
+              out.seen.push(m.id)
+              out.share.push(m.id)
+              out.counts.merged_members++
+            }
+          }
+          return out
+        })()
+        for (const [k, n] of Object.entries(outcome.counts)) result[k as keyof typeof outcome.counts] += n
+        for (const id of outcome.seen) seen.add(id)
+        activated.push(...outcome.activated)
+        toShare.push(...outcome.share)
+        left -= outcome.used
+      }
+      if (activated.length > 0) {
+        this.registry.audit({
+          actor_type: 'user',
+          actor_id: 'local',
+          action: 'triage_promote',
+          target_id_hash: sha256Hex([...activated].sort().join(',')),
+          scope_id: null,
+          reason: `facts=${activated.length}`,
+        })
+      }
+    }
+    if (wanted) result.not_found += wanted.filter(id => !seen.has(id)).length
+    result.cognition_calls_estimate = result.promoted
+    if (result.promoted > 0) {
+      // Les faits validés rejoignent le graphe et l'index (activateFact ne le faisait pas pour les vecteurs).
+      this.scheduleCognition()
+      void this.indexEmbeddings().catch((err: unknown) =>
+        console.warn(`[memoria] indexation après validation du tri en échec : ${(err as Error).message}`),
+      )
+    }
+    if (opts.share && toShare.length > 0) {
+      // Le partage déplace le fait (et sa ligne de tri) dans la base partagée ;
+      // les membres supersédés suivent : la chaîne superseded_by reste dans une seule base.
+      result.shared = this.shareFacts(toShare, 'user').shared
+    }
+    return result
+  }
+
+  /** Conditions communes des lectures d'agent : faits ACTIFS triés, non sensibles, non faux, représentants. */
+  private triageAgentRows(
+    instanceId: string,
+    filter: TriageListFilter,
+    activeContext: ActiveContext | undefined,
+    order: string,
+    limit: number,
+  ): Array<{ row: FactRow; triage: TriageRow }> {
+    const instance = this.mustInstance(instanceId)
+    const context = this.expandContextTree(activeContext)
+    const now = Date.now()
+    const out: Array<{ row: FactRow; triage: TriageRow }> = []
+    for (const target of this.resolveReadTargets(instance)) {
+      const store = this.openContent(target.dbPath)
+      const { where, params } = filterConditions({ ...filter, validated: true, include_members: false, include_faux: false, sensible: false })
+      where.push('t.genre IS NOT NULL', "f.sensitivity IN ('normal','sensitive')")
+      where.push(`f.scope_id IN (${target.scopeIds.map(() => '?').join(',')})`)
+      params.push(...target.scopeIds)
+      const rows = store.db
+        .prepare(`SELECT f.*, t.* FROM fact_triage t JOIN facts f ON f.id = t.fact_id WHERE ${where.join(' AND ')} ORDER BY ${order} LIMIT ?`)
+        .all(...params, limit * 3) as Array<Record<string, unknown>>
+      for (const r of rows) {
+        const row = r as unknown as FactRow
+        // Mêmes filtres DURS que le rappel (actif, non supersédé, sensibilité, scopes, expiration, client).
+        if (!passesRecallHardFilters(row, target.scopeIds, context, now)) continue
+        out.push({ row, triage: rowFromTriageDb(r) })
+      }
+    }
+    return out
+  }
+
+  /**
+   * Idées, décisions… VALIDÉES lisibles par l'instance, avec les mêmes filtres
+   * que le rappel (scopes, sensibilité, client, expiration). Les faits en
+   * attente ne sont jamais rendus : seulement leur nombre par genre, sans texte.
+   */
+  private ideasForInstance(instanceId: string, filter: IdeasFilter, activeContext?: ActiveContext): IdeasResult {
+    this.assertOpen()
+    const limit = Math.max(1, Math.min(200, Math.floor(filter.limit ?? 30)))
+    const found = this.triageAgentRows(
+      instanceId,
+      { genre: filter.genre, sous_type: filter.sous_type, auteur: filter.auteur, projet: filter.projet, q: filter.q, importance_min: filter.importance_min },
+      activeContext,
+      "COALESCE(t.importance, 0) DESC, COALESCE(t.conversation_at, '') DESC",
+      limit,
+    )
+    found.sort(
+      (a, b) =>
+        (b.triage.importance ?? 0) - (a.triage.importance ?? 0) ||
+        (b.triage.conversation_at ?? '').localeCompare(a.triage.conversation_at ?? ''),
+    )
+    const items: IdeaItem[] = found.slice(0, limit).map(({ row, triage }) => ({
+      id: row.id,
+      text: row.fact,
+      titre: triage.titre,
+      genre: triage.genre!,
+      sous_type: triage.sous_type,
+      auteur: triage.auteur,
+      auteur_source: triage.auteur_source,
+      projet: triage.projet,
+      importance: triage.importance,
+      rubriques: triage.rubriques,
+      conversation_at: triage.conversation_at,
+      amas_size: triage.amas_size,
+      validated: true,
+    }))
+    // Compteurs en attente : nombre par genre, jamais de texte. Mêmes scopes et même isolation client.
+    const pending: Record<string, number> = {}
+    const instance = this.mustInstance(instanceId)
+    const client = this.expandContextTree(activeContext)?.client_org_id ?? null
+    for (const target of this.resolveReadTargets(instance)) {
+      const rows = this.openContent(target.dbPath)
+        .db.prepare(
+          `SELECT t.genre AS genre, COUNT(*) AS n FROM fact_triage t JOIN facts f ON f.id = t.fact_id
+           WHERE f.lifecycle_state = 'dormant' AND f.superseded = 0 AND f.deleted_at IS NULL
+             AND t.genre IS NOT NULL AND t.sensible = 0 AND t.verdict IS NULL AND t.same_as_active IS NULL
+             AND (t.amas_id IS NULL OR t.amas_id = t.fact_id)
+             AND f.sensitivity IN ('normal','sensitive')
+             AND f.scope_id IN (${target.scopeIds.map(() => '?').join(',')})
+             AND (f.client_org_id IS NULL OR f.client_org_id = '' OR f.client_org_id IS ?)
+           GROUP BY t.genre`,
+        )
+        .all(...target.scopeIds, client) as Array<{ genre: string; n: number }>
+      for (const r of rows) pending[r.genre] = (pending[r.genre] ?? 0) + r.n
+    }
+    return { items, pending_counts: pending }
+  }
+
+  /** Styles d'échange VALIDÉS d'une personne (null = le propriétaire), du plus récent au plus ancien. */
+  private stylesForInstance(instanceId: string, query: StylesQuery): StylesResult {
+    this.assertOpen()
+    const limit = Math.max(1, Math.min(50, Math.floor(query.limit ?? 10)))
+    const personId = query.person_id ?? null
+    const found = this.triageAgentRows(instanceId, { genre: 'style', person_id: personId }, query.active_context, "COALESCE(t.conversation_at, '') DESC", limit)
+    found.sort((a, b) => (b.triage.conversation_at ?? '').localeCompare(a.triage.conversation_at ?? ''))
+    return {
+      person_id: personId,
+      items: found.slice(0, limit).map(({ row, triage }) => ({ id: row.id, text: row.fact, titre: triage.titre, conversation_at: triage.conversation_at })),
+    }
+  }
+
+  /**
+   * Écrit un fait EN ATTENTE trié (passe sur les messages) : storeFactInternal
+   * en quarantaine (jamais storeFact : un texte identique à un dormant
+   * l'activerait), item de revue sous une source « user-messages », ligne de
+   * tri dans la même transaction. Un fait identique existant n'est ni activé
+   * ni réécrit (created = false).
+   */
+  private storePendingTriaged(input: StorePendingTriagedInput): StorePendingTriagedResult {
+    this.assertOpen()
+    const now = nowISO()
+    const sensible = isTriageSensitive(input.content)
+    let created = false
+    const emb = this.triageEmbKey
+    const { fact } = this.storeFactInternal(
+      { instance: input.instance, content: input.content, category: input.category ?? 'general', source: 'user-messages' },
+      {
+        nearDup: false,
+        quarantine: true,
+        reviewSource: { type: 'user-messages', key: input.source.key, path: input.source.path ?? null, metadata: input.source.metadata },
+        afterInsert: (store, f) => {
+          created = true
+          const row: TriageRow = {
+            ...emptyRow(f.id, now),
+            auteur_source: 'message',
+            amas_id: f.id,
+            prompt_version: TRIAGE_PROMPT_VERSION,
+            ...input.triage,
+            fact_id: f.id,
+            triaged_at: now,
+            sensible: sensible || input.triage.sensible === true,
+          }
+          upsertTriageRows(store.db, [row])
+          if (input.vector && emb && input.vector.length === emb.dimensions && !row.sensible) {
+            const q = quantizeInt8(input.vector)
+            store.db
+              .prepare('INSERT OR REPLACE INTO fact_triage_vectors (fact_id, model, dimensions, vector) VALUES (?, ?, ?, ?)')
+              .run(f.id, emb.model, emb.dimensions, q)
+            // Redites de la suite de la passe : le nouveau rowid est au-dessus des pages restantes, jamais lu deux fois.
+            const cache = this.triageVecCache.get(store.path)
+            if (cache && cache.model === emb.model && cache.dims === emb.dimensions) {
+              this.appendTriageVec(cache, f.id, f.fact, new Int8Array(q.buffer, q.byteOffset, emb.dimensions), TRIAGE_VEC_APPEND_MARGIN_BYTES)
+            }
+          }
+        },
+      },
+    )
+    return { fact_id: fact.id, created }
+  }
+
+  /** Instance d'origine d'une source de messages. */
+  private resolveInstanceForSource(source: { kind: UserMessageSourceKind; path?: string }): string | null {
+    this.assertOpen()
+    if (source.kind === 'chatgpt') return this.findChatGptInstance()
+    const type = source.kind === 'codex-history' ? 'codex' : 'claude-code'
+    const agents = this.listAgents().filter(a => a.instance.revoked_at === null && a.assistant_type === type)
+    if (source.kind === 'claude-code' && source.path) {
+      for (const a of agents) {
+        if (!a.db_path || !existsSync(a.db_path)) continue
+        const hit = this.openContent(a.db_path).db.prepare('SELECT 1 FROM memory_sources WHERE source_path = ? LIMIT 1').get(source.path)
+        if (hit) return a.instance.id
+      }
+    }
+    const machine = hostname()
+    agents.sort(
+      (a, b) =>
+        Number(b.instance.machine_id === machine) - Number(a.instance.machine_id === machine) ||
+        (b.instance.last_seen_at ?? '').localeCompare(a.instance.last_seen_at ?? ''),
+    )
+    return agents[0]?.instance.id ?? null
+  }
+
+  /**
+   * Doublon d'un texte dans les bases lisibles par l'instance : exact (actifs
+   * et dormants), puis par le sens (≥ 0,92, mêmes nombres) parmi les actifs
+   * (index vec0) et les faits en attente triés (cache des vecteurs de tri).
+   *
+   * Synchrone (contrat TriageHost) : le cache n'est jamais construit d'un coup
+   * ici. Une base absente du cache y entre par sa première page, la suite se
+   * lit en arrière-plan ; pendant ce temps, les faits en attente pas encore lus
+   * ne sont pas comparés (la passe sur les messages construit le cache AVANT
+   * de commencer, voir triageHost().userMessagesPass). Un candidat du cache est
+   * relu en base avant d'être rendu : existe, en attente, non supersédé, non
+   * sensible, mêmes nombres.
+   */
+  private findSemanticDuplicate(instanceId: string, text: string, vector?: Float32Array): SemanticDuplicate | null {
+    this.assertOpen()
+    const exact = this.findKnownDuplicate(instanceId, text)
+    if (exact) return { fact_id: exact.existing.id, score: 1, kind: 'exact' }
+    const emb = this.triageEmbKey
+    if (!vector || !emb || vector.length !== emb.dimensions || isTriageSensitive(text)) return null
+    const v = normalizeVector(vector)
+    const sig = numberSignature(text)
+    let best: SemanticDuplicate | null = null
+    const consider = (id: string, fact: string, other: Float32Array): void => {
+      const score = dot(v, other)
+      if (score >= REDITE_THRESHOLD && numberSignature(fact) === sig && (!best || score > best.score)) best = { fact_id: id, score, kind: 'meaning' }
+    }
+    const pending: Array<{ store: ContentStore; cache: TriageVecCache; k: number; score: number }> = []
+    for (const target of this.resolveReadTargets(this.mustInstance(instanceId))) {
+      const store = this.openContent(target.dbPath)
+      if (listVecTables(store.db).includes(vecTableName(emb))) {
+        try {
+          const hits = knn(store.db, emb, v, 16)
+          const rows = store.db
+            .prepare(
+              `SELECT f.id, f.fact, e.vector, e.dimensions FROM facts f
+               JOIN embeddings e ON e.owner_type = 'fact' AND e.owner_id = f.id AND e.model = ?
+               WHERE f.id IN (SELECT value FROM json_each(?)) AND f.lifecycle_state = 'active' AND f.superseded = 0`,
+            )
+            .all(emb.model, JSON.stringify(hits.map(h => h.fact_id))) as Array<{ id: string; fact: string; vector: Buffer; dimensions: number }>
+          for (const r of rows) consider(r.id, r.fact, float32FromBlob(r.vector, r.dimensions))
+        } catch {
+          /* index vectoriel indisponible : les faits en attente restent comparés */
+        }
+      }
+      const cache = this.triageVecCacheFor(store, emb)
+      scanTriageVec(cache, v, sig, (k, score) => pending.push({ store, cache, k, score }))
+    }
+    pending.sort((a, b) => b.score - a.score)
+    for (const c of pending) {
+      if (best !== null && c.score <= (best as SemanticDuplicate).score) break
+      const id = c.cache.ids[c.k]!
+      // Le cache a pu vieillir (oubli, validation, fusion, partage) : relu en base.
+      const row = c.store.db.prepare(TRIAGE_VEC_RECHECK_SQL).get(id) as { fact: string } | undefined
+      if (row && numberSignature(row.fact) === sig) {
+        best = { fact_id: id, score: c.score, kind: 'meaning' }
+        break
+      }
+      c.cache.sigs[c.k] = null
+    }
+    return best
+  }
+
+  /** Vide le cache des redites (une construction en cours s'arrête à sa page suivante). */
+  private dropTriageVecCache(): void {
+    this.triageVecCache.clear()
+  }
+
+  /**
+   * Construit, par pages et en rendant la main entre elles, le cache des
+   * redites de toutes les bases. Toutes les constructions partent ensemble et
+   * se relaient page par page : sous le plafond commun, chaque base garde ses
+   * vecteurs les plus récents (une grosse base lue la première ne prend pas tout).
+   */
+  private async warmTriageVecCaches(): Promise<void> {
+    const emb = this.triageEmbKey
+    if (!emb) return
+    const building: Array<Promise<void>> = []
+    for (const path of this.contentDbPathsFor()) {
+      if (this.closed) return
+      const cache = this.triageVecCacheFor(this.openContent(path), emb)
+      if (cache.building) building.push(cache.building)
+    }
+    await Promise.all(building)
+  }
+
+  /**
+   * Cache des redites d'une base. Créé au besoin : sa première page est lue
+   * tout de suite (une petite base est alors complète), la suite en arrière-plan.
+   */
+  private triageVecCacheFor(store: ContentStore, emb: { model: string; dimensions: number }): TriageVecCache {
+    const existing = this.triageVecCache.get(store.path)
+    if (existing && existing.model === emb.model && existing.dims === emb.dimensions) return existing
+    const bounds = store.db.prepare('SELECT MIN(rowid) AS lo, MAX(rowid) AS hi FROM fact_triage_vectors').get() as { lo: number | null; hi: number | null }
+    const cache: TriageVecCache = {
+      model: emb.model,
+      dims: emb.dimensions,
+      blocks: [],
+      invNorms: [],
+      split: triageVecSplit(emb.dimensions),
+      restNorms: [],
+      sigs: [],
+      ids: [],
+      count: 0,
+      cursor: (bounds.hi ?? 0) + 1,
+      floor: bounds.lo ?? 0,
+      complete: bounds.hi === null,
+      truncated: false,
+      building: null,
+    }
+    this.triageVecCache.set(store.path, cache)
+    this.loadTriageVecPage(store, cache)
+    if (!cache.complete) cache.building = this.buildTriageVecCache(store.path, cache)
+    return cache
+  }
+
+  /** Suite de la construction, une page par tour de boucle d'événements (ticket #27). */
+  private async buildTriageVecCache(path: string, cache: TriageVecCache): Promise<void> {
+    try {
+      while (!cache.complete) {
+        await new Promise<void>(resolve => setImmediate(resolve))
+        // Cache vidé (fin de passe, oubli, validation…) ou Memoria fermé : on s'arrête.
+        if (this.closed || this.triageVecCache.get(path) !== cache) return
+        this.loadTriageVecPage(this.openContent(path), cache)
+      }
+    } catch (err) {
+      // Base illisible : le cache reste partiel (exacts et actifs toujours cherchés).
+      cache.complete = true
+      console.warn(`[memoria] cache des redites incomplet : ${(err as Error).message}`)
+    } finally {
+      cache.building = null
+    }
+  }
+
+  /** Une page (fenêtre de rowid, du plus récent au plus ancien) de vecteurs de tri en attente. */
+  private loadTriageVecPage(store: ContentStore, cache: TriageVecCache): void {
+    if (cache.complete) return
+    const lo = Math.max(cache.floor, cache.cursor - TRIAGE_VEC_PAGE)
+    const rows = store.db.prepare(TRIAGE_VEC_PAGE_SQL).all(lo, cache.cursor, cache.model) as Array<{
+      id: string
+      fact: string
+      vector: Buffer
+      dimensions: number
+    }>
+    for (const r of rows) {
+      if (r.dimensions !== cache.dims || r.vector.byteLength < cache.dims) continue
+      if (!this.appendTriageVec(cache, r.id, r.fact, new Int8Array(r.vector.buffer, r.vector.byteOffset, cache.dims), 0)) {
+        cache.complete = true
+        return
+      }
+    }
+    cache.cursor = lo
+    if (lo <= cache.floor) cache.complete = true
+  }
+
+  /** Ajoute un vecteur int8 au cache ; false si le plafond (toutes bases, + marge) est atteint. */
+  private appendTriageVec(cache: TriageVecCache, id: string, fact: string, vec: Int8Array, marginBytes: number): boolean {
+    let used = 0
+    for (const c of this.triageVecCache.values()) used += c.count * c.dims
+    if (used + cache.dims > TRIAGE_VEC_MAX_BYTES + marginBytes) {
+      cache.truncated = true
+      if (!this.triageVecWarned) {
+        this.triageVecWarned = true
+        console.warn(
+          `[memoria] cache des redites plein (${Math.round(TRIAGE_VEC_MAX_BYTES / 1_048_576)} Mo) : les faits en attente les plus anciens ne sont pas comparés`,
+        )
+      }
+      return false
+    }
+    const j = cache.count % TRIAGE_VEC_BLOCK
+    if (j === 0) cache.blocks.push(new Int8Array(TRIAGE_VEC_BLOCK * cache.dims))
+    cache.blocks[cache.blocks.length - 1]!.set(vec, j * cache.dims)
+    let head = 0
+    let rest = 0
+    for (let i = 0; i < cache.split; i++) head += vec[i]! * vec[i]!
+    for (let i = cache.split; i < cache.dims; i++) rest += vec[i]! * vec[i]!
+    const inv = head + rest > 0 ? 1 / Math.sqrt(head + rest) : 0
+    cache.invNorms.push(inv)
+    cache.restNorms.push(Math.sqrt(rest) * inv)
+    cache.sigs.push(numberSignature(fact))
+    cache.ids.push(id)
+    cache.count++
+    return true
+  }
+
   close(): void {
     if (this.closed) return
+    // Un tri en cours s'arrête entre deux lots (il lit `closed`).
+    this.triage.cancel()
     this.closed = true
+    this.dropTriageVecCache()
     if (this.indexTimer) {
       clearTimeout(this.indexTimer)
       this.indexTimer = null

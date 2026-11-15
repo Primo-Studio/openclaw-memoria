@@ -11,6 +11,7 @@ import {
   Eye,
   GitCompareArrows,
   LayoutDashboard,
+  Lightbulb,
   ListOrdered,
   Repeat,
   ScrollText,
@@ -26,7 +27,7 @@ import {
 
 export type ScreenId =
   | 'dashboard' | 'agents' | 'memory' | 'map' | 'agent-view' | 'themes' | 'patterns' | 'procedures'
-  | 'review' | 'revisions' | 'maintenance' | 'sharing' | 'persons' | 'vault' | 'system' | 'audit' | 'settings' | 'docs'
+  | 'review' | 'triage' | 'revisions' | 'maintenance' | 'sharing' | 'persons' | 'vault' | 'system' | 'audit' | 'settings' | 'docs'
 
 export interface NavItemDef {
   id: ScreenId
@@ -62,6 +63,9 @@ export const NAV_GROUPS: NavGroupDef[] = [
       { id: 'agents', icon: Bot },
       { id: 'memory', icon: Brain },
       { id: 'review', icon: ClipboardCheck },
+      // Juste après la Revue : on y valide aussi, mais rangé par genre (idées,
+      // décisions, leçons…) et pour retrouver ce qu'on cherche, pas seulement trier.
+      { id: 'triage', icon: Lightbulb },
       { id: 'themes', icon: Tags },
       { id: 'map', icon: Orbit },
       // Juste après la carte : la carte montre ce que la mémoire CONTIENT,

@@ -113,6 +113,16 @@ describe('EmbeddingIndexer', () => {
     expect((await indexer.runOnce()).indexed).toBe(1)
   })
 
+  it('un fait CRITICAL actif (paie validée à la main) n’est jamais envoyé au fournisseur de vecteurs', async () => {
+    store.insertFact({ fact: 'Le salaire fictif de Zorba est de 2 100 euros', scope_id: 's1', sensitivity: 'critical' })
+    const normal = store.insertFact({ fact: 'le portail fictif est en ligne', scope_id: 's1' })
+    expect(indexer.pendingCount()).toBe(1)
+    expect(indexer.pendingFacts().map(f => f.id)).toEqual([normal.id])
+    expect((await indexer.runAll()).indexed).toBe(1)
+    const owners = store.db.prepare("SELECT owner_id FROM embeddings WHERE owner_type = 'fact'").all() as { owner_id: string }[]
+    expect(owners.map(o => o.owner_id)).toEqual([normal.id])
+  })
+
   it('removeFor nettoie embeddings + index', async () => {
     const f = store.insertFact({ fact: 'la voiture rouge du garage', scope_id: 's1' })
     await indexer.runOnce()

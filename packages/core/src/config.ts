@@ -68,6 +68,19 @@ export interface MemoriaConfig {
      */
     embeddings?: { provider?: string; model?: string; dimensions?: number; base_url?: string }
   }
+  /**
+   * Tri des souvenirs. `budget_usd` : plafond de dépense par passage (défaut
+   * 5). Racines des transcriptions lues pour la date des conversations et
+   * l'auteur des idées (défauts : ~/.claude/projects, ~/.codex/sessions,
+   * ~/.codex/history.jsonl, <dossier de config.toml>/archive/claude-code-sessions).
+   */
+  triage?: {
+    budget_usd?: number
+    claude_projects_dir?: string
+    codex_sessions_dir?: string
+    codex_history_file?: string
+    archive_dir?: string
+  }
 }
 
 export interface ResolvedConfig {

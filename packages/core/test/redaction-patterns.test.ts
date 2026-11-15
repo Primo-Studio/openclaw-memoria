@@ -158,6 +158,13 @@ describe('formes vues dans de vraies conversations (valeurs fictives)', () => {
     ['curl -u', 'curl -u admin:Fictif123 https://exemple.test', 'Fictif123', 'cli-password'],
     ['Hugging Face', 'clé hf_' + 'AbCdEfGhIjKlMnOpQrStUvWxYz012345 ok', 'hf_AbCdEfGhIjKlMnOpQrStUvWxYz012345', 'huggingface'],
     ['GitLab', 'glpat-' + 'AbCdEfGhIjKlMnOpQrSt fin', 'glpat-AbCdEfGhIjKlMnOpQrSt', 'gitlab'],
+    // Trous trouvés par la contre-vérification du tri (14/11).
+    ['mot de passe dit à l’oral', 'le mot de passe est tournesol42', 'tournesol42', 'mot-de-passe'],
+    ['mot-de-passe avec tirets', 'Le mot-de-passe du NAS fictif est tournesol42', 'tournesol42', 'mot-de-passe'],
+    ['motdepasse collé', 'motdepasse : tournesol42', 'tournesol42', 'mot-de-passe'],
+    ['password= court', 'password=tournesol42', 'tournesol42', 'mot-de-passe'],
+    ['login puis pass', 'login zorba / pass tournesol42', 'tournesol42', 'mot-de-passe'],
+    ['password dit à l’oral', 'the password is tournesol42', 'tournesol42', 'mot-de-passe'],
   ])('%s', (_label, text, value, kind) => expectRedacted(text, value, kind))
 
   it('du code qui NOMME un secret n’est pas masqué', () => {
@@ -168,6 +175,12 @@ describe('formes vues dans de vraies conversations (valeurs fictives)', () => {
       'API_TOKEN=${API_TOKEN_FROM_VAULT}',
       'le mot de passe : identique partout',
       'psql -h localhost -p5432 base',
+      'le mot de passe du NAS est rangé dans le carnet',
+      'le mot de passe est changé chaque trimestre',
+      'le login passe par Google puis par la page d’accueil',
+      'password: process.env.DB_PASS',
+      'password=${PASS}',
+      'mot de passe : process.env.NAS_PASS',
     ]
     for (const s of samples) {
       const r = redactor.redact(s)

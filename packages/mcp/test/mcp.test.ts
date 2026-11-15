@@ -75,6 +75,8 @@ function fakeGateway(): DaemonGateway & { calls: Array<{ method: string; input: 
     pin: async input => { calls.push({ method: 'pin', input }); return { updated: true } },
     correct: async input => { calls.push({ method: 'correct', input }); return { replacement: { id: 'f2' } } },
     expiry: async input => { calls.push({ method: 'expiry', input }); return { updated: true } },
+    ideas: async input => { calls.push({ method: 'ideas', input }); return { items: [], pending_counts: {} } },
+    styles: async input => { calls.push({ method: 'styles', input }); return { person_id: null, items: [] } },
   }
 }
 
@@ -620,7 +622,7 @@ describe('buildServer handlers', () => {
     expect(getPayload.active_context.project_id).toBe('jamboard')
   })
 
-  it('le serveur MCP expose bien les 13 outils', () => {
+  it('le serveur MCP expose bien les 14 outils', () => {
     const { server } = buildServer({
       instanceId: 'i',
       tracker: new ActiveContextTracker(),
@@ -635,6 +637,7 @@ describe('buildServer handlers', () => {
       'memoria_correct',
       'memoria_feedback',
       'memoria_get_context',
+      'memoria_ideas',
       'memoria_identify_interlocutor',
       'memoria_identify_or_create_interlocutor',
       'memoria_pin',

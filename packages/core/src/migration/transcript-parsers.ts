@@ -105,7 +105,7 @@ function asRole(value: unknown): 'user' | 'assistant' | null {
 }
 
 /** Concatène un `content` qui peut être une string ou un tableau de blocs. Filtre le bruit (tool_use/thinking/env). */
-function blocksToText(content: unknown, textTypes: ReadonlySet<string>): string {
+export function blocksToText(content: unknown, textTypes: ReadonlySet<string>): string {
   if (typeof content === 'string') return content.trim()
   if (!Array.isArray(content)) return ''
   const parts: string[] = []
@@ -120,7 +120,7 @@ function blocksToText(content: unknown, textTypes: ReadonlySet<string>): string 
 }
 
 /** Bruit système Codex à ne jamais extraire (contexte injecté, pas de l'utilisateur). */
-function isSystemNoise(text: string): boolean {
+export function isSystemNoise(text: string): boolean {
   const t = text.trimStart()
   return t.startsWith('<environment_context>') || t.startsWith('<user_instructions>') || t.startsWith('<user_info>')
 }
@@ -140,7 +140,7 @@ const CLAUDE_COMMAND_TAGS = /^<(?:command-name|command-message|command-args|loca
  * turnOrigin, isSidechain), puis le début du texte pour les lignes plus
  * anciennes, qui n'ont pas ces champs.
  */
-function claudeUserSource(obj: Record<string, unknown>, text: string): TurnSource | undefined {
+export function claudeUserSource(obj: Record<string, unknown>, text: string): TurnSource | undefined {
   const origin = isRecord(obj['origin']) ? obj['origin']['kind'] : undefined
   const turnOrigin = obj['turnOrigin']
   if (obj['isCompactSummary'] === true || text.startsWith('This session is being continued from a previous conversation')) {
@@ -167,7 +167,7 @@ function claudeUserSource(obj: Record<string, unknown>, text: string): TurnSourc
  * jamais comme un tour `user` : sans ça il était perdu. Les autres entrées de
  * la file (notifications de tâches, messages d'autres sessions) sont écartées.
  */
-function claudeQueuedHumanPrompt(obj: Record<string, unknown>): string | null {
+export function claudeQueuedHumanPrompt(obj: Record<string, unknown>): string | null {
   if (obj['type'] !== 'attachment' || obj['isSidechain'] === true) return null
   const a = obj['attachment']
   if (!isRecord(a) || a['type'] !== 'queued_command' || a['commandMode'] !== 'prompt' || a['isMeta'] === true) return null
