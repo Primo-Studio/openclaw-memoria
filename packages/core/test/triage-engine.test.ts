@@ -8,8 +8,8 @@ import { join } from 'node:path'
 import type { Database } from 'better-sqlite3'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { listVecTables, TriageRefusedError } from '../src/index.js'
-import { isNetworkDown, NETWORK_DOWN_RETRIES, networkDownDelay } from '../src/triage/engine.js'
-import { networkDownError, RecordingLlm, seedPending, setupTriage, triageRow, writeTranscript, type TriageEnv } from './triage-fixtures.js'
+import { describeError, isNetworkDown, isNetworkError, NETWORK_DOWN_RETRIES, networkDownDelay } from '../src/triage/engine.js'
+import { connectTimeoutError, networkDownError, RecordingLlm, socketClosedError, seedPending, setupTriage, triageRow, writeTranscript, type TriageEnv } from './triage-fixtures.js'
 
 let env: TriageEnv
 afterEach(() => env?.close())
@@ -176,8 +176,19 @@ describe('renvois et pannes', () => {
     expect(s.state).toBe('error')
     // Par lot : l'appel, NETWORK_DOWN_RETRIES attentes du réseau, la reprise d'échec passager.
     expect(env.llm.calls).toBe(3 * (NETWORK_DOWN_RETRIES + 2))
-    expect(s.error).toBe('fetch failed')
+    expect(s.error).toBe('fetch failed (cause : ENOTFOUND getaddrinfo ENOTFOUND api.exemple.test)')
     expect(env.db().prepare('SELECT COUNT(*) AS n FROM fact_triage').get()).toEqual({ n: 0 })
+  })
+
+  it('connexion qui n’aboutit pas (ETIMEDOUT, IPv4 et IPv6) ou perdue en route : le tri attend aussi le réseau', async () => {
+    const errors = [connectTimeoutError(), socketClosedError(), connectTimeoutError()]
+    env = setupTriage({ llm: new RecordingLlm('ollama', 'tri-fictif', { fail: call => errors[call - 1] ?? null }) })
+    for (let i = 0; i < 3; i++) seedPending(env, `Le dossier ${100 + i} est rangé chez Brumehost`)
+    const s = await env.m.triage.run()
+    expect(s.state).toBe('done')
+    expect(env.llm.calls).toBe(4)
+    // Seul l'appel perdu en route a pu partir : il compte, les deux autres non.
+    expect(s).toMatchObject({ classified: 3, llm_calls: 2, error: null })
   })
 
   it('annulation pendant une attente du réseau : arrêt sans attendre la fin de la pause', async () => {
@@ -204,6 +215,25 @@ describe('isNetworkDown', () => {
     expect(isNetworkDown(new TypeError('fetch failed'))).toBe(false)
     expect(isNetworkDown(new Error('HTTP 503 fictif'))).toBe(false)
     expect(isNetworkDown(undefined)).toBe(false)
+    expect(isNetworkDown(connectTimeoutError())).toBe(true)
+    expect(isNetworkDown(socketClosedError())).toBe(false)
+  })
+
+  it('isNetworkError : toute panne sans réponse HTTP, jamais une erreur HTTP ni un délai du modèle', () => {
+    expect(isNetworkError(networkDownError())).toBe(true)
+    expect(isNetworkError(connectTimeoutError())).toBe(true)
+    expect(isNetworkError(socketClosedError())).toBe(true)
+    expect(isNetworkError(new TypeError('fetch failed'))).toBe(true)
+    expect(isNetworkError(new Error('openai /chat/completions HTTP 503 (modèle m) : saturé'))).toBe(false)
+    expect(isNetworkError(new Error('HTTP 429 rate limit'))).toBe(false)
+  })
+
+  it('describeError : la cause réseau est dite, une seule fois', () => {
+    expect(describeError(networkDownError())).toBe('fetch failed (cause : ENOTFOUND getaddrinfo ENOTFOUND api.exemple.test)')
+    expect(describeError(connectTimeoutError())).toBe('fetch failed (cause : ETIMEDOUT connect ETIMEDOUT 192.0.2.1:443)')
+    expect(describeError(socketClosedError())).toBe('fetch failed (cause : UND_ERR_SOCKET other side closed)')
+    expect(describeError(new Error('HTTP 503 fictif'))).toBe('HTTP 503 fictif')
+    expect(describeError('texte brut')).toBe('texte brut')
   })
 
   it('pause des essais : doublée, plafonnée à une minute (≈ 9 min au total avec 5 s)', () => {

@@ -31,6 +31,19 @@ export function networkDownError(code = 'ENOTFOUND'): TypeError {
   return new TypeError('fetch failed', { cause })
 }
 
+/** Connexion qui n'aboutit pas : Node essaie IPv4 et IPv6, la cause est une AggregateError (étape `connect`). */
+export function connectTimeoutError(): TypeError {
+  const attempt = (ip: string) => Object.assign(new Error(`connect ETIMEDOUT ${ip}:443`), { code: 'ETIMEDOUT', syscall: 'connect' })
+  const cause = Object.assign(new AggregateError([attempt('192.0.2.1'), attempt('2001:db8::1')]), { code: 'ETIMEDOUT' })
+  return new TypeError('fetch failed', { cause })
+}
+
+/** Connexion perdue après l'envoi : la requête a pu partir. */
+export function socketClosedError(): TypeError {
+  const cause = Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' })
+  return new TypeError('fetch failed', { cause })
+}
+
 export interface LlmBehaviour {
   /** Lève cette erreur à chaque appel (ou aux appels pour lesquels elle rend une erreur). */
   fail?: (call: number) => Error | null

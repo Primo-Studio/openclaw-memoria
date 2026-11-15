@@ -22,7 +22,7 @@ import {
   type UserMessagesDetailReport,
   type UserMessagesPassOptionsExt,
 } from '../src/triage/user-messages.js'
-import { networkDownError, RecordingLlm, setupTriage, type TriageEnv } from './triage-fixtures.js'
+import { networkDownError, RecordingLlm, setupTriage, socketClosedError, type TriageEnv } from './triage-fixtures.js'
 
 let env: TriageEnv
 afterEach(() => env?.close())
@@ -349,6 +349,13 @@ describe('passe sur les messages : écriture, idempotence, reprise', () => {
     const r = await pass()
     expect(r).toMatchObject({ stopped: null, llm_calls: 1, facts_created: 1, errors: [] })
     expect(llm().calls).toBe(5)
+  })
+
+  it('connexion perdue en route : attente aussi, l’appel parti compte', async () => {
+    env = setupTriage({ llm: new MessagesLlm({ fail: call => (call === 1 ? socketClosedError() : null) }) })
+    live('-p/s.jsonl', [user('IDEE une app de troc de vélos', 1)])
+    const r = await pass()
+    expect(r).toMatchObject({ stopped: null, llm_calls: 2, facts_created: 1, errors: [] })
   })
 
   it('échec passager (429) : une reprise, puis le lot passe', async () => {

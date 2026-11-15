@@ -102,7 +102,7 @@ import {
 import { normalizeText } from '../storage/content.js'
 import { sha256Hex } from '../util.js'
 import { AUTHOR_IA_MARGIN, AUTHOR_IA_MIN_SCORE, AUTHOR_OWNER_MARGIN, AUTHOR_OWNER_MIN_SCORE, contentTokens } from './authorship.js'
-import { CIRCUIT_BREAKER_FAILURES, isNetworkDown, isTransient, NETWORK_DOWN_RETRIES, networkDownDelay, pauseUnlessStopped } from './engine.js'
+import { CIRCUIT_BREAKER_FAILURES, describeError, isNetworkDown, isNetworkError, isTransient, NETWORK_DOWN_RETRIES, networkDownDelay, pauseUnlessStopped } from './engine.js'
 import { normalizeGenre } from './prompt.js'
 import { SENSITIVE_PATTERNS, sensitiveMatch } from './sensitive.js'
 import {
@@ -1177,7 +1177,7 @@ class Pass {
         return
       }
       this.consecutiveFailures++
-      r.errors.push(`messages : appel en échec (${(err as Error)?.message ?? String(err)})`)
+      r.errors.push(`messages : appel en échec (${describeError(err)})`)
       if (this.consecutiveFailures >= CIRCUIT_BREAKER_FAILURES) throw new StopPass('circuit')
       return
     }
@@ -1208,8 +1208,10 @@ class Pass {
       } catch (err) {
         // Plafond : l'appel n'est pas parti.
         if (err instanceof TriageBudgetError) throw new StopPass('budget')
-        // Réseau coupé : rien n'est parti ; on attend son retour sans compter d'appel.
-        if (isNetworkDown(err) && outage < NETWORK_DOWN_RETRIES && !this.host.shouldStop()) {
+        // Réseau coupé ou connexion perdue : on attend son retour sans compter d'échec ;
+        // l'appel compte seulement s'il a pu partir (connexion perdue en route).
+        if (isNetworkError(err) && outage < NETWORK_DOWN_RETRIES && !this.host.shouldStop()) {
+          if (!isNetworkDown(err)) this.report.llm_calls++
           await pauseUnlessStopped(networkDownDelay(this.retryDelayMs, outage++), () => this.host.shouldStop() !== null)
           this.checkStop()
           continue

@@ -141,17 +141,63 @@ export function isTransient(err: unknown): boolean {
 
 /** Connexion jamais établie (DNS introuvable, refus, réseau coupé) : la requête n'est pas partie. */
 const NETWORK_DOWN_CODES = /\b(ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ENETUNREACH|EHOSTUNREACH|ENETDOWN|UND_ERR_CONNECT_TIMEOUT)\b/
+/** Connexion perdue en cours d'échange : la requête a pu partir (et être facturée). */
+const CONNECTION_LOST_CODES = /\b(ECONNRESET|EPIPE|ETIMEDOUT|UND_ERR_SOCKET|UND_ERR_CLOSED)\b/
+
+interface ErrorParts {
+  code?: unknown
+  message?: unknown
+  syscall?: unknown
+  cause?: unknown
+  errors?: unknown
+}
+
+/** L'erreur, sa cause, et les erreurs d'une AggregateError (Node essaie IPv4 puis IPv6 à la connexion). */
+function errorChain(err: unknown): ErrorParts[] {
+  const e = err as ErrorParts | undefined
+  if (!e) return []
+  const cause = e.cause as ErrorParts | undefined
+  const inner = Array.isArray(cause?.errors) ? (cause.errors as ErrorParts[]) : []
+  return [e, ...(cause ? [cause] : []), ...inner].filter(Boolean)
+}
+
+function chainText(chain: ErrorParts[]): string {
+  return chain
+    .flatMap(p => [p.code, p.message])
+    .filter(v => typeof v === 'string')
+    .join(' ')
+}
 
 /**
- * Réseau coupé : `fetch failed` porte le code dans `err.cause`. Mesuré le 15/11 :
- * des coupures DNS de quelques secondes arrêtaient le tri au 3e échec d'affilée,
- * réseau revenu ou non. Ces échecs-là attendent le retour du réseau.
+ * Réseau coupé, requête jamais partie : `fetch failed` porte le code dans `err.cause`
+ * (étape `getaddrinfo` ou `connect`). Mesuré le 15/11 : des coupures DNS de quelques
+ * secondes arrêtaient le tri au 3e échec d'affilée, réseau revenu ou non.
  */
 export function isNetworkDown(err: unknown): boolean {
-  const e = err as (Error & { cause?: unknown; code?: unknown }) | undefined
-  const cause = e?.cause as { code?: unknown; message?: unknown } | undefined
-  const text = [e?.code, e?.message, cause?.code, cause?.message].filter(v => typeof v === 'string').join(' ')
-  return NETWORK_DOWN_CODES.test(text)
+  const chain = errorChain(err)
+  return chain.some(p => p.syscall === 'getaddrinfo' || p.syscall === 'connect') || NETWORK_DOWN_CODES.test(chainText(chain))
+}
+
+/**
+ * Panne de réseau sans réponse HTTP (coupure, connexion perdue en route) : on attend
+ * le retour du réseau au lieu de compter un échec. Une erreur HTTP n'en est pas une.
+ */
+export function isNetworkError(err: unknown): boolean {
+  if (isNetworkDown(err)) return true
+  const chain = errorChain(err)
+  return /^fetch failed$/i.test(String((err as ErrorParts | undefined)?.message ?? '')) || CONNECTION_LOST_CODES.test(chainText(chain.slice(1)))
+}
+
+/** Message d'erreur avec sa cause réseau : « fetch failed » seul ne dit pas quoi faire. */
+export function describeError(err: unknown): string {
+  const chain = errorChain(err)
+  const message = typeof chain[0]?.message === 'string' ? chain[0].message : String(err)
+  const detail = chain
+    .slice(1, 3)
+    .flatMap(p => [p.code, p.message])
+    .filter((v, i, all): v is string => typeof v === 'string' && v !== '' && all.indexOf(v) === i)
+    .join(' ')
+  return detail ? `${message} (cause : ${detail})` : message
 }
 
 /** Essais d'un appel quand le réseau est coupé, avant de compter un échec (≈ 9 min avec une pause de 5 s). */
@@ -678,11 +724,10 @@ class DbPass {
       this.failures.consecutive = 0
       if (outage > 0) this.ctx.status.error = null
     } catch (err) {
-      const down = isNetworkDown(err)
-      this.ctx.budget.fail(reservation, { outputBilled: err instanceof LlmTimeoutError, notSent: down })
+      this.ctx.budget.fail(reservation, { outputBilled: err instanceof LlmTimeoutError, notSent: isNetworkDown(err) })
       this.syncCounters()
-      // Réseau coupé : on attend son retour, sans compter d'échec ; au-delà, échec ordinaire.
-      if (down && outage < NETWORK_DOWN_RETRIES && !this.ctx.shouldStop()) {
+      // Réseau coupé ou connexion perdue : on attend son retour, sans compter d'échec ; au-delà, échec ordinaire.
+      if (isNetworkError(err) && outage < NETWORK_DOWN_RETRIES && !this.ctx.shouldStop()) {
         this.ctx.status.error = `réseau coupé, nouvel essai (${outage + 1}/${NETWORK_DOWN_RETRIES})`
         await pauseUnlessStopped(networkDownDelay(this.ctx.retryDelayMs, outage), () => this.ctx.shouldStop() !== null)
         this.checkStop()
@@ -726,7 +771,7 @@ class DbPass {
   /** Échec d'appel : compté ; au 3e d'affilée, le passage s'arrête sans marquer les faits. */
   private countFailure(err: unknown): void {
     this.failures.consecutive++
-    this.ctx.status.error = (err as Error)?.message ?? String(err)
+    this.ctx.status.error = describeError(err)
     if (this.failures.consecutive >= CIRCUIT_BREAKER_FAILURES) throw new StopSignal('circuit')
   }
 
