@@ -17,7 +17,7 @@ import { priceFor } from '../llm/pricing.js'
 import { newId, nowISO } from '../util.js'
 import type { ActiveContext } from '../types.js'
 import { assertPriced, DEFAULT_TRIAGE_BUDGET_USD, estimateTokensFromChars, TriageBudget } from './budget.js'
-import { countPending, CROSS_SOURCE_MAX_COMPARISONS, MAX_OUTPUT_TOKENS_PER_FACT, runTriagePass, TRIAGE_LLM_TIMEOUT_MS, type EngineDb } from './engine.js'
+import { countPending, CROSS_SOURCE_MAX_COMPARISONS, isNetworkDown, MAX_OUTPUT_TOKENS_PER_FACT, runTriagePass, TRIAGE_LLM_TIMEOUT_MS, type EngineDb } from './engine.js'
 import { buildTriageSystem } from './prompt.js'
 import { isSensitive } from './sensitive.js'
 import { addStats, addStatsAsync, applyCorrection, emptyStats, listPage } from './store.js'
@@ -568,7 +568,7 @@ export class TriageService implements TriageApi {
           budget.settleCompletion(r, res.usage, res.text.length)
           return res
         } catch (err) {
-          budget.fail(r, { outputBilled: err instanceof LlmTimeoutError })
+          budget.fail(r, { outputBilled: err instanceof LlmTimeoutError, notSent: isNetworkDown(err) })
           throw err
         }
       },

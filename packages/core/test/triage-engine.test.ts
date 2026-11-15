@@ -8,7 +8,8 @@ import { join } from 'node:path'
 import type { Database } from 'better-sqlite3'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { listVecTables, TriageRefusedError } from '../src/index.js'
-import { RecordingLlm, seedPending, setupTriage, triageRow, writeTranscript, type TriageEnv } from './triage-fixtures.js'
+import { isNetworkDown, NETWORK_DOWN_RETRIES, networkDownDelay } from '../src/triage/engine.js'
+import { networkDownError, RecordingLlm, seedPending, setupTriage, triageRow, writeTranscript, type TriageEnv } from './triage-fixtures.js'
 
 let env: TriageEnv
 afterEach(() => env?.close())
@@ -157,6 +158,58 @@ describe('renvois et pannes', () => {
     expect(s.state).toBe('done')
     expect(env.llm.calls).toBe(2)
     expect(s.classified).toBe(3)
+  })
+
+  it('réseau coupé (DNS) : le tri attend son retour sans compter d’échec ni d’appel, puis classe le lot', async () => {
+    env = setupTriage({ llm: new RecordingLlm('ollama', 'tri-fictif', { fail: call => (call <= 5 ? networkDownError() : null) }) })
+    for (let i = 0; i < 3; i++) seedPending(env, `Le dossier ${100 + i} est rangé chez Brumehost`)
+    const s = await env.m.triage.run()
+    expect(s.state).toBe('done')
+    expect(env.llm.calls).toBe(6)
+    expect(s).toMatchObject({ classified: 3, llm_calls: 1, error: null })
+  })
+
+  it('réseau coupé trop longtemps : chaque lot finit en échec ordinaire, coupe-circuit au 3e', async () => {
+    env = setupTriage({ llm: new RecordingLlm('ollama', 'tri-fictif', { fail: () => networkDownError() }) })
+    for (let i = 0; i < 90; i++) seedPending(env, `Le dossier ${100 + i} est rangé chez Brumehost`)
+    const s = await env.m.triage.run({ concurrency: 1 })
+    expect(s.state).toBe('error')
+    // Par lot : l'appel, NETWORK_DOWN_RETRIES attentes du réseau, la reprise d'échec passager.
+    expect(env.llm.calls).toBe(3 * (NETWORK_DOWN_RETRIES + 2))
+    expect(s.error).toBe('fetch failed')
+    expect(env.db().prepare('SELECT COUNT(*) AS n FROM fact_triage').get()).toEqual({ n: 0 })
+  })
+
+  it('annulation pendant une attente du réseau : arrêt sans attendre la fin de la pause', async () => {
+    env = setupTriage({ llm: new RecordingLlm('ollama', 'tri-fictif', { fail: () => networkDownError() }) })
+    env.m.triage.retryDelayMs = 60_000
+    seedPending(env, 'Le dossier 100 est rangé chez Brumehost')
+    env.llm.behaviour.onCall = () => {
+      setTimeout(() => env.m.triage.cancel(), 20)
+    }
+    const started = Date.now()
+    const s = await env.m.triage.run()
+    expect(s.state).toBe('cancelled')
+    expect(Date.now() - started).toBeLessThan(5000)
+    expect(env.llm.calls).toBe(1)
+  })
+})
+
+describe('isNetworkDown', () => {
+  it('reconnaît une connexion jamais établie, pas une panne du serveur ni une coupure en cours d’échange', () => {
+    expect(isNetworkDown(networkDownError())).toBe(true)
+    expect(isNetworkDown(networkDownError('EAI_AGAIN'))).toBe(true)
+    expect(isNetworkDown(networkDownError('ECONNREFUSED'))).toBe(true)
+    expect(isNetworkDown(networkDownError('ECONNRESET'))).toBe(false)
+    expect(isNetworkDown(new TypeError('fetch failed'))).toBe(false)
+    expect(isNetworkDown(new Error('HTTP 503 fictif'))).toBe(false)
+    expect(isNetworkDown(undefined)).toBe(false)
+  })
+
+  it('pause des essais : doublée, plafonnée à une minute (≈ 9 min au total avec 5 s)', () => {
+    const delays = Array.from({ length: NETWORK_DOWN_RETRIES }, (_, i) => networkDownDelay(5000, i))
+    expect(delays.slice(0, 5)).toEqual([5000, 10_000, 20_000, 40_000, 60_000])
+    expect(delays.reduce((a, b) => a + b, 0)).toBe(555_000)
   })
 })
 

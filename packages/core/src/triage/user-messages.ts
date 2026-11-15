@@ -102,7 +102,7 @@ import {
 import { normalizeText } from '../storage/content.js'
 import { sha256Hex } from '../util.js'
 import { AUTHOR_IA_MARGIN, AUTHOR_IA_MIN_SCORE, AUTHOR_OWNER_MARGIN, AUTHOR_OWNER_MIN_SCORE, contentTokens } from './authorship.js'
-import { CIRCUIT_BREAKER_FAILURES, isTransient } from './engine.js'
+import { CIRCUIT_BREAKER_FAILURES, isNetworkDown, isTransient, NETWORK_DOWN_RETRIES, networkDownDelay, pauseUnlessStopped } from './engine.js'
 import { normalizeGenre } from './prompt.js'
 import { SENSITIVE_PATTERNS, sensitiveMatch } from './sensitive.js'
 import {
@@ -1200,15 +1200,23 @@ class Pass {
 
   /** Appel LLM : plafond vérifié par l'hôte avant l'envoi ; une reprise sur un échec passager. */
   private async complete(prompt: string, maxTokens: number): Promise<string> {
-    for (let retry = 0; ; retry++) {
+    let retried = false
+    for (let outage = 0; ; ) {
       let text: string
       try {
         text = (await this.host.complete({ system: this.system, prompt, json: true, temperature: 0, maxTokens })).text
       } catch (err) {
         // Plafond : l'appel n'est pas parti.
         if (err instanceof TriageBudgetError) throw new StopPass('budget')
+        // Réseau coupé : rien n'est parti ; on attend son retour sans compter d'appel.
+        if (isNetworkDown(err) && outage < NETWORK_DOWN_RETRIES && !this.host.shouldStop()) {
+          await pauseUnlessStopped(networkDownDelay(this.retryDelayMs, outage++), () => this.host.shouldStop() !== null)
+          this.checkStop()
+          continue
+        }
         this.report.llm_calls++
-        if (retry === 0 && isTransient(err) && !this.host.shouldStop()) {
+        if (!retried && isTransient(err) && !this.host.shouldStop()) {
+          retried = true
           await new Promise(resolve => setTimeout(resolve, this.retryDelayMs))
           continue
         }

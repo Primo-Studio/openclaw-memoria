@@ -139,6 +139,40 @@ export function isTransient(err: unknown): boolean {
   return /\b(429|500|502|503|504)\b|rate.?limit|overloaded|ECONNRESET|ETIMEDOUT|fetch failed/i.test(message)
 }
 
+/** Connexion jamais établie (DNS introuvable, refus, réseau coupé) : la requête n'est pas partie. */
+const NETWORK_DOWN_CODES = /\b(ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ENETUNREACH|EHOSTUNREACH|ENETDOWN|UND_ERR_CONNECT_TIMEOUT)\b/
+
+/**
+ * Réseau coupé : `fetch failed` porte le code dans `err.cause`. Mesuré le 15/11 :
+ * des coupures DNS de quelques secondes arrêtaient le tri au 3e échec d'affilée,
+ * réseau revenu ou non. Ces échecs-là attendent le retour du réseau.
+ */
+export function isNetworkDown(err: unknown): boolean {
+  const e = err as (Error & { cause?: unknown; code?: unknown }) | undefined
+  const cause = e?.cause as { code?: unknown; message?: unknown } | undefined
+  const text = [e?.code, e?.message, cause?.code, cause?.message].filter(v => typeof v === 'string').join(' ')
+  return NETWORK_DOWN_CODES.test(text)
+}
+
+/** Essais d'un appel quand le réseau est coupé, avant de compter un échec (≈ 9 min avec une pause de 5 s). */
+export const NETWORK_DOWN_RETRIES = 12
+const NETWORK_DOWN_MAX_DELAY_MS = 60_000
+
+/** Pause doublée à chaque essai, plafonnée à une minute. */
+export function networkDownDelay(baseMs: number, attempt: number): number {
+  return Math.min(NETWORK_DOWN_MAX_DELAY_MS, baseMs * 2 ** attempt)
+}
+
+/** Pause en tranches d'une seconde : une annulation n'attend pas la fin d'une longue pause. */
+export async function pauseUnlessStopped(ms: number, stopped: () => boolean): Promise<void> {
+  const end = Date.now() + ms
+  while (!stopped()) {
+    const left = end - Date.now()
+    if (left <= 0) return
+    await new Promise(resolve => setTimeout(resolve, Math.min(1000, left)))
+  }
+}
+
 class StopSignal extends Error {
   constructor(readonly reason: TriageStopReason) {
     super(reason)
@@ -617,7 +651,7 @@ class DbPass {
   }
 
   /** Un appel : rend les entrées validées par id. Manquants et invalides : un renvoi, puis échec. */
-  private async classify(chunk: WorkFact[], attempt: number, retried = false): Promise<Map<string, ParsedTriageItem>> {
+  private async classify(chunk: WorkFact[], attempt: number, retried = false, outage = 0): Promise<Map<string, ParsedTriageItem>> {
     const llm = this.ctx.llm
     if (!llm) throw new StopSignal('circuit')
     const prompt = renderTriageBatch(chunk.map(w => ({ origine: w.prov.origine, cat: w.category, texte: w.safeText })))
@@ -642,9 +676,18 @@ class DbPass {
       this.ctx.budget.settleCompletion(reservation, res.usage, res.text.length)
       text = res.text
       this.failures.consecutive = 0
+      if (outage > 0) this.ctx.status.error = null
     } catch (err) {
-      this.ctx.budget.fail(reservation, { outputBilled: err instanceof LlmTimeoutError })
+      const down = isNetworkDown(err)
+      this.ctx.budget.fail(reservation, { outputBilled: err instanceof LlmTimeoutError, notSent: down })
       this.syncCounters()
+      // Réseau coupé : on attend son retour, sans compter d'échec ; au-delà, échec ordinaire.
+      if (down && outage < NETWORK_DOWN_RETRIES && !this.ctx.shouldStop()) {
+        this.ctx.status.error = `réseau coupé, nouvel essai (${outage + 1}/${NETWORK_DOWN_RETRIES})`
+        await pauseUnlessStopped(networkDownDelay(this.ctx.retryDelayMs, outage), () => this.ctx.shouldStop() !== null)
+        this.checkStop()
+        return this.classify(chunk, attempt, retried, outage + 1)
+      }
       if (err instanceof LlmTruncatedError && chunk.length > 1) {
         // Sortie coupée : le lot est coupé en deux, chaque moitié repart.
         const half = Math.ceil(chunk.length / 2)
@@ -657,7 +700,7 @@ class DbPass {
       // une pause, puis l'échec compte pour le coupe-circuit.
       if (!retried && isTransient(err) && !this.ctx.shouldStop()) {
         await new Promise(resolve => setTimeout(resolve, this.ctx.retryDelayMs))
-        return this.classify(chunk, attempt, true)
+        return this.classify(chunk, attempt, true, outage)
       }
       this.countFailure(err)
       return new Map()

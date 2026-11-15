@@ -182,9 +182,11 @@ export class TriageBudget {
    * Appel en échec : l'entrée estimée (corrigée) est comptée (prudence : le fournisseur a pu la facturer).
    * `outputBilled` (délai dépassé) : le modèle générait encore quand l'appel a été coupé, et le
    * fournisseur facture ce qu'il a produit sans le rendre ; on compte alors le pire cas réservé.
+   * `notSent` (réseau coupé, connexion jamais établie) : rien n'est parti, rien n'est compté.
    */
-  fail(r: BudgetReservation, opts: { outputBilled?: boolean } = {}): void {
+  fail(r: BudgetReservation, opts: { outputBilled?: boolean; notSent?: boolean } = {}): void {
     this.inFlight.delete(r.id)
+    if (opts.notSent) return
     if (r.kind === 'llm') this.counters.llm_calls++
     else this.counters.embed_calls++
     if (opts.outputBilled && r.kind === 'llm') return this.add(r.worstUsd)

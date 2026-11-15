@@ -38,6 +38,15 @@ describe('TriageBudget', () => {
     expect(b.counters.embed_tokens).toBe(120)
   })
 
+  it('réseau coupé (rien n’est parti) : ni dépense ni appel compté, la réservation est rendue', () => {
+    const b = new TriageBudget({ budgetUsd: 0.001, llmPrice: MINI })
+    const r = b.reserveCompletion(4000, 1000)
+    b.fail(r, { notSent: true })
+    expect(b.spentUsd).toBe(0)
+    expect(b.counters.llm_calls).toBe(0)
+    expect(() => b.reserveCompletion(4000, 1000)).not.toThrow()
+  })
+
   it('prix inconnu chez un fournisseur cloud : refus ; local : gratuit', () => {
     expect(() => assertPriced('openai', 'modele-inconnu-xyz', 'le LLM')).toThrow(/prix inconnu/)
     expect(assertPriced('ollama', 'n-importe', 'le LLM')).toEqual({ input: 0, output: 0 })

@@ -25,6 +25,12 @@ export function genreOf(text: string): string {
   return 'fait'
 }
 
+/** Erreur de `fetch` quand le DNS ne trouve pas l'hôte (forme réelle de Node : code dans `cause`). */
+export function networkDownError(code = 'ENOTFOUND'): TypeError {
+  const cause = Object.assign(new Error(`getaddrinfo ${code} api.exemple.test`), { code })
+  return new TypeError('fetch failed', { cause })
+}
+
 export interface LlmBehaviour {
   /** Lève cette erreur à chaque appel (ou aux appels pour lesquels elle rend une erreur). */
   fail?: (call: number) => Error | null
