@@ -5,7 +5,7 @@
 import type { Database } from 'better-sqlite3'
 import { openDatabase } from './sqlite.js'
 import { runMigrations } from './migrations.js'
-import { contentMigrations } from './content-schema.js'
+import { contentMigrations, RECALL_FTS_STATE_KEY } from './content-schema.js'
 import { cognitionMigrations } from './cognition-schema.js'
 import { topicMigrations } from '../cognition/topics.js'
 import { patternMigrations } from '../cognition/patterns.js'
@@ -92,6 +92,15 @@ export interface FtsSearchOptions {
   scopeIds?: string[]
 }
 
+export interface ContentStoreOptions {
+  /**
+   * Remplissage de l'index de rappel : faits par tranche, budget à l'ouverture
+   * (0 = une seule tranche). Défauts de production ; les tests les réduisent
+   * pour observer un remplissage inachevé.
+   */
+  recallIndex?: { chunk?: number; openBudgetMs?: number }
+}
+
 export interface FtsHit {
   row: FactRow
   /** Pertinence FTS positive (plus haut = meilleur). */
@@ -105,6 +114,17 @@ export interface FtsHit {
 }
 
 const SENSITIVITY_ORDER: Record<Sensitivity, number> = { normal: 0, sensitive: 1, critical: 2 }
+
+/**
+ * Remplissage de `facts_recall_fts` (migration 100) : faits par tranche, et
+ * budget de temps par appel. Les 1 288 actifs de la plus grosse base réelle se
+ * remplissent en 6 à 34 ms (cache chaud / copie fraîche) ; le découpage ne sert
+ * qu'aux bases à beaucoup d'actifs, pour que le boot ne fige pas la boucle
+ * (règle n°27). Le rappel, lui, n'écrit jamais : il lit l'indicateur.
+ */
+const RECALL_FTS_CHUNK = 500
+/** Budget à l'ouverture de la base (boot), et de chaque reprise de fond du moteur. */
+export const RECALL_FTS_OPEN_BUDGET_MS = 40
 
 /**
  * Un token est-il un MOT de contenu (utile en thème/recall) ? Rejette les
@@ -156,8 +176,12 @@ export class ContentStore {
   readonly path: string
   readonly journalMode: string
   readonly onNetworkVolume: boolean
+  /** `facts_recall_fts` complet : le rappel peut s'y fier (jamais remis à false). */
+  private recallIndexReady = false
+  private readonly recallIndexChunk: number
 
-  constructor(path: string) {
+  constructor(path: string, opts: ContentStoreOptions = {}) {
+    this.recallIndexChunk = Math.max(1, opts.recallIndex?.chunk ?? RECALL_FTS_CHUNK)
     const opened = openDatabase(path)
     this.db = opened.db
     this.path = path
@@ -177,6 +201,75 @@ export class ContentStore {
       ...revisionMigrations,
       ...triageMigrations,
     ])
+    // Première tranche du remplissage de l'index de rappel, bornée en temps :
+    // les bases réelles (≤ 2 000 actifs) sont prêtes dès l'ouverture. Un échec
+    // ne bloque pas l'ouverture : le rappel garde alors l'ancien chemin.
+    try {
+      this.advanceRecallIndex(opts.recallIndex?.openBudgetMs ?? RECALL_FTS_OPEN_BUDGET_MS)
+    } catch (err) {
+      console.warn('[memoria] index de rappel : remplissage différé :', (err as Error).message)
+    }
+  }
+
+  /** L'index des faits rappelables est-il complet ? (lecture de l'état en cache) */
+  isRecallIndexReady(): boolean {
+    return this.recallIndexReady
+  }
+
+  /**
+   * Fait avancer le remplissage de `facts_recall_fts` par tranches de
+   * RECALL_FTS_CHUNK faits actifs (ordre des rowid, curseur dans `meta`),
+   * jusqu'à la fin ou jusqu'à épuisement du budget. Retourne true quand
+   * l'index est complet. Chaque tranche est une transaction : le curseur et
+   * les lignes avancent ensemble, et une autre connexion (CLI) peut reprendre.
+   *
+   * Pourquoi c'est juste pendant le remplissage : les déclencheurs (migration
+   * 100) maintiennent TOUTE ligne qui devient ou reste rappelable, qu'elle soit
+   * avant ou après le curseur, et ne suppriment que ce qui est indexé. Une
+   * tranche saute donc les faits déjà indexés par un déclencheur. Quand la
+   * dernière tranche ne trouve plus d'actif après le curseur, tout actif a été
+   * indexé par une tranche ou par un déclencheur : l'état passe à 'ready'.
+   */
+  advanceRecallIndex(budgetMs: number): boolean {
+    if (this.recallIndexReady) return true
+    // Dans une transaction englobante, un retour arrière effacerait la tranche
+    // (et l'état 'ready') alors que l'indicateur en mémoire resterait levé : le
+    // rappel se fierait à un index incomplet jusqu'au redémarrage. On attend.
+    if (this.db.inTransaction) return false
+    const getState = this.db.prepare('SELECT value FROM meta WHERE key = ?')
+    const setState = this.db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)')
+    const nextIds = this.db.prepare(
+      `SELECT rowid AS r FROM facts WHERE lifecycle_state = 'active' AND superseded = 0 AND rowid > ? ORDER BY rowid LIMIT ?`,
+    )
+    const fill = this.db.prepare(
+      `INSERT INTO facts_recall_fts(rowid, fact, category, tags)
+       SELECT rowid, fact, category, tags FROM facts
+       WHERE lifecycle_state = 'active' AND superseded = 0 AND rowid > ? AND rowid <= ?
+         AND NOT EXISTS (SELECT 1 FROM facts_recall_fts_docsize d WHERE d.id = facts.rowid)`,
+    )
+    const step = this.db.transaction((): boolean => {
+      const state = (getState.get(RECALL_FTS_STATE_KEY) as { value: string } | undefined)?.value
+      if (state === 'ready') return true
+      const parsed = Number(state ?? 0)
+      const cursor = Number.isFinite(parsed) ? parsed : 0
+      const ids = nextIds.all(cursor, this.recallIndexChunk) as Array<{ r: number }>
+      if (ids.length === 0) {
+        setState.run(RECALL_FTS_STATE_KEY, 'ready')
+        return true
+      }
+      const last = ids[ids.length - 1]!.r
+      fill.run(cursor, last)
+      setState.run(RECALL_FTS_STATE_KEY, String(last))
+      return false
+    })
+    const deadline = performance.now() + budgetMs
+    do {
+      if (step()) {
+        this.recallIndexReady = true
+        return true
+      }
+    } while (performance.now() < deadline)
+    return false
   }
 
   insertFact(input: InsertFactInput): Fact {
@@ -340,6 +433,16 @@ export class ContentStore {
   /**
    * Recherche FTS avec PRÉ-FILTRE permissions dans le SQL (filtre DUR, spec §6.1) :
    * lifecycle / superseded / sensibilité / scopes autorisés.
+   *
+   * Sans `includeDormant` (le rappel des agents), le MATCH porte sur
+   * `facts_recall_fts`, qui ne contient QUE les faits actifs et non supersédés :
+   * les faits en attente ne sont plus parcourus puis jetés (règle n°27). Le
+   * WHERE garde toutes ses conditions : l'ensemble rendu est le même, filtré
+   * avant LIMIT comme avant. Seul bm25 change d'assiette (fréquences calculées
+   * sur les faits rappelables), ce qui peut réordonner des faits voisins.
+   * Tant que l'index n'est pas complet, l'ancien chemin (`facts_fts`) sert.
+   * Aucune écriture ici (pas de tranche de remplissage) : un rappel ne doit
+   * jamais attendre le verrou d'écriture d'un autre processus.
    */
   searchFacts(query: string, opts: FtsSearchOptions = {}): FtsHit[] {
     const match = toFtsQuery(query)
@@ -347,6 +450,7 @@ export class ContentStore {
     const limit = opts.limit ?? 50
     const maxSens = SENSITIVITY_ORDER[opts.maxSensitivity ?? 'normal']
     const lifecycleStates = opts.includeDormant ? ['active', 'dormant'] : ['active']
+    const fts = !opts.includeDormant && this.recallIndexReady ? 'facts_recall_fts' : 'facts_fts'
 
     const conditions: string[] = [
       `f.superseded = 0`,
@@ -361,10 +465,10 @@ export class ContentStore {
     }
 
     const sql = `
-      SELECT f.*, -bm25(facts_fts) AS fts_relevance
-      FROM facts_fts
-      JOIN facts f ON f.rowid = facts_fts.rowid
-      WHERE facts_fts MATCH ?
+      SELECT f.*, -bm25(${fts}) AS fts_relevance
+      FROM ${fts}
+      JOIN facts f ON f.rowid = ${fts}.rowid
+      WHERE ${fts} MATCH ?
         AND ${conditions.join(' AND ')}
       ORDER BY fts_relevance DESC
       LIMIT ?

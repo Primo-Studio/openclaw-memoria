@@ -395,6 +395,12 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         sendJson(res, 200, { items: memoria.listReview() })
         return
       }
+      case 'GET /v1/admin/review/count': {
+        // Badge « Revue » (relu toutes les 20 s) : le compte seul, même
+        // périmètre que la liste, sans plafond ni thèmes (règle n°27).
+        sendJson(res, 200, { count: memoria.countReview() })
+        return
+      }
       case 'POST /v1/admin/adopt_legacy': {
         const body = await readJson(req)
         const instanceId = String(body['instance'] ?? '')

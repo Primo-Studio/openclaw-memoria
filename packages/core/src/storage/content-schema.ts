@@ -18,6 +18,9 @@
 import type { Migration } from './migrations.js'
 import { factNormHash } from '../util.js'
 
+/** Clé `meta` de l'état du remplissage de `facts_recall_fts` (curseur rowid, ou 'ready'). */
+export const RECALL_FTS_STATE_KEY = 'facts_recall_fts_backfill'
+
 export const contentMigrations: Migration[] = [
   {
     version: 1,
@@ -392,4 +395,74 @@ export const contentMigrations: Migration[] = [
       db.exec('CREATE INDEX IF NOT EXISTS idx_facts_superseded_by ON facts(superseded_by) WHERE superseded_by IS NOT NULL')
     },
   },
+  // Les versions 10 à 99 sont réservées aux couches (cognition 10-19, thèmes
+  // 20-29, … révision 90-99) : la suite du tronc reprend à 100.
+  {
+    version: 100,
+    name: 'content-facts-recall-fts',
+    up(db) {
+      // INDEX PLEIN TEXTE DES SEULS FAITS RAPPELABLES (règle n°27, 15/11).
+      // `facts_fts` indexe tout, y compris les faits en attente de tri : sur la
+      // base de Claude Code, 72 538 faits en attente pour 1 288 rappelables. Un
+      // rappel faisait un MATCH en OR sur toute la base (70 860 faits touchés
+      // pour les 10 mots les plus fréquents), calculait bm25 et lisait la ligne
+      // `facts` de chacun, puis jetait les 98 % en attente : 378 à 441 ms de
+      // boucle figée à chaque memoria_recall.
+      //
+      // Ici, l'état fait partie de l'index : MATCH ne voit QUE les faits actifs
+      // et non supersédés, exactement l'ensemble que `searchFacts` gardait. La
+      // sensibilité et les scopes restent filtrés dans le WHERE, sur la ligne
+      // courante de `facts` : aucun déclencheur n'a à suivre leurs changements.
+      //
+      // ⚠ Jamais de 'rebuild' sur cette table : il indexerait TOUTE la table
+      // `facts` (contenu externe), en attente compris. Pas d''integrity-check'
+      // non plus : il compare à toute la table `facts` et échoue par construction.
+      //
+      // Déclencheurs gardés par `facts_recall_fts_docsize` (une ligne par fait
+      // indexé) : un 'delete' sur un fait absent de l'index retrancherait des
+      // jetons jamais comptés et fausserait l'index sans erreur. La garde rend
+      // aussi les déclencheurs justes pendant le remplissage (ContentStore),
+      // qui se fait par tranches pour ne pas figer le boot.
+      db.exec(`
+        CREATE VIRTUAL TABLE IF NOT EXISTS facts_recall_fts USING fts5(
+          fact, category, tags,
+          content='facts', content_rowid='rowid',
+          tokenize='unicode61 remove_diacritics 2'
+        );
+        CREATE TRIGGER IF NOT EXISTS facts_recall_ai AFTER INSERT ON facts
+        WHEN new.lifecycle_state = 'active' AND new.superseded = 0
+        BEGIN
+          INSERT INTO facts_recall_fts(rowid, fact, category, tags)
+            SELECT new.rowid, new.fact, new.category, new.tags
+            WHERE NOT EXISTS (SELECT 1 FROM facts_recall_fts_docsize WHERE id = new.rowid);
+        END;
+        CREATE TRIGGER IF NOT EXISTS facts_recall_ad AFTER DELETE ON facts
+        BEGIN
+          INSERT INTO facts_recall_fts(facts_recall_fts, rowid, fact, category, tags)
+            SELECT 'delete', old.rowid, old.fact, old.category, old.tags
+            WHERE EXISTS (SELECT 1 FROM facts_recall_fts_docsize WHERE id = old.rowid);
+        END;
+        CREATE TRIGGER IF NOT EXISTS facts_recall_au
+        AFTER UPDATE OF fact, category, tags, lifecycle_state, superseded ON facts
+        BEGIN
+          INSERT INTO facts_recall_fts(facts_recall_fts, rowid, fact, category, tags)
+            SELECT 'delete', old.rowid, old.fact, old.category, old.tags
+            WHERE EXISTS (SELECT 1 FROM facts_recall_fts_docsize WHERE id = old.rowid)
+              AND (new.lifecycle_state IS NOT 'active' OR new.superseded IS NOT 0
+                   OR new.fact IS NOT old.fact OR new.category IS NOT old.category OR new.tags IS NOT old.tags);
+          INSERT INTO facts_recall_fts(rowid, fact, category, tags)
+            SELECT new.rowid, new.fact, new.category, new.tags
+            WHERE new.lifecycle_state = 'active' AND new.superseded = 0
+              AND NOT EXISTS (SELECT 1 FROM facts_recall_fts_docsize WHERE id = new.rowid);
+        END;
+      `)
+      // Curseur du remplissage (dernier rowid traité) ; 'ready' une fois fini.
+      // Le remplissage lui-même n'est PAS ici : une base à beaucoup d'actifs
+      // figerait le boot. ContentStore.advanceRecallIndex le fait par tranches.
+      db.prepare(`INSERT OR IGNORE INTO meta (key, value) VALUES ('${RECALL_FTS_STATE_KEY}', '0')`).run()
+    },
+  },
+  // Pas d'index partiel sur memory_import_items pour le badge « Revue » : sa
+  // création figeait le premier boot 220 à 430 ms sur la plus grosse base, pour
+  // 10 à 30 ms gagnés par compte (relecture du 15/11). Le COUNT seul suffit.
 ]
