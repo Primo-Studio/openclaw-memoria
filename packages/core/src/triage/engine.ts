@@ -64,8 +64,14 @@ import {
 export const MAX_LLM_FAILURES = 3
 /** Échecs d'appel d'affilée qui arrêtent le passage (API en panne, quota, réseau). */
 export const CIRCUIT_BREAKER_FAILURES = 3
-/** Faits relus par requête lors du repérage des faits à trier. */
-const SCAN_PAGE = 5000
+/**
+ * Largeur (en rowid) d'une fenêtre du repérage des faits à trier, et de
+ * l'estimation. Fenêtres bornées, sans LIMIT : avec « LIMIT 5000 », la première
+ * requête parcourait d'un seul tenant tous les faits déjà triés avant d'en
+ * réunir 5 000 à trier (~400 ms de boucle figée sur la vraie base, 15/11).
+ * Une fenêtre lit au plus ce nombre de faits (~5 ms mesurées), puis la main est rendue.
+ */
+export const SCAN_WINDOW = 2000
 /**
  * Lignes qu'un reclassement (`reclassify`, version de prompt changée) peut
  * réécrire (alias t = fact_triage, f = facts) : ni corrigée à la main, ni
@@ -328,32 +334,33 @@ class DbPass {
     await this.crossSource()
   }
 
-  /** Faits à trier d'une phase : (id, source), par pages de rowid. */
+  /** Faits à trier d'une phase : (id, source), dans l'ordre des rowid, par fenêtres de rowid. */
   private async scan(phase: 'active' | 'dormant'): Promise<Array<{ id: string; source_id: string | null }>> {
     const out: Array<{ id: string; source_id: string | null }> = []
     const stmt = this.db.prepare(
       `SELECT f.rowid AS rid, f.id AS id,
               (SELECT i.source_id FROM memory_import_items i WHERE i.target_memory_id = f.id LIMIT 1) AS source_id
        FROM facts f LEFT JOIN fact_triage t ON t.fact_id = f.id
-       WHERE f.rowid > ? AND f.superseded = 0 AND f.deleted_at IS NULL AND f.lifecycle_state = ?
+       WHERE f.rowid > ? AND f.rowid <= ? AND f.superseded = 0 AND f.deleted_at IS NULL AND f.lifecycle_state = ?
          AND (t.fact_id IS NULL
            OR (t.corrected_at IS NULL AND t.verdict IS NULL AND t.sensible = 0 AND t.genre IS NULL
                AND t.llm_failures BETWEEN 1 AND ${MAX_LLM_FAILURES - 1})
            OR (? = 1 AND ${RECLASSIFY_ROW}
                AND (t.prompt_version IS NULL OR t.prompt_version != ?)))
-       ORDER BY f.rowid LIMIT ?`,
+       ORDER BY f.rowid`,
     )
-    let last = 0
-    for (;;) {
-      const rows = stmt.all(last, phase, this.ctx.reclassify ? 1 : 0, TRIAGE_PROMPT_VERSION, SCAN_PAGE) as Array<{
+    // Fin relue à chaque fenêtre : un fait ajouté pendant le repérage est vu, comme avant.
+    // Une fenêtre vide (faits tous déjà triés) n'arrête jamais le repérage.
+    for (let last = 0; last < maxFactRowid(this.db); last += SCAN_WINDOW) {
+      const rows = stmt.all(last, last + SCAN_WINDOW, phase, this.ctx.reclassify ? 1 : 0, TRIAGE_PROMPT_VERSION) as Array<{
         rid: number
         id: string
         source_id: string | null
       }>
-      if (rows.length === 0) break
       for (const r of rows) out.push({ id: r.id, source_id: r.source_id })
-      last = rows[rows.length - 1]!.rid
       await yieldToEventLoop()
+      // Pause, annulation ou fermeture pendant le repérage : arrêt propre, pas une requête sur une base fermée.
+      this.checkStop()
     }
     return out
   }
@@ -916,6 +923,10 @@ class DbPass {
     const fromTriage = this.db.prepare('SELECT vector, dimensions FROM fact_triage_vectors WHERE fact_id = ? AND model = ?')
     const shouldStop = (): boolean => this.ctx.shouldStop() !== null
     for (const genre of CROSS_SOURCE_GENRES) {
+      // Main rendue entre deux genres : un genre sans nouveau représentant passe
+      // au suivant sans autre pause, et les six relectures (15 à 30 ms chacune sur
+      // la vraie base) tenaient la boucle ~100 ms d'un bloc en fin de passage.
+      await yieldToEventLoop()
       this.checkStop()
       const reps = this.db
         .prepare(
@@ -1056,20 +1067,19 @@ export async function countPending(
               ${opts.embeddingsModel ? `(EXISTS (SELECT 1 FROM embeddings e WHERE e.owner_type = 'fact' AND e.owner_id = f.id AND e.model = @model)
                 OR EXISTS (SELECT 1 FROM fact_triage_vectors v WHERE v.fact_id = f.id AND v.model = @model))` : '1'} AS has_vector
        FROM facts f LEFT JOIN fact_triage t ON t.fact_id = f.id
-       WHERE f.rowid > @last AND f.superseded = 0 AND f.deleted_at IS NULL AND f.lifecycle_state IN ('active','dormant')
+       WHERE f.rowid > @last AND f.rowid <= @hi AND f.superseded = 0 AND f.deleted_at IS NULL AND f.lifecycle_state IN ('active','dormant')
          AND (t.fact_id IS NULL
            OR (t.corrected_at IS NULL AND t.verdict IS NULL AND t.sensible = 0 AND t.genre IS NULL
                AND t.llm_failures BETWEEN 1 AND ${MAX_LLM_FAILURES - 1})
            OR (@reclassify = 1 AND ${RECLASSIFY_ROW}
                AND (t.prompt_version IS NULL OR t.prompt_version != @version)))
-       ORDER BY f.rowid LIMIT ${SCAN_PAGE}`,
+       ORDER BY f.rowid`,
     )
-    let last = 0
-    for (;;) {
-      const params: Record<string, unknown> = { last, reclassify: opts.reclassify ? 1 : 0, version: TRIAGE_PROMPT_VERSION }
+    // Mêmes fenêtres de rowid que le repérage du passage (voir SCAN_WINDOW).
+    for (let last = 0; last < maxFactRowid(store.db); last += SCAN_WINDOW) {
+      const params: Record<string, unknown> = { last, hi: last + SCAN_WINDOW, reclassify: opts.reclassify ? 1 : 0, version: TRIAGE_PROMPT_VERSION }
       if (opts.embeddingsModel) params.model = opts.embeddingsModel
       const rows = stmt.all(params) as Array<{ rid: number; fact: string; lifecycle_state: string; has_vector: number }>
-      if (rows.length === 0) break
       // Le filtre sensible est synchrone : une page de 5 000 faits figeait la boucle ~350 ms (mesuré le 15/11).
       const slice = slicer()
       for (const r of rows) {
@@ -1083,11 +1093,15 @@ export async function countPending(
         out.chars += r.fact.length
         if (opts.embeddingsModel && !r.has_vector) out.facts_to_embed++
       }
-      last = rows[rows.length - 1]!.rid
       await yieldToEventLoop()
     }
   }
   return out
+}
+
+/** Plus grand rowid de `facts` (0 si vide) : fin du repérage par fenêtres, relue à chaque fenêtre. */
+function maxFactRowid(db: Database): number {
+  return (db.prepare('SELECT MAX(rowid) AS m FROM facts').get() as { m: number | null }).m ?? 0
 }
 
 /** Genre des membres et redites : réexporté pour les tests. */

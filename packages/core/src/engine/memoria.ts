@@ -3082,7 +3082,11 @@ export class Memoria {
     const provider = await this.ensureEmbeddings()
     if (!provider) return { indexed: 0 }
     let indexed = 0
-    for (const path of this.contentDbPathsFor(instanceId)) {
+    const paths = this.contentDbPathsFor(instanceId)
+    for (const [i, path] of paths.entries()) {
+      // Main rendue entre deux bases : au démarrage, les 8 bases se vérifiaient d'un bloc.
+      if (i > 0) await new Promise(resolve => setImmediate(resolve))
+      if (this.closed) break
       const store = this.openContent(path)
       let indexer = this.indexers.get(store)
       if (!indexer) {
