@@ -45,6 +45,8 @@ export interface LlmBehaviour {
 /** Faux LLM qui ENREGISTRE chaque prompt (système et utilisateur) et répond selon le texte. */
 export class RecordingLlm implements LlmProvider {
   readonly prompts: string[] = []
+  /** Délai demandé par chaque appel (undefined : celui du fournisseur). */
+  readonly timeouts: Array<number | undefined> = []
   calls = 0
   constructor(
     readonly name = 'ollama',
@@ -60,6 +62,7 @@ export class RecordingLlm implements LlmProvider {
   async completeDetailed(opts: CompleteOptions): Promise<CompletionResult> {
     this.calls++
     this.prompts.push(`${opts.system ?? ''}\n${opts.prompt}`)
+    this.timeouts.push(opts.timeoutMs)
     await this.behaviour.onCall?.(this.calls)
     const failure = this.behaviour.fail?.(this.calls)
     if (failure) throw failure

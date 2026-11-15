@@ -12,12 +12,12 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { monitorEventLoopDelay } from 'node:perf_hooks'
-import { completeDetailed, embedDetailed, type EmbeddingProvider, type LlmProvider } from '../llm/provider.js'
+import { completeDetailed, embedDetailed, LlmTimeoutError, type EmbeddingProvider, type LlmProvider } from '../llm/provider.js'
 import { priceFor } from '../llm/pricing.js'
 import { newId, nowISO } from '../util.js'
 import type { ActiveContext } from '../types.js'
 import { assertPriced, DEFAULT_TRIAGE_BUDGET_USD, estimateTokensFromChars, TriageBudget } from './budget.js'
-import { countPending, CROSS_SOURCE_MAX_COMPARISONS, MAX_OUTPUT_TOKENS_PER_FACT, runTriagePass, type EngineDb } from './engine.js'
+import { countPending, CROSS_SOURCE_MAX_COMPARISONS, MAX_OUTPUT_TOKENS_PER_FACT, runTriagePass, TRIAGE_LLM_TIMEOUT_MS, type EngineDb } from './engine.js'
 import { buildTriageSystem } from './prompt.js'
 import { isSensitive } from './sensitive.js'
 import { addStats, addStatsAsync, applyCorrection, emptyStats, listPage } from './store.js'
@@ -564,11 +564,11 @@ export class TriageService implements TriageApi {
         if (!llm) throw new TriageRefusedError('no-llm', 'aucun LLM d’extraction configuré')
         const r = budget.reserveCompletion((callOpts.system?.length ?? 0) + callOpts.prompt.length, callOpts.maxTokens ?? 1024)
         try {
-          const res = await completeDetailed(llm, callOpts)
+          const res = await completeDetailed(llm, { timeoutMs: TRIAGE_LLM_TIMEOUT_MS, ...callOpts })
           budget.settleCompletion(r, res.usage, res.text.length)
           return res
         } catch (err) {
-          budget.fail(r)
+          budget.fail(r, { outputBilled: err instanceof LlmTimeoutError })
           throw err
         }
       },

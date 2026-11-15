@@ -59,7 +59,7 @@ export function triageFilterFor(tab: TriageTab, f: TriageScreenFilters, now: num
   return out
 }
 
-/** Nombre affiché sur un onglet (souvenirs non marqués faux, redites comprises). */
+/** Nombre affiché sur un onglet : les mêmes lignes que la liste par défaut (ni membres d'amas, ni redites d'un actif, ni faux). */
 export function tabCount(stats: TriageStats | null, tab: TriageTab): number | null {
   if (!stats) return null
   if (tab === 'sensible') return stats.sensible

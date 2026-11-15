@@ -187,7 +187,7 @@ export class OpenAiProvider implements LlmProvider {
     const res = await fetchWithTimeout(
       `${this.baseUrl}/chat/completions`,
       { method: 'POST', headers, body: JSON.stringify(body) },
-      this.timeoutMs,
+      opts.timeoutMs ?? this.timeoutMs,
       { provider: this.flavor, model: this.model, what: '/chat/completions' },
     )
     if (!res.ok) {

@@ -13,6 +13,8 @@ export interface CompleteOptions {
   /** Si vrai, demande une sortie JSON (le provider fait au mieux). */
   json?: boolean
   temperature?: number
+  /** Délai de CET appel (ms) ; défaut : celui du fournisseur. Un gros lot (tri) peut demander plus. */
+  timeoutMs?: number
 }
 
 /**

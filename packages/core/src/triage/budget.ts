@@ -178,11 +178,16 @@ export class TriageBudget {
     this.add(this.embeddingsCost(tokens))
   }
 
-  /** Appel en échec : l'entrée estimée (corrigée) est comptée (prudence : le fournisseur a pu la facturer). */
-  fail(r: BudgetReservation): void {
+  /**
+   * Appel en échec : l'entrée estimée (corrigée) est comptée (prudence : le fournisseur a pu la facturer).
+   * `outputBilled` (délai dépassé) : le modèle générait encore quand l'appel a été coupé, et le
+   * fournisseur facture ce qu'il a produit sans le rendre ; on compte alors le pire cas réservé.
+   */
+  fail(r: BudgetReservation, opts: { outputBilled?: boolean } = {}): void {
     this.inFlight.delete(r.id)
     if (r.kind === 'llm') this.counters.llm_calls++
     else this.counters.embed_calls++
+    if (opts.outputBilled && r.kind === 'llm') return this.add(r.worstUsd)
     this.add(r.kind === 'llm' ? this.llmCost(r.inputTokens, 0) : this.embeddingsCost(r.inputTokens))
   }
 

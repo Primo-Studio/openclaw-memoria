@@ -149,6 +149,12 @@ function yieldToEventLoop(): Promise<void> {
   return new Promise(resolve => setImmediate(resolve))
 }
 
+/**
+ * Délai d'un appel de tri. Un lot de 20 faits produit ~700 jetons : à 30 s (défaut
+ * du fournisseur), un modèle lent coupait un appel sur six, déjà facturé (mesuré le 15/11).
+ */
+export const TRIAGE_LLM_TIMEOUT_MS = 90_000
+
 /** Temps de calcul maximal entre deux retours à la boucle d'événements dans une unité (ms). */
 const SLICE_MS = 10
 
@@ -625,12 +631,19 @@ class DbPass {
     }
     let text: string
     try {
-      const res = await completeDetailed(llm, { system: this.ctx.system, prompt, json: true, temperature: 0, maxTokens })
+      const res = await completeDetailed(llm, {
+        system: this.ctx.system,
+        prompt,
+        json: true,
+        temperature: 0,
+        maxTokens,
+        timeoutMs: TRIAGE_LLM_TIMEOUT_MS,
+      })
       this.ctx.budget.settleCompletion(reservation, res.usage, res.text.length)
       text = res.text
       this.failures.consecutive = 0
     } catch (err) {
-      this.ctx.budget.fail(reservation)
+      this.ctx.budget.fail(reservation, { outputBilled: err instanceof LlmTimeoutError })
       this.syncCounters()
       if (err instanceof LlmTruncatedError && chunk.length > 1) {
         // Sortie coupée : le lot est coupé en deux, chaque moitié repart.

@@ -5,7 +5,7 @@
  */
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { Memoria, TRIAGE_STATUS_SETTING, TriageBudget } from '../src/index.js'
+import { LlmTimeoutError, Memoria, TRIAGE_LLM_TIMEOUT_MS, TRIAGE_STATUS_SETTING, TriageBudget } from '../src/index.js'
 import { RecordingLlm, seedPending, setupTriage, type TriageEnv } from './triage-fixtures.js'
 
 const MINI = { input: 0.15, output: 0.6 }
@@ -102,5 +102,24 @@ describe('dépense persistée après chaque appel', () => {
       m2.close()
     }
     ;(env as unknown as { m: { close(): void } }).m = { close() {} }
+  })
+})
+
+describe('délai dépassé (15/11 : un appel sur six coupé à 30 s, déjà facturé)', () => {
+  it('chaque appel demande 90 s ; un appel coupé compte au pire cas, pas pour zéro', async () => {
+    const timeout = new LlmTimeoutError({ provider: 'openai', model: 'gpt-4o-mini', timeoutMs: 90_000, what: '/chat/completions' })
+    const usage = { input_tokens: 1000, output_tokens: 300 }
+    // 1er appel coupé, sa reprise aussi : le lot échoue ; les suivants passent.
+    const llm = new RecordingLlm('openai', 'gpt-4o-mini', { usage, fail: call => (call <= 2 ? timeout : null) })
+    env = setupTriage({ llm, embedder: null })
+    for (let i = 0; i < 30; i++) seedPending(env, `Le projet fictif numéro ${i} concerne le jardin partagé ${i * 7}`)
+    const s = await env.m.triage.run({ budgetUsd: 1, concurrency: 1, batchSize: 10 })
+    expect(llm.timeouts.length).toBeGreaterThanOrEqual(3)
+    expect(llm.timeouts.every(t => t === TRIAGE_LLM_TIMEOUT_MS)).toBe(true)
+    const ok = llm.calls - 2
+    const perCall = (usage.input_tokens * MINI.input + usage.output_tokens * MINI.output) / 1e6
+    // Les deux appels coupés coûtent chacun plus que leur seule entrée : la sortie maximale réservée est comptée.
+    const cutCost = s.spent_usd - ok * perCall
+    expect(cutCost).toBeGreaterThan(2 * ((1000 * MINI.input) / 1e6))
   })
 })

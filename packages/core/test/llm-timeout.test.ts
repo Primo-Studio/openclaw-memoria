@@ -49,6 +49,17 @@ describe('délai dépassé → erreur nommant provider, modèle et durée', () =
     await expect(new LmStudioProvider({ model: 'm1', timeoutMs: 800 }).complete({ prompt: 'x' })).rejects.toThrow(/lmstudio.*m1.*800 ms/s)
   })
 
+  it('un appel peut porter son propre délai (gros lot du tri)', async () => {
+    fetchMock.mockRejectedValue(timeoutAbort())
+    const opts = { prompt: 'x', timeoutMs: 90_000 }
+    await expect(new OpenAiProvider({ apiKey: 'k', model: 'gpt-4o-mini', timeoutMs: 500 }).complete(opts)).rejects.toThrow(/90000 ms/)
+    await expect(new AnthropicProvider({ apiKey: 'k', timeoutMs: 700 }).complete(opts)).rejects.toThrow(/90000 ms/)
+    await expect(new LmStudioProvider({ model: 'm1', timeoutMs: 800 }).complete(opts)).rejects.toThrow(/90000 ms/)
+    await expect(new OllamaProvider({ model: 'm', timeoutMs: 10 }).complete(opts)).rejects.toThrow(/90000 ms/)
+    // Sans délai propre : celui du fournisseur.
+    await expect(new OpenAiProvider({ apiKey: 'k', model: 'gpt-4o-mini', timeoutMs: 500 }).complete({ prompt: 'x' })).rejects.toThrow(/500 ms/)
+  })
+
   it('l’erreur est typée (LlmTimeoutError) et une autre erreur réseau passe inchangée', async () => {
     fetchMock.mockRejectedValue(timeoutAbort())
     const err = await new OllamaProvider({ model: 'm', timeoutMs: 10 }).complete({ prompt: 'x' }).catch((e: unknown) => e)

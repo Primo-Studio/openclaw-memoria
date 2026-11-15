@@ -177,7 +177,7 @@ export class LmStudioProvider implements LlmProvider {
           ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
         }),
       },
-      this.timeoutMs,
+      opts.timeoutMs ?? this.timeoutMs,
       { provider: 'lmstudio', model, what: '/chat/completions' },
     )
     if (!res.ok) {

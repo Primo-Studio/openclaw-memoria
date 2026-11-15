@@ -28,6 +28,12 @@ describe('TriageBudget', () => {
     const before = b.spentUsd
     b.fail(b.reserveCompletion(4000, 500))
     expect(b.spentUsd - before).toBeCloseTo((1200 * 0.15) / 1e6, 10)
+    // Délai dépassé : la sortie déjà générée est facturée sans être rendue, le pire cas est compté.
+    const r = b.reserveCompletion(4000, 500)
+    const avant = b.spentUsd
+    b.fail(r, { outputBilled: true })
+    expect(b.spentUsd - avant).toBeCloseTo(r.worstUsd, 10)
+    expect(r.worstUsd).toBeGreaterThan((1200 * 0.15) / 1e6)
     b.settleEmbeddings(b.reserveEmbeddings(400), undefined)
     expect(b.counters.embed_tokens).toBe(120)
   })

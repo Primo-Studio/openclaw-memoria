@@ -110,7 +110,7 @@ export class AnthropicProvider implements LlmProvider {
           messages: [{ role: 'user', content: opts.prompt }],
         }),
       },
-      this.timeoutMs,
+      opts.timeoutMs ?? this.timeoutMs,
       { provider: 'anthropic', model: this.model, what: '/v1/messages' },
     )
     if (!res.ok) {

@@ -91,7 +91,7 @@ export class OllamaProvider implements LlmProvider {
           format: opts.json ? 'json' : undefined,
         }),
       },
-      this.timeoutMs,
+      opts.timeoutMs ?? this.timeoutMs,
       { provider: 'ollama', model: this.model, what: '/api/chat' },
     )
     if (!res.ok) {
