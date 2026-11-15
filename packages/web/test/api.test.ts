@@ -13,6 +13,7 @@ import {
   getAgents,
   getLlmHealth,
   getOllamaPullStatus,
+  getReviewCount,
   getStats,
   pairAgent,
   searchFacts,
@@ -223,6 +224,19 @@ describe('santé LLM (anti-mort-silencieuse)', () => {
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
     expect(url).toBe('/v1/admin/openclaw_copy_key')
     expect(JSON.parse(init.body as string)).toEqual({ provider: 'openrouter' })
+  })
+
+  it('getReviewCount lit le compte seul (badge Revue), pas la liste', async () => {
+    stubBrowser({ token: 'tok-admin' })
+    const fetchMock = vi.fn(async () => jsonResponse({ count: 72538 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    expect(await getReviewCount()).toBe(72538)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
+    expect(url).toBe('/v1/admin/review/count')
+    expect(init.method).toBe('GET')
+    expect((init.headers as Record<string, string>)['authorization']).toBe('Bearer tok-admin')
   })
 })
 

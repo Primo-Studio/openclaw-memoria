@@ -21,7 +21,16 @@ import {
 } from '../config.js'
 import { RegistryStore } from '../storage/registry.js'
 import { isOnNetworkVolume } from '../storage/network-guard.js'
-import { ContentStore, normalizeText, queryTokens, rowToFact, type FactRow, type FtsHit, type FtsSearchOptions } from '../storage/content.js'
+import {
+  ContentStore,
+  normalizeText,
+  queryTokens,
+  RECALL_FTS_OPEN_BUDGET_MS,
+  rowToFact,
+  type FactRow,
+  type FtsHit,
+  type FtsSearchOptions,
+} from '../storage/content.js'
 import { EmbeddingIndexer, hybridSearchFacts } from '../vector/index.js'
 import {
   CognitionEngine,
@@ -209,6 +218,19 @@ const DEFAULT_TOKEN_BUDGET = 1500
 const DEFAULT_RECALL_LIMIT = 12
 /** Délai de regroupement des indexations d'embeddings déclenchées par storeFact. */
 const EMBEDDINGS_DEBOUNCE_MS = 250
+/** Écart entre deux tranches du remplissage de fond de l'index de rappel (la boucle respire). */
+const RECALL_INDEX_STEP_DELAY_MS = 50
+/** Nouvel essai du remplissage après une erreur (base verrouillée par un autre processus…). */
+const RECALL_INDEX_RETRY_MS = 60_000
+/**
+ * File de revue : items `pending` de type fait, avec leur source et leur fait.
+ * PARTAGÉ par listReview et countReview : le badge compte exactement ce que la
+ * liste montrerait (un item dont le fait a été oublié n'y figure pas).
+ */
+const REVIEW_QUEUE_FROM = `FROM memory_import_items i
+           JOIN memory_sources s ON s.id = i.source_id
+           JOIN facts f ON f.id = i.target_memory_id
+           WHERE i.status = 'pending' AND i.target_type = 'fact'`
 /**
  * Délai avant la cognition d'un fait DÉCLARÉ (store_fact, partage). Plus long
  * que celui des embeddings : une rafale d'écritures donne un seul passage, et
@@ -3350,10 +3372,7 @@ export class Memoria {
         .prepare(
           `SELECT i.id, i.target_memory_id AS fact_id, i.confidence, s.source_type,
                   f.fact AS content, f.category, f.created_at
-           FROM memory_import_items i
-           JOIN memory_sources s ON s.id = i.source_id
-           JOIN facts f ON f.id = i.target_memory_id
-           WHERE i.status = 'pending' AND i.target_type = 'fact'
+           ${REVIEW_QUEUE_FROM}
            ORDER BY f.created_at DESC LIMIT ?`,
         )
         .all(limit) as Array<Omit<ReturnType<Memoria['listReview']>[number], 'source_db' | 'topics'>>
@@ -3366,6 +3385,28 @@ export class Memoria {
       }
     }
     return out.slice(0, limit)
+  }
+
+  /**
+   * Nombre d'items de la file de revue, toutes bases : même périmètre que
+   * listReview (REVIEW_QUEUE_FROM), sans plafond, sans tri ni thèmes. Sert le
+   * badge « Revue » de l'interface, relu toutes les 20 s : il lisait la liste
+   * entière (150 à 353 ms de boucle figée, règle n°27). Le COUNT parcourt
+   * l'index partiel idx_import_items_pending (couvrant pour les jointures) ;
+   * reste une recherche dans l'index de `facts.id` par item, gardée pour que
+   * le compte égale la liste (un fait oublié laisse son item `pending`). Sur
+   * 72 538 items (copie de la plus grosse base) : ~36 ms à chaud, ~134 ms à
+   * connexion neuve, contre 48 et 415 ms sans l'index, 120 et 510 ms la liste.
+   */
+  countReview(): number {
+    this.assertOpen()
+    let total = 0
+    for (const entry of this.registry.listDbs()) {
+      if (entry.kind === 'registry' || !existsSync(entry.path)) continue
+      const store = this.openContent(entry.path)
+      total += (store.db.prepare(`SELECT COUNT(*) AS c ${REVIEW_QUEUE_FROM}`).get() as { c: number }).c
+    }
+    return total
   }
 
   /** Approuve (active) ou rejette (hard-delete) des items de revue. */
@@ -5538,8 +5579,30 @@ export class Memoria {
     if (!store) {
       store = new ContentStore(path)
       this.pool.set(path, store)
+      if (!store.isRecallIndexReady()) this.scheduleRecallIndex(store)
     }
     return store
+  }
+
+  /**
+   * Base à beaucoup de faits actifs : l'ouverture n'a rempli qu'une partie de
+   * l'index de rappel (budget borné). La suite se fait par tranches espacées,
+   * hors de tout appel, pour ne jamais figer la boucle (règle n°27). D'ici là,
+   * le rappel de cette base garde l'ancien chemin, juste mais plus lent.
+   */
+  private scheduleRecallIndex(store: ContentStore, delayMs = RECALL_INDEX_STEP_DELAY_MS): void {
+    const timer = setTimeout(() => {
+      if (this.closed || !store.db.open) return
+      try {
+        if (!store.advanceRecallIndex(RECALL_FTS_OPEN_BUDGET_MS)) this.scheduleRecallIndex(store)
+      } catch (err) {
+        // Base verrouillée par un autre processus, disque plein… : on réessaie
+        // plus tard ; le rappel reste juste entre-temps (ancien chemin).
+        console.warn('[memoria] index de rappel : remplissage en échec, nouvel essai dans 60 s :', (err as Error).message)
+        this.scheduleRecallIndex(store, RECALL_INDEX_RETRY_MS)
+      }
+    }, delayMs)
+    timer.unref()
   }
 
   /** Scope cible d'une écriture : id, nom, ou défaut = privé de l'instance. */

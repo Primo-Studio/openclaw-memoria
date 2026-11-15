@@ -924,6 +924,15 @@ export async function getReview(): Promise<ReviewItem[]> {
   return res.items
 }
 
+/**
+ * Nombre de souvenirs en attente de revue (badge de la navigation). Le compte
+ * seul, sans plafond : la liste (getReview) est réservée à l'écran Revue.
+ */
+export async function getReviewCount(): Promise<number> {
+  const res = await request<{ count: number }>('GET', '/v1/admin/review/count')
+  return res.count
+}
+
 export async function reviewDecision(ids: string[], decision: 'approve' | 'reject'): Promise<number> {
   if (ids.length === 0) return 0
   const res = await request<{ updated: number }>('POST', `/v1/admin/review/${decision}`, { ids })
