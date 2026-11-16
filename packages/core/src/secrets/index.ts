@@ -92,8 +92,12 @@ export function setClusterPairingKey(provider: SecretProvider, key: Buffer): voi
 export function freshGroupKeys(provider: SecretProvider): { gvk_fingerprint: string; cpk_fingerprint: string } {
   const gvk = randomBytes(32)
   const cpk = randomBytes(32)
-  provider.set(GVK_NAME, gvk.toString('hex'))
-  provider.set(CPK_NAME, cpk.toString('hex'))
+  for (const [name, key] of [[GVK_NAME, gvk], [CPK_NAME, cpk]] as const) {
+    provider.set(name, key.toString('hex'))
+    // Relecture : une écriture qui n'aurait pas remplacé l'ancienne clé
+    // (Trousseau, coffre) laisserait l'ancien groupe en place sans un mot.
+    if (provider.get(name) !== key.toString('hex')) throw new Error(`clé de groupe ${name} : la nouvelle valeur n'a pas remplacé l'ancienne dans le coffre (${provider.kind})`)
+  }
   return { gvk_fingerprint: keyFingerprint(gvk), cpk_fingerprint: keyFingerprint(cpk) }
 }
 
