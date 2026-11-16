@@ -1,70 +1,134 @@
-# Point de reprise — Memoria
+# Point de reprise : Memoria
 
-> **À lire en premier** après une pause. Mis à jour le **31 août 2026**.
-> Détail des sessions : [`JOURNAL-2026-08-27.md`](JOURNAL-2026-08-27.md), [`JOURNAL-2026-08-28.md`](JOURNAL-2026-08-28.md).
-> Ce qui reste à faire, classé : [`TODO.md`](TODO.md). Installer/mettre à jour ailleurs : [`INSTALLER-ET-METTRE-A-JOUR.md`](INSTALLER-ET-METTRE-A-JOUR.md).
+> **À lire en premier** après une pause. Mis à jour le **16 novembre 2026**.
+> Ce qui reste à faire, classé : [`TODO.md`](TODO.md) (T15, T29, T30, T31).
+> Partage entre Mac, pas à pas : [`INSTALLATION-RESEAU.md`](INSTALLATION-RESEAU.md).
+> Installer ou mettre à jour un poste : [`INSTALLER-ET-METTRE-A-JOUR.md`](INSTALLER-ET-METTRE-A-JOUR.md).
 
 ## 1. Où on en est
 
 | | |
 |---|---|
-| Branche vivante | `memoria-v1` — tip **`372e9af`**, tout est poussé sur GitHub |
-| Tests | **1 094 verts** (122 fichiers) · build TS + Vite verts · `cargo test` 19 verts |
-| Daemon | tourne **sous launchd** sur ce build (`GET /v1/health` expose `pid`, `supervisor`, `built_sha`) |
-| Interface | refondue sur **shadcn/ui** — 16 écrans, thème clair/sombre, contrastes mesurés (AA) |
-| Dépôt | **PUBLIC** (Apache 2.0) — code, tests, démo et docs **anonymisés** |
+| Branche vivante | `memoria-v1`, tout est poussé sur GitHub |
+| Tests | **1 903 verts** (184 fichiers), `tsc -b` et build Vite verts |
+| Poste du propriétaire | daemon sous launchd sur ce build, écoute `127.0.0.1` seulement ; synchro **non activée** |
+| Deux autres postes du bureau | mis à jour sur `d46ef97` le 16/11 (voir §3), synchro **non activée** |
+| Troisième poste d'équipe | Memoria **pas installé** |
+| Dépôt | **PUBLIC** (Apache 2.0) : code, tests, démo et docs anonymisés |
 
-En trois jours : suivi de la consommation par modèle, icône « M » de barre d'état, service launchd fiabilisé,
-audit multi-agents (127 constats) puis vérification fonctionnelle (118 constats) implémentés, refonte
-complète de l'interface, et mise en ordre du dépôt public.
+## 2. Ce qui a été fait du 13 au 16 novembre
 
-## 2. Ce qui tourne pendant la pause
+- **Tri de la file de revue** : environ 75 000 faits classés par genre (process, décision, savoir, leçon,
+  idée, préférence, style…), rubrique, portée (`entite`, `user`, `perso`), auteur (propriétaire, IA, équipe)
+  et sensibilité. Les faits restent dormants jusqu'à leur validation dans l'écran Tri. Coût total d'environ
+  4,3 $ (gpt-4o-mini).
+- **Passe sur les messages du propriétaire** : idées, décisions et préférences tirées de ses propres messages.
+  Le filtre des sujets sensibles s'applique avant tout envoi à l'IA.
+- **Passe « styles d'échange »** (`/v1/admin/triage/styles`) : la manière d'échanger du propriétaire, à
+  partir de ses messages, et celle de chaque personne de l'équipe, à partir des faits validés qui la nomment.
+  Les observations arrivent dormantes, à valider dans Tri.
+- **Vitesse** (règle : aucun blocage de la boucle au-delà de 200 ms) : réparation vectorielle et repérage
+  du tri découpés, FTS limité aux faits rappelables, badge Revue par simple compte, la main rendue entre
+  deux recherches de doublons. Mesuré après la mise en service : 79 ms au pire sur 4 minutes de sonde.
+- **Partage entre Mac** (T15, T29) :
+  - **par défaut, seul l'espace d'équipe `org` voyage** (un hub peut aussi ouvrir `project` et
+    `shared_topic`) ; `user`, privé et quarantaine sont toujours refusés ;
+  - contrôle par pair côté hub, avec refus fait par fait, à l'envoi comme à l'arrivée : sensible,
+    critical, secret, fait client, dormant ; le hub refuse aussi l'écrasement d'un fait né ailleurs ;
+  - la portée `entite` n'est exigée qu'au rangement d'un fait dans `org` (partage ou promotion), pas par
+    la synchro elle-même (voir §5) ;
+  - curseur par numéro d'ordre qui ne redescend jamais ;
+  - join possible sur un Mac qui a déjà des agents, et relançable s'il échoue ;
+  - un seul `org` par Mac ;
+  - écriture des agents dans `org` (`store_fact`), réglée par `[sharing] machine = "team"` ;
+  - le hub peut corriger ou dater un fait né sur un Mac relié ;
+  - écoute réseau par défaut (`lan:47600`) sur l'adresse privée du réseau local ; l'invitation n'affiche
+    jamais `0.0.0.0` ;
+  - essai d'acceptation local réussi, avec un hub et quatre Mac simulés (mesure de session, hors suite
+    de tests).
+- **Les deux autres postes du bureau** : leur daemon bouclait en échec depuis des semaines (verrou d'un
+  démarrage précédent, module natif compilé pour un autre Node). Leurs agents OpenClaw tournaient sans
+  mémoire, sans aucun signal. Ils sont réparés et mis à jour, voir §3. La surveillance qui aurait dû le
+  voir est la tâche **T31**.
 
-- **Le daemon reste actif** (service launchd) : il continue de capturer et d'indexer. C'est voulu — c'est ce
-  qui alimente la mémoire des agents.
-- **L'import automatique tourne toutes les 6 h** (`fr.primo-studio.memoria.autoimport`) et **coûte de
-  l'argent** : ≈ **0,16 $ par 24 h** en ce moment (gpt-4o-mini, rattrapage d'historique). En régime normal,
-  sans gros import, c'est nettement moins.
-  Pour l'arrêter : `launchctl bootout gui/$(id -u)/fr.primo-studio.memoria.autoimport`.
-  Pour tout mettre en pause sans rien désinstaller : `memoria disable` (puis `memoria enable`).
-- **Après un `memoria stop`, le service ne repart pas seul** avant le prochain login : relancer avec
-  `memoria start`.
+## 3. Ce qui tourne pendant la pause
 
-## 3. Les décisions qui attendent Néto
+- **Poste du propriétaire** :
+  - le daemon (launchd `fr.primo-studio.memoria`) capture et indexe ;
+  - l'import automatique toutes les 6 h (`fr.primo-studio.memoria.autoimport`) coûte quelques centimes
+    par jour ;
+  - le veilleur local (`fr.primo-studio.memoria.watchdog`, `scripts/watchdog.sh`) sonde `/v1/health`
+    chaque minute et affiche une notification après 3 échecs, sans rien réparer ;
+  - aucun tri ni aucune passe ne tourne : ils ne partent qu'à la main.
+- **Mac Studio du bureau** (toujours allumé, il héberge un agent OpenClaw et des runners CI) : daemon sur
+  `d46ef97`, Node nvm 24.18.0, plist d'origine gardé. Les deux jetons OpenClaw répondent.
+- **iMac du bureau** (8 Go, il héberge un agent OpenClaw) : daemon sur `d46ef97`, service recréé par
+  `autostart on` avec **Node nvm 22.22.0**, parce que better-sqlite3 y est compilé pour cette ABI.
+- Sur ces deux postes : sauvegarde d'avant la mise à jour dans `~/.memoria-sauvegarde-avant-maj-20261116`.
+  Un retour arrière demande l'ancien commit **et** cette sauvegarde, car les migrations ne reviennent pas
+  en arrière. Aucun n'est relié à un hub ; rien n'écoute sur 47600.
 
-Rien ne bouge sur ces points sans son accord — chacun engage de l'argent, un compte ou un nom public.
+## 4. Les décisions qui attendent le propriétaire
 
-| # | Décision | Ce qui est prêt | Ce qui manque |
-|---|---|---|---|
-| 1 | **Version et tag** | La version actuelle est stable et documentée | Le versionnage est **incohérent** : dernier tag `v4.0.0`, mais tous les `package.json` disent `0.1.0`. Il faut trancher (repartir en `0.x` ? assumer `4.x` ?) **avant** toute publication |
-| 2 | **Notarisation de l'app macOS** | Certificat Developer ID présent, app signée, build reproductible | La soumission à Apple (`xcrun notarytool`) — sans elle, l'app ne s'ouvre pas sur un autre Mac |
-| 3 | **Publication npm** | Paquets durcis, `npm pack --dry-run` propre | Le scope `@memoria` appartient à un tiers → créer une organisation npm et renommer partout |
-| 4 | **Réécriture de l'historique git** | L'état actuel du dépôt est anonymisé | Les **anciens commits** gardent des noms de tiers et des montants réels, et un *fork* existe déjà. `git filter-repo` + push forcé casserait les clones existants |
-| 5 | **Grok** | — | Introuvable dans l'installation. Deux voies : via **OpenRouter** (`x-ai/grok-…`, marche déjà, simple changement de modèle) ou une **clé API xAI** (petit développement) |
-| 6 | **Ré-extraction des corrélations** | ~4 200 souvenirs actifs, outil de nettoyage des libellés prêt | ≈ **0,30 $** d'appels pour remplacer les 96 % de relations heuristiques par de vraies relations |
+Pour le branchement des Mac (prévu mercredi 18/11) :
 
-## 4. À faire au retour, dans cet ordre
+| # | Décision | Recommandé |
+|---|---|---|
+| 1 | Quel poste sert de hub | le Mac Studio : toujours allumé, c'était le plan d'origine |
+| 2 | L'agent OpenClaw joignable par des tiers lit-il encore `org` | non, retrait en une commande |
+| 3 | Moteur d'IA des postes d'équipe | clé d'équipe plafonnée (dépense) ou modèle local ; jamais la clé personnelle du propriétaire |
+| 4 | Remplissage de `org` | seulement ce que le propriétaire valide dans la liste « proposés pour l'équipe » |
+| 5 | Filtre des sujets sensibles vers `org` | le garder strict ; reformuler les phrases banales qu'il refuse (« clé RSA », « taux horaire du rendu ») |
 
-1. **Valider le démarrage automatique sur une machine d'essai** (VM ou second compte macOS) : c'est le seul
-   maillon du parcours d'installation qui n'a **pas pu être testé** ici — l'essayer sur ce Mac aurait arrêté
-   le daemon de production. À faire **avant** d'installer chez quelqu'un d'autre.
-2. **Relancer la gateway OpenClaw** : à l'arrêt depuis le 24/08, donc l'agent de messagerie ne mémorise ni
-   ne rappelle rien.
-3. **Arbitrer les 5 révisions en attente** (écran Révisions — il montre désormais les deux souvenirs en
-   conflit, on peut trancher en connaissance de cause).
-4. **Re-mesurer la latence de recall à froid** : le doctor signale un p95 à 1 597 ms, mesuré pendant une
-   réindexation — le chiffre est probablement faussé.
-5. Puis les points 1 à 6 du tableau ci-dessus, selon les décisions prises.
+Aussi en attente : la validation des styles d'échange dans Tri, et l'avis sur la maquette de l'écran
+« idées regroupées », qui reste locale.
 
-## 5. Les réflexes à ne pas perdre
+Décisions plus anciennes (état du 31/08, à revérifier) : versionnage incohérent (tag `v4.0.0`, paquets en
+`0.1.0`), notarisation de l'app macOS, organisation npm, réécriture de l'historique git (anciens commits
+non anonymisés, un fork existe), accès à Grok.
 
-- **Le dépôt est public** : jamais de nom de client, de montant, d'adresse ou de contact réel dans le code,
-  les tests, les données de démonstration ou les documents. Le jeu de démo (`scripts/ui-preview.mjs`) est
-  entièrement fictif — le garder ainsi.
+## 5. À faire au retour, dans cet ordre
+
+1. **Branchement des Mac** (après les décisions 1 à 4), en suivant `INSTALLATION-RESEAU.md` :
+   - ne jamais relier un poste dont le code est antérieur à `d46ef97` ;
+   - avant `init-hub`, vérifier que l'`org` du hub est vide ou entièrement de portée `entite` : la synchro
+     ne relit pas la portée des faits déjà rangés dans `org` ;
+   - sur un poste d'équipe, `[sharing] machine = "team"` puis redémarrage, avant ou après le join ;
+   - appairage en HTTP clair : sur le réseau du bureau seulement.
+2. **Limites à annoncer** :
+   - un fait déjà parti ne se retire pas des autres postes (`forget` ne se propage pas) ;
+   - un poste d'équipe ne corrige pas un fait né ailleurs (403, le demander au propriétaire) ;
+   - au-delà d'environ 13 000 faits `org`, le join bloque plus de 200 ms.
+3. **Écrans** : Tri et Partage (validation de la liste équipe sans passer par l'API), puis l'écran des
+   idées regroupées une fois la maquette validée.
+4. **T31, le veilleur** : vérifier chaque poste, réparer les pannes connues, prévenir le propriétaire.
+5. **Vitesse, restes mesurés** :
+   - `GET /v1/admin/triage` sans paramètre bloque 150 à 160 ms (index de `listPage`) ;
+   - la passe sur les messages bloque encore environ 575 ms (lecture et hachage des grosses conversations) ;
+   - `purgeFactVectors` supprime fait par fait (environ 15 ms chacun sur vec0) ;
+   - coût CPU du KNN vec0 ;
+   - `promoteTriaged` sans cession.
+   - La branche `perf/point-de-controle-wal` (`e130ad2`) n'est **pas** fusionnée, et ne doit pas l'être
+     telle quelle : pilote résolu depuis le daemon, fsync multipliés.
+6. **Reporté** : tombstones et « retirer du partage », TLS, `rotate-key`, relais NAS, tri de l'agent
+   OpenClaw (budget à accorder), import ChatGPT à réception de l'export.
+
+## 6. Les réflexes à ne pas perdre
+
+- **Le dépôt est public** : jamais de nom réel, de montant, d'adresse, d'IP ou de contact dans le code, les
+  tests, la démo, les docs ou les messages de commit.
+- **Filtrer les données sensibles AVANT tout envoi à une IA**, et tester le filtre.
+- **Ne jamais redémarrer le daemon pendant un tri ou un import.** Avant un redémarrage :
+  `/v1/admin/triage/run`, `/v1/admin/triage/messages`, `/v1/admin/triage/styles` et `import-status.json`
+  au repos ; éviter la fenêtre de l'import automatique.
+- **Mesurer la règle des 200 ms par une sonde séquentielle de `/v1/health`** pendant et après la mise en
+  service, pas seulement par les tests.
+- **Mettre à jour un autre poste** :
+  - sauvegarder `~/.memoria`, daemon arrêté (`launchctl bootout`) ;
+  - `git pull --ff-only`, puis `npm install` et `npm run build` avec **le Node du service** en tête du PATH ;
+  - vérifier `require('better-sqlite3')` avec ce Node, car npm 12 bloque les scripts d'installation et un
+    module natif d'une autre ABI fait boucler le service ;
+  - renommer un vieux `daemon.lock`, sans jamais tuer son pid, qui peut appartenir à un process système ;
+  - relancer, puis vérifier `/v1/health`, les comptes de faits et un rappel avec le jeton de chaque agent.
 - **Après un `memoria stop`, toujours `memoria start`** (le service launchd ne redémarre pas seul).
-- **Fusion de catalogues de traduction** : toujours dédoublonner ensuite, sinon le build Vite échoue sur
-  « Duplicate key ».
-- **Aperçu de l'interface sans toucher à la vraie mémoire** : `npm run ui:preview` (données fictives,
-  faux moteur, aucun appel payant), `--screenshot <dossier>` pour les captures.
-- **Vérifier avant d'affirmer** : `memoria doctor` (bilan complet, dont le moteur d'IA et le coût),
-  `GET /v1/health` (quel build tourne réellement).
+- **Aperçu de l'interface sans toucher à la vraie mémoire** : `npm run ui:preview` (données fictives).

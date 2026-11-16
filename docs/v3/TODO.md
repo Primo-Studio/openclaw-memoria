@@ -700,6 +700,12 @@ tourné sans mémoire pendant une semaine sur l'un et un mois sur l'autre, sans 
 un daemon qui plante, mais rien ne répare une panne qui revient à chaque démarrage, et rien ne prévient.
 Le verrou périmé est corrigé dans le code (bootId) ; le reste ne l'est pas.
 
+**Base existante** : `scripts/watchdog.sh` (ticket #27), lancé chaque minute par
+`fr.primo-studio.memoria.watchdog`. Il sonde `/v1/health` et affiche une notification macOS après 3 échecs,
+sans rien réparer. Il n'est installé que sur le poste du propriétaire, ni par `install-memoria.sh` ni par
+`autostart on`. Sur un poste d'équipe, la notification s'afficherait d'ailleurs à l'utilisateur de ce poste,
+pas au propriétaire. T31 part de ce script.
+
 - [ ] Vérification périodique (toutes les heures) de chaque poste : service chargé, process vivant,
       `/v1/health` qui répond, boucle d'échecs dans `memoria.err.log`, agents OpenClaw qui joignent le daemon.
 - [ ] Réparation automatique des pannes connues, chacune journalisée :
