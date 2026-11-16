@@ -25,17 +25,20 @@ export interface CaptureMessage {
  * Destination d'un fait déclaré. `private` = mémoire de CET agent seulement ;
  * `user` = scope partagé « user » (nom de scope côté registre), lu par tous les
  * assistants de l'utilisateur — c'est la seule voie par laquelle un agent peut
- * faire circuler ce qu'il apprend sur l'humain. Le daemon refuse l'écriture si
- * la policy de l'assistant n'a pas can_write sur ce scope (erreur explicite).
+ * faire circuler ce qu'il apprend sur l'humain. `org` = espace d'équipe
+ * (process, savoirs, leçons partagés avec les Mac de l'équipe ; alias résolu
+ * par le daemon). Le daemon refuse l'écriture si la policy de l'assistant n'a
+ * pas can_write sur ce scope, et pour `org` aussi un fait sensible, un secret,
+ * un client déclaré ou un agent OpenClaw (erreur explicite).
  */
-export type StoreScope = 'private' | 'user'
+export type StoreScope = 'private' | 'user' | 'org'
 
 /**
  * Réponse compacte de store_fact pour le LLM. Le daemon renvoie la ligne Fact
  * entière (~30 colonnes : origin_machine_id, content_hash, relevance_weight…),
  * soit ~770 caractères pour une phrase de 35 — du contexte brûlé pour rien.
  */
-export function compactStoredFact(payload: unknown): Record<string, unknown> {
+export function compactStoredFact(payload: unknown, requested: StoreScope = 'private'): Record<string, unknown> {
   const p = (payload ?? {}) as { fact?: Record<string, unknown> | null; disabled?: boolean; skipped?: boolean; reason?: string }
   if (!p.fact) {
     // `disabled` = kill-switch ; `skipped/paused` = mode « Pause » de la
@@ -56,7 +59,10 @@ export function compactStoredFact(payload: unknown): Record<string, unknown> {
     id: f['id'],
     content: f['fact'],
     category: f['category'],
-    scope: f['visibility'] === 'shared' ? 'user' : 'private',
+    // Le scope DEMANDÉ dit lequel des espaces partagés a reçu le fait (le
+    // doublon renvoyé est cherché dans ce même scope) : un fait d'équipe n'est
+    // jamais présenté comme un fait sur l'utilisateur.
+    scope: f['visibility'] === 'shared' ? (requested === 'org' ? 'org' : 'user') : 'private',
     visibility: f['visibility'],
     project_id: f['project_id'] ?? null,
     client_org_id: f['client_org_id'] ?? null,
@@ -442,6 +448,7 @@ export const SERVER_INSTRUCTIONS = [
   '',
   'WRITE — memoria_store_fact / memoria_capture_turn',
   '- memoria_store_fact IMMEDIATELY when you learn something durable: a decision (e.g. "The site is deployed on Vercel; commits must be authored by the deploy account"), a preference (e.g. "The user wants short answers with absolute file paths"), a stable project or business detail, a correction of something you believed. One self-contained sentence, third person, in the user\'s language. Do not wait for the end of the session. Never store secrets, transient state or chatter.',
+  '- memoria_store_fact with scope "org" (team space) only for a team process, know-how or lesson that the AI assistants of the whole team should know; never anything personal, sensitive, secret or about a client. Recalled items from that space carry `scope: "org"`.',
   '- memoria_capture_turn after an exchange dense in such facts (a briefing, a planning discussion, a review with several decisions): hand over the user and assistant messages and Memoria extracts and deduplicates them.',
   '- memoria_correct when a recalled memory is wrong or outdated; memoria_pin when the user says something must always be kept in mind; memoria_set_expiry for something true only for a while.',
   '',
@@ -506,6 +513,8 @@ export function buildServer(opts: BuildServerOptions): BuiltServer {
 
   /** Message du core (memoria.ts storeFact) : « écriture refusée : … can_write … ». */
   const isWriteRefusal = (daemonMessage: string): boolean => /écriture refusée|can_write/.test(daemonMessage)
+  /** Refus de l'espace d'équipe (memoria.ts TEAM_WRITE_REFUSED) : la raison est dans le message. */
+  const isTeamRefusal = (daemonMessage: string): boolean => /espace d'équipe \(org\)/.test(daemonMessage)
 
   /**
    * Message d'erreur POUR LE LLM, différencié par cause. Avant, tout finissait
@@ -522,6 +531,11 @@ export function buildServer(opts: BuildServerOptions): BuiltServer {
       // dans la branche 5xx, le LLM abandonnait le fait et envoyait vers
       // `memoria doctor` (qui dit que tout va bien). On reconnaît le refus au
       // message tant que le daemon n'émet pas 403 ; 403 est couvert d'avance.
+      // Espace d'équipe : plusieurs raisons possibles (droit, sensible, secret,
+      // client, OpenClaw). Le message du daemon les dit, il est rendu tel quel.
+      if ((err.status === 403 || err.status === 500) && isTeamRefusal(m)) {
+        return `Memoria refused to write to the team space ("org"): ${m}. Nothing was stored there. Keep the fact private (omit scope) unless it is a team process, knowledge or lesson with nothing personal, sensitive or client-related.`
+      }
       if ((err.status === 403 || err.status === 500) && isWriteRefusal(m)) {
         return `Memoria refused to write to the shared "user" scope: the user has not granted this agent write access. Store the fact privately (omit scope) and tell the user they can grant it from the Memoria app.`
       }
@@ -621,9 +635,10 @@ export function buildServer(opts: BuildServerOptions): BuiltServer {
         if (ctx.client_org_id) input['client_org_id'] = ctx.client_org_id
         if (ctx.org_id) input['org_id'] = ctx.org_id
         // `private` (défaut) = on n'envoie rien : le daemon retombe sur le scope
-        // privé de l'instance. `user` = nom du scope partagé côté registre.
-        if (args.scope === 'user') input['scope'] = 'user'
-        return ok(compactStoredFact(await withDaemon(g => g.storeFact(input))))
+        // privé de l'instance. `user` = nom du scope partagé côté registre ;
+        // `org` = alias de l'espace d'équipe, résolu par le daemon.
+        if (args.scope === 'user' || args.scope === 'org') input['scope'] = args.scope
+        return ok(compactStoredFact(await withDaemon(g => g.storeFact(input)), args.scope ?? 'private'))
       } catch (err) {
         return fail(err)
       }
@@ -839,10 +854,10 @@ export function buildServer(opts: BuildServerOptions): BuiltServer {
           .optional()
           .describe('Sensitivity level; higher levels are shared more restrictively.'),
         scope: z
-          .enum(['private', 'user'])
+          .enum(['private', 'user', 'org'])
           .optional()
           .describe(
-            '"private" (default): remembered by this agent only. "user": shared with ALL of the user\'s AI assistants — use it for facts about the user themself (identity, preferences, how they like to work, stable personal/business details), NOT for project-specific or agent-specific details. If the daemon refuses the write, the user has not granted this agent write access to the shared scope: store it privately and tell the user.',
+            '"private" (default): remembered by this agent only. "user": shared with ALL of the user\'s AI assistants — use it for facts about the user themself (identity, preferences, how they like to work, stable personal/business details), NOT for project-specific or agent-specific details. "org": the TEAM space, shared with the AI assistants of the whole team (other people\'s Macs): only team processes, know-how and lessons learned (how a tool is set up, how a video is exported, a mistake not to repeat); NEVER anything personal, sensitive, secret or about a client. If the daemon refuses the write, read its reason: no write access, sensitive content, a secret, a client in the active context, or an agent that may never write there. Store it privately and tell the user.',
           ),
       },
     },

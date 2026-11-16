@@ -101,11 +101,14 @@ import { localMachineId, nextRev } from '../sync/clock.js'
 import { contentHash } from '../sync/merge.js'
 import { SyncEngine } from '../sync/engine.js'
 import { TriageService, type TriageServiceHost } from '../triage/service.js'
-import { copyTriageRows, emptyRow, rowFromDb as rowFromTriageDb, upsertTriageRows } from '../triage/store.js'
+import { copyTriageRows, emptyRow, readTriageRows, rowFromDb as rowFromTriageDb, upsertTriageRows } from '../triage/store.js'
 import { dot, float32FromBlob, normalizeVector, numberSignature, quantizeInt8, REDITE_THRESHOLD } from '../triage/dedup.js'
 import { isSensitive as isTriageSensitive } from '../triage/sensitive.js'
 import { knn, listVecTables, vecTableName } from '../vector/vec-table.js'
 import {
+  TEAM_REFUSED_RUBRIQUES,
+  TEAM_SHARE_GENRES,
+  TEAM_SHARE_REFUSALS,
   TRIAGE_PROMPT_VERSION,
   TriageRefusedError,
   type IdeaItem,
@@ -121,6 +124,8 @@ import {
   type TriageListFilter,
   type TriagePromoteResult,
   type TriageRow,
+  type TeamShareRefusal,
+  type TeamShareRefusedCounts,
   type UserMessageSourceKind,
   type UserMessagesPassFn,
 } from '../triage/types.js'
@@ -214,6 +219,32 @@ export interface MemoriaInitOptions extends ResolveOptions {
 export type DeclareFactResult =
   | { fact: Fact; skipped: false; mode: CaptureMode }
   | { fact: null; skipped: true; reason: 'paused'; mode: CaptureMode }
+
+/**
+ * Nom court de l'espace de l'ENTREPRISE, accepté partout où l'on désigne un
+ * scope cible (store_fact, partage, promotion du tri) : `org` désigne l'espace
+ * d'équipe quel que soit son identifiant `org:<uuid>` (voir `teamScope`).
+ */
+export const TEAM_SCOPE_ALIAS = 'org'
+
+/** Rôle de la machine dans le partage d'équipe (config `[sharing] machine`). */
+export type SharingMachineRole = 'owner' | 'team'
+
+/** Résultat d'un partage. `refused` : vers l'espace d'équipe seulement, faits écartés par raison. */
+export interface ShareFactsResult {
+  shared: number
+  scope: string
+  refused?: TeamShareRefusedCounts
+}
+
+/** Référence posée par le masquage à la place d'un secret (`[secret:<nom>]`). */
+const SECRET_REF = '[secret:'
+
+/** Agents qui, sur un Mac d'équipe, écrivent dans l'espace d'équipe dès l'appairage. Jamais OpenClaw. */
+const TEAM_WRITER_TYPES: readonly AssistantType[] = ['claude-code', 'codex']
+
+/** Début de tout refus d'écriture dans l'espace d'équipe (403 côté daemon, message propre côté MCP). */
+const TEAM_WRITE_REFUSED = "écriture refusée dans l'espace d'équipe (org)"
 
 const DEFAULT_TOKEN_BUDGET = 1500
 const DEFAULT_RECALL_LIMIT = 12
@@ -557,6 +588,7 @@ export class Memoria {
     this.secretProvider = opts.secretProvider ?? createSecretProvider(this.paths.secretsDir, { force: opts.secretsVault })
     this.llmOverride = opts.llm
     this.grantDefaultUserWrite()
+    this.grantTeamWriteDefault()
     this.triage = new TriageService(this.triageHost())
   }
 
@@ -608,6 +640,149 @@ export class Memoria {
         reason: null,
       })
     }
+  }
+
+  // ------------------------------------------------------------ espace d'équipe (org)
+
+  /** Rôle de cette machine dans le partage d'équipe : `owner` (défaut) ou `team`. */
+  machineRole(): SharingMachineRole {
+    return this.resolved.config.sharing?.machine === 'team' ? 'team' : 'owner'
+  }
+
+  /**
+   * L'espace de l'ENTREPRISE (scope `org`), retrouvé par son type et son lien,
+   * jamais par son nom `org:<uuid>` (renommé ou repris d'un autre Mac, il
+   * change). Dans l'ordre :
+   *  1. sur un Mac d'équipe relié, l'org repris du hub (dans les scopes
+   *     autorisés du pair hub) : après la reprise, le démarrage suivant recrée
+   *     un org local à côté, et c'est celui du hub qui compte ;
+   *  2. l'org de l'organisation `own_company`, le plus ancien d'abord ;
+   *  3. le seul scope org, s'il n'y en a qu'un.
+   * null : aucun, ou plusieurs sans lien clair (on ne devine pas).
+   * Lecture du registre seulement (quelques lignes) : rien n'est balayé.
+   */
+  teamScope(): MemoryScope | null {
+    this.assertOpen()
+    const orgs = this.registry.listScopes().filter(s => s.type === 'org')
+    if (orgs.length === 0) return null
+    const fromHub = new Set(this.registry.listPeers().filter(p => p.role === 'hub').flatMap(p => p.allowed_scopes))
+    const adopted = orgs.find(s => fromHub.has(s.id))
+    if (adopted) return adopted
+    const own = this.registry.ownCompany()
+    const mine = own ? orgs.find(s => s.org_id === own.id) : undefined
+    if (mine) return mine
+    return orgs.length === 1 ? orgs[0]! : null
+  }
+
+  /** Tous les scopes de type org (doublon de reprise compris) : ce qui y est déjà n'est plus un candidat équipe. */
+  private teamScopeIds(): string[] {
+    return this.registry
+      .listScopes()
+      .filter(s => s.type === 'org')
+      .map(s => s.id)
+  }
+
+  /** Scope désigné par un id, un nom, ou l'alias `org`. null : inconnu. */
+  private resolveScopeRef(ref: string): MemoryScope | null {
+    if (ref === TEAM_SCOPE_ALIAS) return this.teamScope()
+    return this.registry.getScope(ref) ?? this.registry.getScopeByName(ref)
+  }
+
+  /**
+   * Mac d'équipe : un agent Claude Code ou Codex reçoit lecture ET écriture sur
+   * l'espace d'équipe, s'il n'a encore AUCUNE politique sur ce scope (un
+   * réglage existant, fait à la main ou non, n'est jamais modifié). OpenClaw
+   * n'est jamais servi ici : bot joignable par des tiers. Sur le Mac du
+   * propriétaire, rien : ses faits n'entrent dans `org` que par sa validation.
+   */
+  private grantTeamWrite(assistant: { id: string; type: AssistantType }, reason: string): void {
+    if (this.machineRole() !== 'team' || !TEAM_WRITER_TYPES.includes(assistant.type)) return
+    const scope = this.teamScope()
+    if (!scope || this.registry.getPolicy(assistant.id, scope.id)) return
+    this.registry.setPolicy({
+      assistant_id: assistant.id,
+      scope_id: scope.id,
+      can_read: true,
+      can_write: true,
+      can_share: false,
+      secret_access: 'none',
+    })
+    this.registry.audit({
+      actor_type: 'system',
+      actor_id: reason,
+      action: 'grant_team_write_default',
+      target_id_hash: sha256Hex(`${assistant.id}:${scope.id}`),
+      scope_id: scope.id,
+      reason: `type=${assistant.type}`,
+    })
+  }
+
+  /**
+   * Même droit au démarrage, pour les agents appairés AVANT le passage en
+   * `team` (ou avant la reprise de l'org du hub, qui change son id).
+   * Idempotent ; registre seulement (quelques lignes), aucune base de contenu.
+   * `setScopeAccess` écrit toujours une ligne : un choix du propriétaire (même
+   * un retrait) est donc une politique existante, jamais réécrite ici.
+   */
+  private grantTeamWriteDefault(): void {
+    if (this.machineRole() !== 'team') return
+    for (const assistant of this.registry.listAssistants()) this.grantTeamWrite(assistant, 'migration')
+  }
+
+  /**
+   * Garde-fous d'une écriture dans l'espace d'équipe, AVANT le dédoublonnage
+   * et le masquage (un fait refusé ne laisse rien au coffre). Chaque refus
+   * commence par TEAM_WRITE_REFUSED (403) et ne cite jamais le contenu.
+   * Appelé pour une écriture d'agent (`byAgent`) ; un agent OpenClaw est
+   * refusé même avec le droit posé à la main (bot joignable par des tiers),
+   * et assertWritable le refuse aussi pour épingler, corriger, dater.
+   */
+  private assertTeamWrite(instance: AssistantInstance, scope: MemoryScope, input: StoreFactInput, content: string): void {
+    const refuse = (why: string): never => {
+      throw new Error(`${TEAM_WRITE_REFUSED} : ${why}`)
+    }
+    if (this.registry.getAssistant(instance.assistant_id)?.type === 'openclaw') {
+      refuse("un agent OpenClaw (joignable par des tiers) n'écrit jamais dans l'espace d'équipe ; garde le fait privé")
+    }
+    if (!this.registry.getPolicy(instance.assistant_id, scope.id)?.can_write) {
+      refuse("cet agent n'a pas can_write sur l'espace d'équipe ; garde le fait privé, le propriétaire peut ouvrir le droit dans l'écran Partage")
+    }
+    if (input.sensitivity === 'sensitive' || input.sensitivity === 'critical') {
+      refuse(`un fait ${input.sensitivity} n'entre jamais dans l'espace d'équipe ; garde-le privé`)
+    }
+    if (isTriageSensitive(content)) {
+      refuse("le fait touche un sujet sensible (paie, impôts, santé, identité…) ; garde-le privé")
+    }
+    if (content.includes(SECRET_REF) || this.redactor.redact(content).found.length > 0) {
+      refuse("le fait contient un secret ; rien n'a été écrit, ni le fait ni le secret")
+    }
+    const project = input.project_id ? this.registry.getProject(input.project_id) : null
+    if (input.client_org_id || project?.client_org_id) {
+      refuse("un client est déclaré dans le contexte actif : ce qui touche un client reste hors de l'espace d'équipe")
+    }
+  }
+
+  /**
+   * Première raison qui écarte un fait d'un partage vers l'espace d'équipe
+   * (ordre de TEAM_SHARE_REFUSALS), ou null s'il peut y entrer. Le texte
+   * stocké est déjà masqué : le secret se lit dans la marque du tri et dans
+   * la référence `[secret:…]`, le masquage relu ne sert qu'aux anciens faits.
+   */
+  private teamShareRefusal(row: FactRow, triage: TriageRow | null): TeamShareRefusal | null {
+    if (row.sensitivity === 'critical') return 'critical'
+    if (row.sensitivity === 'sensitive') return 'sensible'
+    // Marque levée à la main par le propriétaire (correction `sensible: false`) : son choix prime, comme à la validation.
+    const ownerLifted = triage !== null && !triage.sensible && triage.corrected_fields.includes('sensible')
+    if (triage?.sensible || (!ownerLifted && isTriageSensitive(row.fact))) return 'sensible'
+    if (triage?.secret_found || row.fact.includes(SECRET_REF) || this.redactor.redact(row.fact).found.length > 0) return 'secret'
+    const project = row.project_id ? this.registry.getProject(row.project_id) : null
+    if (row.client_org_id || project?.client_org_id) return 'client'
+    if (row.superseded) return 'redite'
+    if (!triage || !triage.genre) return 'sans_tri'
+    if (triage.verdict === 'faux') return 'faux'
+    if (triage.rubriques.some(r => TEAM_REFUSED_RUBRIQUES.includes(r))) return 'rubrique'
+    if (!TEAM_SHARE_GENRES.includes(triage.genre)) return 'genre'
+    return null
   }
 
   /**
@@ -695,6 +870,8 @@ export class Memoria {
         secret_access: 'none',
       })
     }
+    // Mac d'équipe : Claude Code et Codex lisent et écrivent l'espace d'équipe.
+    this.grantTeamWrite(assistant, 'pairing')
 
     const { code } = this.registry.createPairing(instance.id)
     this.registry.audit({
@@ -1026,7 +1203,7 @@ export class Memoria {
       this.mustInstance(input.instance)
       return { fact: null, skipped: true, reason: 'paused', mode }
     }
-    const { fact } = this.storeFactInternal(input, { nearDup: false, quarantine: mode === 'review-first' })
+    const { fact } = this.storeFactInternal(input, { nearDup: false, quarantine: mode === 'review-first', byAgent: true })
     return { fact, skipped: false, mode }
   }
 
@@ -1056,6 +1233,13 @@ export class Memoria {
       afterInsert?: (store: ContentStore, fact: Fact) => void
       /** false : un jumeau exact expiré reste expiré (défaut : il est réveillé). */
       revive?: boolean
+      /**
+       * Écriture d'un AGENT (declareFact : route store_fact et outil MCP ;
+       * correctFact : route correct) : vers l'espace d'équipe, garde-fous
+       * assertTeamWrite. La primitive storeFact (imports, tests, fixtures de
+       * synchro) garde seulement le contrôle de droit, comme avant.
+       */
+      byAgent?: boolean
     } = {},
   ): { fact: Fact; created: boolean } {
     this.assertOpen()
@@ -1072,6 +1256,10 @@ export class Memoria {
       if (scope.name !== `private:${instance.id}`) {
         throw new Error(`écriture refusée : le scope « ${scope.name} » est le privé d'un autre agent`)
       }
+    } else if (scope.type === 'org' && opts.byAgent) {
+      // Espace d'équipe, écrit par un agent : OpenClaw, droit d'écriture, puis
+      // contenu (sensible, secret, client), avant tout dédoublonnage ou masquage.
+      this.assertTeamWrite(instance, scope, input, trimmed)
     } else {
       const policy = this.registry.getPolicy(instance.assistant_id, scope.id)
       if (!policy?.can_write) {
@@ -1139,7 +1327,8 @@ export class Memoria {
         confidence: input.confidence,
         source: input.source ?? 'manual',
         assistant_instance_id: instance.id,
-        org_id: input.org_id ?? scope.org_id,
+        // Espace d'équipe : l'organisation est celle du scope, jamais l'étiquette `org` du contexte de l'agent.
+        org_id: scope.type === 'org' ? scope.org_id : (input.org_id ?? scope.org_id),
         client_org_id: input.client_org_id ?? scope.client_org_id,
         project_id: input.project_id ?? scope.project_id,
         scope_id: scope.id,
@@ -1314,6 +1503,9 @@ export class Memoria {
     const searchTargets = this.resolveReadTargets(instance)
     const now = Date.now()
     const procedural = isProceduralQuery(input.query) // boost procédures sur requête impérative
+    // Faits de l'espace d'équipe : rendus `org` à l'agent (jamais comme un fait sur l'utilisateur).
+    const teamIds = new Set(this.teamScopeIds())
+    const teamMark = (scopeId: string): Pick<RecallItem, 'scope_type'> => (teamIds.has(scopeId) ? { scope_type: 'org' } : {})
     // `row` voyage avec le candidat : l'enrichissement (statut, confiance) le
     // relit après la sélection sans refaire de requête.
     const candidates: Array<{ item: RecallItem; store: ContentStore; row: FactRow }> = []
@@ -1356,6 +1548,7 @@ export class Memoria {
             created_at: hit.row.created_at,
             origin: factOrigin(hit.row),
             matched_by: [...matchedBy, ...boostReasons(hit.row, context)],
+            ...teamMark(hit.row.scope_id),
           },
         })
       }
@@ -1432,6 +1625,7 @@ export class Memoria {
               origin: factOrigin(row),
               matched_by: ['graph', ...boostReasons(row, context)],
               ...(ex.via_entity ? { via_entity: ex.via_entity } : {}),
+              ...teamMark(row.scope_id),
             },
           })
         }
@@ -2603,6 +2797,10 @@ export class Memoria {
   /** Modifier un fait partagé exige can_write sur son scope (le privé est toujours à soi). */
   private assertWritable(instance: AssistantInstance, scope: MemoryScope): void {
     if (scope.type === 'private') return
+    // Épingler, corriger, dater un fait de l'espace d'équipe : jamais par OpenClaw, même avec le droit posé à la main.
+    if (scope.type === 'org' && this.registry.getAssistant(instance.assistant_id)?.type === 'openclaw') {
+      throw new Error(`${TEAM_WRITE_REFUSED} : un agent OpenClaw (joignable par des tiers) n'y modifie rien`)
+    }
     const policy = this.registry.getPolicy(instance.assistant_id, scope.id)
     if (!policy?.can_write) {
       throw new Error(`écriture refusée : l'assistant n'a pas can_write sur le scope « ${scope.name} »`)
@@ -2697,7 +2895,8 @@ export class Memoria {
     const tx = store.db.transaction((): Fact | null => {
       const { fact: replacement } = this.storeFactInternal(
         { instance: instanceId, content: text, category: old.category, scope: old.scope_id },
-        { nearDup: false },
+        // Correction par un agent : un fait d'équipe corrigé repasse les garde-fous (secret, sensible…).
+        { nearDup: false, byAgent: true },
       )
       if (replacement.id === factId) return null
       store.db
@@ -3597,15 +3796,21 @@ export class Memoria {
    * Promeut des faits vers un scope PARTAGÉ (`user`/`org`/…) : ils quittent la
    * mémoire privée de leur agent et deviennent recallables par tout agent
    * autorisé sur ce scope (spec §11, partage gouverné). Déplacement, pas copie.
+   *
+   * Vers l'espace d'équipe (`org`, alias compris) : garde-fous CÔTÉ SERVEUR
+   * (teamShareRefusal) ; un fait écarté reste où il est, et `refused` donne
+   * les comptes par raison. Les autres scopes ne changent pas.
    */
-  shareFacts(factIds: string[], targetScopeRef: string): { shared: number; scope: string } {
+  shareFacts(factIds: string[], targetScopeRef: string): ShareFactsResult {
     this.assertOpen()
     if (factIds.length === 0) return { shared: 0, scope: targetScopeRef }
-    const scope = this.registry.getScope(targetScopeRef) ?? this.registry.getScopeByName(targetScopeRef)
+    const scope = this.resolveScopeRef(targetScopeRef)
     if (!scope) throw new Error(`scope cible inconnu : ${targetScopeRef}`)
     if (scope.type === 'private' || scope.type === 'legacy_to_review') {
       throw new Error(`partage interdit vers un scope ${scope.type}`)
     }
+    const refused: TeamShareRefusedCounts | null =
+      scope.type === 'org' ? (Object.fromEntries(TEAM_SHARE_REFUSALS.map(r => [r, 0])) as TeamShareRefusedCounts) : null
     const targetPath = this.sharedDbPathPublic(scope)
     const target = this.openContent(targetPath)
     this.registry.registerDb({ kind: 'shared', path: targetPath, assistant_instance_id: null, scope_id: scope.id })
@@ -3618,8 +3823,17 @@ export class Memoria {
       if (entry.kind === 'registry' || entry.path === targetPath || !existsSync(entry.path)) continue
       const store = this.openContent(entry.path)
       const placeholders = [...idSet].map(() => '?').join(',')
-      const rows = store.db.prepare(`SELECT * FROM facts WHERE id IN (${placeholders})`).all(...idSet) as FactRow[]
+      let rows = store.db.prepare(`SELECT * FROM facts WHERE id IN (${placeholders})`).all(...idSet) as FactRow[]
       if (rows.length === 0) continue
+      if (refused) {
+        const triage = new Map(readTriageRows(store.db, rows.map(r => r.id)).map(t => [t.fact_id, t]))
+        rows = rows.filter(row => {
+          const why = this.teamShareRefusal(row, triage.get(row.id) ?? null)
+          if (why) refused[why]++
+          return why === null
+        })
+        if (rows.length === 0) continue
+      }
       const cols = (store.db.pragma('table_info(facts)') as Array<{ name: string }>).map(c => c.name)
       const insert = target.db.prepare(
         `INSERT OR IGNORE INTO facts (${cols.join(',')}) VALUES (${cols.map(c => '@' + c).join(',')})`,
@@ -3675,7 +3889,7 @@ export class Memoria {
         action: 'share_facts',
         target_id_hash: sha256Hex([...idSet].sort().join(',')),
         scope_id: scope.id,
-        reason: `shared=${shared}`,
+        reason: refused ? `shared=${shared} refused=${Object.values(refused).reduce((n, c) => n + c, 0)}` : `shared=${shared}`,
       })
       // Le partage ne copie que la ligne du fait : entités, thème et marqueur
       // restent dans la base d'origine (puis y sont supprimés). La base
@@ -3683,7 +3897,7 @@ export class Memoria {
       // Pas d'instance ici : toutes les bases, en un seul passage différé.
       this.scheduleCognition()
     }
-    return { shared, scope: scope.name }
+    return refused ? { shared, scope: scope.name, refused } : { shared, scope: scope.name }
   }
 
   /** Scopes + agents qui peuvent les lire (matrice de partage UI). */
@@ -4927,6 +5141,7 @@ export class Memoria {
       audit: (action, reason) =>
         this.registry.audit({ actor_type: 'user', actor_id: 'local', action, target_id_hash: null, scope_id: null, reason }),
       promote: opts => this.promoteTriaged(opts),
+      teamScopeIds: () => this.teamScopeIds(),
       ideas: (id, filter, context) => this.ideasForInstance(id, filter, context),
       styles: (id, query) => this.stylesForInstance(id, query),
       storePendingTriaged: input => this.storePendingTriaged(input),
@@ -5031,6 +5246,10 @@ export class Memoria {
     const seen = new Set<string>()
     const toShare: string[] = []
     const now = nowISO()
+    // `true` reste l'espace `user` ; `'org'` passe par les garde-fous de l'espace d'équipe (shareFacts).
+    const shareTo = opts.share === 'org' ? TEAM_SCOPE_ALIAS : opts.share === true || opts.share === 'user' ? 'user' : null
+    // Filtre « candidats équipe » : ce qui est déjà dans l'espace d'équipe n'y est pas proposé.
+    const listQuery = opts.filter?.team ? { excludeScopeIds: this.teamScopeIds() } : {}
     for (const path of this.contentDbPathsFor(wanted ? undefined : opts.filter?.instance)) {
       if (left <= 0) break
       const store = this.openContent(path)
@@ -5046,7 +5265,7 @@ export class Memoria {
           .all(JSON.stringify(wanted.filter(id => !seen.has(id)))) as Array<Record<string, unknown>>
       } else {
         const filter = { ...opts.filter, validated: false }
-        const { where, params } = filterConditions(filter)
+        const { where, params } = filterConditions(filter, listQuery)
         const genres = filter.genre === undefined ? [] : Array.isArray(filter.genre) ? filter.genre : [filter.genre]
         if (!genres.includes('ephemere')) where.push("(t.genre IS NULL OR t.genre != 'ephemere')")
         if (!opts.allow_sensitive) where.push('t.sensible = 0')
@@ -5100,6 +5319,8 @@ export class Memoria {
             }
             if (r.f_state === 'active') {
               out.counts.already_active++
+              // Fait déjà validé, désigné par son id : il part quand même vers l'espace d'équipe (amorçage).
+              if (shareTo === TEAM_SCOPE_ALIAS && wanted) out.share.push(id)
               continue
             }
             if (r.f_state !== 'dormant') {
@@ -5177,10 +5398,14 @@ export class Memoria {
         console.warn(`[memoria] indexation après validation du tri en échec : ${(err as Error).message}`),
       )
     }
-    if (opts.share && toShare.length > 0) {
+    if (shareTo && toShare.length > 0) {
       // Le partage déplace le fait (et sa ligne de tri) dans la base partagée ;
-      // les membres supersédés suivent : la chaîne superseded_by reste dans une seule base.
-      result.shared = this.shareFacts(toShare, 'user').shared
+      // les membres supersédés suivent vers `user` : la chaîne superseded_by
+      // reste dans une seule base. Vers l'espace d'équipe, une redite ne part
+      // pas (raison `redite`) : seul le représentant voyage.
+      const shared = this.shareFacts(toShare, shareTo)
+      result.shared = shared.shared
+      if (shared.refused) result.share_refused = shared.refused
     }
     return result
   }
@@ -5677,8 +5902,13 @@ export class Memoria {
       if (!scope) throw new Error(`scope privé introuvable pour l'instance ${instance.id}`)
       return scope
     }
-    const scope = this.registry.getScope(scopeRef) ?? this.registry.getScopeByName(scopeRef)
-    if (!scope) throw new Error(`scope inconnu : ${scopeRef}`)
+    // `org` : l'espace de l'entreprise, quel que soit son identifiant (teamScope).
+    const scope = this.resolveScopeRef(scopeRef)
+    if (!scope) {
+      throw new Error(
+        scopeRef === TEAM_SCOPE_ALIAS ? "scope inconnu : org (aucun espace d'entreprise sur cette machine)" : `scope inconnu : ${scopeRef}`,
+      )
+    }
     return scope
   }
 

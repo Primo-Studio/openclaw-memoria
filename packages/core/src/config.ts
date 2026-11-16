@@ -43,6 +43,16 @@ export interface MemoriaConfig {
     relay_path?: string
     discovery_file?: string
   }
+  /**
+   * Rôle de CETTE machine dans le partage d'équipe. `owner` (défaut) : le Mac
+   * du propriétaire, ses agents gardent leurs droits et ses faits n'entrent
+   * dans l'espace d'équipe (`org`) que par sa validation (tri, partage).
+   * `team` : un Mac de l'équipe, où l'appairage d'un agent Claude Code ou
+   * Codex donne lecture ET écriture sur `org` (OpenClaw jamais l'écriture).
+   */
+  sharing?: {
+    machine?: 'owner' | 'team'
+  }
   llm?: {
     /** Profil raccourci : '100-local' | 'local-plus-cloud' | 'cloud' | 'custom'. */
     profile?: string

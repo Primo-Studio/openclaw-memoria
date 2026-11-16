@@ -389,6 +389,11 @@ export interface RecallItem {
   trust?: RecallTrust
   /** Au plus 3 voisins par entité partagée ; seulement si `RecallInput.links`. */
   links?: RecallLink[]
+  /**
+   * `org` : le fait vient de l'espace d'équipe (partagé avec les Mac de
+   * l'équipe). Absent pour tout autre scope : la sortie d'avant est inchangée.
+   */
+  scope_type?: Extract<ScopeKind, 'org'>
 }
 
 /** Raison d'un match : mots, sens (vecteurs), voisin de graphe, contexte actif, épinglé. */

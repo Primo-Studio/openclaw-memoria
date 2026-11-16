@@ -592,8 +592,24 @@ export async function setPolicy(
   await request<{ ok: boolean }>('POST', '/v1/admin/policy', { assistant_id: assistantId, scope_id: scopeId, ...perms })
 }
 
-export async function shareFacts(factIds: string[], targetScope: string): Promise<{ shared: number; scope: string }> {
-  return request<{ shared: number; scope: string }>('POST', '/v1/admin/share', { fact_ids: factIds, target_scope: targetScope })
+/**
+ * Raisons d'un refus de partage vers l'espace d'équipe (miroir de
+ * TEAM_SHARE_REFUSALS, core/triage/types.ts), dans l'ordre où le moteur les teste.
+ */
+export const TEAM_SHARE_REFUSALS = ['critical', 'sensible', 'secret', 'client', 'redite', 'sans_tri', 'faux', 'rubrique', 'genre'] as const
+export type TeamShareRefusal = (typeof TEAM_SHARE_REFUSALS)[number]
+export type TeamShareRefusedCounts = Record<TeamShareRefusal, number>
+
+export interface ShareFactsResult {
+  shared: number
+  scope: string
+  /** Vers l'espace d'équipe (`org`) seulement : faits écartés par raison. */
+  refused?: TeamShareRefusedCounts
+}
+
+/** `targetScope` : id, nom, ou `org` (l'espace d'équipe, garde-fous côté serveur). */
+export async function shareFacts(factIds: string[], targetScope: string): Promise<ShareFactsResult> {
+  return request<ShareFactsResult>('POST', '/v1/admin/share', { fact_ids: factIds, target_scope: targetScope })
 }
 
 export interface IdentityCandidate {
@@ -1497,6 +1513,8 @@ export interface TriageFilter {
   include_faux?: boolean
   since?: string
   until?: string
+  /** Candidats pour l'espace d'équipe (process, savoir, leçon métier ; ni client, ni sensible, ni secret). */
+  team?: boolean
 }
 
 export interface TriagePage {
@@ -1520,6 +1538,7 @@ export function triageQuery(filter: TriageFilter, page: { cursor?: string | null
   if (filter.include_faux) p.set('include_faux', 'true')
   if (filter.since) p.set('since', filter.since)
   if (filter.until) p.set('until', filter.until)
+  if (filter.team) p.set('team', 'true')
   if (page.limit) p.set('limit', String(page.limit))
   if (page.cursor) p.set('cursor', page.cursor)
   const qs = p.toString()
@@ -1528,6 +1547,14 @@ export function triageQuery(filter: TriageFilter, page: { cursor?: string | null
 
 export async function getTriageList(filter: TriageFilter, page: { cursor?: string | null; limit?: number } = {}): Promise<TriagePage> {
   return request<TriagePage>('GET', `/v1/admin/triage${triageQuery(filter, page)}`)
+}
+
+/** Faits proposés pour l'espace d'équipe (filtre « candidats équipe » du serveur). Pas encore d'écran. */
+export async function getTeamCandidates(
+  filter: Omit<TriageFilter, 'team'> = {},
+  page: { cursor?: string | null; limit?: number } = {},
+): Promise<TriagePage> {
+  return getTriageList({ ...filter, team: true }, page)
 }
 
 export interface TriageGenreCount {
@@ -1615,11 +1642,17 @@ export interface TriagePromoteResult {
   already_active: number
   not_found: number
   shared: number
+  /** `share: 'org'` seulement : faits validés mais écartés de l'espace d'équipe, par raison. */
+  share_refused?: TeamShareRefusedCounts
 }
 
-/** Valide (→ actif) ; `share` : partagé ensuite avec toutes les IA (espace « user »). */
-export async function promoteTriage(factIds: string[], opts: { share?: boolean } = {}): Promise<TriagePromoteResult> {
-  return request<TriagePromoteResult>('POST', '/v1/admin/triage/promote', { fact_ids: factIds, ...(opts.share ? { share: true } : {}) })
+/**
+ * Valide (→ actif) ; `share` : partagé ensuite. `true` ou `'user'` : avec
+ * toutes les IA (espace « user ») ; `'org'` : espace d'équipe, filtré côté serveur.
+ */
+export async function promoteTriage(factIds: string[], opts: { share?: boolean | 'user' | 'org' } = {}): Promise<TriagePromoteResult> {
+  const share = opts.share === 'user' || opts.share === 'org' ? opts.share : opts.share ? true : undefined
+  return request<TriagePromoteResult>('POST', '/v1/admin/triage/promote', { fact_ids: factIds, ...(share !== undefined ? { share } : {}) })
 }
 
 export interface TriageCorrectionInput {

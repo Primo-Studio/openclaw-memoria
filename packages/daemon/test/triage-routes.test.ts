@@ -374,6 +374,49 @@ describe('promote, correct, verdict', () => {
   })
 })
 
+describe("espace d'équipe : candidats, promotion share 'org', partage", () => {
+  const PROCESS = 'Le banc de montage exporte les masters en ProRes 422.'
+  const FINANCE = 'Le banc de montage suit les achats de disques du trimestre.'
+
+  async function seedTeam(): Promise<{ process: string; finance: string; idea: string }> {
+    await boot()
+    const process = seedPending(PROCESS)
+    const finance = seedPending(FINANCE)
+    const idea = seedPending(IDEA)
+    await runToEnd()
+    expect((await call('POST', '/v1/admin/triage/correct', { fact_id: process, genre: 'process', rubriques: ['outils'] })).status).toBe(200)
+    expect((await call('POST', '/v1/admin/triage/correct', { fact_id: finance, genre: 'process', rubriques: ['outils', 'finance'] })).status).toBe(200)
+    return { process, finance, idea }
+  }
+
+  it('GET /v1/admin/triage?team=true : seulement le candidat ; team invalide → 400', async () => {
+    const { process } = await seedTeam()
+    expect(items((await call('GET', '/v1/admin/triage?team=true')).json).map(i => i.fact_id)).toEqual([process])
+    expect((await call('GET', '/v1/admin/triage?team=peut-etre')).status).toBe(400)
+  })
+
+  it("promote share: 'org' rend les comptes écartés ; share inconnu → 400 ; share: true reste vers user", async () => {
+    const { process, finance, idea } = await seedTeam()
+    const r = await call('POST', '/v1/admin/triage/promote', { fact_ids: [process, finance], share: 'org' })
+    expect(r.status).toBe(200)
+    expect(r.json).toMatchObject({ promoted: 2, shared: 1, share_refused: { rubrique: 1 } })
+    expect((await call('POST', '/v1/admin/triage/promote', { fact_ids: [idea], share: 'equipe' })).status).toBe(400)
+    const toUser = await call('POST', '/v1/admin/triage/promote', { fact_ids: [idea], share: true })
+    expect(toUser.json).toMatchObject({ promoted: 1, shared: 1 })
+    expect(toUser.json['share_refused']).toBeUndefined()
+    const userScope = daemon.memoria.registry.getScopeByName('user')!
+    expect(daemon.memoria.scopeFacts(userScope.id).map(f => f.id)).toEqual([idea])
+  })
+
+  it("POST /v1/admin/share vers 'org' : garde-fous côté serveur, comptes par raison", async () => {
+    const { process, finance, idea } = await seedTeam()
+    const r = await call('POST', '/v1/admin/share', { fact_ids: [process, finance, idea], target_scope: 'org' })
+    expect(r.status).toBe(200)
+    expect(r.json).toMatchObject({ shared: 1, refused: { rubrique: 1, genre: 1, sensible: 0 } })
+    expect(daemon.memoria.scopeFacts(daemon.memoria.teamScope()!.id).map(f => f.id)).toEqual([process])
+  })
+})
+
 describe('routes mémoire (jeton d’instance)', () => {
   it('/v1/memory/ideas : seuls les faits validés reviennent ; les en attente sont comptés, sans texte', async () => {
     await boot()

@@ -303,6 +303,8 @@ export function triageListFilterFrom(src: Source): TriageListFilter {
   if (since) f.since = since
   const until = isoDate(src, 'until')
   if (until) f.until = until
+  const team = bool(src, 'team')
+  if (team !== undefined) f.team = team
   return f
 }
 
@@ -344,6 +346,19 @@ function stringIds(value: unknown, name: string, max = TRIAGE_LIST_MAX): string[
   return value
 }
 
+/**
+ * `share` de la promotion : `true` (ou `'user'`) = espace user ; `'org'` =
+ * espace d'équipe, avec les garde-fous du moteur ; `false` = pas de partage.
+ */
+function shareTarget(body: Source): boolean | 'user' | 'org' | undefined {
+  const v = body['share']
+  if (v === 'user' || v === 'org') return v
+  if (!present(body, 'share')) return undefined
+  if (v === true || v === 'true' || v === '1') return true
+  if (v === false || v === 'false' || v === '0') return false
+  throw new HttpError(400, `share inconnu : ${JSON.stringify(v)} (attendu : true | false | "user" | "org")`)
+}
+
 /** Corps de POST /v1/admin/triage/promote. */
 export function triagePromoteFrom(body: Source): TriagePromoteOptions {
   const o: TriagePromoteOptions = {}
@@ -354,7 +369,7 @@ export function triagePromoteFrom(body: Source): TriagePromoteOptions {
     o.filter = triageListFilterFrom(raw as Source)
   }
   if (!o.fact_ids && !o.filter) throw new HttpError(400, 'fact_ids ou filter requis')
-  const share = bool(body, 'share')
+  const share = shareTarget(body)
   if (share !== undefined) o.share = share
   const allow = bool(body, 'allow_sensitive')
   if (allow !== undefined) o.allow_sensitive = allow
