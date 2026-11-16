@@ -1311,12 +1311,15 @@ class Pass {
       }
     }
     const perMessage = new Map<number, number>()
-    facts.forEach((f, i) => {
+    for (const [i, f] of facts.entries()) {
+      // Chaque doublon cherché coûte 90 à 130 ms sur la plus grosse base : la main
+      // est rendue entre deux faits (un lot de 6 faits figeait la boucle 0,6 s, 16/11).
+      if (i > 0) await yieldToEventLoop()
       const vector = vectors.get(i)
       const dup = this.host.findSemanticDuplicate(instance, f.text, vector)
       if (dup) {
         r.facts_duplicate++
-        return
+        continue
       }
       const auteur: Auteur = f.author.approved ? `ia:${source.agent}` : 'owner'
       const personne = f.item.personne
@@ -1354,13 +1357,13 @@ class Pass {
       })
       if (!res.created) {
         r.facts_duplicate++
-        return
+        continue
       }
       r.facts_created++
       bump(r.by_genre, f.item.genre)
       if (f.author.approved) r.facts_ia_approved++
       perMessage.set(f.item.m, (perMessage.get(f.item.m) ?? 0) + 1)
-    })
+    }
     this.mark(
       instance,
       source,

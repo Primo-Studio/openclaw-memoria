@@ -1105,7 +1105,11 @@ class Pass {
     }
     let created = 0
     let otherTwins = 0
-    accepted.forEach((a, i) => {
+    for (const [i, a] of accepted.entries()) {
+      // Chaque doublon cherché coûte 90 à 130 ms sur la plus grosse base (parcours
+      // des vecteurs en attente) : la main est rendue entre deux observations,
+      // sinon une période de 6 observations figeait la boucle 0,5 à 0,8 s (16/11).
+      if (i > 0) await yieldToEventLoop()
       const vector = vectors.get(i)
       // Une redite (même texte normalisé, texte proche ou même sens) se cherche
       // parmi les faits de la MÊME personne seulement (aucune en mode owner) :
@@ -1114,7 +1118,7 @@ class Pass {
       const dup = this.host.findSemanticDuplicate(target.instance, a.text, vector, { personId: target.personId })
       if (dup) {
         r.facts_duplicate++
-        return
+        continue
       }
       const triage: Partial<Omit<TriageRow, 'fact_id' | 'triaged_at'>> = {
         genre: 'style',
@@ -1158,11 +1162,11 @@ class Pass {
         // Texte identique au fait d'une autre fiche (ou sans fiche) : rien n'est écrit.
         r.facts_duplicate++
         otherTwins++
-        return
+        continue
       }
       created++
       r.facts_created++
-    })
+    }
     return { created, otherTwins }
   }
 }

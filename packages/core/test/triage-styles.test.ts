@@ -826,6 +826,32 @@ describe('passe styles : mode person', () => {
     expect(r.max_block_ms).toBeLessThan(200)
   }, 60_000)
 
+  it('règle n°27 : un doublon lent à chercher (80 ms par observation) ne fige pas la boucle, la main est rendue entre deux observations', async () => {
+    env = setupTriage({ llm: new StylesLlm() })
+    llm().owner = [
+      { titre: 'Messages courts', texte: "L'utilisateur écrit des messages très courts, souvent un seul mot.", appuis: [1, 2, 3] },
+      { titre: 'Dictée', texte: "L'utilisateur dicte ses messages, sans ponctuation, en longues phrases.", appuis: [2, 3, 4] },
+      { titre: 'Validation', texte: "L'utilisateur valide d'un simple accord avant de passer à la suite.", appuis: [3, 4, 5] },
+      { titre: 'Recadrage', texte: "L'utilisateur recadre vite quand la réponse s'éloigne du sujet demandé.", appuis: [4, 5, 6] },
+      { titre: 'Questions', texte: "L'utilisateur pose ses questions en fin de message, après le contexte.", appuis: [5, 6, 7] },
+      { titre: 'Rythme', texte: "L'utilisateur relance plusieurs fois par heure pour savoir où en est le travail.", appuis: [6, 7, 8] },
+    ]
+    live('-p/s.jsonl', monthOf(3, 12))
+    // Dédoublonnage lent simulé : 80 ms de calcul synchrone par observation.
+    const m = env.m as unknown as { findSemanticDuplicate: (...a: unknown[]) => unknown }
+    const original = m.findSemanticDuplicate.bind(env.m)
+    m.findSemanticDuplicate = (...a: unknown[]) => {
+      const end = Date.now() + 80
+      while (Date.now() < end) {
+        /* calcul synchrone */
+      }
+      return original(...a)
+    }
+    const r = await pass()
+    expect(r.facts_created).toBe(6)
+    expect(r.max_block_ms).toBeLessThan(200)
+  }, 30_000)
+
   it('personne inconnue ou absente : refus clair, rien ne part', async () => {
     env = setupTriage({ llm: new StylesLlm() })
     await expect(pass({ mode: 'person', person_id: 'personne-inconnue' })).rejects.toMatchObject({ code: 'not-found' })

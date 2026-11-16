@@ -564,6 +564,26 @@ describe('passe sur les messages : dry-run et autres sources', () => {
     expect(rows()).toEqual([])
   })
 
+  it('règle n°27 : un doublon lent à chercher (80 ms par fait) ne fige pas la boucle, la main est rendue entre deux faits', async () => {
+    env = setupTriage({ llm: new MessagesLlm() })
+    live(
+      '-p/s.jsonl',
+      ['vélos', 'outils', 'livres', 'jeux', 'graines', 'meubles'].map((x, i) => user(`IDEE une app de troc de ${x}`, i + 1)),
+    )
+    const m = env.m as unknown as { findSemanticDuplicate: (...a: unknown[]) => unknown }
+    const original = m.findSemanticDuplicate.bind(env.m)
+    m.findSemanticDuplicate = (...a: unknown[]) => {
+      const end = Date.now() + 80
+      while (Date.now() < end) {
+        /* calcul synchrone */
+      }
+      return original(...a)
+    }
+    const r = await pass()
+    expect(r.facts_created).toBe(6)
+    expect(r.max_block_ms).toBeLessThan(200)
+  }, 30_000)
+
   it('historique Codex : une source par session, sans le bruit système, dans la base de l’instance codex', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'memoria-codex-'))
     const file = join(dir, 'history.jsonl')
