@@ -208,7 +208,8 @@ function whyOf(item: RecallItem): string[] {
  *
  * T30 : `why`, `topic` (nom seul), `entities`, `status`, `links` et, au niveau
  * global, `dropped` s'ajoutent UNIQUEMENT quand ils existent. Un résultat sans
- * champs nouveaux donne exactement la sortie d'avant.
+ * champs nouveaux donne exactement la sortie d'avant. De même `scope: 'org'`,
+ * pour un fait de l'espace d'équipe seulement.
  */
 export function compactRecall(payload: RecallResult & { disabled?: boolean }): Record<string, unknown> {
   const items = (payload.items ?? []).map(i => {
@@ -223,6 +224,8 @@ export function compactRecall(payload: RecallResult & { disabled?: boolean }): R
     if (i.entities && i.entities.length > 0) out['entities'] = i.entities
     if (i.status) out['status'] = i.status
     if (i.links && i.links.length > 0) out['links'] = i.links
+    // Espace d'équipe seulement : un fait d'équipe n'est pas un fait sur l'utilisateur.
+    if (i.scope_type === 'org') out['scope'] = 'org'
     return out
   })
   return {
@@ -287,12 +290,13 @@ function statusWord(item: RecallItem): string | undefined {
   return undefined
 }
 
-/** Crochets d'un souvenir : raison(s) du match, origine, statut, voisins. */
+/** Crochets d'un souvenir : raison(s) du match, origine, espace d'équipe, statut, voisins. */
 function annotations(item: RecallItem): string {
   const parts: string[] = []
   const why = whyOf(item).map(label)
   if (why.length > 0) parts.push(why.join('+'))
   if (item.origin) parts.push(ORIGIN_WORD[item.origin] ?? item.origin)
+  if (item.scope_type === 'org') parts.push('team space (org)')
   const status = statusWord(item)
   if (status) parts.push(status)
   if (item.links && item.links.length > 0) {

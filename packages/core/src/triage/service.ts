@@ -114,6 +114,8 @@ export interface TriageServiceHost {
   findSemanticDuplicate(instanceId: string, text: string, vector?: Float32Array, opts?: SemanticDuplicateOptions): SemanticDuplicate | null
   /** Base privée d'une instance (état par message), ou null. */
   instanceDb(instanceId: string): EngineDb | null
+  /** Scopes de l'espace d'équipe (`org`) : le filtre « candidats équipe » écarte ce qui y est déjà. */
+  teamScopeIds?(): string[]
   userMessagesPass(): UserMessagesPassFn | null
   /** Fiche Person : nom affiché et alias (identifiants `handle` ou `other` seulement), ou null. */
   personProfile(personId: string): { id: string; display_name: string; aliases: string[] } | null
@@ -480,8 +482,9 @@ export class TriageService implements TriageApi {
   list(filter: TriageListFilter = {}, page: { cursor?: TriageCursor | null; limit?: number } = {}): TriageListPage {
     const limit = Math.max(1, Math.min(500, page.limit ?? 50))
     const items: TriageListItem[] = []
+    const query = filter.team ? { excludeScopeIds: this.host.teamScopeIds?.() ?? [] } : {}
     for (const db of this.host.dbs(filter.instance)) {
-      for (const r of listPage(db.store.db, filter, page.cursor ?? null, limit)) {
+      for (const r of listPage(db.store.db, filter, page.cursor ?? null, limit, query)) {
         items.push({
           ...r.row,
           text: r.text,

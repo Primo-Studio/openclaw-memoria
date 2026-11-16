@@ -65,6 +65,49 @@ export type Rubrique = (typeof RUBRIQUES)[number]
 export const PORTEES = ['perso', 'user', 'entite'] as const
 export type Portee = (typeof PORTEES)[number]
 
+// ---------------------------------------------------------------- espace d'équipe (`org`)
+
+/**
+ * Ce qui peut entrer dans l'espace d'équipe (`org`, partagé avec les Mac de
+ * l'équipe) et ce qui n'y entre jamais. Contrôlé CÔTÉ SERVEUR, au partage
+ * (shareFacts, promotion du tri) : un écran ou un agent ne peut pas le contourner.
+ *
+ * Liste d'AUTORISATION pour les genres (plus de la moitié des faits « entité »
+ * n'ont aucune rubrique : refuser seulement par rubrique laisserait passer le
+ * reste) ; liste de REFUS pour les rubriques.
+ */
+export const TEAM_SHARE_GENRES: readonly Genre[] = ['process', 'savoir', 'lecon', 'decision']
+
+/** Rubriques qui n'entrent jamais dans l'espace d'équipe. */
+export const TEAM_REFUSED_RUBRIQUES: readonly Rubrique[] = ['rh', 'finance', 'juridique', 'clients', 'vente']
+
+/**
+ * Filtre « candidats équipe » du tri (`team: true`) : plus strict que le
+ * partage. Les décisions n'y sont pas : elles passent au cas par cas.
+ */
+export const TEAM_CANDIDATE_GENRES: readonly Genre[] = ['process', 'savoir', 'lecon']
+
+/** Le candidat porte au moins une de ces rubriques. */
+export const TEAM_CANDIDATE_RUBRIQUES: readonly Rubrique[] = ['app', 'outils', 'contenu', 'infra', 'erreurs', 'savoir_entreprise']
+
+/**
+ * Raisons d'un refus de partage vers l'espace d'équipe, dans l'ordre où elles
+ * sont testées (un fait compte pour la première qui s'applique) :
+ *  - `critical`, `sensible` : sensibilité du fait, marque de tri ou filtre sensible local ;
+ *  - `secret` : secret trouvé au tri, référence `[secret:…]` ou secret en clair ;
+ *  - `client` : fait marqué d'un client (ou d'un projet de client) ;
+ *  - `redite` : fait supersédé (une redite ne voyage pas sans son représentant) ;
+ *  - `sans_tri` : aucune ligne de tri, ou classement sans genre ;
+ *  - `faux` : marqué faux au tri ;
+ *  - `rubrique` : rubrique refusée (rh, finance, juridique, clients, vente) ;
+ *  - `genre` : genre hors de la liste d'autorisation.
+ */
+export const TEAM_SHARE_REFUSALS = ['critical', 'sensible', 'secret', 'client', 'redite', 'sans_tri', 'faux', 'rubrique', 'genre'] as const
+export type TeamShareRefusal = (typeof TEAM_SHARE_REFUSALS)[number]
+
+/** Faits écartés d'un partage vers l'espace d'équipe, par raison (toutes les clés, 0 compris). */
+export type TeamShareRefusedCounts = Record<TeamShareRefusal, number>
+
 /**
  * Auteur : `owner` (le propriétaire de la mémoire), `ia:<agent>` (claude,
  * codex, gpt, grok…), `person:<person_id>` (une fiche Person du registre),
@@ -184,6 +227,14 @@ export interface TriageListFilter {
   /** Bornes ISO sur conversation_at. */
   since?: string
   until?: string
+  /**
+   * Candidats pour l'espace d'équipe : genre process, savoir ou lecon, au
+   * moins une rubrique de TEAM_CANDIDATE_RUBRIQUES et aucune de
+   * TEAM_REFUSED_RUBRIQUES, ni client, ni sensible, ni secret, importance et
+   * durabilité ≥ 2, représentant d'un amas seulement (même avec
+   * `include_members`), hors faits déjà dans l'espace d'équipe.
+   */
+  team?: boolean
 }
 
 /** Curseur de pagination : (conversation_at, fact_id) du dernier élément rendu. `conversation_at` vide = date inconnue. */
@@ -381,8 +432,13 @@ export interface TriagePromoteOptions {
   fact_ids?: string[]
   /** Ou un filtre de liste (en attente seulement ; éphémères et sensibles exclus par défaut). */
   filter?: TriageListFilter
-  /** Partager au scope user (toutes les IA) après validation. */
-  share?: boolean
+  /**
+   * Partager après validation. `true` ou `'user'` : espace `user` (toutes les
+   * IA du propriétaire). `'org'` : espace d'équipe, avec les garde-fous du
+   * partage (TEAM_SHARE_REFUSALS) ; un fait désigné par son id et déjà validé
+   * y part aussi.
+   */
+  share?: boolean | 'user' | 'org'
   /** Valider aussi les faits sensibles, en sensitivity = 'critical' (gardés, invisibles au rappel). */
   allow_sensitive?: boolean
   /** Plafond par appel (défaut et maximum 500). */
@@ -400,6 +456,8 @@ export interface TriagePromoteResult {
   already_active: number
   not_found: number
   shared: number
+  /** `share: 'org'` seulement : faits validés mais écartés de l'espace d'équipe, par raison. */
+  share_refused?: TeamShareRefusedCounts
   secrets_masked: number
   /** Passage ordinaire de cognition déclenché : jusqu'à un appel LLM par fait validé. */
   cognition_calls_estimate: number

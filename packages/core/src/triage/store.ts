@@ -5,14 +5,17 @@
 import type { Database } from 'better-sqlite3'
 import { toFtsQuery } from '../storage/content.js'
 import { isSensitive } from './sensitive.js'
-import type {
-  AuteurPreuve,
-  Genre,
-  TriageCorrection,
-  TriageCursor,
-  TriageListFilter,
-  TriageRow,
-  TriageStats,
+import {
+  TEAM_CANDIDATE_GENRES,
+  TEAM_CANDIDATE_RUBRIQUES,
+  TEAM_REFUSED_RUBRIQUES,
+  type AuteurPreuve,
+  type Genre,
+  type TriageCorrection,
+  type TriageCursor,
+  type TriageListFilter,
+  type TriageRow,
+  type TriageStats,
 } from './types.js'
 
 /** Colonnes écrites par un passage (jamais `verdict`, `corrected_at`, `corrected_fields`). */
@@ -245,7 +248,13 @@ interface ListQuery {
 }
 
 /** Conditions SQL d'un filtre de liste (alias t = fact_triage, f = facts). */
-export function filterConditions(filter: TriageListFilter): ListQuery {
+/** Réglages de la requête qui ne viennent pas du filtre public. */
+export interface ListQueryOptions {
+  /** Faits de ces scopes écartés (filtre « candidats équipe » : ce qui est déjà dans l'espace d'équipe). */
+  excludeScopeIds?: readonly string[]
+}
+
+export function filterConditions(filter: TriageListFilter, opts: ListQueryOptions = {}): ListQuery {
   const where: string[] = [
     'f.superseded = 0',
     'f.deleted_at IS NULL',
@@ -318,7 +327,43 @@ export function filterConditions(filter: TriageListFilter): ListQuery {
       params.push(match)
     } else where.push('0')
   }
+  if (filter.team) teamConditions(where, params, opts)
   return { where, params }
+}
+
+const placeholders = (values: readonly unknown[]): string => values.map(() => '?').join(',')
+
+/**
+ * Filtre « candidats équipe » : une liste d'AUTORISATION (genre et rubrique
+ * métier), plus les refus du partage vers l'espace d'équipe, pour que la
+ * liste ne propose jamais un fait que le partage écarterait. Aucun index
+ * dédié : le filtre s'ajoute aux conditions de la liste (règle n°27).
+ */
+function teamConditions(where: string[], params: unknown[], opts: ListQueryOptions): void {
+  where.push(`t.genre IN (${placeholders(TEAM_CANDIDATE_GENRES)})`)
+  params.push(...TEAM_CANDIDATE_GENRES)
+  where.push(`EXISTS (SELECT 1 FROM json_each(t.rubriques) WHERE value IN (${placeholders(TEAM_CANDIDATE_RUBRIQUES)}))`)
+  params.push(...TEAM_CANDIDATE_RUBRIQUES)
+  where.push(`NOT EXISTS (SELECT 1 FROM json_each(t.rubriques) WHERE value IN (${placeholders(TEAM_REFUSED_RUBRIQUES)}))`)
+  params.push(...TEAM_REFUSED_RUBRIQUES)
+  where.push(
+    'f.client_org_id IS NULL',
+    "f.sensitivity = 'normal'",
+    't.sensible = 0',
+    't.secret_found = 0',
+    "instr(f.fact, '[secret:') = 0",
+    't.verdict IS NULL',
+    't.importance >= 2',
+    't.durabilite >= 2',
+    // Représentant seulement, même si la liste demande les membres.
+    '(t.amas_id IS NULL OR t.amas_id = t.fact_id)',
+    't.same_as_active IS NULL',
+  )
+  const exclude = opts.excludeScopeIds ?? []
+  if (exclude.length > 0) {
+    where.push(`f.scope_id NOT IN (${placeholders(exclude)})`)
+    params.push(...exclude)
+  }
 }
 
 export interface ListRow {
@@ -331,8 +376,14 @@ export interface ListRow {
 }
 
 /** Une page d'une base, triée par (conversation_at, fact_id) décroissants, après le curseur. */
-export function listPage(db: Database, filter: TriageListFilter, cursor: TriageCursor | null, limit: number): ListRow[] {
-  const { where, params } = filterConditions(filter)
+export function listPage(
+  db: Database,
+  filter: TriageListFilter,
+  cursor: TriageCursor | null,
+  limit: number,
+  opts: ListQueryOptions = {},
+): ListRow[] {
+  const { where, params } = filterConditions(filter, opts)
   if (cursor) {
     where.push("(COALESCE(t.conversation_at, ''), t.fact_id) < (?, ?)")
     params.push(cursor.conversation_at, cursor.fact_id)
