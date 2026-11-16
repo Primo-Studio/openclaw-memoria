@@ -2,7 +2,8 @@
  * TRI DES SOUVENIRS : le contrat.
  *
  * Partagé par le moteur de tri (core), la passe sur les messages de
- * l'utilisateur (`user-messages.ts`) et les surfaces (daemon, CLI, MCP, web).
+ * l'utilisateur (`user-messages.ts`), la passe styles (`styles-pass.ts`) et
+ * les surfaces (daemon, CLI, MCP, web).
  * Toute modification de ce fichier passe par la session principale : les
  * autres modules s'y alignent.
  *
@@ -17,6 +18,13 @@ import type { ActiveContext } from '../types.js'
 
 /** Version du prompt de classement. Une ligne d'une version plus ancienne n'est reclassée qu'avec `reclassify`. */
 export const TRIAGE_PROMPT_VERSION = 'tri-v3'
+
+/**
+ * Version du prompt de la passe styles (`styles-pass.ts`), notée dans la ligne
+ * de tri et dans l'état. Ici pour que l'hôte écarte ces faits des sources du
+ * mode person sans importer la passe.
+ */
+export const STYLES_PROMPT_VERSION = 'styles-v1'
 
 export const GENRES = [
   'idee',
@@ -331,9 +339,9 @@ export interface TriageRunStatus {
 /** Pourquoi un passage s'arrête avant la fin. */
 export type TriageStopReason = 'cancelled' | 'paused' | 'budget' | 'circuit' | 'closed' | 'max_facts'
 
-export type TriageRefusalCode = 'running' | 'paused' | 'no-llm' | 'price-unknown' | 'closed' | 'not-registered' | 'bad-request'
+export type TriageRefusalCode = 'running' | 'paused' | 'no-llm' | 'price-unknown' | 'closed' | 'not-registered' | 'bad-request' | 'not-found'
 
-/** Refus AVANT tout travail. Le daemon le traduit : running → 409, paused → 423, no-llm / price-unknown → 422. */
+/** Refus AVANT tout travail. Le daemon le traduit : running → 409, paused → 423, no-llm / price-unknown → 422, not-found → 404. */
 export class TriageRefusedError extends Error {
   readonly code: TriageRefusalCode
   constructor(code: TriageRefusalCode, message: string) {
@@ -568,6 +576,146 @@ export interface UserMessagesReport {
 
 export type UserMessagesPassFn = (host: TriageHost, opts: UserMessagesPassOptions) => Promise<UserMessagesReport>
 
+// ---------------------------------------------------------------- passe styles (hôte)
+
+/**
+ * `owner` : la manière d'échanger du propriétaire, mois par mois, tirée de ses
+ * propres messages. `person` : comment échanger avec une personne (fiche
+ * Person), tirée des notes déjà triées qui la citent.
+ */
+export type StylesPassMode = 'owner' | 'person'
+
+/** État d'une période de la passe styles (table `style_pass_state`, base de l'instance). */
+export interface StylesPeriodState {
+  /** Messages (owner) ou faits sources (person) retenus au dernier envoi : base de la règle des 50 %. */
+  items: number
+  last_at: string | null
+  /** Période finie au dernier envoi (mois écoulé ; toujours vrai en mode person). */
+  closed: boolean
+  facts: number
+  prompt_version: string
+  updated_at: string
+}
+
+/** Fait trié candidat du mode person (lu par l'hôte, jamais modifié). */
+export interface StyleSourceFact {
+  id: string
+  text: string
+  /** `conversation_at` de la ligne de tri, sinon date de création du fait. */
+  at: string
+  at_source: ConversationAtSource
+  rubriques: Rubrique[]
+}
+
+/**
+ * Ce que le moteur prête à la passe styles : l'hôte de la passe sur les
+ * messages, plus la fiche Person, le parcours des faits triés et l'état par
+ * période. Le module n'ouvre toujours aucune base.
+ */
+export interface StylesHost extends TriageHost {
+  /** Fiche Person : nom affiché et alias (identifiants `handle` ou `other`, jamais un numéro ni un e-mail), ou null. */
+  person(personId: string): { id: string; display_name: string; aliases: string[] } | null
+  /** Noms affichés de toutes les fiches Person (garde « aucun nom de tiers »). */
+  personNames(): string[]
+  /** Agent d'une instance (claude, codex, gpt…), pour `ia:<agent>`. */
+  agentOf(instanceId: string): string
+  /**
+   * Faits TRIÉS des bases lisibles par l'instance (toutes sans instance) :
+   * genre connu hors `ephemere`, ni faux, ni sensibles (marque ou
+   * `sensitivity`), ni oubliés, ni remplacés, ni tirés par la passe styles
+   * elle-même ; parcourus par fenêtres de rowid en rendant la main entre deux
+   * fenêtres. Seuls ceux dont le texte vérifie `match` sont rendus.
+   */
+  styleSourceFacts(query: {
+    instance?: string
+    match: (text: string) => boolean
+    /** Arrêt demandé : le parcours s'interrompt à la fenêtre suivante. */
+    stop?: () => boolean
+  }): Promise<{ facts: StyleSourceFact[]; scanned: number }>
+  stylesState(instanceId: string, stateKey: string): StylesPeriodState | null
+  markStyles(
+    instanceId: string,
+    stateKey: string,
+    info: { mode: StylesPassMode; person_id: string | null; period: string; items: number; last_at: string | null; closed: boolean; facts: number },
+  ): void
+}
+
+export interface StylesPassOptions {
+  mode: StylesPassMode
+  /** Obligatoire en mode person : une fiche Person du registre. */
+  person_id?: string
+  dryRun?: boolean
+  budgetUsd?: number
+  /** Messages (owner) ou faits sources (person) postérieurs à cette date ISO seulement. */
+  since?: string
+  /** Mode owner : sources de messages (défaut claude-code ; codex-history en option). */
+  sources?: Array<Extract<UserMessageSourceKind, 'claude-code' | 'codex-history'>>
+  /** Mode person : bases lisibles par cette instance, et instance où écrire (défaut : toutes les bases, l'agent principal de la machine). */
+  instance?: string
+  /** Refait une période même si elle n'a pas assez changé. */
+  force?: boolean
+  onProgress?: (progress: StylesProgress) => void
+}
+
+export interface StylesProgress {
+  periods_done: number
+  periods_total: number
+  llm_calls: number
+  facts_created: number
+  spent_usd: number
+}
+
+export interface StylesReport {
+  mode: StylesPassMode
+  person_id: string | null
+  /** Mode owner : sessions de messages. */
+  sessions_found: number
+  sessions_read: number
+  sessions_no_instance: number
+  sessions_unreadable: number
+  sessions_twin: number
+  /** Mode owner : messages humains gardés (non vides, non répétés). */
+  messages_seen: number
+  messages_undated: number
+  messages_before_since: number
+  /** Même message (date et texte) déjà vu dans une autre session. */
+  messages_repeated: number
+  messages_sensitive: number
+  /** Mode person : faits parcourus, cités (nom trouvé), écartés (rubrique rh/finance/juridique, sensibles). */
+  facts_scanned: number
+  sources_matched: number
+  sources_excluded_rubrique: number
+  sources_sensitive: number
+  /** Messages (owner) ou faits (person) envoyés au LLM ; en dry-run : qui le seraient. */
+  items_sent: number
+  /** Périodes : mois (owner) ou la personne (person). */
+  periods_found: number
+  /** Mois de moins de STYLE_MONTH_MIN_MESSAGES messages (ignorés). */
+  periods_small: number
+  /** Déjà traitées et pas assez changées : rien ne repart. */
+  periods_known: number
+  periods_sent: number
+  /** Sortie illisible ou appel en échec : rien d'écrit ni de marqué, reprise au passage suivant. */
+  periods_failed: number
+  facts_created: number
+  facts_duplicate: number
+  /** Observations écartées, par raison (appuis, sensible, theme, tiers, surplus, invalide). */
+  observations_rejected: Record<string, number>
+  secrets_masked: number
+  llm_calls: number
+  llm_calls_estimate: number
+  tokens_in_estimate: number
+  spent_usd: number
+  /** Dry-run : coût estimé (null si un prix est inconnu). */
+  estimate_usd: number | null
+  stopped: TriageStopReason | null
+  errors: string[]
+  /** Plus long blocage de la boucle d'événements pendant la passe (ms). */
+  max_block_ms: number | null
+}
+
+export type StylesPassFn = (host: StylesHost, opts: StylesPassOptions) => Promise<StylesReport>
+
 // ---------------------------------------------------------------- l'API publique
 
 export interface TriageApi {
@@ -601,4 +749,6 @@ export interface TriageApi {
   stylesForInstance(instanceId: string, query?: StylesQuery): StylesResult
   /** Passe sur les messages de l'utilisateur (fonction branchée par registerUserMessagesPass). */
   runUserMessages(opts?: UserMessagesPassOptions): Promise<UserMessagesReport>
+  /** Passe styles (fonction branchée par registerStylesPass). Mêmes refus, plus `not-found` (personne inconnue). */
+  runStyles(opts: StylesPassOptions): Promise<StylesReport>
 }

@@ -20,15 +20,23 @@ import { assertPriced, DEFAULT_TRIAGE_BUDGET_USD, estimateTokensFromChars, Triag
 import { countPending, CROSS_SOURCE_MAX_COMPARISONS, isNetworkDown, MAX_OUTPUT_TOKENS_PER_FACT, runTriagePass, TRIAGE_LLM_TIMEOUT_MS, type EngineDb } from './engine.js'
 import { buildTriageSystem } from './prompt.js'
 import { isSensitive } from './sensitive.js'
-import { addStats, addStatsAsync, applyCorrection, emptyStats, listPage } from './store.js'
+import { addStats, addStatsAsync, applyCorrection, emptyStats, listPage, readStyleState, scanStyleSourcesAsync, writeStyleState } from './store.js'
 import {
+  STYLES_PROMPT_VERSION,
   TriageRefusedError,
+  type ConversationAtSource,
   type IdeasFilter,
   type IdeasResult,
+  type Rubrique,
   type SemanticDuplicate,
   type StorePendingTriagedInput,
   type StorePendingTriagedResult,
+  type StyleSourceFact,
+  type StylesHost,
+  type StylesPassFn,
+  type StylesPassOptions,
   type StylesQuery,
+  type StylesReport,
   type StylesResult,
   type TriageApi,
   type TriageCorrection,
@@ -103,6 +111,9 @@ export interface TriageServiceHost {
   /** Base privée d'une instance (état par message), ou null. */
   instanceDb(instanceId: string): EngineDb | null
   userMessagesPass(): UserMessagesPassFn | null
+  /** Fiche Person : nom affiché et alias (identifiants `handle` ou `other` seulement), ou null. */
+  personProfile(personId: string): { id: string; display_name: string; aliases: string[] } | null
+  stylesPass(): StylesPassFn | null
 }
 
 function idleStatus(budget: number): TriageRunStatus {
@@ -174,6 +185,7 @@ export class TriageService implements TriageApi {
   /** Plafond de comparaisons de l'amas entre sources (public pour les tests ; défaut du moteur). */
   crossSourceMaxComparisons = CROSS_SOURCE_MAX_COMPARISONS
   private active: ActiveRun | null = null
+  /** Passe annexe en cours (messages ou styles) : une seule à la fois, et jamais pendant un passage. */
   private messages: { cancelled: boolean } | null = null
 
   constructor(private readonly host: TriageServiceHost) {}
@@ -645,6 +657,95 @@ export class TriageService implements TriageApi {
       const report = await pass(host, opts)
       if (!this.host.isClosed()) {
         this.host.audit('triage_user_messages', `facts=${report.facts_created} spent_usd=${report.spent_usd.toFixed(4)}`)
+      }
+      return report
+    } finally {
+      this.messages = null
+    }
+  }
+
+  // ---------------------------------------------------------------- passe styles
+
+  /**
+   * Hôte prêté à la passe styles : celui de la passe sur les messages, plus la
+   * fiche Person, le parcours des faits triés (fenêtres de rowid, main rendue
+   * entre deux) et l'état par période (`style_pass_state`, base de l'instance).
+   * Public pour les tests de ce module.
+   */
+  createStylesHost(opts: Parameters<TriageService['createHost']>[0]): StylesHost {
+    const host = this.host
+    const stateDb = (instanceId: string) => host.instanceDb(instanceId)?.store.db ?? null
+    return {
+      ...this.createHost(opts),
+      person: personId => host.personProfile(personId),
+      personNames: () => host.persons().map(p => p.display_name),
+      agentOf: instanceId => host.agentOf(instanceId),
+      async styleSourceFacts(query) {
+        const facts: StyleSourceFact[] = []
+        let scanned = 0
+        for (const db of host.dbs(query.instance)) {
+          if (host.isClosed() || query.stop?.()) break
+          const r = await scanStyleSourcesAsync(db.store.db, {
+            match: query.match,
+            excludePromptVersion: STYLES_PROMPT_VERSION,
+            stop: () => host.isClosed() || query.stop?.() === true,
+          })
+          scanned += r.scanned
+          for (const f of r.facts) {
+            facts.push({ ...f, at_source: f.at_source as ConversationAtSource, rubriques: f.rubriques as Rubrique[] })
+          }
+        }
+        return { facts, scanned }
+      },
+      stylesState(instanceId, stateKey) {
+        const db = stateDb(instanceId)
+        return db ? readStyleState(db, stateKey) : null
+      },
+      markStyles(instanceId, stateKey, info) {
+        const db = stateDb(instanceId)
+        if (!db) return
+        writeStyleState(db, stateKey, { ...info, prompt_version: STYLES_PROMPT_VERSION }, nowISO())
+      },
+    }
+  }
+
+  async runStyles(opts: StylesPassOptions): Promise<StylesReport> {
+    const pass = this.host.stylesPass()
+    if (!pass) throw new TriageRefusedError('not-registered', 'passe styles non branchée (registerStylesPass)')
+    if (this.host.isClosed()) throw new TriageRefusedError('closed', 'Memoria est fermé')
+    if (opts.mode !== 'owner' && opts.mode !== 'person') throw new TriageRefusedError('bad-request', 'mode inconnu : owner ou person')
+    if (opts.mode === 'person') {
+      if (!opts.person_id) throw new TriageRefusedError('bad-request', 'person_id requis en mode person')
+      if (!this.host.personProfile(opts.person_id)) throw new TriageRefusedError('not-found', `personne inconnue : ${opts.person_id}`)
+    }
+    if (this.active || this.messages) throw new TriageRefusedError('running', 'un tri est déjà en cours')
+    if (!opts.dryRun && !this.host.isEnabled()) {
+      throw new TriageRefusedError('paused', 'Memoria est en pause : la passe styles est refusée.')
+    }
+    const flag = { cancelled: false }
+    this.messages = flag
+    try {
+      const { extraction, embeddings } = await this.host.profile()
+      if (!extraction && !opts.dryRun) throw new TriageRefusedError('no-llm', 'aucun LLM d’extraction configuré')
+      const llmPrice = extraction ? assertPriced(extraction.name, extraction.model, 'le LLM') : null
+      const embPrice = embeddings ? assertPriced(embeddings.name, embeddings.model, 'les vecteurs') : null
+      const budgetUsd = opts.budgetUsd ?? this.defaultBudget()
+      if (!(budgetUsd >= 0)) throw new TriageRefusedError('bad-request', 'plafond de dépense invalide')
+      const budget = new TriageBudget({ budgetUsd, llmPrice, embeddingsPrice: embPrice })
+      const host = this.createStylesHost({
+        llm: extraction,
+        embeddings,
+        budget,
+        stop: () => {
+          if (this.host.isClosed()) return 'closed'
+          if (flag.cancelled) return 'cancelled'
+          if (!opts.dryRun && !this.host.isEnabled()) return 'paused'
+          return null
+        },
+      })
+      const report = await pass(host, opts)
+      if (!this.host.isClosed()) {
+        this.host.audit('triage_styles', `mode=${report.mode} facts=${report.facts_created} spent_usd=${report.spent_usd.toFixed(4)}`)
       }
       return report
     } finally {

@@ -1637,3 +1637,87 @@ export async function correctTriage(c: TriageCorrectionInput): Promise<boolean> 
 export async function setTriageVerdict(factIds: string[], verdict: 'faux' | null): Promise<number> {
   return (await request<{ updated: number }>('POST', '/v1/admin/triage/verdict', { fact_ids: factIds, verdict })).updated
 }
+
+// ---------------------------------------------------------------- passe styles
+// Miroir de StylesPassOptions / StylesReport (core/triage/types.ts) et de
+// /v1/admin/triage/styles (daemon/triage-routes.ts). Pas encore d'écran.
+
+/** `owner` : la manière d'échanger du propriétaire, mois par mois ; `person` : comment échanger avec une fiche Person. */
+export type StylesPassMode = 'owner' | 'person'
+
+export interface StylesPassInput {
+  mode: StylesPassMode
+  /** Obligatoire en mode person. */
+  person_id?: string
+  dry_run?: boolean
+  budget_usd?: number
+  /** Date ISO : messages ou faits sources postérieurs seulement. */
+  since?: string
+  /** Refait une période même si elle n'a pas assez changé. */
+  force?: boolean
+  /** Mode owner seulement. */
+  sources?: Array<'claude-code' | 'codex-history'>
+  /** Mode person seulement : bases lisibles par cette instance, et instance où écrire. */
+  instance?: string
+}
+
+export interface StylesProgress {
+  periods_done: number
+  periods_total: number
+  llm_calls: number
+  facts_created: number
+  spent_usd: number
+}
+
+export interface StylesReport {
+  mode: StylesPassMode
+  person_id: string | null
+  sessions_found: number
+  sessions_read: number
+  messages_seen: number
+  messages_sensitive: number
+  facts_scanned: number
+  sources_matched: number
+  sources_excluded_rubrique: number
+  sources_sensitive: number
+  items_sent: number
+  periods_found: number
+  periods_small: number
+  periods_known: number
+  periods_sent: number
+  periods_failed: number
+  facts_created: number
+  facts_duplicate: number
+  observations_rejected: Record<string, number>
+  llm_calls: number
+  llm_calls_estimate: number
+  spent_usd: number
+  estimate_usd: number | null
+  stopped: 'cancelled' | 'paused' | 'budget' | 'circuit' | 'closed' | 'max_facts' | null
+  errors: string[]
+  max_block_ms: number | null
+}
+
+export interface StylesJobState {
+  status: 'idle' | 'running' | 'done' | 'cancelled' | 'error'
+  dry_run: boolean
+  started_at: string | null
+  finished_at: string | null
+  progress: StylesProgress | null
+  report: StylesReport | null
+  refusal: string | null
+  error: string | null
+}
+
+export async function getStylesPass(): Promise<StylesJobState> {
+  return request<StylesJobState>('GET', '/v1/admin/triage/styles')
+}
+
+/** Lance la passe styles (ou une estimation sans aucun appel : `dry_run`). Rend dès le démarrage (202). */
+export async function startStylesPass(input: StylesPassInput): Promise<StylesJobState> {
+  return request<StylesJobState>('POST', '/v1/admin/triage/styles', input)
+}
+
+export async function cancelStylesPass(): Promise<boolean> {
+  return (await request<{ cancelled: boolean }>('DELETE', '/v1/admin/triage/styles')).cancelled
+}

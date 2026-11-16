@@ -484,3 +484,75 @@ describe('passe sur les messages et mise à jour', () => {
     expect(after.status).toBe(200)
   })
 })
+
+describe('passe styles', () => {
+  /** Session Claude Code fictive : `n` messages du propriétaire en mars 2026. */
+  function writeSession(n: number): void {
+    const dir = join(root, 'claude-projects', '-projet-fictif')
+    mkdirSync(dir, { recursive: true })
+    const lines: string[] = []
+    for (let k = 1; k <= n; k++) {
+      const ts = new Date(Date.UTC(2026, 2, k, 9)).toISOString()
+      lines.push(JSON.stringify({ type: 'user', timestamp: ts, entrypoint: 'cli', message: { role: 'user', content: `ok go pour la suite numéro ${k}` } }))
+      lines.push(JSON.stringify({ type: 'assistant', timestamp: ts, message: { role: 'assistant', content: [{ type: 'text', text: 'Fait.' }] } }))
+    }
+    writeFileSync(join(dir, 'session.jsonl'), lines.join('\n') + '\n')
+  }
+
+  async function finished(): Promise<Record<string, unknown>> {
+    let state: Record<string, unknown> = {}
+    await waitFor(async () => {
+      state = (await call('GET', '/v1/admin/triage/styles')).json
+      return state['status'] !== 'running'
+    })
+    return state
+  }
+
+  it('POST /v1/admin/triage/styles (dry-run) lance la passe en job, GET rend son bilan, sans aucun appel au LLM', async () => {
+    await boot()
+    writeSession(12)
+    const r = await call('POST', '/v1/admin/triage/styles', { mode: 'owner', dry_run: true })
+    expect(r.status).toBe(202)
+    expect(r.json['status']).toBe('running')
+    const state = await finished()
+    expect(state['status']).toBe('done')
+    expect(state['refusal']).toBeNull()
+    expect(state['report']).toMatchObject({ mode: 'owner', periods_sent: 1, items_sent: 12, llm_calls: 0, llm_calls_estimate: 1, estimate_usd: 0 })
+    expect(llm.calls).toBe(0)
+
+    // Mode person : une fiche existante, des faits triés qui la citent.
+    const leonie = daemon.memoria.createPerson({ display_name: 'Léonie Exemple' }).id
+    for (const text of ['Léonie répond plus vite par message que par mail.', 'Pour Léonie, un vocal court marche mieux.']) {
+      const fact = daemon.memoria.storeFact({ instance, content: text, source: 'transcript-import' })
+      contentDb(daemon.memoria)
+        .prepare("INSERT INTO fact_triage (fact_id, genre, rubriques, triaged_at, prompt_version) VALUES (?, 'fait', '[\"projet\"]', ?, 'tri-v3')")
+        .run(fact.id, new Date().toISOString())
+    }
+    expect((await call('POST', '/v1/admin/triage/styles', { mode: 'person', person_id: leonie, dry_run: true })).status).toBe(202)
+    expect((await finished())['report']).toMatchObject({ mode: 'person', person_id: leonie, sources_matched: 2, items_sent: 2, llm_calls: 0 })
+    expect(llm.calls).toBe(0)
+  })
+
+  it('corps invalide → 400, personne ou instance inconnue → 404, pendant un tri → 409', async () => {
+    await boot()
+    expect((await call('POST', '/v1/admin/triage/styles', {})).status).toBe(400)
+    expect((await call('POST', '/v1/admin/triage/styles', { mode: 'equipe' })).status).toBe(400)
+    expect((await call('POST', '/v1/admin/triage/styles', { mode: 'person' })).status).toBe(400)
+    expect((await call('POST', '/v1/admin/triage/styles', { mode: 'owner', person_id: 'x' })).status).toBe(400)
+    expect((await call('POST', '/v1/admin/triage/styles', { mode: 'owner', sources: ['mail'] })).status).toBe(400)
+    expect((await call('POST', '/v1/admin/triage/styles', { mode: 'person', person_id: 'personne-inconnue', dry_run: true })).status).toBe(404)
+    const leonie = daemon.memoria.createPerson({ display_name: 'Léonie Exemple' }).id
+    expect((await call('POST', '/v1/admin/triage/styles', { mode: 'person', person_id: leonie, instance: 'instance-inconnue' })).status).toBe(404)
+    // Sans jeton admin : refusé.
+    expect((await call('GET', '/v1/admin/triage/styles', undefined, instanceToken)).status).toBe(401)
+    seedPending(IDEA)
+    let release!: () => void
+    llm.gate = new Promise<void>(r => (release = r))
+    expect((await call('POST', '/v1/admin/triage/run', {})).status).toBe(202)
+    await waitFor(() => llm.calls > 0)
+    expect((await call('POST', '/v1/admin/triage/styles', { mode: 'owner', dry_run: true })).status).toBe(409)
+    release()
+    await waitFor(async () => (await call('GET', '/v1/admin/triage/run')).json['state'] !== 'running')
+    expect((await call('GET', '/v1/admin/triage/styles')).json['status']).toBe('idle')
+  })
+})

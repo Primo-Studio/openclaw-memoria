@@ -14,6 +14,10 @@
  *    l'auraient vidé, et repairVecIndex réinjecte toute ligne d'`embeddings`).
  *  - 81 `user_message_state` : état par message de la passe sur les messages
  *    de l'utilisateur (idempotence, reprise).
+ *  - 82 `style_pass_state` : état par période de la passe styles (un mois du
+ *    propriétaire, ou une personne). Petite table neuve, sa seule clé
+ *    primaire : aucun index sur une grosse table (un index de la file de
+ *    revue figeait le premier démarrage 220 à 430 ms et a été retiré).
  */
 import type { Migration } from '../storage/migrations.js'
 
@@ -92,6 +96,26 @@ export const triageMigrations: Migration[] = [
           updated_at TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_user_message_state_source ON user_message_state(source_key);
+      `)
+    },
+  },
+  {
+    version: 82,
+    name: 'style-pass-state',
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS style_pass_state (
+          state_key TEXT PRIMARY KEY,
+          mode TEXT NOT NULL CHECK (mode IN ('owner','person')),
+          person_id TEXT,
+          period TEXT NOT NULL,
+          items INTEGER NOT NULL DEFAULT 0,
+          last_at TEXT,
+          closed INTEGER NOT NULL DEFAULT 0,
+          facts INTEGER NOT NULL DEFAULT 0,
+          prompt_version TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
       `)
     },
   },

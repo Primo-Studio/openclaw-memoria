@@ -532,3 +532,106 @@ export function applyCorrection(db: Database, correction: TriageCorrection, now:
   ).run(params)
   return true
 }
+
+// ---------------------------------------------------------------- passe styles
+
+/** Largeur (en rowid) d'une fenêtre du parcours des sources du mode person (même mesure que le repérage du moteur). */
+export const STYLE_SOURCES_WINDOW = 2000
+
+/**
+ * Faits triés candidats d'une fenêtre de rowid (alias f = facts, t =
+ * fact_triage) : ni oubliés, ni remplacés, ni archivés, sensibilité normale,
+ * genre connu hors `ephemere`, ni faux, ni sensibles, ni tirés par la passe
+ * styles (`prompt_version` du 3e paramètre). Les rubriques et le nom cité se
+ * vérifient ensuite en JS.
+ */
+const STYLE_SOURCES_SQL = `SELECT f.id AS id, f.fact AS fact, f.created_at AS created_at,
+       t.conversation_at AS conversation_at, t.conversation_at_source AS at_source, t.rubriques AS rubriques
+  FROM facts f JOIN fact_triage t ON t.fact_id = f.id
+  WHERE f.rowid > ? AND f.rowid <= ?
+    AND f.superseded = 0 AND f.deleted_at IS NULL AND f.lifecycle_state IN ('active','dormant')
+    AND f.sensitivity = 'normal'
+    AND t.genre IS NOT NULL AND t.genre != 'ephemere'
+    AND t.verdict IS NULL AND t.sensible = 0
+    AND (t.prompt_version IS NULL OR t.prompt_version != ?)`
+
+/**
+ * Parcours des sources du mode person dans une base, par fenêtres de rowid
+ * bornées, en rendant la main entre deux fenêtres (ticket #27). Comme le
+ * repérage du moteur, chaque fenêtre s'arrête au max relu après la cession :
+ * un fait ajouté pendant le parcours est vu.
+ */
+export async function scanStyleSourcesAsync(
+  db: Database,
+  opts: {
+    match: (text: string) => boolean
+    excludePromptVersion: string
+    stop?: () => boolean
+    window?: number
+    yieldFn?: () => Promise<void>
+  },
+): Promise<{ facts: Array<{ id: string; text: string; at: string; at_source: string; rubriques: string[] }>; scanned: number }> {
+  const size = Math.max(1, Math.floor(opts.window ?? STYLE_SOURCES_WINDOW))
+  const pause = opts.yieldFn ?? ((): Promise<void> => new Promise(resolve => setImmediate(resolve)))
+  const stmt = db.prepare(STYLE_SOURCES_SQL)
+  const out: Array<{ id: string; text: string; at: string; at_source: string; rubriques: string[] }> = []
+  let scanned = 0
+  for (let last = 0, top = maxRowid(db, 'facts'); last < top; top = maxRowid(db, 'facts')) {
+    const hi = Math.min(last + size, top)
+    const rows = stmt.all(last, hi, opts.excludePromptVersion) as Array<{
+      id: string
+      fact: string
+      created_at: string
+      conversation_at: string | null
+      at_source: string
+      rubriques: string
+    }>
+    scanned += rows.length
+    for (const r of rows) {
+      if (!opts.match(r.fact)) continue
+      let rubriques: string[] = []
+      try {
+        const parsed = JSON.parse(r.rubriques || '[]') as unknown
+        if (Array.isArray(parsed)) rubriques = parsed.filter((x): x is string => typeof x === 'string')
+      } catch {
+        /* rubriques illisibles : traitées comme vides, le filtre sensible reste appliqué */
+      }
+      out.push({
+        id: r.id,
+        text: r.fact,
+        at: r.conversation_at ?? r.created_at,
+        at_source: r.conversation_at ? r.at_source : 'creation',
+        rubriques,
+      })
+    }
+    last = hi
+    await pause()
+    if (opts.stop?.()) break
+  }
+  return { facts: out, scanned }
+}
+
+/** État d'une période de la passe styles (null : jamais traitée). */
+export function readStyleState(
+  db: Database,
+  stateKey: string,
+): { items: number; last_at: string | null; closed: boolean; facts: number; prompt_version: string; updated_at: string } | null {
+  const r = db.prepare('SELECT items, last_at, closed, facts, prompt_version, updated_at FROM style_pass_state WHERE state_key = ?').get(stateKey) as
+    | { items: number; last_at: string | null; closed: number; facts: number; prompt_version: string; updated_at: string }
+    | undefined
+  return r ? { ...r, closed: r.closed === 1 } : null
+}
+
+export function writeStyleState(
+  db: Database,
+  stateKey: string,
+  info: { mode: string; person_id: string | null; period: string; items: number; last_at: string | null; closed: boolean; facts: number; prompt_version: string },
+  now: string,
+): void {
+  db.prepare(
+    `INSERT INTO style_pass_state (state_key, mode, person_id, period, items, last_at, closed, facts, prompt_version, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(state_key) DO UPDATE SET items = excluded.items, last_at = excluded.last_at, closed = excluded.closed,
+       facts = excluded.facts, prompt_version = excluded.prompt_version, updated_at = excluded.updated_at`,
+  ).run(stateKey, info.mode, info.person_id, info.period, info.items, info.last_at, info.closed ? 1 : 0, info.facts, info.prompt_version, now)
+}

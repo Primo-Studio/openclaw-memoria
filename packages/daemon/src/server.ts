@@ -41,6 +41,7 @@ import {
   saveCredentials,
   serveInvocation,
   runUserMessagesPass,
+  runStylesPass,
   type AssistantType,
   type AutostartSpec,
   type AutostartStatus,
@@ -60,11 +61,13 @@ import { OllamaPullJob } from './ollama-pull.js'
 import { ImportJobRunner } from './import-job.js'
 import { HttpError } from './http-error.js'
 import {
+  StylesJob,
   TriageStatsCache,
   UserMessagesJob,
   encodeTriageCursor,
   ideasInputFrom,
   mapTriageErrors,
+  stylesOptionsFrom,
   stylesQueryFrom,
   triageCorrectionFrom,
   triageListQuery,
@@ -197,8 +200,11 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   // c'est l'hôte qui la branche (triage/user-messages.ts). Un job à la fois.
   memoria.registerUserMessagesPass(runUserMessagesPass)
   const messagesJob = new UserMessagesJob()
-  /** Un tri (passage ou passe sur les messages) tourne : la mise à jour le couperait net. */
-  const triageBusy = (): boolean => memoria.triage.status().state === 'running' || messagesJob.running
+  // Passe styles (triage/styles-pass.ts) : même branchement, même règle d'un seul travail de tri à la fois.
+  memoria.registerStylesPass(runStylesPass)
+  const stylesJob = new StylesJob()
+  /** Un tri (passage, passe sur les messages ou passe styles) tourne : la mise à jour le couperait net. */
+  const triageBusy = (): boolean => memoria.triage.status().state === 'running' || messagesJob.running || stylesJob.running
   /**
    * Compteurs du tri : une lecture groupée de fact_triage, par tranches avec
    * retour à la boucle d'événements (moins de 20 ms d'un tenant sur 70 000
@@ -210,9 +216,10 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     stamp: () => {
       const run = memoria.triage.status()
       const messages = messagesJob.current()
+      const styles = stylesJob.current()
       return {
-        key: `${run.run_id}:${run.state}:${run.finished_at}|${messages.status}:${messages.finished_at}`,
-        running: run.state === 'running' || messagesJob.running,
+        key: `${run.run_id}:${run.state}:${run.finished_at}|${messages.status}:${messages.finished_at}|${styles.status}:${styles.finished_at}`,
+        running: run.state === 'running' || messagesJob.running || stylesJob.running,
       }
     },
   })
@@ -602,7 +609,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         // Mêmes refus que le moteur, vérifiés AVANT de lancer : le moteur ne les
         // lève qu'après une sonde du profil, quand la réponse serait déjà partie.
         const busy = (): void => {
-          if (triageBusy()) throw new HttpError(409, 'un tri est déjà en cours (GET /v1/admin/triage/run ou /v1/admin/triage/messages)')
+          if (triageBusy()) throw new HttpError(409, 'un tri est déjà en cours (GET /v1/admin/triage/run, /v1/admin/triage/messages ou /v1/admin/triage/styles)')
         }
         busy()
         if (!opts.dryRun && !memoria.isEnabled()) {
@@ -622,6 +629,34 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       }
       case 'DELETE /v1/admin/triage/messages': {
         sendJson(res, 200, { cancelled: messagesJob.running ? memoria.triage.cancel() : false })
+        return
+      }
+      // Passe styles : même contrat que la passe sur les messages (job, 202, état par le GET).
+      case 'POST /v1/admin/triage/styles': {
+        const opts = stylesOptionsFrom(await readJson(req))
+        assertKnownInstance(opts.instance)
+        if (opts.person_id && !memoria.getPerson(opts.person_id)) throw new HttpError(404, `personne inconnue : ${opts.person_id}`)
+        const busy = (): void => {
+          if (triageBusy()) throw new HttpError(409, 'un tri est déjà en cours (GET /v1/admin/triage/run, /v1/admin/triage/messages ou /v1/admin/triage/styles)')
+        }
+        busy()
+        if (!opts.dryRun && !memoria.isEnabled()) {
+          throw new HttpError(423, 'Memoria est en pause : la passe styles est refusée. Réactive Memoria pour la lancer.')
+        }
+        if (!opts.dryRun && !(await memoria.hasExtraction())) {
+          throw new HttpError(422, 'aucun LLM d’extraction disponible : configure d’abord un moteur d’intelligence (Réglages)')
+        }
+        busy() // après le dernier await : deux POST simultanés ne lancent jamais deux passes
+        if (!opts.dryRun) invalidateTriageStats()
+        sendJson(res, 202, stylesJob.start(memoria, opts))
+        return
+      }
+      case 'GET /v1/admin/triage/styles': {
+        sendJson(res, 200, stylesJob.current())
+        return
+      }
+      case 'DELETE /v1/admin/triage/styles': {
+        sendJson(res, 200, { cancelled: stylesJob.running ? memoria.triage.cancel() : false })
         return
       }
       // Rattrapage de cognition : relie au graphe et aux thèmes les faits

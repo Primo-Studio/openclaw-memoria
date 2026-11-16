@@ -114,6 +114,7 @@ import {
   type SemanticDuplicate,
   type StorePendingTriagedInput,
   type StorePendingTriagedResult,
+  type StylesPassFn,
   type StylesQuery,
   type StylesResult,
   type TriagePromoteOptions,
@@ -540,6 +541,8 @@ export class Memoria {
   readonly triage: TriageService
   /** Passe sur les messages de l'utilisateur, branchée par l'hôte (jamais importée ici). */
   private userMessagesPassFn: UserMessagesPassFn | null = null
+  /** Passe styles, branchée par l'hôte (jamais importée ici). */
+  private stylesPassFn: StylesPassFn | null = null
 
   private constructor(resolved: ResolvedConfig, opts: MemoriaInitOptions) {
     this.resolved = resolved
@@ -563,6 +566,14 @@ export class Memoria {
    */
   registerUserMessagesPass(fn: UserMessagesPassFn): void {
     this.userMessagesPassFn = fn
+  }
+
+  /**
+   * Branche la passe styles (`triage/styles-pass.ts`). Même règle : l'hôte
+   * (daemon) l'appelle au démarrage, le moteur ne l'importe jamais.
+   */
+  registerStylesPass(fn: StylesPassFn): void {
+    this.stylesPassFn = fn
   }
 
   /**
@@ -4913,19 +4924,34 @@ export class Memoria {
       },
       userMessagesPass: () => {
         const pass = this.userMessagesPassFn
-        if (!pass) return null
-        // Le cache des redites ne vit que le temps de la passe : construit par
-        // pages AVANT (sans figer la boucle d'événements), vidé à la fin.
-        return async (host, opts) => {
-          this.dropTriageVecCache()
-          try {
-            if (!opts.dryRun) await this.warmTriageVecCaches()
-            return await pass(host, opts)
-          } finally {
-            this.dropTriageVecCache()
-          }
-        }
+        return pass ? (host, opts) => this.withTriageVecCache(opts.dryRun !== true, () => pass(host, opts)) : null
       },
+      stylesPass: () => {
+        const pass = this.stylesPassFn
+        return pass ? (host, opts) => this.withTriageVecCache(opts.dryRun !== true, () => pass(host, opts)) : null
+      },
+      personProfile: id => {
+        const p = this.registry.getPerson(id)
+        if (!p) return null
+        // Alias de nom seulement : un numéro, un e-mail ou un compte de messagerie n'est pas un prénom.
+        const aliases = p.identifiers.filter(i => i.kind === 'handle' || i.kind === 'other').map(i => i.value)
+        return { id: p.id, display_name: p.display_name, aliases }
+      },
+    }
+  }
+
+  /**
+   * Le cache des redites ne vit que le temps d'une passe annexe (messages,
+   * styles) : construit par pages AVANT (sans figer la boucle d'événements),
+   * vidé à la fin. Un dry-run ne le construit pas (il ne cherche aucun doublon).
+   */
+  private async withTriageVecCache<T>(warm: boolean, fn: () => Promise<T>): Promise<T> {
+    this.dropTriageVecCache()
+    try {
+      if (warm) await this.warmTriageVecCaches()
+      return await fn()
+    } finally {
+      this.dropTriageVecCache()
     }
   }
 

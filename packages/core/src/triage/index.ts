@@ -14,3 +14,5 @@ export { TriageService, TRIAGE_STATUS_SETTING, TRIAGE_ESTIMATE_SETTING, TRIAGE_S
 export type { TriageConfig, TriageServiceHost } from './service.js'
 export { MAX_LLM_FAILURES, CIRCUIT_BREAKER_FAILURES, TRIAGE_LLM_TIMEOUT_MS } from './engine.js'
 export { runUserMessagesPass } from './user-messages.js'
+export { runStylesPass } from './styles-pass.js'
+export type { StylesDetailReport } from './styles-pass.js'

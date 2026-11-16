@@ -1,0 +1,505 @@
+/**
+ * Passe styles (`triage/styles-pass.ts`) : la manière d'échanger du
+ * propriétaire, mois par mois, et comment échanger avec une fiche Person.
+ * Données fictives uniquement (dépôt public) : sessions Claude Code écrites
+ * dans un dossier temporaire, faits triés semés à la main, faux LLM.
+ */
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import type { Database } from 'better-sqlite3'
+import { afterEach, describe, expect, it } from 'vitest'
+import type { CompleteOptions, CompletionResult } from '../src/llm/provider.js'
+import { isSensitive } from '../src/triage/sensitive.js'
+import { scanStyleSourcesAsync } from '../src/triage/store.js'
+import {
+  monthClosed,
+  monthStats,
+  nameMatcher,
+  parseStylesOutput,
+  runStylesPass,
+  shouldRedo,
+  spreadSample,
+  type StylesDetailReport,
+  type StylesPassOptionsExt,
+} from '../src/triage/styles-pass.js'
+import type { StylesHost, StylesPassOptions } from '../src/triage/types.js'
+import { RecordingLlm, setupTriage, type TriageEnv } from './triage-fixtures.js'
+
+let env: TriageEnv
+afterEach(() => env?.close())
+
+// ---------------------------------------------------------------- faux LLM
+
+interface Observation {
+  titre?: string
+  texte: string
+  appuis: number[]
+}
+
+/** Répond aux deux prompts de la passe ; enregistre les éléments reçus (messages ou notes). */
+class StylesLlm extends RecordingLlm {
+  readonly messages: string[] = []
+  readonly notes: string[] = []
+  owner: Observation[] = [
+    { titre: 'Valide d’un mot', texte: "L'utilisateur valide d'un mot ou deux dès que la proposition lui convient.", appuis: [1, 2, 3] },
+    { titre: 'Dicte ses messages', texte: "L'utilisateur dicte souvent de longues phrases enchaînées, sans ponctuation.", appuis: [2, 3, 4] },
+    { titre: 'Recadre vite', texte: "L'utilisateur recadre l'assistant dès qu'une réponse s'écarte de sa demande.", appuis: [4, 5, 6] },
+    { titre: 'Rafales de messages', texte: "L'utilisateur envoie ses consignes en rafales de messages très courts.", appuis: [1, 5, 9] },
+    // Appuyée par deux messages seulement : écartée par le code.
+    { titre: 'Faible', texte: "L'utilisateur termine parfois ses messages par un émoji.", appuis: [1, 2] },
+  ]
+  person: Observation[] = []
+  constructor(name = 'ollama', model = 'styles-fictif') {
+    super(name, model)
+  }
+  override async completeDetailed(opts: CompleteOptions): Promise<CompletionResult> {
+    this.calls++
+    this.prompts.push(`${opts.system ?? ''}\n${opts.prompt}`)
+    for (const line of opts.prompt.split('\n')) {
+      if (!line.startsWith('{')) continue
+      const e = JSON.parse(line) as { message?: string; note?: string }
+      if (e.message !== undefined) this.messages.push(e.message)
+      if (e.note !== undefined) this.notes.push(e.note)
+    }
+    const owner = (opts.system ?? '').includes("SA MANIÈRE D'ÉCHANGER")
+    return { text: JSON.stringify({ observations: owner ? this.owner : this.person }) }
+  }
+}
+
+// ---------------------------------------------------------------- sessions fictives
+
+const at = (month: number, day: number, minute = 0): string => new Date(Date.UTC(2026, month - 1, day, 9, minute)).toISOString()
+const user = (text: string, ts: string) => ({ type: 'user', timestamp: ts, entrypoint: 'cli', message: { role: 'user', content: text } })
+const assistant = (text: string, ts: string) => ({ type: 'assistant', timestamp: ts, message: { role: 'assistant', content: [{ type: 'text', text }] } })
+
+function live(rel: string, lines: unknown[]): string {
+  const path = join(env.claudeDir, rel)
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, lines.map(l => JSON.stringify(l)).join('\n') + '\n')
+  return path
+}
+
+/** `n` messages fictifs du propriétaire, un par jour du mois, chacun suivi d'une réponse. */
+function monthOf(month: number, n: number, text = (k: number) => `ok go pour la suite numéro ${k}`): unknown[] {
+  const out: unknown[] = []
+  for (let k = 1; k <= n; k++) {
+    out.push(user(text(k), at(month, k)))
+    out.push(assistant('Fait.', at(month, k, 1)))
+  }
+  return out
+}
+
+const NOW = () => new Date(Date.UTC(2026, 10, 15, 12))
+
+async function pass(opts: Partial<StylesPassOptionsExt> = {}): Promise<StylesDetailReport> {
+  env.m.registerStylesPass(runStylesPass)
+  return (await env.m.triage.runStyles({ mode: 'owner', retryDelayMs: 0, now: NOW, ...opts } as StylesPassOptions)) as StylesDetailReport
+}
+
+function llm(): StylesLlm {
+  return env.llm as StylesLlm
+}
+
+/** Styles écrits par la passe (les faits semés à la main viennent d'un « import »). */
+function styles(db: Database = env.db()): Array<Record<string, unknown>> {
+  return db
+    .prepare(
+      `SELECT f.id, f.fact, f.lifecycle_state, f.source, t.genre, t.person_id, t.auteur, t.auteur_source, t.approuve_par_owner,
+              t.portee, t.conversation_at, t.prompt_version, t.titre, t.citation, t.sensible
+       FROM facts f JOIN fact_triage t ON t.fact_id = f.id
+       WHERE t.genre = 'style' AND f.source != 'transcript-import' ORDER BY f.fact`,
+    )
+    .all() as Array<Record<string, unknown>>
+}
+
+function states(db: Database = env.db()): Array<Record<string, unknown>> {
+  return db.prepare('SELECT state_key, mode, person_id, items, closed, facts FROM style_pass_state ORDER BY state_key').all() as Array<Record<string, unknown>>
+}
+
+/** Fait trié semé à la main (actif), comme après un passage du moteur. */
+function seedTriaged(
+  text: string,
+  triage: { genre?: string; rubriques?: string[]; conversation_at?: string; sensible?: number; verdict?: string | null; prompt_version?: string } = {},
+): string {
+  const fact = env.m.storeFact({ instance: env.instance, content: text, source: 'transcript-import' })
+  env
+    .db()
+    .prepare(
+      `INSERT INTO fact_triage (fact_id, genre, rubriques, triaged_at, conversation_at, conversation_at_source, sensible, verdict, prompt_version)
+       VALUES (?, ?, ?, ?, ?, 'fichier', ?, ?, ?)`,
+    )
+    .run(
+      fact.id,
+      triage.genre ?? 'fait',
+      JSON.stringify(triage.rubriques ?? ['projet']),
+      '2026-05-01T00:00:00.000Z',
+      triage.conversation_at ?? null,
+      triage.sensible ?? 0,
+      triage.verdict ?? null,
+      triage.prompt_version ?? 'tri-v3',
+    )
+  return fact.id
+}
+
+// ---------------------------------------------------------------- outils
+
+describe('passe styles : outils', () => {
+  it('statistiques locales, échantillon réparti, mois fini, règle des 50 %', () => {
+    const msgs = [5, 10, 40, 200].map(length => ({ length, noFinalPunct: length < 50, question: length === 40 }))
+    expect(monthStats(msgs)).toEqual({ messages: 4, longueur_mediane: 25, part_tres_courts: 50, part_sans_ponctuation_finale: 75, part_avec_question: 25 })
+    const list = Array.from({ length: 120 }, (_, i) => i)
+    const sample = spreadSample(list, 60)
+    expect(sample).toHaveLength(60)
+    expect(sample[0]).toBe(1)
+    expect(sample.at(-1)).toBe(119)
+    expect(spreadSample(list, 60)).toEqual(sample)
+    expect(monthClosed('2026-10', NOW())).toBe(true)
+    expect(monthClosed('2026-11', NOW())).toBe(false)
+    const state = { items: 20, last_at: null, closed: true, facts: 3, prompt_version: 'styles-v1', updated_at: '' }
+    expect(shouldRedo(null, 10, true)).toBe(true)
+    expect(shouldRedo(state, 29, true)).toBe(false)
+    expect(shouldRedo(state, 30, true)).toBe(true)
+    expect(shouldRedo({ ...state, closed: false }, 21, true)).toBe(true)
+    expect(shouldRedo({ ...state, closed: false }, 20, true)).toBe(false)
+    expect(shouldRedo({ ...state, closed: false }, 25, false)).toBe(false)
+  })
+
+  it('nom cherché : mot entier, sans accents ni casse', () => {
+    const match = nameMatcher(['Léonie', 'leo'])!
+    expect(match('Point avec LEONIE demain')).toBe(true)
+    expect(match('Léo a répondu.')).toBe(true)
+    expect(match('Léonard a répondu.')).toBe(false)
+    expect(match('cinéléonie')).toBe(false)
+  })
+
+  it('sortie du LLM : appuis vérifiés (distincts, dans le lot), sortie illisible levée', () => {
+    const out = parseStylesOutput(
+      JSON.stringify({ observations: [{ texte: 'Observation assez longue.', appuis: [1, 1, 2, 9] }, { texte: 'Autre observation longue.', appuis: [1, 2, 3] }, { texte: 'court' }] }),
+      5,
+      3,
+    )
+    expect(out.items).toEqual([{ texte: 'Autre observation longue.', titre: null, appuis: [1, 2, 3] }])
+    expect(out.rejected).toEqual({ appuis: 1, invalide: 1 })
+    expect(() => parseStylesOutput('pas du json', 5, 3)).toThrow(/sans JSON/)
+  })
+
+  it('parcours des sources par fenêtres de rowid, en rendant la main entre deux fenêtres', async () => {
+    env = setupTriage({ llm: new StylesLlm() })
+    for (let k = 0; k < 5; k++) seedTriaged(`Note ${k} : Léonie répond vite par message.`)
+    seedTriaged('Note sans le prénom.')
+    let yields = 0
+    const r = await scanStyleSourcesAsync(env.db(), {
+      match: nameMatcher(['Léonie'])!,
+      excludePromptVersion: 'styles-v1',
+      window: 2,
+      yieldFn: async () => {
+        yields++
+      },
+    })
+    expect(r.facts).toHaveLength(5)
+    expect(r.scanned).toBe(6)
+    expect(yields).toBeGreaterThanOrEqual(3)
+  })
+})
+
+// ---------------------------------------------------------------- mode owner
+
+describe('passe styles : mode owner', () => {
+  it('plusieurs observations par mois gardées, en faits DORMANTS du propriétaire ; un mois trop petit est ignoré', async () => {
+    env = setupTriage({ llm: new StylesLlm() })
+    live('-p/s1.jsonl', [...monthOf(3, 14), ...monthOf(4, 3)])
+    const r = await pass()
+    expect(r).toMatchObject({ periods_found: 2, periods_small: 1, periods_sent: 1, llm_calls: 1, facts_created: 4, observations_rejected: { appuis: 1 } })
+    const rows = styles()
+    expect(rows).toHaveLength(4)
+    for (const row of rows) {
+      expect(row).toMatchObject({
+        lifecycle_state: 'dormant',
+        source: 'user-messages',
+        genre: 'style',
+        person_id: null,
+        auteur: 'owner',
+        auteur_source: 'message',
+        approuve_par_owner: 0,
+        portee: 'user',
+        conversation_at: at(3, 14),
+        prompt_version: 'styles-v1',
+        sensible: 0,
+      })
+    }
+    // Statistiques calculées sur place, données au LLM ; jamais le texte de l'assistant.
+    expect(llm().prompts[0]).toContain('"messages":14')
+    expect(llm().messages).toHaveLength(14)
+    expect(llm().prompts.join('\n')).not.toContain('Fait.')
+    expect(states()).toEqual([{ state_key: 'owner:2026-03', mode: 'owner', person_id: null, items: 14, closed: 1, facts: 4 }])
+  })
+
+  it('un message répété dans une session reprise ne compte qu’une fois ; doublon d’un mois à l’autre écarté', async () => {
+    env = setupTriage({ llm: new StylesLlm() })
+    live('-p/s1.jsonl', monthOf(3, 12))
+    // Session reprise : elle recopie mars, puis ajoute avril.
+    live('-p/s2.jsonl', [...monthOf(3, 12), ...monthOf(4, 12)])
+    const r = await pass()
+    expect(r).toMatchObject({ messages_repeated: 12, periods_sent: 2, llm_calls: 2, facts_created: 4, facts_duplicate: 4 })
+    expect(states().map(s => s['items'])).toEqual([12, 12])
+  })
+
+  it('un message sensible n’atteint jamais le LLM (ni l’échantillon, ni les statistiques)', async () => {
+    env = setupTriage({ llm: new StylesLlm() })
+    live('-p/s.jsonl', [...monthOf(3, 12), user('vérifie le bulletin de salaire de Zorba pour mars', at(3, 20))])
+    const r = await pass()
+    expect(r).toMatchObject({ messages_sensitive: 1, items_sent: 12 })
+    expect(llm().prompts.join('\n')).not.toMatch(/salaire|bulletin|Zorba/)
+    expect(llm().prompts[0]).toContain('"messages":12')
+  })
+
+  it('les secrets sont masqués juste avant l’envoi', async () => {
+    env = setupTriage({ llm: new StylesLlm() })
+    const key = 'sk-proj-ABCDEFGHIJKLMNOPQRSTUVWXYZ012345'
+    live('-p/s.jsonl', [...monthOf(3, 11), user(`garde ${key} pour le test`, at(3, 25))])
+    const r = await pass()
+    const prompts = llm().prompts.join('\n')
+    expect(prompts).not.toContain(key)
+    expect(prompts).toMatch(/\[secret:/)
+    expect(r.secrets_masked).toBeGreaterThanOrEqual(1)
+  })
+
+  it('une observation sensible, sur la vie privée ou qui nomme une autre fiche Person est écartée', async () => {
+    env = setupTriage({ llm: new StylesLlm() })
+    env.m.createPerson({ display_name: 'Bastien Exemple' })
+    llm().owner = [
+      { texte: "L'utilisateur parle souvent de son arrêt maladie.", appuis: [1, 2, 3] },
+      { texte: "L'utilisateur évoque sa famille en fin de journée.", appuis: [1, 2, 3] },
+      { texte: "L'utilisateur transfère les remarques de Bastien sans les reformuler.", appuis: [1, 2, 3] },
+      { texte: "L'utilisateur valide d'un mot ou deux dès que la proposition lui convient.", appuis: [1, 2, 3] },
+    ]
+    live('-p/s.jsonl', monthOf(3, 12))
+    const r = await pass()
+    expect(r.facts_created).toBe(1)
+    expect(r.observations_rejected).toEqual({ sensible: 1, theme: 1, tiers: 1 })
+    expect(styles().map(s => s['fact'])).toEqual(["L'utilisateur valide d'un mot ou deux dès que la proposition lui convient."])
+  })
+
+  it('second passage : rien ne repart pour un mois fermé ; il repart quand il a gagné 50 % de messages', async () => {
+    env = setupTriage({ llm: new StylesLlm() })
+    live('-p/s.jsonl', monthOf(3, 14))
+    await pass()
+    expect(llm().calls).toBe(1)
+    const second = await pass()
+    expect(second).toMatchObject({ periods_known: 1, periods_sent: 0, llm_calls: 0 })
+    expect(llm().calls).toBe(1)
+    live('-p/s.jsonl', monthOf(3, 21))
+    const third = await pass()
+    expect(third).toMatchObject({ periods_sent: 1, llm_calls: 1 })
+    expect(states()).toMatchObject([{ state_key: 'owner:2026-03', items: 21, closed: 1 }])
+  })
+
+  it('mois encore ouvert : refait seulement une fois fini s’il a gagné des messages', async () => {
+    env = setupTriage({ llm: new StylesLlm() })
+    live('-p/s.jsonl', monthOf(11, 12))
+    await pass()
+    expect(states()).toMatchObject([{ state_key: 'owner:2026-11', closed: 0 }])
+    expect((await pass()).llm_calls).toBe(0)
+    live('-p/s.jsonl', monthOf(11, 13))
+    expect((await pass()).llm_calls).toBe(0)
+    const later = await pass({ now: () => new Date(Date.UTC(2026, 11, 2)) })
+    expect(later).toMatchObject({ periods_sent: 1, llm_calls: 1 })
+    expect(states()).toMatchObject([{ state_key: 'owner:2026-11', items: 13, closed: 1 }])
+  })
+
+  it('plafond de dépense : l’appel qui pourrait dépasser ne part pas, arrêt « budget », rien n’est marqué', async () => {
+    env = setupTriage({ llm: new StylesLlm('openai', 'gpt-4o-mini') })
+    live('-p/s.jsonl', monthOf(3, 14))
+    const r = await pass({ budgetUsd: 0.000001 })
+    expect(r.stopped).toBe('budget')
+    expect(llm().calls).toBe(0)
+    expect(states()).toEqual([])
+    expect(styles()).toEqual([])
+  })
+
+  it('jamais reclassés par le moteur : un passage `reclassify` ne relit pas ces faits', async () => {
+    env = setupTriage({ llm: new StylesLlm() })
+    live('-p/s.jsonl', monthOf(3, 14))
+    await pass()
+    const before = styles()
+    const calls = llm().calls
+    const run = await env.m.triage.run({ reclassify: true })
+    expect(run.state).toBe('done')
+    expect(llm().calls).toBe(calls)
+    expect(styles()).toEqual(before)
+  })
+})
+
+// ---------------------------------------------------------------- dry-run
+
+describe('passe styles : dry-run', () => {
+  it('aucun appel, aucune écriture, ni masquage (qui écrit au coffre) ; coût estimé', async () => {
+    env = setupTriage({ llm: new StylesLlm() })
+    live('-p/s.jsonl', monthOf(3, 14))
+    const forbid = (name: string) => (): never => {
+      throw new Error(`interdit en dry-run : ${name}`)
+    }
+    const host: StylesHost = {
+      roots: { claudeProjectsDir: env.claudeDir, archiveDir: env.archiveDir, codexHistoryFile: join(env.root, 'absent'), codexSessionsDir: join(env.root, 'absent') },
+      owner: { display_name: null, context: null },
+      redact: forbid('redact'),
+      isSensitive,
+      complete: forbid('complete'),
+      embed: forbid('embed'),
+      estimateCost: (chars, out) => chars / 1e6 + out / 1e6,
+      findSemanticDuplicate: forbid('findSemanticDuplicate'),
+      storePendingTriaged: forbid('storePendingTriaged'),
+      resolveInstanceForSource: () => 'instance-fictive',
+      messageDone: () => false,
+      markMessage: forbid('markMessage'),
+      shouldStop: () => null,
+      spentUsd: () => 0,
+      person: id => (id === 'p1' ? { id, display_name: 'Léonie Exemple', aliases: [] } : null),
+      personNames: () => ['Léonie Exemple'],
+      agentOf: () => 'claude',
+      styleSourceFacts: async () => ({
+        facts: [1, 2, 3].map(k => ({ id: `f${k}`, text: `Léonie préfère un vocal court, note ${k}.`, at: at(3, k), at_source: 'fichier' as const, rubriques: [] })),
+        scanned: 3,
+      }),
+      stylesState: () => null,
+      markStyles: forbid('markStyles'),
+    }
+    const owner = await runStylesPass(host, { mode: 'owner', dryRun: true })
+    expect(owner).toMatchObject({ periods_sent: 1, items_sent: 14, llm_calls: 0, llm_calls_estimate: 1, facts_created: 0, errors: [] })
+    expect(owner.estimate_usd).toBeGreaterThan(0)
+    const person = await runStylesPass(host, { mode: 'person', person_id: 'p1', dryRun: true })
+    expect(person).toMatchObject({ periods_sent: 1, items_sent: 3, llm_calls: 0, llm_calls_estimate: 1 })
+    // Par le vrai service : rien d'écrit.
+    const real = await pass({ dryRun: true })
+    expect(real).toMatchObject({ periods_sent: 1, llm_calls: 0 })
+    expect(llm().calls).toBe(0)
+    expect(states()).toEqual([])
+    expect(styles()).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------- mode person
+
+describe('passe styles : mode person', () => {
+  function seedTeam(): { leonie: string; ids: Record<string, string> } {
+    const leonie = env.m.createPerson({ display_name: 'Léonie Exemple' }).id
+    env.m.addPersonIdentifier(leonie, 'handle', 'leo')
+    env.m.addPersonIdentifier(leonie, 'phone', '+33 6 00 00 00 00')
+    env.m.createPerson({ display_name: 'Bastien Exemple' })
+    const ids: Record<string, string> = {
+      messagerie: seedTriaged('Léonie répond plus vite sur la messagerie que par mail.', { conversation_at: at(3, 2) }),
+      vocal: seedTriaged('Pour Leonie, un vocal court marche mieux qu’un long mail.', { genre: 'preference', conversation_at: at(3, 5) }),
+      exemple: seedTriaged('Léo a demandé un exemple avant de commencer la maquette.', { conversation_at: at(3, 9) }),
+      // Jamais envoyés : rubriques interdites, filtre sensible, éphémère, faux, sensible, tiré par la passe, autre prénom.
+      avenant: seedTriaged('Léonie a signé son avenant au cabinet.', { rubriques: ['juridique'] }),
+      frais: seedTriaged('Léonie a envoyé la note de frais du trimestre.', { rubriques: ['finance', 'projet'] }),
+      entretien: seedTriaged('Entretien annuel de Léonie prévu jeudi.', { rubriques: ['rh'] }),
+      maladie: seedTriaged('Léonie est en arrêt maladie cette semaine.', { rubriques: ['projet'] }),
+      build: seedTriaged('Léonie a relancé le build du site.', { genre: 'ephemere' }),
+      faux: seedTriaged('Léonie a demandé MARQUE-FAUX.', { verdict: 'faux' }),
+      marque: seedTriaged('Léonie MARQUE-SENSIBLE.', { sensible: 1 }),
+      ancien: seedTriaged('Avec Léonie, MARQUE-STYLE-PASSE.', { genre: 'style', prompt_version: 'styles-v1' }),
+      autre: seedTriaged('Léonard aime les réunions courtes.'),
+    }
+    return { leonie, ids }
+  }
+
+  it('écrit des styles DORMANTS reliés à la fiche ; les notes rh/finance/juridique, sensibles ou hors sujet ne partent jamais', async () => {
+    env = setupTriage({ llm: new StylesLlm() })
+    const { leonie } = seedTeam()
+    llm().person = [
+      { titre: 'Joindre par messagerie', texte: 'Avec Léonie, la messagerie obtient une réponse plus vite que le mail.', appuis: [1, 3] },
+      { titre: 'Tâche avec exemple', texte: 'Une tâche confiée avec un exemple démarre tout de suite.', appuis: [1, 2] },
+      { texte: 'Léonie est peu compétente sur les maquettes.', appuis: [1, 2] },
+      { texte: 'Léonie répond mieux quand Bastien est en copie.', appuis: [1, 2] },
+      { texte: 'Léonie préfère les vocaux aux longs messages.', appuis: [2] },
+    ]
+    const r = await pass({ mode: 'person', person_id: leonie })
+    expect(llm().notes.sort()).toEqual([
+      'Léo a demandé un exemple avant de commencer la maquette.',
+      'Léonie répond plus vite sur la messagerie que par mail.',
+      'Pour Leonie, un vocal court marche mieux qu’un long mail.',
+    ])
+    expect(llm().prompts.join('\n')).not.toMatch(/avenant|note de frais|Entretien|maladie|build|MARQUE-|Léonard|\+33/)
+    expect(r).toMatchObject({
+      sources_matched: 7,
+      sources_excluded_rubrique: 3,
+      sources_sensitive: 1,
+      items_sent: 3,
+      llm_calls: 1,
+      facts_created: 2,
+      observations_rejected: { theme: 1, tiers: 1, appuis: 1 },
+    })
+    const rows = styles()
+    expect(rows.map(x => x['fact'])).toEqual([
+      'Avec Léonie : Une tâche confiée avec un exemple démarre tout de suite.',
+      'Avec Léonie, la messagerie obtient une réponse plus vite que le mail.',
+    ])
+    for (const row of rows) {
+      expect(row).toMatchObject({
+        lifecycle_state: 'dormant',
+        genre: 'style',
+        person_id: leonie,
+        auteur: 'ia:claude',
+        auteur_source: 'llm',
+        approuve_par_owner: 0,
+        portee: 'user',
+        prompt_version: 'styles-v1',
+      })
+    }
+    // Date du plus récent des faits qui l'appuient (notes de la plus récente à la plus ancienne).
+    expect(rows.find(x => String(x['fact']).includes('messagerie'))!['conversation_at']).toBe(at(3, 9))
+    expect(states()).toEqual([{ state_key: `person:${leonie}`, mode: 'person', person_id: leonie, items: 3, closed: 1, facts: 2 }])
+    // Second passage : rien de nouveau, rien ne repart.
+    expect(await pass({ mode: 'person', person_id: leonie })).toMatchObject({ periods_known: 1, llm_calls: 0 })
+  })
+
+  it('validés, ils ne ressortent JAMAIS comme styles du propriétaire (et ceux du propriétaire ne ressortent pas pour la personne)', async () => {
+    env = setupTriage({ llm: new StylesLlm() })
+    const { leonie } = seedTeam()
+    llm().person = [{ texte: 'Avec Léonie, la messagerie obtient une réponse plus vite que le mail.', appuis: [1, 3] }]
+    live('-p/s.jsonl', monthOf(3, 14))
+    await pass()
+    await pass({ mode: 'person', person_id: leonie })
+    const all = styles()
+    expect(all.filter(x => x['person_id'] === leonie)).toHaveLength(1)
+    expect(all.filter(x => x['person_id'] === null)).toHaveLength(4)
+    const promoted = env.m.triage.promote({ fact_ids: all.map(x => String(x['id'])) })
+    expect(promoted.promoted).toBe(5)
+    const ownerTexts = all.filter(x => x['person_id'] === null).map(x => String(x['fact']))
+    const personText = 'Avec Léonie, la messagerie obtient une réponse plus vite que le mail.'
+    const ownerStyles = env.m.triage.stylesForInstance(env.instance, {}).items.map(i => i.text)
+    // Témoin : les styles du propriétaire ressortent bien ; celui de la personne jamais.
+    for (const t of ownerTexts) expect(ownerStyles).toContain(t)
+    expect(ownerStyles).not.toContain(personText)
+    const leonieStyles = env.m.triage.stylesForInstance(env.instance, { person_id: leonie }).items.map(i => i.text)
+    expect(leonieStyles).toEqual([personText])
+  })
+
+  it('personne inconnue ou absente : refus clair, rien ne part', async () => {
+    env = setupTriage({ llm: new StylesLlm() })
+    await expect(pass({ mode: 'person', person_id: 'personne-inconnue' })).rejects.toMatchObject({ code: 'not-found' })
+    await expect(pass({ mode: 'person' })).rejects.toMatchObject({ code: 'bad-request' })
+    await expect(pass({ mode: 'autre' as 'owner' })).rejects.toMatchObject({ code: 'bad-request' })
+    expect(llm().calls).toBe(0)
+  })
+
+  it('un seul travail de tri à la fois : la passe styles refuse pendant une passe sur les messages, et inversement', async () => {
+    env = setupTriage({ llm: new StylesLlm() })
+    live('-p/s.jsonl', monthOf(3, 14))
+    env.m.registerStylesPass(runStylesPass)
+    let release!: () => void
+    const gate = new Promise<void>(resolve => (release = resolve))
+    const original = llm().completeDetailed.bind(llm())
+    llm().completeDetailed = async (opts: CompleteOptions) => {
+      await gate
+      return original(opts)
+    }
+    const running = env.m.triage.runStyles({ mode: 'owner', retryDelayMs: 0, now: NOW } as StylesPassOptions)
+    await new Promise(resolve => setTimeout(resolve, 50))
+    await expect(env.m.triage.runStyles({ mode: 'owner' })).rejects.toMatchObject({ code: 'running' })
+    await expect(env.m.triage.start({})).rejects.toMatchObject({ code: 'running' })
+    release()
+    expect((await running).facts_created).toBe(4)
+  })
+})

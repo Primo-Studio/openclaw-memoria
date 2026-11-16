@@ -89,7 +89,7 @@ import { createReadStream } from 'node:fs'
 import { readdir, readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { monitorEventLoopDelay } from 'node:perf_hooks'
-import { LlmTruncatedError } from '../llm/provider.js'
+import { LlmTruncatedError, type CompleteOptions } from '../llm/provider.js'
 import { readChatGptExport, CHATGPT_KEY_PREFIX, type ChatGptConversation } from '../migration/chatgpt-export.js'
 import {
   blocksToText,
@@ -247,12 +247,12 @@ function bump(counts: Record<string, number>, key: string, n = 1): void {
 
 // ---------------------------------------------------------------- boucle d'événements
 
-function yieldToEventLoop(): Promise<void> {
+export function yieldToEventLoop(): Promise<void> {
   return new Promise(resolve => setImmediate(resolve))
 }
 
-/** Rend la main dès que la tranche de calcul en cours dépasse `ms`. */
-function slicer(ms = SLICE_MS): () => Promise<void> {
+/** Rend la main dès que la tranche de calcul en cours dépasse `ms`. Partagé avec la passe styles. */
+export function slicer(ms = SLICE_MS): () => Promise<void> {
   let start = Date.now()
   return async () => {
     if (Date.now() - start < ms) return
@@ -261,7 +261,7 @@ function slicer(ms = SLICE_MS): () => Promise<void> {
   }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
@@ -518,13 +518,14 @@ export function messageKey(sourceKey: string, ts: string | null, raw: string): s
   return sha256Hex(`${sourceKey}\n${ts ?? ''}\n${normalizeKeyText(raw)}`)
 }
 
-function normalizeKeyText(text: string): string {
+/** Texte du parseur normalisé (clé d'idempotence, empreinte des messages répétés). */
+export function normalizeKeyText(text: string): string {
   return normalizeText(text).replace(/\s+/g, ' ').trim()
 }
 
 // ---------------------------------------------------------------- sources
 
-interface PlannedSource {
+export interface PlannedSource {
   kind: UserMessageSourceKind
   /** Clé stable (indépendante de l'endroit lu) : idempotence et memory_sources. */
   key: string
@@ -604,7 +605,16 @@ export async function listClaudeSessions(roots: { claudeProjectsDir: string; arc
   return out
 }
 
-async function planSources(host: TriageHost, opts: UserMessagesPassOptionsExt, report: UserMessagesDetailReport): Promise<PlannedSource[]> {
+/**
+ * Sources de messages demandées (défaut : sessions Claude Code), dans l'ordre
+ * de lecture. Partagé avec la passe styles : `report` ne reçoit que les
+ * erreurs et le nombre de sessions présentes aux deux endroits.
+ */
+export async function planSources(
+  host: TriageHost,
+  opts: Pick<UserMessagesPassOptionsExt, 'sources' | 'chatgptExport'>,
+  report: { errors: string[]; sessions_twin: number },
+): Promise<PlannedSource[]> {
   const kinds = new Set<UserMessageSourceKind>(opts.sources && opts.sources.length > 0 ? opts.sources : ['claude-code'])
   const out: PlannedSource[] = []
   if (kinds.has('claude-code')) {
@@ -774,7 +784,7 @@ function level(value: unknown): number | null {
   return Number.isFinite(n) ? Math.max(0, Math.min(3, Math.round(n))) : null
 }
 
-function clip(value: unknown, max: number): string | null {
+export function clip(value: unknown, max: number): string | null {
   if (typeof value !== 'string') return null
   const t = value.replace(/\s+/g, ' ').trim()
   return t.length === 0 ? null : t.slice(0, max)
@@ -960,6 +970,46 @@ function sensitiveLabel(text: string): string | null {
   if (hit === null) return null
   const pattern = SENSITIVE_PATTERNS.find(re => new RegExp(re.source).test(hit))
   return pattern ? pattern.source : 'autre'
+}
+
+// ---------------------------------------------------------------- appel LLM
+
+/**
+ * Appel LLM d'une passe (messages, styles). Réseau coupé ou connexion perdue :
+ * on attend son retour sans compter d'échec (l'appel compte seulement s'il a
+ * pu partir) ; échec passager : une reprise. `onCall` compte chaque appel
+ * parti ; `checkStop` lève pour arrêter pendant une attente. Plafond
+ * (TriageBudgetError, l'appel n'est pas parti) : remonte tel quel.
+ */
+export async function completeWithRetries(
+  host: TriageHost,
+  call: CompleteOptions,
+  opts: { retryDelayMs: number; onCall(): void; checkStop(): void },
+): Promise<string> {
+  let retried = false
+  for (let outage = 0; ; ) {
+    let text: string
+    try {
+      text = (await host.complete(call)).text
+    } catch (err) {
+      if (err instanceof TriageBudgetError) throw err
+      if (isNetworkError(err) && outage < NETWORK_DOWN_RETRIES && !host.shouldStop()) {
+        if (!isNetworkDown(err)) opts.onCall()
+        await pauseUnlessStopped(networkDownDelay(opts.retryDelayMs, outage++), () => host.shouldStop() !== null)
+        opts.checkStop()
+        continue
+      }
+      opts.onCall()
+      if (!retried && isTransient(err) && !host.shouldStop()) {
+        retried = true
+        await new Promise(resolve => setTimeout(resolve, opts.retryDelayMs))
+        continue
+      }
+      throw err
+    }
+    opts.onCall()
+    return text
+  }
 }
 
 // ---------------------------------------------------------------- la passe
@@ -1200,32 +1250,16 @@ class Pass {
 
   /** Appel LLM : plafond vérifié par l'hôte avant l'envoi ; une reprise sur un échec passager. */
   private async complete(prompt: string, maxTokens: number): Promise<string> {
-    let retried = false
-    for (let outage = 0; ; ) {
-      let text: string
-      try {
-        text = (await this.host.complete({ system: this.system, prompt, json: true, temperature: 0, maxTokens })).text
-      } catch (err) {
-        // Plafond : l'appel n'est pas parti.
-        if (err instanceof TriageBudgetError) throw new StopPass('budget')
-        // Réseau coupé ou connexion perdue : on attend son retour sans compter d'échec ;
-        // l'appel compte seulement s'il a pu partir (connexion perdue en route).
-        if (isNetworkError(err) && outage < NETWORK_DOWN_RETRIES && !this.host.shouldStop()) {
-          if (!isNetworkDown(err)) this.report.llm_calls++
-          await pauseUnlessStopped(networkDownDelay(this.retryDelayMs, outage++), () => this.host.shouldStop() !== null)
-          this.checkStop()
-          continue
-        }
-        this.report.llm_calls++
-        if (!retried && isTransient(err) && !this.host.shouldStop()) {
-          retried = true
-          await new Promise(resolve => setTimeout(resolve, this.retryDelayMs))
-          continue
-        }
-        throw err
-      }
-      this.report.llm_calls++
-      return text
+    try {
+      return await completeWithRetries(
+        this.host,
+        { system: this.system, prompt, json: true, temperature: 0, maxTokens },
+        { retryDelayMs: this.retryDelayMs, onCall: () => this.report.llm_calls++, checkStop: () => this.checkStop() },
+      )
+    } catch (err) {
+      // Plafond : l'appel n'est pas parti.
+      if (err instanceof TriageBudgetError) throw new StopPass('budget')
+      throw err
     }
   }
 

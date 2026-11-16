@@ -18,6 +18,7 @@
  *   POST   /v1/admin/triage/correct  → { updated } (404 si le fait est inconnu)
  *   POST   /v1/admin/triage/verdict  → { updated }
  *   POST|GET|DELETE /v1/admin/triage/messages → UserMessagesJobState
+ *   POST|GET|DELETE /v1/admin/triage/styles   → StylesJobState
  *   POST   /v1/memory/ideas          → IdeasResult (jeton d'instance)
  *   POST   /v1/memory/styles         → StylesResult (jeton d'instance)
  */
@@ -37,7 +38,11 @@ import {
   type Portee,
   type Rubrique,
   type SousType,
+  type StylesPassMode,
+  type StylesPassOptions,
+  type StylesProgress,
   type StylesQuery,
+  type StylesReport,
   type TriageCorrection,
   type TriageCursor,
   type TriageListFilter,
@@ -45,6 +50,7 @@ import {
   type TriageRefusalCode,
   type TriageRunOptions,
   type TriageStats,
+  type TriageStopReason,
   type UserMessageSourceKind,
   type UserMessagesPassOptions,
   type UserMessagesProgress,
@@ -70,6 +76,7 @@ export const TRIAGE_REFUSAL_STATUS: Record<TriageRefusalCode, number> = {
   'bad-request': 400,
   closed: 503,
   'not-registered': 501,
+  'not-found': 404,
 }
 
 function isRefusal(err: unknown): err is TriageRefusedError {
@@ -459,51 +466,104 @@ export function userMessagesOptionsFrom(body: Source): UserMessagesPassOptions {
   return o
 }
 
-// ---------------------------------------------------------------- job de la passe sur les messages
+const STYLES_MODES: readonly StylesPassMode[] = ['owner', 'person']
+const STYLES_SOURCES: ReadonlyArray<NonNullable<StylesPassOptions['sources']>[number]> = ['claude-code', 'codex-history']
+
+/**
+ * Corps de POST /v1/admin/triage/styles : `mode` obligatoire ; `person_id`
+ * obligatoire en mode person et refusé en mode owner ; `sources` (owner) et
+ * `instance` (person) en option.
+ */
+export function stylesOptionsFrom(body: Source): StylesPassOptions {
+  if (!present(body, 'mode')) throw new HttpError(400, 'mode requis (owner | person)')
+  const mode = oneOf(body['mode'], STYLES_MODES, 'mode')
+  const o: StylesPassOptions = { mode }
+  const personId = str(body, 'person_id', 100)
+  if (mode === 'person') {
+    if (!personId) throw new HttpError(400, 'person_id requis en mode person')
+    o.person_id = personId
+  } else if (personId !== undefined) throw new HttpError(400, 'person_id seulement en mode person')
+  const dry = bool(body, 'dry_run')
+  if (dry !== undefined) o.dryRun = dry
+  const budget = amount(body, 'budget_usd')
+  if (budget !== undefined) o.budgetUsd = budget
+  const since = isoDate(body, 'since')
+  if (since) o.since = since
+  const force = bool(body, 'force')
+  if (force !== undefined) o.force = force
+  if (present(body, 'sources')) {
+    if (mode !== 'owner') throw new HttpError(400, 'sources seulement en mode owner')
+    const s = body['sources']
+    if (!Array.isArray(s) || s.length === 0) throw new HttpError(400, 'sources doit être un tableau non vide')
+    o.sources = [...new Set(s.map(x => oneOf(x, STYLES_SOURCES, 'source')))]
+  }
+  const instance = str(body, 'instance', 100)
+  if (instance !== undefined) {
+    if (mode !== 'person') throw new HttpError(400, 'instance seulement en mode person')
+    o.instance = instance
+  }
+  return o
+}
+
+// ---------------------------------------------------------------- jobs des passes annexes (messages, styles)
 
 export type UserMessagesJobStatus = 'idle' | 'running' | 'done' | 'cancelled' | 'error'
 
-/** État de la passe sur les messages (GET /v1/admin/triage/messages). En mémoire : repart à `idle` au redémarrage. */
-export interface UserMessagesJobState {
+/** État d'une passe annexe (GET de sa route). En mémoire : repart à `idle` au redémarrage. */
+export interface PassJobState<P, R> {
   status: UserMessagesJobStatus
   dry_run: boolean
   started_at: string | null
   finished_at: string | null
-  progress: UserMessagesProgress | null
-  report: UserMessagesReport | null
+  progress: P | null
+  report: R | null
   /** Refus du moteur (code) si la passe a été refusée après son lancement. */
   refusal: TriageRefusalCode | null
   error: string | null
 }
 
+/** État de la passe sur les messages (GET /v1/admin/triage/messages). */
+export type UserMessagesJobState = PassJobState<UserMessagesProgress, UserMessagesReport>
+/** État de la passe styles (GET /v1/admin/triage/styles). */
+export type StylesJobState = PassJobState<StylesProgress, StylesReport>
+
 export function idleUserMessagesJob(): UserMessagesJobState {
+  return idlePassJob()
+}
+
+function idlePassJob<P, R>(): PassJobState<P, R> {
   return { status: 'idle', dry_run: false, started_at: null, finished_at: null, progress: null, report: null, refusal: null, error: null }
 }
 
 /**
  * Un seul passage à la fois ; état lisible à tout moment. Le moteur n'a pas de
- * séparation « démarrer / attendre » pour cette passe : le job garde la
+ * séparation « démarrer / attendre » pour ces passes : le job garde la
  * promesse et la termine TOUJOURS (`.then` + `.catch`), jamais de rejet non
  * géré qui tuerait le daemon.
  */
-export class UserMessagesJob {
-  private state: UserMessagesJobState = idleUserMessagesJob()
+class PassJob<O extends { dryRun?: boolean; onProgress?: (p: P) => void }, P, R extends { stopped: TriageStopReason | null }> {
+  private state: PassJobState<P, R> = idlePassJob()
+
+  constructor(
+    private readonly busyMessage: string,
+    private readonly launch: (memoria: Memoria, opts: O) => Promise<R>,
+  ) {}
 
   get running(): boolean {
     return this.state.status === 'running'
   }
 
-  current(): UserMessagesJobState {
+  current(): PassJobState<P, R> {
     return { ...this.state }
   }
 
-  start(memoria: Memoria, opts: UserMessagesPassOptions): UserMessagesJobState {
-    if (this.running) throw new HttpError(409, 'une passe sur les messages est déjà en cours (GET /v1/admin/triage/messages)')
-    const job: UserMessagesJobState = { ...idleUserMessagesJob(), status: 'running', dry_run: opts.dryRun === true, started_at: nowISO() }
+  start(memoria: Memoria, opts: O): PassJobState<P, R> {
+    if (this.running) throw new HttpError(409, this.busyMessage)
+    const job: PassJobState<P, R> = { ...idlePassJob<P, R>(), status: 'running', dry_run: opts.dryRun === true, started_at: nowISO() }
     this.state = job
-    let promise: Promise<UserMessagesReport>
+    let promise: Promise<R>
     try {
-      promise = memoria.triage.runUserMessages({ ...opts, onProgress: p => (job.progress = { ...p }) })
+      promise = this.launch(memoria, { ...opts, onProgress: (p: P) => (job.progress = { ...p }) })
     } catch (err) {
       promise = Promise.reject(err)
     }
@@ -521,5 +581,19 @@ export class UserMessagesJob {
         job.finished_at = nowISO()
       })
     return { ...job }
+  }
+}
+
+/** Job de la passe sur les messages (POST|GET|DELETE /v1/admin/triage/messages). */
+export class UserMessagesJob extends PassJob<UserMessagesPassOptions, UserMessagesProgress, UserMessagesReport> {
+  constructor() {
+    super('une passe sur les messages est déjà en cours (GET /v1/admin/triage/messages)', (memoria, opts) => memoria.triage.runUserMessages(opts))
+  }
+}
+
+/** Job de la passe styles (POST|GET|DELETE /v1/admin/triage/styles). */
+export class StylesJob extends PassJob<StylesPassOptions, StylesProgress, StylesReport> {
+  constructor() {
+    super('une passe styles est déjà en cours (GET /v1/admin/triage/styles)', (memoria, opts) => memoria.triage.runStyles(opts))
   }
 }

@@ -1,5 +1,5 @@
 /**
- * Schéma du tri (migrations 80 et 81) et sort de la ligne de tri quand le
+ * Schéma du tri (migrations 80, 81 et 82) et sort de la ligne de tri quand le
  * fait part : oubli, rejet en revue (effacés), partage (déplacée). Données fictives.
  */
 import { afterEach, describe, expect, it } from 'vitest'
@@ -10,18 +10,18 @@ import { join } from 'node:path'
 let env: TriageEnv
 afterEach(() => env?.close())
 
-describe('migrations 80 et 81', () => {
-  it('créent fact_triage, fact_triage_vectors, user_message_state et l’index de provenance ; idempotentes', () => {
+describe('migrations 80, 81 et 82', () => {
+  it('créent fact_triage, fact_triage_vectors, user_message_state, style_pass_state et l’index de provenance ; idempotentes', () => {
     env = setupTriage()
     const path = join(env.root, 'seule.sqlite')
     const store = new ContentStore(path)
     const tables = (store.db.prepare("SELECT name FROM sqlite_master WHERE type IN ('table','index')").all() as Array<{ name: string }>).map(t => t.name)
-    expect(tables).toEqual(expect.arrayContaining(['fact_triage', 'fact_triage_vectors', 'user_message_state', 'idx_import_items_target', 'idx_fact_triage_genre']))
+    expect(tables).toEqual(expect.arrayContaining(['fact_triage', 'fact_triage_vectors', 'user_message_state', 'style_pass_state', 'idx_import_items_target', 'idx_fact_triage_genre']))
     const versions = (store.db.prepare('SELECT version FROM schema_migrations WHERE version >= 80 AND version < 90').all() as Array<{ version: number }>).map(v => v.version)
-    expect(versions).toEqual([80, 81])
+    expect(versions).toEqual([80, 81, 82])
     store.close()
     const again = new ContentStore(path)
-    expect(again.db.prepare('SELECT COUNT(*) AS n FROM schema_migrations WHERE version IN (80, 81)').get()).toEqual({ n: 2 })
+    expect(again.db.prepare('SELECT COUNT(*) AS n FROM schema_migrations WHERE version IN (80, 81, 82)').get()).toEqual({ n: 3 })
     again.close()
   })
 })
