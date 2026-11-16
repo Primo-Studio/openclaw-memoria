@@ -13,6 +13,7 @@ import { importTranscripts } from '../migration/import-transcripts.js'
 import { CHATGPT_EXTRACTION_SYSTEM } from '../migration/chatgpt-export.js'
 import {
   ensureStorageTree,
+  loadConfigFile,
   resolveStorageRoot,
   saveConfigFile,
   storagePaths,
@@ -652,6 +653,26 @@ export class Memoria {
   }
 
   /**
+   * Écrit la config en mémoire dans config.toml. `[sharing]` n'est réglé par
+   * aucune route, seulement à la main dans le fichier : il est relu sur le
+   * disque au moment d'écrire. Sans cela, un join (ou un réglage) fait entre
+   * l'ajout de `machine = "team"` et le redémarrage l'effaçait, et le Mac
+   * repartait en `owner`. Le rôle en service ne change qu'au redémarrage.
+   */
+  private saveConfig(): void {
+    let next = this.resolved.config
+    try {
+      const sharing = loadConfigFile(this.resolved.configPath).sharing
+      next = { ...this.resolved.config }
+      if (sharing) next.sharing = sharing
+      else delete next.sharing
+    } catch {
+      // fichier illisible : on l'écrase comme avant, avec la config en mémoire
+    }
+    saveConfigFile(next, this.resolved.configPath)
+  }
+
+  /**
    * L'espace de l'ENTREPRISE (scope `org`), retrouvé par son type et son lien,
    * jamais par son nom `org:<uuid>` (renommé ou repris d'un autre Mac, il
    * change). Dans l'ordre :
@@ -974,7 +995,7 @@ export class Memoria {
   setEnabled(enabled: boolean): boolean {
     this.assertOpen()
     this.resolved.config.enabled = enabled
-    saveConfigFile(this.resolved.config, this.resolved.configPath)
+    this.saveConfig()
     this.registry.audit({
       actor_type: 'user',
       actor_id: 'local',
@@ -3962,7 +3983,7 @@ export class Memoria {
       listen_lan: listenLan,
       scopes: types,
     }
-    saveConfigFile(this.resolved.config, this.resolved.configPath)
+    this.saveConfig()
     this.registry.audit({ actor_type: 'user', actor_id: 'local', action: 'sync_hub_configured', target_id_hash: null, scope_id: null, reason: `scopes=${types.join(',')};keys=${keys}` })
     this.syncEngine = undefined // re-construire avec la nouvelle config
     return { listen_lan: listenLan, scopes: types, keys }
@@ -4003,7 +4024,7 @@ export class Memoria {
         config: () => this.resolved.config.sync ?? {},
         sharedStore: (scopeId: string) => this.sharedContentStore(scopeId),
         listSyncableScopes: (whitelist: readonly string[]) => this.syncableScopes(whitelist),
-        persistConfig: () => saveConfigFile(this.resolved.config, this.resolved.configPath),
+        persistConfig: () => this.saveConfig(),
         setSyncConfig: (patch: Record<string, unknown>) => {
           this.resolved.config.sync = { ...this.resolved.config.sync, ...patch }
         },
@@ -4611,7 +4632,7 @@ export class Memoria {
   }
 
   private persistLlmConfig(action: string): void {
-    saveConfigFile(this.resolved.config, this.resolved.configPath)
+    this.saveConfig()
     // invalide la résolution mémoïsée (pipeline et indexeurs compris) →
     // re-résolue au prochain usage
     this.invalidateProfile()

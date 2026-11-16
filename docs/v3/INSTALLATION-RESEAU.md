@@ -166,8 +166,10 @@ Sur le Mac de l'équipe (pas sur celui du propriétaire), ajouter à `~/.memoria
 machine = "team"
 ```
 
-puis redémarrer Memoria (`memoria stop && memoria start`). Avant ou après le join, peu importe :
-le droit suit l'espace `org` quand il prend l'identifiant du hub.
+puis redémarrer Memoria (`memoria stop && memoria start`) : le rôle ne prend effet qu'au
+redémarrage. Avant ou après le join, peu importe : le join réécrit `config.toml` sans effacer cette
+section, et le droit suit l'espace `org` quand il prend l'identifiant du hub. (La matrice
+**Partage** ne montre encore que la lecture ; la colonne « écriture » est à venir, T29.)
 - **Claude Code et Codex** reçoivent lecture + écriture sur `org` : à leur connexion, et au
   démarrage pour ceux déjà connectés (seulement s'ils n'ont encore aucun réglage sur `org` : un
   réglage fait dans **Partage** n'est jamais modifié).

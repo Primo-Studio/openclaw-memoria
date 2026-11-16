@@ -7,11 +7,13 @@
  *    sans erreur, et le droit suit l'org repris ;
  *  - l'alias `org` vise l'org repris, avant comme après un redémarrage ;
  *  - un fait écrit par un agent du collègue est rappelé `org` sur le hub ;
- *  - un hub qui porte deux scopes org ne fait voyager que celui de l'alias.
+ *  - un hub qui porte deux scopes org ne fait voyager que celui de l'alias,
+ *    et un Mac invité n'en reprend jamais qu'un ;
+ *  - `[sharing]` ajouté à la main survit à la config réécrite par le join.
  *
  * Données FICTIVES uniquement (dépôt public).
  */
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -168,6 +170,45 @@ describe('Mac `team` relié au hub', () => {
 
     const codex = spoke.pairAssistant({ type: 'codex', display_name: 'Agent de publication' })
     expect(spoke.registry.getPolicy(codex.assistant_id, hubOrgId)).toMatchObject({ can_read: true, can_write: true })
+  })
+
+  it('`machine = "team"` ajouté à la main pendant que Memoria tourne : le join ne l’efface pas', async () => {
+    const hub = makeHub()
+    let spoke = mk('spoke')
+    const cc = spoke.pairAssistant({ type: 'claude-code', display_name: 'Agent de montage' })
+    appendFileSync(join(dir, 'spoke.toml'), '\n[sharing]\nmachine = "team"\n')
+    expect(spoke.machineRole()).toBe('owner') // le rôle en service ne change qu'au redémarrage
+    await joinTo(spoke, hub)
+    expect(readFileSync(join(dir, 'spoke.toml'), 'utf8')).toMatch(/\[sharing\][\s\S]*machine = "team"/)
+
+    spoke = reopen(spoke, 'spoke')
+    expect(spoke.machineRole()).toBe('team')
+    // l'agent appairé avant reçoit son droit au démarrage, sur l'org repris
+    const hubOrgId = hub.teamScope()!.id
+    expect(spoke.registry.getPolicy(cc.assistant_id, hubOrgId)).toMatchObject({ can_read: true, can_write: true })
+  })
+})
+
+describe('un seul org repris par Mac', () => {
+  it('même si le hub en proposait deux, le Mac invité n’en reprend qu’un', async () => {
+    const hub = makeHub()
+    const hubOrgId = hub.teamScope()!.id
+    const base = hubFetch(hub)
+    // hub d'un ancien code : un second org glissé dans la réponse d'appairage
+    const twoOrgs: FetchLike = async (url, init) => {
+      const r = await base(url, init)
+      if (!new URL(url).pathname.endsWith('/pairing/complete') || !r.ok) return r
+      const body = (await r.json()) as { scopes: Array<{ id: string; type: string; name: string }> }
+      const scopes = [...body.scopes, { id: 'org-en-trop-fictif', type: 'org', name: 'org:en-trop-fictif' }]
+      return { ok: true, status: 200, json: async () => ({ ...body, scopes }) }
+    }
+    const spoke = mk('spoke', 'team')
+    spoke.pairAssistant({ type: 'claude-code', display_name: 'Agent de montage' })
+    const inv = hub.sync.invite('Mac de l’équipe')
+    await spoke.sync.join({ hub: HUB_ADDR, code: inv.code, fetchImpl: twoOrgs })
+    expect(orgs(spoke).map(s => s.id)).toEqual([hubOrgId])
+    expect(spoke.registry.listPeers().find(p => p.role === 'hub')!.allowed_scopes).toEqual([hubOrgId])
+    expect(hasFact(spoke, hubOrgId, 'Essai fictif : les exports passent par le dossier Livraisons')).toBe(true)
   })
 })
 
