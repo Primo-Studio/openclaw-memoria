@@ -7,7 +7,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   compactRecall,
   formatRecallBlocks,
@@ -147,6 +147,19 @@ describe("écriture d'un agent dans l'espace d'équipe", () => {
     expect(() => m.correctFact(bot.assistant_instance_id, fact.id, 'Le serveur de rendu redémarre à une heure')).toThrow(/espace d'équipe \(org\)/)
   })
 
+  it('lecture seule sur `org` (Mac du propriétaire) : épingler ou corriger est refusé en nommant l’espace d’équipe', () => {
+    const { m } = open()
+    const writer = m.pairAssistant({ type: 'codex' })
+    const reader = m.pairAssistant({ type: 'claude-code' })
+    grantOrg(m, writer)
+    m.setScopeAccess(reader.assistant_id, orgScope(m).id, { can_read: true, can_write: false })
+    const fact = m.declareFact({ instance: writer.assistant_instance_id, content: 'Les sous-titres se calent à la frame près', scope: 'org' }).fact!
+    expect(() => m.setPinned(reader.assistant_instance_id, fact.id, true)).toThrow(/^écriture refusée dans l'espace d'équipe \(org\) : .*sans can_write/)
+    expect(() => m.correctFact(reader.assistant_instance_id, fact.id, 'Les sous-titres se calent à deux frames près')).toThrow(
+      /^écriture refusée dans l'espace d'équipe \(org\)/,
+    )
+  })
+
   it('avec le droit : écrit, et l’organisation du contexte de l’agent est remplacée par celle du scope', () => {
     const { m } = open()
     const agent = m.pairAssistant({ type: 'codex' })
@@ -161,6 +174,8 @@ describe("écriture d'un agent dans l'espace d'équipe", () => {
     const agent = m.pairAssistant({ type: 'claude-code' })
     grantOrg(m, agent)
     const instance = agent.assistant_instance_id
+    // Aucun refus ne passe par le coffre : le secret refusé n'est mis nulle part.
+    const vaulted = vi.spyOn(m.secrets, 'set')
     const store = (content: string, extra: Record<string, unknown> = {}) => () => m.declareFact({ instance, content, scope: 'org', ...extra })
     expect(store('Le planning du tournage est partagé', { sensitivity: 'sensitive' })).toThrow(/un fait sensitive/)
     expect(store('Le planning du tournage est partagé', { sensitivity: 'critical' })).toThrow(/un fait critical/)
@@ -174,7 +189,11 @@ describe("écriture d'un agent dans l'espace d'équipe", () => {
     expect(store('Le logo se livre en SVG', { project_id: project.id })).toThrow(/un client est déclaré/)
     // Rien n'a été écrit, et le secret refusé n'est pas parti au coffre.
     expect(m.scopeFacts(orgScope(m).id)).toEqual([])
-    expect(m.secrets.get('generic-token-1')).toBeNull()
+    expect(vaulted).not.toHaveBeenCalled()
+    // Témoin : le même secret écrit en PRIVÉ passe bien par le coffre (l'espion voit les mises au coffre).
+    m.declareFact({ instance, content: 'La clé du service de rendu est api_key=Zx9fictif00112233445566' })
+    expect(vaulted).toHaveBeenCalledTimes(1)
+    vaulted.mockClear()
     // Le même fait, privé, reste possible.
     expect(m.declareFact({ instance, content: 'Le logo se livre en SVG', client_org_id: 'client-fictif' }).fact).not.toBeNull()
   })

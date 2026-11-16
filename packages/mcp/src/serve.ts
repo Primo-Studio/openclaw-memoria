@@ -534,7 +534,7 @@ export function buildServer(opts: BuildServerOptions): BuiltServer {
       // Espace d'équipe : plusieurs raisons possibles (droit, sensible, secret,
       // client, OpenClaw). Le message du daemon les dit, il est rendu tel quel.
       if ((err.status === 403 || err.status === 500) && isTeamRefusal(m)) {
-        return `Memoria refused to write to the team space ("org"): ${m}. Nothing was stored there. Keep the fact private (omit scope) unless it is a team process, knowledge or lesson with nothing personal, sensitive or client-related.`
+        return `Memoria refused to write to the team space ("org"): ${m}. Nothing was stored or changed there. For a new fact, keep it private (omit scope) unless it is a team process, knowledge or lesson with nothing personal, sensitive or client-related.`
       }
       if ((err.status === 403 || err.status === 500) && isWriteRefusal(m)) {
         return `Memoria refused to write to the shared "user" scope: the user has not granted this agent write access. Store the fact privately (omit scope) and tell the user they can grant it from the Memoria app.`

@@ -2802,6 +2802,10 @@ export class Memoria {
       throw new Error(`${TEAM_WRITE_REFUSED} : un agent OpenClaw (joignable par des tiers) n'y modifie rien`)
     }
     const policy = this.registry.getPolicy(instance.assistant_id, scope.id)
+    // Lecture seule sur l'espace d'équipe (cas du Mac du propriétaire) : le refus le nomme, pour que l'agent ne lise pas « scope user ».
+    if (scope.type === 'org' && !policy?.can_write) {
+      throw new Error(`${TEAM_WRITE_REFUSED} : cet agent lit l'espace d'équipe sans can_write ; il n'y modifie rien`)
+    }
     if (!policy?.can_write) {
       throw new Error(`écriture refusée : l'assistant n'a pas can_write sur le scope « ${scope.name} »`)
     }

@@ -88,6 +88,21 @@ describe('memoria_store_fact vers l’espace d’équipe', () => {
   })
 })
 
+describe('épingler ou corriger un fait d’équipe en lecture seule', () => {
+  it('le refus parle de l’espace d’équipe, jamais du scope « user »', async () => {
+    const g = gateway({
+      pin: async () => {
+        throw new DaemonHttpError('/v1/memory/pin', 403, "écriture refusée dans l'espace d'équipe (org) : cet agent lit l'espace d'équipe sans can_write ; il n'y modifie rien")
+      },
+    })
+    const { handlers } = buildServer({ instanceId: 'i', tracker: new ActiveContextTracker(), connect: async () => g })
+    const res = await handlers.pin({ fact_id: 'f-org', pinned: true })
+    expect(res.isError).toBe(true)
+    expect(text(res)).toMatch(/team space \("org"\)/)
+    expect(text(res)).not.toMatch(/"user" scope/)
+  })
+})
+
 describe('rappel : un fait de l’espace d’équipe est rendu `org`', () => {
   it('JSON compact : `scope: "org"` sur le fait d’équipe seulement', async () => {
     const { handlers } = buildServer({ instanceId: 'i', tracker: new ActiveContextTracker(), connect: async () => gateway() })
