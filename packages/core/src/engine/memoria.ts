@@ -20,7 +20,7 @@ import {
   type ResolveOptions,
   type ResolvedConfig,
 } from '../config.js'
-import { RegistryStore } from '../storage/registry.js'
+import { RegistryStore, SCOPE_MOVE_KEY } from '../storage/registry.js'
 import { isOnNetworkVolume } from '../storage/network-guard.js'
 import {
   ContentStore,
@@ -588,9 +588,27 @@ export class Memoria {
     this.registry.registerDb({ kind: 'registry', path: this.paths.registry, assistant_instance_id: null, scope_id: null })
     this.secretProvider = opts.secretProvider ?? createSecretProvider(this.paths.secretsDir, { force: opts.secretsVault })
     this.llmOverride = opts.llm
+    this.recoverInterruptedScopeMove()
     this.grantDefaultUserWrite()
     this.grantTeamWriteDefault()
     this.triage = new TriageService(this.triageHost())
+  }
+
+  /**
+   * Arrêt brutal pendant un join, entre le déplacement du contenu de l'espace
+   * d'équipe et celui du registre : le contenu porte le nouvel id, le registre
+   * l'ancien, et les faits sont invisibles. Réparé dès l'ouverture, que la
+   * synchro soit active ou non (le join n'active `[sync]` qu'après la reprise
+   * des espaces). Sans marque, une seule lecture de réglage (règle n°27).
+   */
+  private recoverInterruptedScopeMove(): void {
+    if (!this.registry.getSetting(SCOPE_MOVE_KEY)) return
+    try {
+      this.registry.recoverScopeMove((from, toId) => this.moveScopeContent(from, toId))
+      console.warn('[memoria] synchro : déplacement d’espace interrompu (arrêt pendant un join) repris au démarrage')
+    } catch (err) {
+      console.warn('[memoria] synchro : reprise d’un déplacement d’espace en échec :', (err as Error).message)
+    }
   }
 
   /**
@@ -2863,6 +2881,24 @@ export class Memoria {
   }
 
   /**
+   * Mac relié à un hub : un fait d'un espace synchronisé né sur une AUTRE
+   * machine (le hub ou un collègue) ne se corrige, ne se date ni ne se fusionne
+   * ici. La synchro n'envoie que les faits nés sur ce Mac, et le hub refuserait
+   * le reste : la modification resterait locale, l'ancien texte actif partout
+   * ailleurs, sans un mot. Refus explicite (403) : sa machine d'origine le fait.
+   * Épingler reste permis (préférence locale, jamais synchronisée).
+   */
+  private assertModifiableHere(scope: MemoryScope, rows: ReadonlyArray<{ origin_machine_id?: string | null }>): void {
+    if (scope.type === 'private') return
+    const here = localMachineId(this.registry)
+    if (!rows.some(r => r.origin_machine_id && r.origin_machine_id !== here)) return
+    const hub = this.registry.listPeers().find(p => p.role === 'hub')
+    if (!hub || !hub.allowed_scopes.includes(scope.id)) return
+    const prefix = scope.type === 'org' ? TEAM_WRITE_REFUSED : `écriture refusée dans l'espace « ${scope.name} »`
+    throw new Error(`${prefix} : ce fait vient d'un autre Mac (le hub ou un collègue) ; seule sa machine d'origine le corrige, le date ou le fusionne, demande au propriétaire`)
+  }
+
+  /**
    * Statut des messages d'une capture — le « suivi de colis » réclamé en bêta.
    *
    * Dérivé du WAL et de l'audit, SANS table ni colonne supplémentaire :
@@ -2937,6 +2973,7 @@ export class Memoria {
     if (!located || located.row.superseded) return { replacement: null }
     const { store, row: old, scope } = located
     this.assertWritable(instance, scope)
+    this.assertModifiableHere(scope, [old])
 
     // La correction hérite du classement de l'original (catégorie, scope,
     // épinglage) : corriger une formulation ne doit pas dégrader le rangement.
@@ -2991,6 +3028,10 @@ export class Memoria {
     this.assertWritable(instance, scope)
     // Les doublons fusionnés doivent vivre dans la MÊME DB que le conservé
     // (superseded_by ne traverse pas les bases) : un id d'ailleurs est ignoré.
+    const origins = store.db
+      .prepare(`SELECT origin_machine_id FROM facts WHERE id IN (${targets.map(() => '?').join(',')})`)
+      .all(...targets) as Array<{ origin_machine_id: string | null }>
+    this.assertModifiableHere(scope, [located.row, ...origins])
 
     const ts = nowISO()
     const merged: string[] = []
@@ -3079,6 +3120,7 @@ export class Memoria {
     const located = this.locateFact(instance, factId)
     if (!located) return false
     this.assertWritable(instance, located.scope)
+    this.assertModifiableHere(located.scope, [located.row])
     const { store } = located
     const r = store.db
       .prepare('UPDATE facts SET expires_at = ?, updated_at = ? WHERE id = ?')

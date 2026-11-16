@@ -202,6 +202,27 @@ describe("écriture d'un agent dans l'espace d'équipe", () => {
   })
 })
 
+describe("correction d'un fait d'équipe par un agent", () => {
+  it('repasse les garde-fous : sujet sensible ou secret refusés (403), rien d’écrit, rien au coffre', () => {
+    const { m } = open({ machine: 'team' })
+    const agent = m.pairAssistant({ type: 'claude-code' })
+    const instance = agent.assistant_instance_id
+    const fact = m.declareFact({ instance, content: 'Le planning du tournage se met à jour le lundi', scope: 'org' }).fact!
+    const vaulted = vi.spyOn(m.secrets, 'set')
+    expect(() => m.correctFact(instance, fact.id, 'Le salaire de Zorba passe à 2 100 euros')).toThrow(
+      /^écriture refusée dans l'espace d'équipe \(org\) : le fait touche un sujet sensible/,
+    )
+    expect(() => m.correctFact(instance, fact.id, 'La clé du service de rendu est api_key=Zx9fictif00112233445566')).toThrow(
+      /^écriture refusée dans l'espace d'équipe \(org\) : le fait contient un secret/,
+    )
+    expect(m.scopeFacts(orgScope(m).id).map(f => f.id)).toEqual([fact.id])
+    expect(m.sharedContentStore(orgScope(m).id)!.db.prepare('SELECT superseded FROM facts WHERE id = ?').get(fact.id)).toEqual({ superseded: 0 })
+    expect(vaulted).not.toHaveBeenCalled()
+    // Témoin : une correction ordinaire passe.
+    expect(m.correctFact(instance, fact.id, 'Le planning du tournage se met à jour le mardi').replacement).not.toBeNull()
+  })
+})
+
 describe('rôle de la machine ([sharing] machine)', () => {
   it('Mac d’équipe : Claude Code et Codex lisent et écrivent `org` dès l’appairage, OpenClaw jamais', () => {
     const { m } = open({ machine: 'team' })

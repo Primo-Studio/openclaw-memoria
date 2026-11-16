@@ -384,8 +384,8 @@ describe("espace d'équipe : candidats, promotion share 'org', partage", () => {
     const finance = seedPending(FINANCE)
     const idea = seedPending(IDEA)
     await runToEnd()
-    expect((await call('POST', '/v1/admin/triage/correct', { fact_id: process, genre: 'process', rubriques: ['outils'] })).status).toBe(200)
-    expect((await call('POST', '/v1/admin/triage/correct', { fact_id: finance, genre: 'process', rubriques: ['outils', 'finance'] })).status).toBe(200)
+    expect((await call('POST', '/v1/admin/triage/correct', { fact_id: process, genre: 'process', rubriques: ['outils'], portee: 'entite' })).status).toBe(200)
+    expect((await call('POST', '/v1/admin/triage/correct', { fact_id: finance, genre: 'process', rubriques: ['outils', 'finance'], portee: 'entite' })).status).toBe(200)
     return { process, finance, idea }
   }
 

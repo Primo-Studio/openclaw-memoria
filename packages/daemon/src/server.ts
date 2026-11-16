@@ -806,7 +806,8 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         const factId = String(body['fact_id'] ?? '')
         const content = String(body['content'] ?? '')
         if (!instance || !factId || !content.trim()) throw new HttpError(400, 'instance, fact_id et content requis')
-        sendJson(res, 200, memoria.correctFact(instance, factId, content))
+        // Refus du moteur (garde-fous de l'espace d'équipe, droit) → 403/404 parlant, jamais un 500.
+        sendJson(res, 200, mapEngineErrors(() => memoria.correctFact(instance, factId, content)))
         return
       }
       case 'POST /v1/admin/merge_facts': {
@@ -817,7 +818,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         if (!instance || !keep || !Array.isArray(ids)) {
           throw new HttpError(400, 'instance, keep_fact_id et merge_fact_ids requis')
         }
-        sendJson(res, 200, memoria.mergeFacts(instance, keep, ids.filter((v): v is string => typeof v === 'string')))
+        sendJson(res, 200, mapEngineErrors(() => memoria.mergeFacts(instance, keep, ids.filter((v): v is string => typeof v === 'string'))))
         return
       }
       case 'GET /v1/admin/never_used': {
@@ -1765,14 +1766,8 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
 
   // ---- SYNCHRO INTER-MACHINES (SYNC §3.10) -------------------------------
   const syncCfg = memoria.resolved.config.sync
-  // Un déplacement d'espace interrompu par un arrêt brutal (join) est repris.
-  if (syncCfg?.enabled) {
-    try {
-      memoria.sync.recoverPendingScopeMove()
-    } catch (err) {
-      console.warn('[memoria-daemon] synchro : reprise d’un déplacement d’espace en échec :', (err as Error).message)
-    }
-  }
+  // (Un déplacement d'espace interrompu par un arrêt brutal pendant un join
+  // est repris à l'ouverture de Memoria, synchro active ou non.)
   // (a) HUB : second listener sur le LAN, routes /v1/sync/* uniquement.
   // `lan:47600` (défaut) = l'IPv4 privée de l'interface du réseau local,
   // résolue à chaque démarrage. Pas d'adresse (Wi-Fi pas encore là au login)

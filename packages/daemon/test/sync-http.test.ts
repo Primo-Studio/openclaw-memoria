@@ -58,7 +58,8 @@ describe('synchro sur HTTP réel', () => {
   it('une nouveauté du hub est tirée ensuite par le spoke', async () => {
     await spoke.memoria.sync.join({ hub: `127.0.0.1:${LAN_PORT}`, code: hub.memoria.sync.invite().code })
     const a = hub.memoria.listAgents().find(x => x.assistant_type === 'openclaw')!
-    hub.memoria.storeFact({ instance: a.instance.id, scope: orgScopeId, content: 'Le mot de passe du NAS tourne tous les 90 jours' })
+    // (un texte qui touche un mot de passe ne voyage plus : sujet sensible, refusé à l'envoi)
+    hub.memoria.storeFact({ instance: a.instance.id, scope: orgScopeId, content: 'Le NAS redémarre le premier lundi du mois' })
     const r = await spoke.memoria.sync.pull(orgScopeId)
     expect(r.applied).toBeGreaterThanOrEqual(1)
   })

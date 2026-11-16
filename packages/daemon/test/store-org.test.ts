@@ -85,3 +85,20 @@ describe('POST /v1/memory/store_fact avec scope « org »', () => {
     expect(daemon.memoria.scopeFacts(daemon.memoria.teamScope()!.id)).toEqual([])
   })
 })
+
+describe('POST /v1/admin/correct_fact et merge_facts : un refus du moteur est un 403, pas un 500', () => {
+  it('correction vers un sujet sensible ou un secret : 403 qui nomme l’espace d’équipe, rien d’écrit', async () => {
+    const { token } = await pairToken('claude-code')
+    const instance = daemon.memoria.listAgents().find(a => a.assistant_type === 'claude-code')!.instance.id
+    const stored = await post('/v1/memory/store_fact', { content: 'Le planning du tournage fictif se met à jour le lundi', scope: 'org' }, token)
+    const factId = (stored.json['fact'] as { id: string }).id
+    for (const content of ['Le salaire de Zorba passe à 2 100 euros', 'La clé du service de rendu est api_key=Zx9fictif00112233445566']) {
+      const r = await post('/v1/admin/correct_fact', { instance, fact_id: factId, content }, daemon.state.admin_token)
+      expect(r.status).toBe(403)
+      expect(String(r.json['error'])).toMatch(/^écriture refusée dans l'espace d'équipe \(org\)/)
+    }
+    const missing = await post('/v1/admin/merge_facts', { instance, keep_fact_id: 'absent-fictif', merge_fact_ids: [factId] }, daemon.state.admin_token)
+    expect(missing.status).toBe(404)
+    expect(daemon.memoria.scopeFacts(daemon.memoria.teamScope()!.id).map(f => f.id)).toEqual([factId])
+  })
+})

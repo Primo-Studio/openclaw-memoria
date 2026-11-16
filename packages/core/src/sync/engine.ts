@@ -18,7 +18,7 @@
  * jamais bloquant, jamais dans le chemin recall/store_fact.
  */
 import type { ContentStore } from '../storage/content.js'
-import { SCOPE_MOVE_KEY, type RegistryStore, type ScopeContentMover } from '../storage/registry.js'
+import type { RegistryStore, ScopeContentMover } from '../storage/registry.js'
 import type { SecretProvider } from '../secrets/types.js'
 import type { MemoryScope, SyncPeer } from '../types.js'
 import { newToken, nowISO, sha256Hex } from '../util.js'
@@ -166,7 +166,8 @@ export interface SyncHttpResponse {
 interface PendingInvite {
   code_hash: string
   expires_at: string
-  display_name: string
+  /** Nom donné par le propriétaire (`invite --name`) : il l'emporte sur celui que le Mac invité annonce. */
+  display_name: string | null
   scopes: string[]
   /** Machine qui a présenté le bon code : elle seule peut le représenter (relance d'un join raté). */
   claimed_by: string | null
@@ -176,8 +177,25 @@ interface PendingInvite {
 export class SyncEngine {
   private lastRun: SyncRunStatus | null = null
   private lastLoggedError: string | null = null
+  /**
+   * Clés du groupe gardées en mémoire : relire le coffre (Trousseau, ou coffre
+   * chiffré dérivé par scrypt, mesuré à 34-36 ms) à CHAQUE requête signée
+   * pesait sur la boucle d'événements (règle n°27). Le join les remplace ou
+   * les rétablit (et met ce cache à jour) ; init-hub reconstruit le moteur.
+   */
+  private keyCache: { cpk?: Buffer; gvk?: Buffer } = {}
 
   constructor(private readonly deps: SyncDeps) {}
+
+  /** Clé de signature du groupe (créée au premier usage sur le hub). */
+  private cpk(): Buffer {
+    return (this.keyCache.cpk ??= clusterPairingKey(this.deps.secrets))
+  }
+
+  /** Clé de coffre du groupe (créée au premier usage sur le hub). */
+  private gvk(): Buffer {
+    return (this.keyCache.gvk ??= groupVaultKey(this.deps.secrets))
+  }
 
   private get registry(): RegistryStore {
     return this.deps.registry
@@ -230,7 +248,7 @@ export class SyncEngine {
     this.expireStalePairings()
     const code = `${rand4()}-${rand4()}`
     const expires_at = new Date(Date.now() + INVITE_TTL_MS).toISOString()
-    const invite: PendingInvite = { code_hash: sha256Hex(code), expires_at, display_name: displayName ?? 'machine', scopes: types, claimed_by: null, attempts: 0 }
+    const invite: PendingInvite = { code_hash: sha256Hex(code), expires_at, display_name: displayName?.trim() || null, scopes: types, claimed_by: null, attempts: 0 }
     this.registry.setSetting(PENDING_INVITE_KEY, JSON.stringify(invite))
     const addr = hubAddressesFor(this.config.listen_lan)
     return { code, expires_at, hub_lan: addr.primary, hub_alternatives: addr.alternatives, scopes: types }
@@ -274,6 +292,19 @@ export class SyncEngine {
     if (!machineId) throw new Error('identifiant de machine manquant')
     if (machineId === this.machineId) throw new Error('une machine ne peut pas se relier à elle-même')
     if (inv.claimed_by && inv.claimed_by !== machineId) throw new Error('invitation déjà utilisée par une autre machine')
+    // L'identifiant est déclaré par le Mac invité, et la propriété des faits
+    // (garde not_owner) repose sur lui : un identifiant déjà porté par un Mac
+    // relié ne se reprend pas (sinon un invité prendrait la place d'un collègue
+    // et pourrait modifier ou effacer ses faits). Seul le même appairage en
+    // cours (code réservé à cette machine) se représente. Un Mac coupé peut
+    // revenir sous le même identifiant : c'est journalisé.
+    const existing = this.registry.getPeerByMachineId(machineId)
+    if (existing && !existing.revoked_at && inv.claimed_by !== machineId) {
+      throw new Error('identifiant de machine déjà relié à ce hub : révoquer d’abord l’ancien appairage (« memoria sync revoke »)')
+    }
+    if (existing?.revoked_at) {
+      this.registry.audit({ actor_type: 'system', actor_id: 'sync', action: 'sync_peer_replaced', target_id_hash: sha256Hex(machineId), scope_id: null, reason: `revoked_at=${existing.revoked_at}` })
+    }
 
     // Espaces de CE pair : ceux de l'invitation, encore synchronisés par le hub.
     const hubTypes = this.syncTypes()
@@ -282,12 +313,13 @@ export class SyncEngine {
       .filter(s => types.includes(s.type))
       .map(s => ({ id: s.id, type: s.type, name: s.name }))
 
-    const gvk = groupVaultKey(this.deps.secrets)
-    const cpk = clusterPairingKey(this.deps.secrets)
+    const gvk = this.gvk()
+    const cpk = this.cpk()
     const peerToken = newToken()
     this.registry.addPeer({
       machine_id: machineId,
-      display_name: input.display_name ?? inv.display_name,
+      // Le nom choisi à l'invitation d'abord (le Mac invité n'annonce que son nom d'hôte).
+      display_name: inv.display_name ?? (input.display_name?.trim() || machineId),
       role: 'spoke',
       host: input.host ?? null,
       peer_token: peerToken,
@@ -353,8 +385,7 @@ export class SyncEngine {
     const peer = this.registry.verifyPeerToken(peerToken)
     if (!peer) throw new SyncAuthError('peer inconnu ou révoqué')
     if (!sig) throw new SyncAuthError('signature requise')
-    const cpk = clusterPairingKey(this.deps.secrets)
-    const result = verifyRequest(cpk, sig, parts, n => !this.registry.recordSyncNonce(n))
+    const result = verifyRequest(this.cpk(), sig, parts, n => !this.registry.recordSyncNonce(n))
     if (!result.ok) throw new SyncAuthError(`signature refusée (${result.reason})`)
     this.registry.touchPeer(peer.machine_id, peer.host)
     return peer
@@ -611,8 +642,7 @@ export class SyncEngine {
 
   /** (hub) Marque un secret existant comme partageable : scelle sa valeur en enveloppe GVK. */
   shareSecret(refId: string, scopeId: string, value: string, opts: { syncable?: boolean } = {}): void {
-    const gvk = groupVaultKey(this.deps.secrets)
-    const env = sealValue(value, gvk)
+    const env = sealValue(value, this.gvk())
     this.registry.db
       .prepare(
         `INSERT INTO shared_secret_envelopes (ref_id, scope_id, syncable, iv, tag, data, updated_at)
@@ -655,10 +685,13 @@ export class SyncEngine {
     try {
       for (const p of previousHubs) this.registry.revokePeer(p.machine_id)
       // installer les clés du groupe
-      setClusterPairingKey(this.deps.secrets, Buffer.from(data.cpk, 'hex'))
+      const cpk = Buffer.from(data.cpk, 'hex')
+      setClusterPairingKey(this.deps.secrets, cpk)
+      this.keyCache = { cpk }
       const gvk = openGvk(data.sealed_gvk, opts.code)
       if (!gvk) throw new Error('échec du descellement de la clé de coffre (code invalide ?)')
       setGroupVaultKey(this.deps.secrets, gvk)
+      this.keyCache = { cpk, gvk }
 
       // Espaces d'équipe seulement, même si un hub d'avant propose `user`.
       const allowed = (data.scopes ?? []).filter(s => SYNC_ALLOWED_TYPES.includes(s.type) && !SYNC_FORBIDDEN_TYPES.includes(s.type))
@@ -713,6 +746,7 @@ export class SyncEngine {
     this.registry.deleteSetting(`sync.peer_token.${hubMachineId}`)
     this.registry.deleteCursors(hubKey(hubHost))
     restoreGroupKeys(this.deps.secrets, keys)
+    this.keyCache = {}
     if (this.deps.replaceSyncConfig) this.deps.replaceSyncConfig(Object.keys(configBefore).length > 0 ? configBefore : undefined)
     else this.deps.setSyncConfig({ enabled: configBefore.enabled ?? false, role: configBefore.role, hub: configBefore.hub })
     this.deps.persistConfig()
@@ -737,7 +771,7 @@ export class SyncEngine {
       }
       // secrets du scope
       const secrets = await this.signedGet<{ secrets: Array<{ name: string; env: Envelope }> }>(opts.hub, `/v1/sync/secrets?scope=${encodeURIComponent(scopeId)}`, f)
-      const gvk = groupVaultKey(this.deps.secrets)
+      const gvk = this.gvk()
       for (const s of secrets.secrets) {
         const value = openEnvelope(s.env, gvk)
         if (value !== null) {
@@ -907,11 +941,6 @@ export class SyncEngine {
     }))
   }
 
-  /** Reprend un déplacement d'espace interrompu (arrêt brutal pendant un join). */
-  recoverPendingScopeMove(): void {
-    if (this.registry.getSetting(SCOPE_MOVE_KEY)) this.registry.recoverScopeMove(this.deps.moveScopeContent)
-  }
-
   // ------------------------------------------------------------ internes
 
   private hubPeer(): SyncPeer | null {
@@ -940,8 +969,7 @@ export class SyncEngine {
     // le token du hub est stocké au join (settings, chmod du registry) ; à défaut, en-tête vide → 401 clair
     const ts = nowISO()
     const nonce = newNonce()
-    const cpk = clusterPairingKey(this.deps.secrets)
-    const sig = signRequest(cpk, { method, path, body, ts, nonce })
+    const sig = signRequest(this.cpk(), { method, path, body, ts, nonce })
     return {
       authorization: `Bearer ${token ?? ''}`,
       'x-memoria-ts': ts,
@@ -982,7 +1010,7 @@ function parseInvite(raw: string | null): PendingInvite | null {
     return {
       code_hash: v.code_hash,
       expires_at: v.expires_at,
-      display_name: typeof v.display_name === 'string' ? v.display_name : 'machine',
+      display_name: typeof v.display_name === 'string' && v.display_name.trim() ? v.display_name : null,
       // invitation d'avant (sans liste) : l'espace d'équipe seulement
       scopes: Array.isArray(v.scopes) ? v.scopes.filter(t => SYNC_ALLOWED_TYPES.includes(t)) : ['org'],
       claimed_by: typeof v.claimed_by === 'string' ? v.claimed_by : null,

@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   Memoria,
   clusterPairingKey,
+  contentHash,
   groupVaultKey,
   hubAddressesFor,
   keyFingerprint,
@@ -394,6 +395,89 @@ describe('sensible et secrets : ni envoyés, ni acceptés (hub et Mac relié)', 
   })
 })
 
+describe('Mac relié : un fait né ailleurs ne se modifie pas ici', () => {
+  it('corriger, dater ou fusionner un fait du hub : refus explicite, rien ne diverge ; ses propres faits partent corrigés', async () => {
+    const { hub } = makeHub()
+    const orgId = orgOf(hub).id
+    const spoke = mk('spoke')
+    await joinTo(spoke, hub)
+    const a = spoke.pairAssistant({ type: 'claude-code', display_name: 'Agent du collègue' })
+    spoke.setScopeAccess(a.assistant_id, orgId, { can_read: true, can_write: true })
+    const inst = a.assistant_instance_id
+    const local = spoke.sharedContentStore(orgId)!
+    const fromHub = (local.db.prepare('SELECT id FROM facts WHERE scope_id = ? LIMIT 1').get(orgId) as { id: string }).id
+    const refusal = /^écriture refusée dans l'espace d'équipe \(org\) : ce fait vient d'un autre Mac/
+    expect(() => spoke.correctFact(inst, fromHub, 'Essai fictif : process d’export vidéo en H.264 pour l’équipe')).toThrow(refusal)
+    expect(() => spoke.setExpiry(inst, fromHub, '2031-01-01T00:00:00.000Z')).toThrow(refusal)
+    const mine = spoke.storeFact({ instance: inst, scope: orgId, content: 'Essai fictif : leçon d’équipe sur les sous-titres' })
+    expect(() => spoke.mergeFacts(inst, mine.id, [fromHub])).toThrow(refusal)
+    // rien n'a bougé ici : pas de version locale qui divergerait du hub
+    expect(local.db.prepare('SELECT superseded, expires_at FROM facts WHERE id = ?').get(fromHub)).toEqual({ superseded: 0, expires_at: null })
+    expect(countIn(spoke, orgId)).toBe(2)
+    // épingler reste permis (préférence locale)
+    expect(spoke.setPinned(inst, fromHub, true)).toBe(true)
+
+    // ses propres faits : la correction et l'expiration arrivent au hub
+    await spoke.sync.syncAll(hubFetch(hub))
+    const fixed = spoke.correctFact(inst, mine.id, 'Essai fictif : leçon d’équipe sur les sous-titres, corrigée').replacement!
+    expect(spoke.setExpiry(inst, fixed.id, '2033-01-01T00:00:00.000Z')).toBe(true)
+    const r = await spoke.sync.syncAll(hubFetch(hub))
+    expect(r).toMatchObject({ refused: 0, errors: [] })
+    const onHub = hub.sharedContentStore(orgId)!.db.prepare('SELECT id, superseded, expires_at FROM facts WHERE id IN (?, ?) ORDER BY superseded').all(fixed.id, mine.id)
+    expect(onHub).toEqual([
+      { id: fixed.id, superseded: 0, expires_at: '2033-01-01T00:00:00.000Z' },
+      { id: mine.id, superseded: 1, expires_at: null },
+    ])
+
+    // après « leave », plus rien ne se synchronise : le Mac modifie librement sa copie
+    await spoke.sync.leave(hubFetch(hub))
+    expect(spoke.setExpiry(inst, fromHub, '2031-01-01T00:00:00.000Z')).toBe(true)
+  })
+})
+
+describe('identité d’un Mac relié', () => {
+  it('un Mac invité ne reprend pas l’identifiant d’un Mac déjà relié ; un Mac coupé peut revenir (journalisé)', async () => {
+    const { hub } = makeHub()
+    const orgId = orgOf(hub).id
+    const b = mk('mac-b')
+    await joinTo(b, hub)
+    const ab = b.pairAssistant({ type: 'claude-code', display_name: 'Agent de B' })
+    b.setScopeAccess(ab.assistant_id, orgId, { can_read: true, can_write: true })
+    b.storeFact({ instance: ab.assistant_instance_id, scope: orgId, content: 'Essai fictif : fait du Mac B' })
+    await b.sync.syncAll(hubFetch(hub))
+
+    // C se déclare sous l'identifiant de B, avec une invitation valide
+    const c = mk('mac-c')
+    c.registry.setSetting('sync.machine_id', b.sync.machineId)
+    await expect(joinTo(c, hub)).rejects.toThrow(/pairing refusé par le hub \(400\)/)
+    const spokes = hub.registry.listPeers().filter(p => p.role === 'spoke')
+    expect(spokes).toHaveLength(1)
+    expect(spokes[0]!.display_name).toBe('Mac de l’équipe')
+    const why = hub.registry.db.prepare("SELECT reason FROM audit_log WHERE action = 'sync_pairing_refused' ORDER BY rowid DESC LIMIT 1").get() as { reason: string }
+    expect(why.reason).toMatch(/déjà relié/)
+    // B n'a rien perdu : sa synchro marche encore
+    expect((await b.sync.syncAll(hubFetch(hub))).errors).toEqual([])
+
+    // B coupé par le propriétaire : son identifiant se reprend, et c'est journalisé
+    hub.registry.revokePeer(b.sync.machineId)
+    await joinTo(c, hub)
+    expect(hub.registry.db.prepare("SELECT COUNT(*) AS n FROM audit_log WHERE action = 'sync_peer_replaced'").get()).toEqual({ n: 1 })
+  })
+
+  it('le nom donné à l’invitation l’emporte sur celui que le Mac invité annonce', async () => {
+    const { hub } = makeHub()
+    const named = mk('mac-nomme')
+    await joinTo(named, hub)
+    const anonymous = mk('mac-anonyme')
+    const inv = hub.sync.invite()
+    await anonymous.sync.join({ hub: HUB_ADDR, code: inv.code, fetchImpl: hubFetch(hub) })
+    const names = Object.fromEntries(hub.registry.listPeers().filter(p => p.role === 'spoke').map(p => [p.machine_id, p.display_name]))
+    expect(names[named.sync.machineId]).toBe('Mac de l’équipe')
+    // sans nom à l'invitation : l'identifiant du Mac
+    expect(names[anonymous.sync.machineId]).toBe(anonymous.sync.machineId)
+  })
+})
+
 describe('join sur un Mac qui a déjà des agents et des souvenirs', () => {
   it('réussit sans perte de faits ni de politiques, un seul org, et ses faits d’équipe partent au hub', async () => {
     const { hub } = makeHub()
@@ -439,6 +523,23 @@ describe('join sur un Mac qui a déjà des agents et des souvenirs', () => {
     hub.setScopeAccess(hubReader.assistant_id, newOrg.id, { can_read: true })
     const hubRec = hub.recall({ instance: hubReader.assistant_instance_id, query: 'Essai fictif check-list montage' })
     expect(hubRec.items.some(i => i.content === 'Essai fictif : check-list de montage')).toBe(true)
+  })
+
+  it('arrêt brutal entre les deux transactions du premier join : réparé au démarrage, même sans [sync]', () => {
+    let spoke = mk('spoke')
+    const a = spoke.pairAssistant({ type: 'claude-code', display_name: 'Agent du collègue' })
+    const org = orgOf(spoke)
+    spoke.setScopeAccess(a.assistant_id, org.id, { can_read: true, can_write: true })
+    spoke.storeFact({ instance: a.assistant_instance_id, scope: org.id, content: 'Essai fictif : process de publication sur le store' })
+    // ce que laisse un arrêt au mauvais moment : marque posée, contenu déplacé, registre intact
+    spoke.registry.setSetting('sync.scope_move', JSON.stringify({ from: org.id, to: 'org-du-hub-fictif', at: nowISO() }))
+    ;(spoke as unknown as { moveScopeContent: (from: unknown, to: string) => void }).moveScopeContent(org, 'org-du-hub-fictif')
+    expect(countIn(spoke, org.id)).toBe(0)
+    spoke = reopen(spoke, 'spoke')
+    expect(spoke.resolved.config.sync?.enabled).toBeUndefined()
+    expect(spoke.registry.getSetting('sync.scope_move')).toBeNull()
+    expect(countIn(spoke, org.id)).toBe(1)
+    expect(spoke.recall({ instance: a.assistant_instance_id, query: 'publication store' }).items).toHaveLength(1)
   })
 
   it('un seul org après redémarrage (et après une nouvelle connexion d’agent)', async () => {
@@ -605,6 +706,16 @@ describe('clés de groupe et adresses', () => {
     expect(keyFingerprint(clusterPairingKey(hub.secrets))).toBe(kept)
   })
 
+  it('les clés du groupe restent en mémoire : une passe de synchro ne relit pas le coffre (règle n°27)', async () => {
+    const { hub } = makeHub()
+    const spoke = mk('spoke')
+    await joinTo(spoke, hub)
+    await spoke.sync.syncAll(hubFetch(hub))
+    const reads = [vi.spyOn(spoke.secrets, 'get'), vi.spyOn(hub.secrets, 'get')]
+    expect((await spoke.sync.syncAll(hubFetch(hub))).errors).toEqual([])
+    for (const spy of reads) expect(spy).not.toHaveBeenCalled()
+  })
+
   it('l’invitation donne une adresse joignable depuis un autre Mac, jamais 0.0.0.0', () => {
     const ifaces = {
       lo0: [{ address: '127.0.0.1', family: 'IPv4', internal: true }],
@@ -625,5 +736,98 @@ describe('clés de groupe et adresses', () => {
     const hub = mk('hub')
     hub.configureSyncHub('127.0.0.1:47600')
     expect(hub.sync.invite().hub_lan).toBe('127.0.0.1:47600')
+  })
+})
+
+describe('gardes de la synchro, une à une', () => {
+  it('pair invité avec moins d’espaces que le hub : il n’a que les siens', async () => {
+    const { hub } = makeHub()
+    hub.configureSyncHub('127.0.0.1:47600', ['org', 'shared_topic'])
+    const topic = hub.registry.ensureScope('shared_topic', 'sujet-fictif', {})
+    const spoke = mk('spoke')
+    await joinTo(spoke, hub, hubFetch(hub), ['org'])
+    expect(hub.sync.peers().find(p => p.role === 'spoke')!.allowed.map(a => a.type)).toEqual(['org'])
+    const q = encodeURIComponent(topic.id)
+    expect(asPeer(spoke, hub, 'GET', `/v1/sync/pull?scope=${q}&since=0`).status).toBe(403)
+    expect(asPeer(spoke, hub, 'POST', '/v1/sync/push', { scope_id: topic.id, facts: [], tombstones: [] }).status).toBe(403)
+    // témoin : un pair invité sur les deux y accède
+    const both = mk('spoke-2')
+    await joinTo(both, hub, hubFetch(hub), ['org', 'shared_topic'])
+    expect(asPeer(both, hub, 'GET', `/v1/sync/pull?scope=${q}&since=0`).status).toBe(200)
+  })
+
+  it('un hub d’avant qui propose `user` : le Mac invité ne le reprend pas, ni ne le demande', async () => {
+    const { hub } = makeHub()
+    const hubUser = userOf(hub)
+    const inner = hubFetch(hub)
+    const oldHub: FetchLike = async (url, init) => {
+      const res = await inner(url, init)
+      if (!new URL(url).pathname.endsWith('/pairing/complete')) return res
+      const body = (await res.json()) as { scopes: unknown[] }
+      return { ...res, json: async () => ({ ...body, scopes: [...body.scopes, { id: hubUser.id, type: 'user', name: 'user' }] }) }
+    }
+    const spoke = mk('spoke')
+    const spokeUser = userOf(spoke).id
+    await joinTo(spoke, hub, oldHub)
+    expect(userOf(spoke).id).toBe(spokeUser)
+    expect(spoke.registry.getScope(hubUser.id)).toBeNull()
+    expect(spoke.registry.listPeers().find(p => p.role === 'hub')!.allowed_scopes).toEqual([orgOf(hub).id])
+    expect(countIn(spoke, spokeUser)).toBe(0)
+    // seconde couche : la reprise d'un espace interdit ne fait rien
+    expect(spoke.registry.adoptScope({ id: hubUser.id, type: 'user', name: 'user' })).toBeNull()
+    expect(userOf(spoke).id).toBe(spokeUser)
+  })
+
+  it('le Mac relié ne repousse pas un fait né ailleurs, même modifié chez lui', async () => {
+    const { hub } = makeHub()
+    const orgId = orgOf(hub).id
+    const spoke = mk('spoke')
+    await joinTo(spoke, hub)
+    const local = spoke.sharedContentStore(orgId)!
+    const fromHub = (local.db.prepare('SELECT id FROM facts WHERE scope_id = ? LIMIT 1').get(orgId) as { id: string }).id
+    // modification locale directe (ancien code, outil externe) d'un fait du hub
+    local.db.prepare('UPDATE facts SET fact = ?, updated_at = ? WHERE id = ?').run('Essai fictif : texte modifié sur le Mac relié', nowISO(), fromHub)
+    expect(spoke.sync.collectDelta(orgId, '0', { originOnly: spoke.sync.machineId }).facts).toEqual([])
+    expect(await spoke.sync.push(orgId, hubFetch(hub))).toEqual({ applied: 0, skipped_lww: 0, refused: 0 })
+  })
+
+  it('cinq codes faux annulent l’invitation ; le bon code ne sert plus', async () => {
+    const { hub } = makeHub()
+    const inv = hub.sync.invite('Mac de l’équipe')
+    for (let i = 0; i < 5; i++) {
+      expect(() => hub.sync.completePairing({ code: `FAUX-000${i}`, machine_id: 'mac-intrus-fictif' })).toThrow(/code de synchro invalide/)
+    }
+    expect(() => hub.sync.completePairing({ code: inv.code, machine_id: 'mac-equipe-fictif' })).toThrow(/aucune invitation/)
+    expect(hub.registry.listPeers().filter(p => p.role === 'spoke')).toEqual([])
+    expect(hub.registry.db.prepare("SELECT COUNT(*) AS n FROM audit_log WHERE action = 'sync_invite_cancelled'").get()).toEqual({ n: 1 })
+  })
+
+  it('le code est réservé au Mac qui l’a présenté le premier', () => {
+    const { hub } = makeHub()
+    const inv = hub.sync.invite('Mac de l’équipe')
+    hub.sync.completePairing({ code: inv.code, machine_id: 'mac-equipe-fictif' })
+    expect(() => hub.sync.completePairing({ code: inv.code, machine_id: 'mac-intrus-fictif' })).toThrow(/déjà utilisée par une autre machine/)
+    // le même Mac peut le représenter (relance d'un join raté)
+    expect(hub.sync.completePairing({ code: inv.code, machine_id: 'mac-equipe-fictif' }).peer_token).toBeTruthy()
+    expect(hub.registry.listPeers().filter(p => p.role === 'spoke').map(p => p.machine_id)).toEqual(['mac-equipe-fictif'])
+  })
+
+  it('reprise de l’identité du hub : listes d’espaces des agents repointées, empreintes de contenu recalculées', async () => {
+    const { hub } = makeHub()
+    const hubOrg = orgOf(hub).id
+    const spoke = mk('spoke')
+    const a = spoke.pairAssistant({ type: 'codex', display_name: 'Agent du collègue' })
+    const localOrg = orgOf(spoke).id
+    spoke.setScopeAccess(a.assistant_id, localOrg, { can_read: true, can_write: true })
+    spoke.registry.db.prepare('UPDATE assistants SET default_scopes = ? WHERE id = ?').run(JSON.stringify([localOrg]), a.assistant_id)
+    const f = spoke.storeFact({ instance: a.assistant_instance_id, scope: localOrg, content: 'Essai fictif : check-list de montage' })
+    await joinTo(spoke, hub)
+    const row = spoke.registry.db.prepare('SELECT default_scopes FROM assistants WHERE id = ?').get(a.assistant_id) as { default_scopes: string }
+    expect(JSON.parse(row.default_scopes)).toEqual([hubOrg])
+    const hash = (spoke.sharedContentStore(hubOrg)!.db.prepare('SELECT content_hash FROM facts WHERE id = ?').get(f.id) as { content_hash: string }).content_hash
+    expect(hash).toBe(contentHash({ fact: 'Essai fictif : check-list de montage', category: 'general', scope_id: hubOrg }))
+    // et le fait part au hub sous l'identité de l'espace repris
+    await spoke.sync.syncAll(hubFetch(hub))
+    expect(hub.sharedContentStore(hubOrg)!.db.prepare('SELECT content_hash FROM facts WHERE id = ?').get(f.id)).toEqual({ content_hash: hash })
   })
 })

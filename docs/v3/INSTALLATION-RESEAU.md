@@ -35,7 +35,7 @@ Terminal. Pas besoin de relancer quoi que ce soit après un redémarrage : Memor
 > développement), le script **refuse** de l'écraser et conseille `memoria update` à la place.
 
 ### L'app Memoria (optionnel)
-`Memoria.app` (signée, dossier `/Applications` sur le poste de Néto) affiche une icône **M** dans la
+`Memoria.app` (signée, dossier `/Applications` sur le poste du propriétaire) affiche une icône **M** dans la
 barre de menus : **vert** = service actif, **rouge** = éteint, **gris** = démarrage ou état inconnu.
 « Ouvrir Memoria » ramène la fenêtre ; fermer la fenêtre cache l'app (le M reste). Elle démarre le
 service par launchd, jamais en double.
@@ -74,7 +74,7 @@ le chat de l'agent. Il n'y a pas de commande « connect » : c'est le pairing.
 
 **Importer** récupère les souvenirs existants avec une barre de progression : les conversations
 (transcripts) arrivent **dormantes dans la Revue** ; une mémoire OpenClaw legacy est adoptée telle
-quelle. Sur le poste de Néto, un import automatique tourne toutes les 6 h (`scripts/auto-import.sh`
+quelle. Sur le poste du propriétaire, un import automatique tourne toutes les 6 h (`scripts/auto-import.sh`
 + plist launchd, chemins de ce poste — voir TODO pour la version portable) et remplit la Revue.
 
 ## 2. Désigner le hub (la machine toujours allumée)
@@ -177,11 +177,19 @@ section, et le droit suit l'espace `org` quand il prend l'identifiant du hub. (L
   droit posé à la main.
 - Un agent écrit dans l'espace d'équipe avec `memoria_store_fact` et `scope: "org"`. Le Memoria du
   Mac refuse un fait sensible, `critical`, contenant un secret, ou écrit avec un client déclaré
-  (403, le fait n'est écrit nulle part). Au rappel, un fait d'équipe est marqué `org`.
+  (403, le fait n'est écrit nulle part). Même refus pour une correction. Au rappel, un fait
+  d'équipe est marqué `org`.
+- Sur un Mac de l'équipe, un fait **né ailleurs** (sur le hub ou chez un collègue) ne se corrige,
+  ne se date ni ne se fusionne : 403 « ce fait vient d'un autre Mac ». La synchro n'envoie que les
+  faits nés sur ce Mac ; la modification resterait locale et l'ancien texte actif partout
+  ailleurs. C'est au propriétaire (ou au collègue qui l'a écrit) de le corriger.
 
 Sur le Mac du propriétaire (`machine = "owner"`, le défaut), rien ne change : ses faits n'entrent
 dans `org` que par sa validation, filtrée côté serveur (seuls process, savoirs, leçons et décisions
-passent ; jamais rh, finance, juridique, clients, vente, ni un fait sensible, secret ou client).
+passent ; jamais rh, finance, juridique, clients, vente, ni un fait sensible, secret ou client, ni
+un fait sur une personne : portée `user` ou `perso` au tri, ou fait sur quelqu'un). Un fait de
+l'espace `user` ne part que si sa portée `entite` a été confirmée à la main au tri. Un sujet
+sensible dont la marque a été levée à la main reste refusé vers l'équipe.
 Pour l'instant par l'API seulement (promotion du tri avec `share: 'org'`, ou `POST /v1/admin/share`
 vers `org`) : les boutons des écrans Tri et Partage sont à venir (T29).
 
@@ -195,16 +203,23 @@ injoignable, faire aussi `revoke` sur le hub).
 |---|---|
 | Espace **`org`** : process, savoirs, leçons d'équipe | Espace **`user`** (personnel au propriétaire) |
 | Projets et sujets, **seulement** si `--scopes` les ajoute | Mémoire **privée** de chaque agent, quarantaine de revue (imports) |
-| L'expiration d'un fait (il s'efface partout à la même date) | Faits **`critical`**, faits **en attente de revue** (dormants), faits **marqués d'un client** |
+| L'expiration d'un fait posée sur sa machine d'origine (il s'efface partout à la même date) | Faits **`critical`** ou **`sensitive`**, faits **en attente de revue** (dormants), faits **marqués d'un client** |
+| — | Tout texte qui touche un **sujet sensible** (paie, impôts, santé, identité…) ou qui porte un **secret** |
 | — | Télémétrie d'usage locale |
 | — | **Secrets** : le coffre inter-machines existe côté moteur (chiffré GVK), mais aucun secret n'est partagé |
 
-**Règles appliquées par le hub** à ce qu'envoie un Mac relié :
+**Règles appliquées par le hub** à ce qu'envoie un Mac relié (et par chaque Mac relié à ce qu'il
+reçoit du hub) :
 - chaque fait doit appartenir à l'espace de la requête, sinon il est refusé ;
-- un fait `critical` ou marqué d'un client est refusé ;
+- un fait `critical`, `sensitive`, en attente de revue, marqué d'un client, ou dont le texte touche
+  un sujet sensible ou porte un secret est refusé (jamais masqué : rien n'en est gardé, ni au coffre) ;
 - un Mac ne modifie ou ne supprime **que les faits nés sur sa machine**, jamais ceux du hub ni d'un
   autre collègue ;
-- les refus sont comptés (journal d'audit du hub ; `memoria sync now` affiche le nombre).
+- les refus sont comptés (journal d'audit du hub ; `memoria sync now` affiche le nombre, et celui
+  des faits reçus écartés par le Mac lui-même) ;
+- un Mac invité ne peut pas reprendre l'identifiant d'un Mac déjà relié. Pour relier de nouveau un
+  Mac déjà relié (réinstallation, nouveau join), **le couper d'abord** sur le hub
+  (`memoria sync revoke <machine_id>`), puis l'inviter.
 
 ### Qui écrit dans l'espace `user` ? (il reste sur chaque Mac)
 - Tes agents (Claude Code, Codex…) peuvent **déclarer directement un fait sur toi** dans `user`
