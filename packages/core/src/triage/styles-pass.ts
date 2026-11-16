@@ -37,18 +37,22 @@
  *     3. échantillon déterministe réparti sur le mois (STYLE_SAMPLE_MAX au
  *        plus), masqué par `host.redact` juste avant l'envoi, PUIS coupé à
  *        STYLE_SAMPLE_CHARS (coupé d'abord, une clé tronquée ne serait plus
- *        reconnue et partirait en partie) ;
+ *        reconnue et partirait en partie). Masquage sur une fenêtre bornée qui
+ *        couvre la coupe plus SECRET_MAX_CHARS (`maskForCut`), main rendue
+ *        entre deux textes ;
  *     4. un appel LLM (plafond vérifié au pire cas AVANT : TriageBudgetError,
  *        arrêt propre, le mois n'est pas marqué) ; sortie validée à la main ;
  *     5. 6 observations au plus, chacune appuyée par 3 messages de
  *        l'échantillon au moins (numéros vérifiés par le code) ; texte ET titre
- *        re-masqués, observation écartée si l'un des deux est sensible, touche
- *        la vie privée ou un contrat, ou nomme une autre fiche Person (le titre
- *        est stocké puis rendu aux agents, il passe les mêmes gardes) ;
- *     6. doublon (`host.findSemanticDuplicate`, exact, proche ou par le sens ;
- *        il ne compte que si son fait porte la même personne, ici aucune :
- *        `host.factPersonOf`), sinon
- *        fait DORMANT par `host.storePendingTriaged` : genre `style`,
+ *        re-masqués PUIS coupés (400 et 80), observation écartée si l'un des
+ *        deux est sensible, touche la vie privée ou un contrat, ou nomme une
+ *        autre fiche Person (le titre est stocké puis rendu aux agents, il
+ *        passe les mêmes gardes) ;
+ *     6. doublon (`host.findSemanticDuplicate`, exact, proche ou par le sens,
+ *        cherché parmi les faits de la même personne seulement, ici aucune :
+ *        `personId`), sinon
+ *        fait DORMANT par `host.storePendingTriaged` (`noRevive` : un jumeau
+ *        exact expiré n'est jamais réveillé) : genre `style`,
  *        person_id null, auteur `owner`, auteur_source `message`, portee
  *        `user`, conversation_at = date du dernier message du mois,
  *        prompt_version `styles-v1` ;
@@ -68,21 +72,33 @@
  *   remplacés, ni archivés, ni expirés, ni rattachés à un client, ni tirés par
  *   cette passe), qui citent un de ces noms ; rubriques `rh`, `finance`,
  *   `juridique` écartées ; filtre sensible relancé sur chaque texte. Les 250
- *   plus récents, masqués avant l'envoi PUIS coupés à 300 caractères.
+ *   plus récents, masqués avant l'envoi PUIS coupés à 300 caractères (même
+ *   fenêtre bornée et même cession que le mode owner).
  *   Un appel (deux au-delà de STYLE_PERSON_CALL_CHARS de notes, 4 observations
  *   chacun) ; 8 observations au plus, chacune appuyée par 2 faits sources au
  *   moins ; aucun jugement sur le travail, la santé, la paie, le contrat, la
- *   vie privée (consigne au LLM ET garde du code). Tout ou rien : un arrêt ou
- *   un échec sur le second appel n'écrit rien.
+ *   vie privée (consigne au LLM ET garde du code). Tous les morceaux sont
+ *   masqués d'abord : le plafond est vérifié au pire cas de TOUS les appels
+ *   restants avant le premier (`host.completionsFit`, sinon arrêt `budget`
+ *   sans appel). Tout ou rien pour l'écriture : un arrêt, une pause ou un
+ *   échec sur le second appel n'écrit rien ; mais la sortie validée du premier
+ *   est gardée par le service (`host.rememberStyleCall`, en mémoire, perdue
+ *   au redémarrage) jusqu'à l'écriture de la période : la relance ne la
+ *   repaie pas.
  *   Écriture : genre `style`, person_id de la fiche, auteur `ia:<agent de
  *   l'instance>` (convention des faits tirés par le LLM), auteur_source `llm`,
  *   approuve_par_owner faux, portee `user`, conversation_at = date du plus
- *   récent des faits qui l'appuient. Le texte nomme la personne ; une redite
- *   (proche ou par le sens) ne compte que si son fait porte le même person_id
- *   (le style d'une autre personne n'est pas une redite, et l'état écrit
- *   ensuite empêcherait de le refaire). Ces styles ne ressortent jamais
- *   comme ceux du propriétaire : stylesForInstance sans person_id filtre
- *   `t.person_id IS NULL`.
+ *   récent des faits qui l'appuient. Le texte nomme la personne : par son
+ *   prénom, ou par son nom affiché entier quand plusieurs fiches partagent ce
+ *   prénom (le prompt, lui, ne donne que le prénom). Une redite (exacte,
+ *   proche ou par le sens) se cherche parmi les faits de la même personne
+ *   seulement : le style d'une autre fiche n'est pas une redite et ne cache
+ *   pas celle de la même personne. Un texte mot pour mot identique au fait
+ *   d'une autre fiche ne s'écrit pas (et n'est jamais réveillé s'il est
+ *   expiré) ; si rien d'autre ne s'écrit, l'état n'est pas posé (il
+ *   bloquerait la reprise) et les sorties restent gardées. Ces styles ne
+ *   ressortent jamais comme ceux du propriétaire : stylesForInstance sans
+ *   person_id filtre `t.person_id IS NULL`.
  *   État : la personne n'est renvoyée que si ses faits sources ont augmenté
  *   de 50 % (ou `force`).
  *
@@ -99,7 +115,8 @@
  *
  * Boucle d'événements (ticket #27) : transcriptions lues en flux (fonctions de
  * user-messages.ts), retour à la boucle toutes les 10 ms de calcul ; faits
- * parcourus par fenêtres de rowid avec cession (store.ts).
+ * parcourus par fenêtres de rowid avec cession (store.ts) ; masquage texte par
+ * texte, sur une fenêtre bornée (`maskForCut`), avec cession entre deux.
  */
 import { monitorEventLoopDelay } from 'node:perf_hooks'
 import { LlmTruncatedError } from '../llm/provider.js'
@@ -113,6 +130,7 @@ import {
   TriageRefusedError,
   type Auteur,
   type ConversationAtSource,
+  type StyleObservationDraft,
   type StylesHost,
   type StylesPassMode,
   type StylesPassOptions,
@@ -158,10 +176,21 @@ export const STYLE_REDO_GROWTH = 1.5
 export const STYLE_SHORT_CHARS = 20
 /** Rubriques jamais envoyées en mode person. */
 export const STYLE_EXCLUDED_RUBRIQUES: readonly string[] = ['rh', 'finance', 'juridique']
+/** Texte et titre stockés d'une observation (coupés après le masquage). */
+export const STYLE_TEXT_MAX_CHARS = 400
+export const STYLE_TITLE_MAX_CHARS = 80
+/**
+ * Longueur maximale d'un secret reconnu par le masquage (un bloc PEM RSA de
+ * 4 096 bits fait environ 3 300 caractères). Un texte n'est masqué que sur une
+ * fenêtre qui couvre sa coupe plus cette marge (voir maskForCut).
+ */
+export const SECRET_MAX_CHARS = 4096
 /** Sortie maximale d'un appel (quelques observations courtes). */
 const MAX_OUTPUT_TOKENS = 1500
 /** Sortie retenue pour le dry-run. */
 const ESTIMATE_OUTPUT_TOKENS = 500
+/** Pas de la mesure du plus long blocage de la boucle (`max_block_ms`). */
+const EVENT_LOOP_RESOLUTION_MS = 20
 
 // ---------------------------------------------------------------- options et rapport
 
@@ -281,6 +310,29 @@ export function monthStats(messages: readonly Pick<OwnerStyleMessage, 'length' |
 /** Coupe un texte à `max` caractères (marque « … »). Toujours APRÈS le masquage, jamais avant. */
 function cut(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max)}…` : text
+}
+
+/**
+ * Masque `text` pour une coupe à `max` caractères, sur une fenêtre bornée :
+ * le début du texte, `max + SECRET_MAX_CHARS` caractères (règle n°27 : un
+ * motif du masquage est quadratique sur une longue suite « a-a-a-… » ; sur
+ * 8 000 caractères, plus de 100 ms par texte). Jamais sur un texte déjà
+ * coupé : tout secret qui commence avant la coupe et tient dans la marge est
+ * vu ENTIER. Un secret tronqué par le bord de la fenêtre reste au bout du
+ * texte masqué ; si le masquage a tant raccourci la fenêtre que ce bout
+ * pourrait repasser avant la coupe, la fenêtre double (au pire, le texte
+ * entier). Rend le texte masqué, PAS encore coupé.
+ */
+export function maskForCut(
+  redact: (text: string) => { text: string; secrets: number },
+  text: string,
+  max: number,
+): { text: string; secrets: number } {
+  for (let end = max + SECRET_MAX_CHARS; ; end *= 2) {
+    if (text.length <= end) return redact(text)
+    const masked = redact(text.slice(0, end))
+    if (masked.text.length >= max + SECRET_MAX_CHARS) return masked
+  }
 }
 
 /** Échantillon déterministe réparti sur toute la liste (déjà triée) : `max` éléments au plus, à intervalles réguliers. */
@@ -443,17 +495,13 @@ export function renderPersonNotes(name: string, notes: readonly { at: string; te
 
 // ---------------------------------------------------------------- sortie du LLM
 
-export interface ProposedObservation {
-  texte: string
-  titre: string | null
-  /** Numéros (à partir de 1) des éléments qui l'appuient, distincts et dans le lot. */
-  appuis: number[]
-}
+export type ProposedObservation = StyleObservationDraft
 
 /**
  * Lit la réponse du LLM pour un lot de `size` éléments. Sortie sans JSON
  * lisible : lève (l'appel repart une fois). Une observation sans texte, ou
  * appuyée par moins de `minSupport` éléments du lot, est écartée (comptée).
+ * Titre et texte gardés ENTIERS : `accept` les masque, PUIS les coupe.
  */
 export function parseStylesOutput(raw: string, size: number, minSupport: number): { items: ProposedObservation[]; rejected: Record<string, number> } {
   let parsed: unknown
@@ -480,7 +528,7 @@ export function parseStylesOutput(raw: string, size: number, minSupport: number)
   const items: ProposedObservation[] = []
   const rejected: Record<string, number> = {}
   for (const entry of list) {
-    const texte = isRecord(entry) ? clip(entry['texte'], 400) : null
+    const texte = isRecord(entry) ? clip(entry['texte'], Infinity) : null
     if (!isRecord(entry) || !texte || texte.length < 12) {
       bump(rejected, 'invalide')
       continue
@@ -494,7 +542,7 @@ export function parseStylesOutput(raw: string, size: number, minSupport: number)
       bump(rejected, 'appuis')
       continue
     }
-    items.push({ texte, titre: clip(entry['titre'], 80), appuis })
+    items.push({ texte, titre: clip(entry['titre'], Infinity), appuis })
   }
   return { items, rejected }
 }
@@ -556,6 +604,11 @@ class Pass {
     this.report = emptyReport(opts)
     this.retryDelayMs = Math.max(0, opts.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS)
     this.now = opts.now ?? (() => new Date())
+  }
+
+  /** Masquage pour une coupe à `max` (fenêtre bornée, voir maskForCut). */
+  private mask(text: string, max: number): { text: string; secrets: number } {
+    return maskForCut(t => this.host.redact(t), text, max)
   }
 
   private checkStop(): void {
@@ -710,13 +763,17 @@ class Pass {
       r.periods_sent++
       return
     }
-    // Masquage juste avant l'envoi (la valeur d'un secret va au coffre), sur le
-    // texte ENTIER, puis coupe : coupé d'abord, une clé tronquée passerait.
-    const sent = sample.map(m => {
-      const masked = this.host.redact(m.text)
+    // Masquage juste avant l'envoi (la valeur d'un secret va au coffre), PUIS
+    // coupe : coupé d'abord, une clé tronquée passerait. Fenêtre bornée autour
+    // de la coupe, main rendue entre deux textes (règle n°27).
+    const tick = slicer()
+    const sent: Array<{ ts: string; text: string }> = []
+    for (const m of sample) {
+      await tick()
+      const masked = this.mask(m.text, STYLE_SAMPLE_CHARS)
       r.secrets_masked += masked.secrets
-      return { ts: m.ts, text: cut(masked.text, STYLE_SAMPLE_CHARS) }
-    })
+      sent.push({ ts: m.ts, text: cut(masked.text, STYLE_SAMPLE_CHARS) })
+    }
     const items = await this.ask(system, renderOwnerMonth(group.month, stats, sent), sent.length, STYLE_OWNER_MIN_SUPPORT)
     if (items === null) {
       r.periods_failed++
@@ -738,7 +795,7 @@ class Pass {
       auteurSource: 'message',
       origine: 'session',
     }
-    const created = await this.write(target, accepted)
+    const { created } = await this.write(target, accepted)
     this.host.markStyles(group.instance, stateKey, {
       mode: 'owner',
       person_id: null,
@@ -764,7 +821,15 @@ class Pass {
       r.errors.push('styles : nom de la fiche inutilisable pour la recherche (2 lettres au moins)')
       return
     }
+    // Le prompt nomme la personne par son prénom seulement.
     const display = firstWord(person.display_name) || person.display_name.trim()
+    // Prénom partagé par plusieurs fiches : le texte stocké nomme la personne
+    // par son nom affiché entier, sinon le style de l'une serait mot pour mot
+    // celui de l'autre (et jugé redite).
+    const first = normName(display)
+    const shared = this.host.personNames().filter(n => normName(firstWord(n) || n.trim()) === first).length > 1
+    const fullName = person.display_name.trim()
+    const named = shared ? { display: fullName, match: nameMatcher([fullName]) ?? match } : { display, match }
     this.setThirdParties(names)
     const instance =
       this.opts.instance ??
@@ -829,23 +894,43 @@ class Pass {
       r.periods_sent++
       return
     }
-    // Tout ou rien : les appels d'abord, l'écriture ensuite.
-    const proposed: Array<{ item: ProposedObservation; chunk: typeof notes }> = []
+    // Tous les morceaux sont masqués d'abord (masqué puis coupé, comme le mode
+    // owner ; main rendue entre deux textes) : le plafond se vérifie au pire
+    // cas de TOUS les appels avant le premier.
+    const calls: Array<{ sent: typeof notes; prompt: string; key: string; items: ProposedObservation[] | null }> = []
     for (const chunk of chunks) {
-      this.checkStop()
-      // Masquage du texte entier, puis coupe (même raison que le mode owner).
-      const sent = chunk.map(n => {
-        const masked = this.host.redact(n.text)
+      const sent: typeof notes = []
+      for (const n of chunk) {
+        await tick()
+        const masked = this.mask(n.text, STYLE_PERSON_SOURCE_CHARS)
         r.secrets_masked += masked.secrets
-        return { ...n, text: cut(masked.text, STYLE_PERSON_SOURCE_CHARS) }
-      })
-      const items = await this.ask(system, renderPersonNotes(display, sent), sent.length, STYLE_PERSON_MIN_SUPPORT)
-      if (items === null) {
-        r.periods_failed++
-        return
+        sent.push({ ...n, text: cut(masked.text, STYLE_PERSON_SOURCE_CHARS) })
       }
-      r.items_sent += sent.length
-      for (const item of items.slice(0, perCall)) proposed.push({ item, chunk: sent })
+      const prompt = renderPersonNotes(display, sent)
+      // Même entrée exacte (texte masqué, dates, ids) : même sortie validée, gardée par le service.
+      const key = sha256Hex(JSON.stringify([instance, stateKey, system, prompt, sent.map(s => [s.id, s.at, s.at_source])]))
+      calls.push({ sent, prompt, key, items: this.host.styleCallMemo(key) })
+    }
+    this.checkStop()
+    const toCall = calls.filter(c => c.items === null).map(c => ({ inputChars: system.length + c.prompt.length, maxTokens: MAX_OUTPUT_TOKENS }))
+    if (!this.host.completionsFit(toCall)) throw new StopPass('budget')
+    // Tout ou rien pour l'écriture : les appels d'abord. Chaque sortie validée
+    // est gardée tout de suite ; un arrêt, une pause ou un échec au morceau
+    // suivant n'écrit rien, et la relance ne repaie pas ce morceau.
+    const proposed: Array<{ item: ProposedObservation; chunk: typeof notes }> = []
+    for (const c of calls) {
+      let items = c.items
+      if (items === null) {
+        this.checkStop()
+        items = await this.ask(system, c.prompt, c.sent.length, STYLE_PERSON_MIN_SUPPORT)
+        if (items === null) {
+          r.periods_failed++
+          return
+        }
+        this.host.rememberStyleCall(c.key, items)
+        r.items_sent += c.sent.length
+      }
+      for (const item of items.slice(0, perCall)) proposed.push({ item, chunk: c.sent })
       if (items.length > perCall) bump(r.observations_rejected, 'surplus', items.length - perCall)
     }
     r.periods_sent++
@@ -854,7 +939,7 @@ class Pass {
       proposed.map(p => p.item),
       STYLE_PERSON_MAX_OBSERVATIONS,
       'person',
-      { display, match },
+      named,
       it => {
         const support = it.appuis.map(k => byItem.get(it)![k - 1]!)
         const latest = support.reduce((a, b) => (b.at > a.at ? b : a))
@@ -870,7 +955,11 @@ class Pass {
       auteurSource: 'llm',
       origine: null,
     }
-    const created = await this.write(target, accepted)
+    const { created, otherTwins } = await this.write(target, accepted)
+    // Rien d'écrit parce que tout redit mot pour mot le fait d'une autre fiche
+    // (ou d'un fait sans fiche) : pas d'état « facts: 0 », qui bloquerait la
+    // reprise. Les sorties restent gardées : la relance ne repaie pas l'appel.
+    if (created === 0 && otherTwins > 0) return
     this.host.markStyles(instance, stateKey, {
       mode: 'person',
       person_id: person.id,
@@ -880,6 +969,7 @@ class Pass {
       closed: true,
       facts: created,
     })
+    for (const c of calls) this.host.rememberStyleCall(c.key, null)
     this.periodsDone = 1
     this.progress()
   }
@@ -967,11 +1057,13 @@ class Pass {
         bump(r.observations_rejected, 'surplus')
         continue
       }
-      const masked = this.host.redact(item.texte)
-      let text = masked.text
+      // Masqués PUIS coupés (texte 400, titre 80), comme les entrées : coupés
+      // d'abord, une clé à cheval sur la coupe resterait en partie en clair.
+      const masked = this.mask(item.texte, STYLE_TEXT_MAX_CHARS)
+      let text = masked.text.slice(0, STYLE_TEXT_MAX_CHARS)
       // Le titre aussi : un secret y est masqué, un thème interdit y écarte l'observation entière.
-      const maskedTitre = item.titre ? this.host.redact(item.titre) : null
-      const titre = maskedTitre ? maskedTitre.text : null
+      const maskedTitre = item.titre ? this.mask(item.titre, STYLE_TITLE_MAX_CHARS) : null
+      const titre = maskedTitre ? maskedTitre.text.slice(0, STYLE_TITLE_MAX_CHARS) : null
       const why = guard(text) ?? (titre !== null ? guard(titre) : null)
       if (why) {
         bump(r.observations_rejected, why)
@@ -985,10 +1077,14 @@ class Pass {
     return out
   }
 
-  /** Doublons écartés, le reste écrit en faits DORMANTS. Rend le nombre de faits créés. */
-  private async write(target: PeriodTarget, accepted: Accepted[]): Promise<number> {
+  /**
+   * Doublons écartés, le reste écrit en faits DORMANTS. Rend les faits créés,
+   * et ceux qui n'ont pas été écrits parce qu'ils redisent mot pour mot le
+   * fait d'une autre fiche (ou d'un fait sans fiche).
+   */
+  private async write(target: PeriodTarget, accepted: Accepted[]): Promise<{ created: number; otherTwins: number }> {
     const r = this.report
-    if (accepted.length === 0) return 0
+    if (accepted.length === 0) return { created: 0, otherTwins: 0 }
     const vectors = new Map<number, Float32Array>()
     if (!this.vectorsOff) {
       try {
@@ -1008,15 +1104,15 @@ class Pass {
       }
     }
     let created = 0
+    let otherTwins = 0
     accepted.forEach((a, i) => {
       const vector = vectors.get(i)
-      // Une redite (même texte normalisé, texte proche ou même sens) ne compte
-      // que si son fait porte la même personne : le style de Bastien n'est pas
-      // une redite de celui de Léonie, même tourné pareil (`kind: 'exact'`
-      // couvre aussi le texte proche, à un prénom près). Un texte identique,
-      // lui, ne s'écrit de toute façon pas (storePendingTriaged : created faux).
-      const dup = this.host.findSemanticDuplicate(target.instance, a.text, vector)
-      if (dup && this.host.factPersonOf(target.instance, dup.fact_id) === target.personId) {
+      // Une redite (même texte normalisé, texte proche ou même sens) se cherche
+      // parmi les faits de la MÊME personne seulement (aucune en mode owner) :
+      // le style de Bastien n'est pas une redite de celui de Léonie, même
+      // tourné pareil, et il ne cache pas la vraie redite de Léonie.
+      const dup = this.host.findSemanticDuplicate(target.instance, a.text, vector, { personId: target.personId })
+      if (dup) {
         r.facts_duplicate++
         return
       }
@@ -1055,24 +1151,34 @@ class Pass {
           metadata: { kind: 'styles', mode: target.personId ? 'person' : 'owner', period: target.period, prompt: STYLES_PROMPT_VERSION },
         },
         ...(vector ? { vector } : {}),
+        // Jumeau exact d'une autre fiche : jamais réveillé s'il est expiré.
+        noRevive: true,
       })
       if (!res.created) {
+        // Texte identique au fait d'une autre fiche (ou sans fiche) : rien n'est écrit.
         r.facts_duplicate++
+        otherTwins++
         return
       }
       created++
       r.facts_created++
     })
-    return created
+    return { created, otherTwins }
   }
 }
 
 /** La passe : voir le contrat en tête de fichier. */
 export async function runStylesPass(host: StylesHost, opts: StylesPassOptions): Promise<StylesDetailReport> {
-  const delay = monitorEventLoopDelay({ resolution: 20 })
+  const delay = monitorEventLoopDelay({ resolution: EVENT_LOOP_RESOLUTION_MS })
   delay.enable()
+  // Le premier relevé de l'histogramme ne fait que poser son origine : un
+  // blocage avant lui (dans les 20 premières ms), ou juste avant la fin, ne
+  // serait jamais compté. On attend donc un relevé avant la passe et après.
+  const settle = (): Promise<void> => new Promise(resolve => setTimeout(resolve, EVENT_LOOP_RESOLUTION_MS + 5))
   try {
+    await settle()
     const report = await new Pass(host, opts as StylesPassOptionsExt).run()
+    await settle()
     report.max_block_ms = Math.round(delay.max / 1e6)
     return report
   } finally {

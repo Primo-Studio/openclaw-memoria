@@ -1054,6 +1054,8 @@ export class Memoria {
       reviewSource?: ReviewSourceSpec
       /** Écrit avec le fait, dans la MÊME transaction (ligne de tri). Seulement pour un fait créé. */
       afterInsert?: (store: ContentStore, fact: Fact) => void
+      /** false : un jumeau exact expiré reste expiré (défaut : il est réveillé). */
+      revive?: boolean
     } = {},
   ): { fact: Fact; created: boolean } {
     this.assertOpen()
@@ -1101,7 +1103,7 @@ export class Memoria {
         this.activateFact(store, dup.existing.id)
       }
       const expiresAt = dup.existing.expires_at ?? null
-      const expired = dup.kind === 'exact' && expiresAt !== null && expiresAt <= now
+      const expired = opts.revive !== false && dup.kind === 'exact' && expiresAt !== null && expiresAt <= now
       if (expired) {
         store.db.prepare('UPDATE facts SET expires_at = NULL, updated_at = ? WHERE id = ?').run(now, dup.existing.id)
       }
@@ -1245,15 +1247,20 @@ export class Memoria {
    * fan-out du recall. Sert à la capture, à l'import de transcripts et à tout
    * appelant qui veut savoir « est-ce déjà su quelque part ? » avant d'écrire.
    */
-  findKnownDuplicate(instanceId: string, factText: string, opts: { includePrivate?: boolean } = {}): DuplicateMatch | null {
+  findKnownDuplicate(
+    instanceId: string,
+    factText: string,
+    opts: { includePrivate?: boolean; accept?: (store: ContentStore, factId: string) => boolean } = {},
+  ): DuplicateMatch | null {
     this.assertOpen()
     const instance = this.mustInstance(instanceId)
     const privateDbPath = this.paths.assistantDb(instance.id)
+    const accept = opts.accept
     for (const target of this.resolveReadTargets(instance)) {
       if (opts.includePrivate === false && target.dbPath === privateDbPath) continue
       const store = this.openContent(target.dbPath)
       for (const scopeId of target.scopeIds) {
-        const dup = findDuplicate(store, scopeId, factText)
+        const dup = findDuplicate(store, scopeId, factText, accept ? { accept: id => accept(store, id) } : {})
         if (dup) return dup
       }
     }
@@ -4924,7 +4931,7 @@ export class Memoria {
       styles: (id, query) => this.stylesForInstance(id, query),
       storePendingTriaged: input => this.storePendingTriaged(input),
       resolveInstanceForSource: source => this.resolveInstanceForSource(source),
-      findSemanticDuplicate: (id, text, vector) => this.findSemanticDuplicate(id, text, vector),
+      findSemanticDuplicate: (id, text, vector, opts) => this.findSemanticDuplicate(id, text, vector, opts),
       instanceDb: id => {
         const path = this.paths.assistantDb(id)
         return this.registry.getInstance(id) && existsSync(path) ? { path, store: this.openContent(path) } : null
@@ -5284,7 +5291,7 @@ export class Memoria {
    * en quarantaine (jamais storeFact : un texte identique à un dormant
    * l'activerait), item de revue sous une source « user-messages », ligne de
    * tri dans la même transaction. Un fait identique existant n'est ni activé
-   * ni réécrit (created = false).
+   * ni réécrit (created = false) ; expiré, il est réveillé, sauf `noRevive`.
    */
   private storePendingTriaged(input: StorePendingTriagedInput): StorePendingTriagedResult {
     this.assertOpen()
@@ -5297,6 +5304,7 @@ export class Memoria {
       {
         nearDup: false,
         quarantine: true,
+        ...(input.noRevive ? { revive: false } : {}),
         reviewSource: { type: 'user-messages', key: input.source.key, path: input.source.path ?? null, metadata: input.source.metadata },
         afterInsert: (store, f) => {
           created = true
@@ -5362,26 +5370,45 @@ export class Memoria {
    * de commencer, voir triageHost().userMessagesPass). Un candidat du cache est
    * relu en base avant d'être rendu : existe, en attente, non supersédé, non
    * sensible, mêmes nombres.
+   *
+   * `personId` (passe styles) : seuls comptent les faits dont la ligne de tri
+   * porte ce person_id (null : aucune ligne, ou fait du propriétaire). Un
+   * candidat d'une autre personne est sauté et la recherche continue (plus de
+   * candidats examinés) : le style d'une autre fiche n'est pas une redite et ne
+   * doit pas cacher celle de la même personne. Absent : aucun filtre.
    */
-  private findSemanticDuplicate(instanceId: string, text: string, vector?: Float32Array): SemanticDuplicate | null {
+  private findSemanticDuplicate(
+    instanceId: string,
+    text: string,
+    vector?: Float32Array,
+    opts: { personId?: string | null } = {},
+  ): SemanticDuplicate | null {
     this.assertOpen()
-    const exact = this.findKnownDuplicate(instanceId, text)
+    const filtered = opts.personId !== undefined
+    const samePerson = (store: ContentStore, id: string): boolean => {
+      if (!filtered) return true
+      const row = store.db.prepare('SELECT person_id FROM fact_triage WHERE fact_id = ?').get(id) as { person_id: string | null } | undefined
+      return (row?.person_id ?? null) === opts.personId
+    }
+    const exact = this.findKnownDuplicate(instanceId, text, filtered ? { accept: samePerson } : {})
     if (exact) return { fact_id: exact.existing.id, score: 1, kind: 'exact' }
     const emb = this.triageEmbKey
     if (!vector || !emb || vector.length !== emb.dimensions || isTriageSensitive(text)) return null
     const v = normalizeVector(vector)
     const sig = numberSignature(text)
     let best: SemanticDuplicate | null = null
-    const consider = (id: string, fact: string, other: Float32Array): void => {
+    const consider = (store: ContentStore, id: string, fact: string, other: Float32Array): void => {
       const score = dot(v, other)
-      if (score >= REDITE_THRESHOLD && numberSignature(fact) === sig && (!best || score > best.score)) best = { fact_id: id, score, kind: 'meaning' }
+      if (score >= REDITE_THRESHOLD && numberSignature(fact) === sig && (!best || score > best.score) && samePerson(store, id)) {
+        best = { fact_id: id, score, kind: 'meaning' }
+      }
     }
     const pending: Array<{ store: ContentStore; cache: TriageVecCache; k: number; score: number }> = []
     for (const target of this.resolveReadTargets(this.mustInstance(instanceId))) {
       const store = this.openContent(target.dbPath)
       if (listVecTables(store.db).includes(vecTableName(emb))) {
         try {
-          const hits = knn(store.db, emb, v, 16)
+          const hits = knn(store.db, emb, v, filtered ? 64 : 16)
           const rows = store.db
             .prepare(
               `SELECT f.id, f.fact, e.vector, e.dimensions FROM facts f
@@ -5389,7 +5416,7 @@ export class Memoria {
                WHERE f.id IN (SELECT value FROM json_each(?)) AND f.lifecycle_state = 'active' AND f.superseded = 0`,
             )
             .all(emb.model, JSON.stringify(hits.map(h => h.fact_id))) as Array<{ id: string; fact: string; vector: Buffer; dimensions: number }>
-          for (const r of rows) consider(r.id, r.fact, float32FromBlob(r.vector, r.dimensions))
+          for (const r of rows) consider(store, r.id, r.fact, float32FromBlob(r.vector, r.dimensions))
         } catch {
           /* index vectoriel indisponible : les faits en attente restent comparés */
         }
@@ -5404,6 +5431,8 @@ export class Memoria {
       // Le cache a pu vieillir (oubli, validation, fusion, partage) : relu en base.
       const row = c.store.db.prepare(TRIAGE_VEC_RECHECK_SQL).get(id) as { fact: string } | undefined
       if (row && numberSignature(row.fact) === sig) {
+        // Valide mais d'une autre personne : sauté, jamais retiré du cache.
+        if (!samePerson(c.store, id)) continue
         best = { fact_id: id, score: c.score, kind: 'meaning' }
         break
       }

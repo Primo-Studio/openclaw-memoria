@@ -486,11 +486,13 @@ export interface StorePendingTriagedInput {
   source: { key: string; path?: string | null; metadata?: Record<string, unknown> }
   /** Vecteur du texte (modèle de vecteurs configuré), rangé dans `fact_triage_vectors` pour les redites suivantes. */
   vector?: Float32Array
+  /** Un jumeau exact expiré reste expiré (passe styles : elle ne réveille jamais un fait). Défaut : il est réveillé. */
+  noRevive?: boolean
 }
 
 export interface StorePendingTriagedResult {
   fact_id: string
-  /** false : un fait identique existait déjà (rien n'est activé ni réécrit). */
+  /** false : un fait identique existait déjà (rien n'est activé ni réécrit ; expiré, il est réveillé, sauf `noRevive`). */
   created: boolean
 }
 
@@ -498,6 +500,15 @@ export interface SemanticDuplicate {
   fact_id: string
   score: number
   kind: 'exact' | 'meaning'
+}
+
+export interface SemanticDuplicateOptions {
+  /**
+   * Seuls comptent les faits dont la ligne de tri porte ce person_id (null :
+   * aucune ligne, ou fait du propriétaire) ; les autres sont sautés et la
+   * recherche continue. Absent : aucun filtre.
+   */
+  personId?: string | null
 }
 
 /**
@@ -521,8 +532,8 @@ export interface TriageHost {
   embed(texts: string[]): Promise<Float32Array[]>
   /** Coût estimé d'un appel (USD), pour un dry-run. null si prix inconnu. */
   estimateCost(inputChars: number, outputTokens: number): number | null
-  /** Doublon dans les bases de l'instance (exact, ou par le sens ≥ 0,92 avec garde chiffres). */
-  findSemanticDuplicate(instanceId: string, text: string, vector?: Float32Array): SemanticDuplicate | null
+  /** Doublon dans les bases de l'instance (exact, ou par le sens ≥ 0,92 avec garde chiffres), filtré par personne si demandé. */
+  findSemanticDuplicate(instanceId: string, text: string, vector?: Float32Array, opts?: SemanticDuplicateOptions): SemanticDuplicate | null
   /** Écrit un fait EN ATTENTE (dormant) + sa ligne de tri, dans une seule transaction. */
   storePendingTriaged(input: StorePendingTriagedInput): StorePendingTriagedResult
   /** Instance d'origine d'une source de messages, ou null. */
@@ -597,6 +608,14 @@ export interface StylesPeriodState {
   updated_at: string
 }
 
+/** Observation proposée par le LLM, après lecture de sa sortie (avant les gardes du code). */
+export interface StyleObservationDraft {
+  texte: string
+  titre: string | null
+  /** Numéros (à partir de 1) des éléments qui l'appuient, distincts et dans le lot. */
+  appuis: number[]
+}
+
 /** Fait trié candidat du mode person (lu par l'hôte, jamais modifié). */
 export interface StyleSourceFact {
   id: string
@@ -637,11 +656,21 @@ export interface StylesHost extends TriageHost {
     stop?: () => boolean
   }): Promise<{ facts: StyleSourceFact[]; scanned: number }>
   /**
-   * person_id de la ligne de tri d'un fait des bases lisibles par l'instance
-   * (null : aucune ligne, ou fait du propriétaire). Sert à ne compter une
-   * redite (proche ou par le sens) que pour la même personne.
+   * Vrai si ces appels LLM tiennent ENSEMBLE sous le plafond, chacun à son
+   * pire cas (même calcul que la réservation faite par `complete` : entrée
+   * estimée et corrigée, plus `maxTokens` entiers), en plus de la dépense déjà
+   * engagée. Mode person en deux appels : vérifié avant le premier.
    */
-  factPersonOf(instanceId: string, factId: string): string | null
+  completionsFit(calls: ReadonlyArray<{ inputChars: number; maxTokens: number }>): boolean
+  /**
+   * Sortie validée d'un appel de la passe styles, gardée en mémoire par le
+   * service (perdue au redémarrage) tant que sa période n'est pas écrite :
+   * un arrêt, une pause ou un échec sur le second appel ne fait pas repayer
+   * le premier. null : rien de gardé.
+   */
+  styleCallMemo(key: string): StyleObservationDraft[] | null
+  /** Garde (ou, avec null, efface) la sortie validée d'un appel. */
+  rememberStyleCall(key: string, items: StyleObservationDraft[] | null): void
   stylesState(instanceId: string, stateKey: string): StylesPeriodState | null
   markStyles(
     instanceId: string,

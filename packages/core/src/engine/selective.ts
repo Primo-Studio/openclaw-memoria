@@ -17,6 +17,8 @@ export interface DuplicateMatch {
 const NEAR_DUP_JACCARD = 0.85
 /** Candidats FTS examinés pour le near-dup (0 appel LLM — heuristique pure). */
 const NEAR_DUP_CANDIDATES = 3
+/** Avec un filtre (`accept`) : plus de candidats, le bon peut être classé après ceux que le filtre écarte. */
+const NEAR_DUP_CANDIDATES_FILTERED = 20
 
 export { normalizeFact }
 
@@ -54,15 +56,18 @@ function backfillNormHash(store: ContentStore, rows: readonly FactRow[]): void {
  *  (a) égalité exacte sur texte normalisé — TOUS les états lifecycle (dormants inclus) ;
  *  (b) near-dup : top-3 FTS du scope puis similarité Jaccard sur tokens > 0.85.
  * Retourne null si aucun doublon. Aucun appel LLM.
+ * `accept` (facultatif) : seuls les faits qu'il accepte comptent ; les autres
+ * sont sautés et la recherche continue (passe styles : redite de la même personne).
  */
 export function findDuplicate(
   store: ContentStore,
   scopeId: string,
   factText: string,
-  opts: { nearDup?: boolean } = {},
+  opts: { nearDup?: boolean; accept?: (factId: string) => boolean } = {},
 ): DuplicateMatch | null {
   const normalized = normalizeFact(factText)
   if (!normalized) return null
+  const accept = opts.accept ?? (() => true)
 
   // (a) exact — non superseded, dormants/archivés INCLUS. Lecture d'INDEX sur
   // le hash du texte normalisé (facts.norm_hash) : l'ancien balayage complet du
@@ -72,7 +77,7 @@ export function findDuplicate(
     .prepare('SELECT * FROM facts WHERE scope_id = ? AND norm_hash = ? AND superseded = 0 ORDER BY rowid')
     .all(scopeId, factNormHash(factText)) as FactRow[]
   for (const row of hashed) {
-    if (normalizeFact(row.fact) === normalized) return { kind: 'exact', existing: rowToFact(row) }
+    if (normalizeFact(row.fact) === normalized && accept(row.id)) return { kind: 'exact', existing: rowToFact(row) }
   }
   // Lignes SANS hash (chemin d'écriture qui ne le pose pas, ou texte modifié
   // hors des chemins connus) : balayées comme avant, et complétées au passage
@@ -82,7 +87,7 @@ export function findDuplicate(
     .all(scopeId) as FactRow[]
   let found: FactRow | null = null
   for (const row of unhashed) {
-    if (row.superseded === 0 && normalizeFact(row.fact) === normalized) {
+    if (row.superseded === 0 && normalizeFact(row.fact) === normalized && accept(row.id)) {
       found = row
       break
     }
@@ -99,14 +104,14 @@ export function findDuplicate(
   if (opts.nearDup === false) return null
   const tokens = new Set(normalized.split(' '))
   const hits = store.searchFacts(factText, {
-    limit: NEAR_DUP_CANDIDATES,
+    limit: opts.accept ? NEAR_DUP_CANDIDATES_FILTERED : NEAR_DUP_CANDIDATES,
     includeDormant: true,
     maxSensitivity: 'critical',
     scopeIds: [scopeId],
   })
   for (const hit of hits) {
     const candidate = new Set(normalizeFact(hit.row.fact).split(' '))
-    if (jaccardSimilarity(tokens, candidate) > NEAR_DUP_JACCARD) {
+    if (jaccardSimilarity(tokens, candidate) > NEAR_DUP_JACCARD && accept(hit.row.id)) {
       return { kind: 'near', existing: rowToFact(hit.row) }
     }
   }

@@ -29,8 +29,10 @@ import {
   type IdeasResult,
   type Rubrique,
   type SemanticDuplicate,
+  type SemanticDuplicateOptions,
   type StorePendingTriagedInput,
   type StorePendingTriagedResult,
+  type StyleObservationDraft,
   type StyleSourceFact,
   type StylesHost,
   type StylesPassFn,
@@ -109,7 +111,7 @@ export interface TriageServiceHost {
   styles(instanceId: string, query: StylesQuery): StylesResult
   storePendingTriaged(input: StorePendingTriagedInput): StorePendingTriagedResult
   resolveInstanceForSource(source: { kind: UserMessageSourceKind; path?: string }): string | null
-  findSemanticDuplicate(instanceId: string, text: string, vector?: Float32Array): SemanticDuplicate | null
+  findSemanticDuplicate(instanceId: string, text: string, vector?: Float32Array, opts?: SemanticDuplicateOptions): SemanticDuplicate | null
   /** Base privée d'une instance (état par message), ou null. */
   instanceDb(instanceId: string): EngineDb | null
   userMessagesPass(): UserMessagesPassFn | null
@@ -181,6 +183,9 @@ interface ActiveRun {
   promise: Promise<TriageRunStatus> | null
 }
 
+/** Sorties validées gardées au plus par la passe styles (une par appel d'une période pas encore écrite). */
+const STYLE_MEMO_MAX = 32
+
 export class TriageService implements TriageApi {
   /** Pause avant la reprise d'un appel LLM en échec passager (public pour les tests : 0). */
   retryDelayMs = 5000
@@ -189,6 +194,8 @@ export class TriageService implements TriageApi {
   private active: ActiveRun | null = null
   /** Passe annexe en cours (messages ou styles) : une seule à la fois, et jamais pendant un passage. */
   private messages: { cancelled: boolean } | null = null
+  /** Sorties validées des appels de la passe styles dont la période n'est pas encore écrite (en mémoire seulement). */
+  private readonly styleMemo = new Map<string, StyleObservationDraft[]>()
 
   constructor(private readonly host: TriageServiceHost) {}
 
@@ -603,7 +610,7 @@ export class TriageService implements TriageApi {
         const p = priceFor(llm.name, llm.model)
         return p ? (estimateTokensFromChars(inputChars) * p.input + outputTokens * p.output) / 1_000_000 : null
       },
-      findSemanticDuplicate: (instanceId, text, vector) => host.findSemanticDuplicate(instanceId, text, vector),
+      findSemanticDuplicate: (instanceId, text, vector, dupOpts) => host.findSemanticDuplicate(instanceId, text, vector, dupOpts),
       storePendingTriaged: input => host.storePendingTriaged(input),
       resolveInstanceForSource: source => host.resolveInstanceForSource(source),
       messageDone(instanceId, msgKey) {
@@ -671,9 +678,9 @@ export class TriageService implements TriageApi {
   /**
    * Hôte prêté à la passe styles : celui de la passe sur les messages, plus la
    * fiche Person, le parcours des faits triés (fenêtres de rowid, main rendue
-   * entre deux ; bases et scopes lisibles par l'instance seulement), la
-   * personne d'un fait (redites) et l'état par période (`style_pass_state`,
-   * base de l'instance).
+   * entre deux ; bases et scopes lisibles par l'instance seulement), le
+   * plafond de plusieurs appels, les sorties validées gardées en mémoire et
+   * l'état par période (`style_pass_state`, base de l'instance).
    * Public pour les tests de ce module.
    */
   createStylesHost(opts: Parameters<TriageService['createHost']>[0]): StylesHost {
@@ -705,14 +712,20 @@ export class TriageService implements TriageApi {
         }
         return { facts, scanned }
       },
-      factPersonOf(instanceId, factId) {
-        for (const db of host.dbs(instanceId)) {
-          const row = db.store.db.prepare('SELECT person_id FROM fact_triage WHERE fact_id = ?').get(factId) as
-            | { person_id: string | null }
-            | undefined
-          if (row) return row.person_id ?? null
-        }
-        return null
+      completionsFit(calls) {
+        const { budget } = opts
+        // Même pire cas que TriageBudget.reserveCompletion, pour chaque appel.
+        let worst = 0
+        for (const c of calls) worst += budget.llmCost(Math.ceil(estimateTokensFromChars(c.inputChars) * budget.llmInputRatio), c.maxTokens)
+        return budget.committedUsd + worst <= budget.budgetUsd + 1e-12
+      },
+      styleCallMemo: key => this.styleMemo.get(key) ?? null,
+      rememberStyleCall: (key, items) => {
+        this.styleMemo.delete(key)
+        if (items === null) return
+        this.styleMemo.set(key, items)
+        // Borné : les plus anciennes sorties partent d'abord (au pire, un appel repayé).
+        while (this.styleMemo.size > STYLE_MEMO_MAX) this.styleMemo.delete(this.styleMemo.keys().next().value!)
       },
       stylesState(instanceId, stateKey) {
         const db = stateDb(instanceId)

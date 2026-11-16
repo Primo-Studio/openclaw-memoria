@@ -12,13 +12,16 @@ import { priceFor } from '../src/llm/pricing.js'
 import type { CompleteOptions, CompletionResult } from '../src/llm/provider.js'
 import { estimateTokensFromChars } from '../src/triage/budget.js'
 import { isSensitive } from '../src/triage/sensitive.js'
+import { RegexRedactor } from '../src/secrets/redaction.js'
 import { scanStyleSourcesAsync } from '../src/triage/store.js'
 import {
+  maskForCut,
   monthClosed,
   monthStats,
   nameMatcher,
   parseStylesOutput,
   runStylesPass,
+  SECRET_MAX_CHARS,
   shouldRedo,
   spreadSample,
   type StylesDetailReport,
@@ -52,6 +55,10 @@ class StylesLlm extends RecordingLlm {
     { titre: 'Faible', texte: "L'utilisateur termine parfois ses messages par un émoji.", appuis: [1, 2] },
   ]
   person: Observation[] = []
+  /** Appelé avant de répondre (pause pendant un appel). */
+  onCall: ((call: number) => void) | null = null
+  /** Erreur levée pour cet appel (null : il répond). */
+  fail: ((call: number) => Error | null) | null = null
   constructor(name = 'ollama', model = 'styles-fictif') {
     super(name, model)
   }
@@ -64,6 +71,9 @@ class StylesLlm extends RecordingLlm {
       if (e.message !== undefined) this.messages.push(e.message)
       if (e.note !== undefined) this.notes.push(e.note)
     }
+    this.onCall?.(this.calls)
+    const failure = this.fail?.(this.calls)
+    if (failure) throw failure
     const owner = (opts.system ?? '').includes("SA MANIÈRE D'ÉCHANGER")
     return { text: JSON.stringify({ observations: owner ? this.owner : this.person }) }
   }
@@ -204,6 +214,26 @@ describe('passe styles : outils', () => {
     expect(() => parseStylesOutput('pas du json', 5, 3)).toThrow(/sans JSON/)
   })
 
+  it('masquage sur fenêtre bornée : un secret tronqué par le bord ne repasse jamais avant la coupe, même quand le masquage raccourcit la fenêtre', () => {
+    const redactor = new RegexRedactor()
+    const redact = (t: string) => {
+      const r = redactor.redact(t)
+      return { text: r.text, secrets: r.found.length }
+    }
+    // Bloc PEM fictif de 4 200 caractères au début (masqué, il devient une marque courte), puis une clé à cheval sur le bord de la fenêtre.
+    const pem = `-----BEGIN PRIVATE KEY-----${'A'.repeat(4148)}-----END PRIVATE KEY-----`
+    const edge = 300 + SECRET_MAX_CHARS
+    const text = `${`${pem}${' ok'.repeat(Math.ceil((edge - pem.length) / 3))}`.slice(0, edge - 17)} ${KEY} fin.`
+    expect(text.indexOf(KEY)).toBe(edge - 16)
+    const masked = maskForCut(redact, text, 300)
+    expect(masked.text.slice(0, 300)).not.toContain('sk-proj-')
+    expect(masked.secrets).toBe(2)
+    // Témoin : sans élargir la fenêtre, le bout de la clé repasserait avant la coupe.
+    expect(redact(text.slice(0, edge)).text.slice(0, 300)).toContain('sk-proj-')
+    // Texte ordinaire : une seule fenêtre, rien à élargir ; texte court : masqué entier.
+    expect(maskForCut(redact, `${KEY} court`, 300).text).toMatch(/^\[secret:/)
+  })
+
   it('parcours des sources par fenêtres de rowid, en rendant la main entre deux fenêtres', async () => {
     env = setupTriage({ llm: new StylesLlm() })
     for (let k = 0; k < 5; k++) seedTriaged(`Note ${k} : Léonie répond vite par message.`)
@@ -338,6 +368,41 @@ describe('passe styles : mode owner', () => {
     expect(llm().messages.some(m => m.startsWith(pad('ok go pour la suite', 572)))).toBe(true)
   })
 
+  it('titre et texte rendus par le LLM : masqués ENTIERS puis coupés (80 et 400), une clé à cheval sur la coupe ne reste pas en partie', async () => {
+    env = setupTriage({ llm: new StylesLlm() })
+    const titre = `${pad('Valide vite', 62)} ${KEY}`
+    const texte = `${pad("L'utilisateur valide d'un mot", 385)} ${KEY}`
+    expect(titre.indexOf(KEY)).toBe(63)
+    expect(texte.indexOf(KEY)).toBe(386)
+    llm().owner = [{ titre, texte, appuis: [1, 2, 3] }]
+    live('-p/s.jsonl', monthOf(3, 12))
+    const r = await pass()
+    expect(r.facts_created).toBe(1)
+    const row = styles()[0]!
+    expect(String(row['titre'])).not.toContain('sk-proj-')
+    expect(String(row['fact'])).not.toContain('sk-proj-')
+    expect(row['secret_found']).toBe(1)
+    // Témoin : coupés, pas écartés.
+    expect(String(row['titre'])).toHaveLength(80)
+    expect(String(row['fact']).startsWith(pad("L'utilisateur valide d'un mot", 385))).toBe(true)
+  })
+
+  it('règle n°27 : 60 messages pathologiques de 8 000 caractères (motif de masquage quadratique) ne bloquent pas la boucle', async () => {
+    env = setupTriage({ llm: new StylesLlm() })
+    const slow = (k: number): string => {
+      let t = `m${k} `
+      while (t.length < 8000) t += 'a-'
+      return t.slice(0, 8000)
+    }
+    live(
+      '-p/s.jsonl',
+      Array.from({ length: 60 }, (_, i) => user(slow(i + 1), at(3, 1 + (i % 28), i))),
+    )
+    const r = await pass()
+    expect(r).toMatchObject({ items_sent: 60, llm_calls: 1 })
+    expect(r.max_block_ms).toBeLessThan(200)
+  }, 60_000)
+
   it('second passage : rien ne repart pour un mois fermé ; il repart quand il a gagné 50 % de messages', async () => {
     env = setupTriage({ llm: new StylesLlm() })
     live('-p/s.jsonl', monthOf(3, 14))
@@ -374,10 +439,10 @@ describe('passe styles : mode owner', () => {
     const inputUsd = (estimateTokensFromChars(llm().prompts[0]!.length - 1) * price.input) / 1e6
     const withOutput = (tokens: number): number => inputUsd + (tokens * price.output) / 1e6
     env.close()
-    // Plafond au-dessus de « entrée + petite sortie », sous « entrée + 1 500 jetons de sortie » : refusé.
+    // Plafond juste sous « entrée + 1 500 jetons de sortie » (le pire cas entier) : refusé.
     env = setupTriage({ llm: new StylesLlm('openai', 'gpt-4o-mini') })
     live('-p/s.jsonl', monthOf(3, 14))
-    const r = await pass({ budgetUsd: withOutput(750) })
+    const r = await pass({ budgetUsd: withOutput(1500) * 0.99 })
     expect(r.stopped).toBe('budget')
     expect(llm().calls).toBe(0)
     expect(states()).toEqual([])
@@ -386,7 +451,7 @@ describe('passe styles : mode owner', () => {
     // Témoin : juste au-dessus du pire cas, l'appel part.
     env = setupTriage({ llm: new StylesLlm('openai', 'gpt-4o-mini') })
     live('-p/s.jsonl', monthOf(3, 14))
-    const ok = await pass({ budgetUsd: withOutput(1500) * 1.05 })
+    const ok = await pass({ budgetUsd: withOutput(1500) * 1.01 })
     expect(llm().calls).toBe(1)
     expect(ok.facts_created).toBe(4)
   })
@@ -435,7 +500,9 @@ describe('passe styles : dry-run', () => {
         facts: [1, 2, 3].map(k => ({ id: `f${k}`, text: `Léonie préfère un vocal court, note ${k}.`, at: at(3, k), at_source: 'fichier' as const, rubriques: [] })),
         scanned: 3,
       }),
-      factPersonOf: forbid('factPersonOf'),
+      completionsFit: forbid('completionsFit'),
+      styleCallMemo: forbid('styleCallMemo'),
+      rememberStyleCall: forbid('rememberStyleCall'),
       stylesState: () => null,
       markStyles: forbid('markStyles'),
     }
@@ -618,6 +685,146 @@ describe('passe styles : mode person', () => {
     llm().person = [{ texte: 'Avec Léonie, une tâche confiée avec un exemple précis par message écrit démarre tout de suite.', appuis: [1, 2] }]
     expect(await pass({ mode: 'person', person_id: leonie, force: true })).toMatchObject({ facts_created: 0, facts_duplicate: 1 })
   })
+
+  it('redite cherchée parmi les styles de la MÊME personne : un style proche d’une autre fiche, rendu le premier, ne la cache pas', async () => {
+    env = setupTriage({ llm: new StylesLlm() })
+    const { leonie } = seedTeam()
+    const bastien = env.m.listPersons().find(p => p.display_name === 'Bastien Exemple')!.id
+    seedTriaged('Bastien répond plus vite sur la messagerie que par mail.', { conversation_at: at(3, 3) })
+    seedTriaged('Bastien a demandé un exemple avant de commencer.', { conversation_at: at(3, 4) })
+    const phrase = 'un message écrit court obtient une réponse dans une journée'
+    llm().person = [{ texte: `Avec Léonie, ${phrase}.`, appuis: [1, 2] }]
+    expect(await pass({ mode: 'person', person_id: leonie })).toMatchObject({ facts_created: 1 })
+    llm().person = [{ texte: `Avec Bastien, ${phrase}, sans relance.`, appuis: [1, 2] }]
+    expect(await pass({ mode: 'person', person_id: bastien })).toMatchObject({ facts_created: 1 })
+    // Texte proche (à un prénom près) du style de Bastien ; redite par le sens de celui de Léonie.
+    llm().person = [{ texte: `Avec Léonie, ${phrase}, sans relance.`, appuis: [1, 2] }]
+    expect(await pass({ mode: 'person', person_id: leonie, force: true })).toMatchObject({ facts_created: 0, facts_duplicate: 1 })
+    expect(styles().filter(x => x['person_id'] === leonie).map(x => x['fact'])).toEqual([`Avec Léonie, ${phrase}.`])
+  })
+
+  it('deux fiches de même prénom : chacune son style, qui la nomme par son nom affiché entier (le prompt ne donne que le prénom)', async () => {
+    env = setupTriage({ llm: new StylesLlm() })
+    const exemple = env.m.createPerson({ display_name: 'Léonie Exemple' }).id
+    const autre = env.m.createPerson({ display_name: 'Léonie Autre' }).id
+    seedTriaged('Léonie répond plus vite sur la messagerie que par mail.', { conversation_at: at(3, 2) })
+    seedTriaged('Pour Léonie, un vocal court marche mieux qu’un long mail.', { conversation_at: at(3, 5) })
+    const advice = 'Avec Léonie, la messagerie obtient une réponse plus vite que le mail.'
+    llm().person = [{ texte: advice, appuis: [1, 2] }]
+    expect(await pass({ mode: 'person', person_id: exemple })).toMatchObject({ facts_created: 1 })
+    expect(await pass({ mode: 'person', person_id: autre })).toMatchObject({ facts_created: 1, facts_duplicate: 0 })
+    const of = (id: string) => styles().filter(x => x['person_id'] === id).map(x => x['fact'])
+    expect(of(exemple)).toEqual([`Avec Léonie Exemple : ${advice}`])
+    expect(of(autre)).toEqual([`Avec Léonie Autre : ${advice}`])
+    expect(states().find(s => s['person_id'] === autre)).toMatchObject({ facts: 1 })
+    expect(llm().prompts.join('\n')).not.toMatch(/Léonie (Exemple|Autre)/)
+  })
+
+  it('texte identique au fait d’une autre fiche ou sans fiche : jamais réveillé s’il est expiré ; pas d’état « facts: 0 », la relance ne repaie rien', async () => {
+    env = setupTriage({ llm: new StylesLlm() })
+    const { leonie } = seedTeam()
+    const advice = 'Avec Léonie, un message écrit court obtient une réponse dans la journée.'
+    // Fait sans fiche, au texte identique, mis à expirer (il n'est pas une source : la passe ne lit pas les expirés).
+    const twin = seedTriaged(advice)
+    setFact(twin, { expires_at: '2026-02-01T00:00:00.000Z' })
+    llm().person = [{ texte: advice, appuis: [1, 2] }]
+    const r = await pass({ mode: 'person', person_id: leonie })
+    expect(r).toMatchObject({ llm_calls: 1, facts_created: 0, facts_duplicate: 1 })
+    expect(llm().notes).not.toContain(advice)
+    const expiry = env.db().prepare('SELECT expires_at FROM facts WHERE id = ?').get(twin) as { expires_at: string | null }
+    expect(expiry.expires_at).toBe('2026-02-01T00:00:00.000Z')
+    expect(states()).toEqual([])
+    // Relance : la période n'est pas « connue », et la sortie gardée évite un second appel payé.
+    expect(await pass({ mode: 'person', person_id: leonie })).toMatchObject({ periods_known: 0, periods_sent: 1, llm_calls: 0 })
+    expect(llm().calls).toBe(1)
+  })
+
+  /** 140 notes fictives de 330 caractères qui citent Léonie : plus de STYLE_PERSON_CALL_CHARS, donc deux appels. */
+  function seedLongNotes(): string {
+    const leonie = env.m.createPerson({ display_name: 'Léonie Exemple' }).id
+    for (let k = 1; k <= 140; k++) seedTriaged(pad(`Note ${k} : Léonie répond vite par message`, 330), { conversation_at: at(3, 1 + (k % 28), k % 60) })
+    return leonie
+  }
+  const longAdvice = { texte: 'Avec Léonie, un message écrit court obtient une réponse dans la journée.', appuis: [1, 2] }
+
+  it('deux appels : plafond vérifié au pire cas des DEUX avant le premier ; entre les deux pires cas, aucun appel ne part', async () => {
+    const price = priceFor('openai', 'gpt-4o-mini')!
+    // Pire cas de chaque appel, mesuré sur un premier passage sans plafond serré.
+    env = setupTriage({ llm: new StylesLlm('openai', 'gpt-4o-mini') })
+    llm().person = [longAdvice]
+    await pass({ mode: 'person', person_id: seedLongNotes() })
+    expect(llm().calls).toBe(2)
+    const worst = llm().prompts.map(p => (estimateTokensFromChars(p.length - 1) * price.input + 1500 * price.output) / 1e6)
+    const both = worst[0]! + worst[1]!
+    env.close()
+    // Au-dessus du pire cas d'un appel, sous celui des deux : rien ne part, rien n'est dépensé.
+    env = setupTriage({ llm: new StylesLlm('openai', 'gpt-4o-mini') })
+    llm().person = [longAdvice]
+    const budgetUsd = Math.max(...worst) * 1.02
+    expect(budgetUsd).toBeLessThan(both)
+    const tight = await pass({ mode: 'person', person_id: seedLongNotes(), budgetUsd })
+    expect(tight).toMatchObject({ stopped: 'budget', llm_calls: 0, spent_usd: 0, facts_created: 0 })
+    expect(llm().calls).toBe(0)
+    expect(states()).toEqual([])
+    env.close()
+    // Témoin : juste au-dessus des deux pires cas, les deux appels partent.
+    env = setupTriage({ llm: new StylesLlm('openai', 'gpt-4o-mini') })
+    llm().person = [longAdvice]
+    const ok = await pass({ mode: 'person', person_id: seedLongNotes(), budgetUsd: both * 1.01 })
+    expect(llm().calls).toBe(2)
+    expect(ok).toMatchObject({ stopped: null, facts_created: 1 })
+  })
+
+  it('deux appels : un échec sur le second n’écrit rien, et la relance ne repaie pas le premier (sortie validée gardée)', async () => {
+    env = setupTriage({ llm: new StylesLlm() })
+    llm().person = [longAdvice]
+    const leonie = seedLongNotes()
+    llm().fail = call => (call === 2 ? new Error('refus du fournisseur fictif (400)') : null)
+    const first = await pass({ mode: 'person', person_id: leonie })
+    expect(first).toMatchObject({ periods_failed: 1, llm_calls: 2, facts_created: 0 })
+    expect(states()).toEqual([])
+    expect(styles()).toEqual([])
+    llm().fail = null
+    const second = await pass({ mode: 'person', person_id: leonie })
+    expect(second).toMatchObject({ llm_calls: 1, periods_sent: 1, facts_created: 1 })
+    expect(llm().calls).toBe(3)
+    // Le second appel de la relance est celui du morceau en échec.
+    expect(llm().prompts[2]).toBe(llm().prompts[1])
+    expect(states()).toMatchObject([{ state_key: `person:${leonie}`, facts: 1 }])
+  })
+
+  it('deux appels : une pause entre les deux n’écrit rien, et la reprise ne repaie pas le premier', async () => {
+    env = setupTriage({ llm: new StylesLlm() })
+    llm().person = [longAdvice]
+    const leonie = seedLongNotes()
+    llm().onCall = call => {
+      if (call === 1) env.m.setEnabled(false)
+    }
+    const first = await pass({ mode: 'person', person_id: leonie })
+    expect(first).toMatchObject({ stopped: 'paused', llm_calls: 1, facts_created: 0 })
+    expect(states()).toEqual([])
+    env.m.setEnabled(true)
+    llm().onCall = null
+    const second = await pass({ mode: 'person', person_id: leonie })
+    expect(second).toMatchObject({ stopped: null, llm_calls: 1, facts_created: 1 })
+    expect(llm().calls).toBe(2)
+  })
+
+  it('règle n°27 : faits sources pathologiques de 16 000 caractères (aucune borne sur un fait), masqués sur une fenêtre bornée, main rendue entre deux', async () => {
+    env = setupTriage({ llm: new StylesLlm() })
+    const leonie = env.m.createPerson({ display_name: 'Léonie Exemple' }).id
+    // Texte écrit en base tel quel : masqué entier, un seul de ces faits bloquerait la boucle plus de 200 ms.
+    for (let k = 1; k <= 20; k++) {
+      const id = seedTriaged(`Note ${k} : Léonie répond vite.`, { conversation_at: at(3, k) })
+      let t = `Léonie n${k} `
+      while (t.length < 16_000) t += 'a-'
+      setFact(id, { fact: t.slice(0, 16_000) })
+    }
+    llm().person = [longAdvice]
+    const r = await pass({ mode: 'person', person_id: leonie })
+    expect(r).toMatchObject({ items_sent: 20, llm_calls: 1 })
+    expect(r.max_block_ms).toBeLessThan(200)
+  }, 60_000)
 
   it('personne inconnue ou absente : refus clair, rien ne part', async () => {
     env = setupTriage({ llm: new StylesLlm() })
