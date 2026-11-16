@@ -270,12 +270,40 @@ relations heuristiques n'est donc pas un réglage à ajuster : elle est **câbl�
 pull/push + curseur, coffre GVK, bootstrap 1 commande), routes `/v1/sync/*` LAN + `/v1/admin/sync/*`,
 7 sous-commandes CLI (`status`, `init-hub`, `invite`, `join`, `now`, `revoke`, `leave`).
 
+**Fait le 16/11 (branche `feat/partage-synchro`)** :
+- [x] Seul l'espace d'équipe voyage : défaut `scopes = ['org']`, `init-hub --scopes` et
+      `invite --scopes` ; `user`, privé et quarantaine jamais servis, acceptés ni repris d'un pair
+      (`adoptScope` ne rebranche plus `user`).
+- [x] Contrôle PAR PAIR côté hub (snapshot, pull, push, secrets) : espace accordé au pair ET encore
+      synchronisé par le hub, sinon 403. À l'arrivée : espace forcé (fait d'un autre espace refusé),
+      `critical` et client refusés, un pair ne modifie ou ne supprime que les faits nés chez lui. À
+      l'envoi : jamais de dormant, `critical` ni fait marqué d'un client ; l'expiration voyage.
+- [x] `join` sur un Mac qui a déjà des agents : l'`org` local prend l'id du hub en emmenant toutes
+      les lignes qui y renvoient (politiques, registre des bases, secrets, curseurs, `facts.scope_id`
+      et voisins), sans perte ; un join raté remet le Mac comme avant, prévient le hub (plus de pair
+      à moitié actif) et se relance avec le même code.
+- [x] `bootstrap` retrouve l'`org` par type et organisation : un seul `org` après redémarrage.
+- [x] Minuterie de synchro armée juste après le join (plus de redémarrage) ; erreurs de la boucle
+      journalisées et visibles dans `sync status`.
+- [x] Curseur par numéro d'ordre local (table `sync_seq` créée à la demande dans les seules bases
+      partagées touchées par la synchro) : plus de fait perdu quand trois Mac écrivent ensemble.
+- [x] `invite` donne l'IP du réseau local (et `<nom>.local`), jamais `0.0.0.0` ; écoute par défaut
+      `lan:47600` (IPv4 privée de l'interface du réseau local, résolue à chaque démarrage).
+- [x] `init-hub` tire des clés de groupe neuves tant qu'aucun Mac n'est relié.
+- [x] `leave` prévient le hub, qui coupe ce Mac.
+
 **Manque pour s'en servir vraiment** :
+- [ ] Chiffrement : l'appairage (jeton, clé de signature) et le texte des faits passent en clair
+      → TLS, ou au moins appairage scellé par le code. **Reporté** ; en attendant, appairer
+      seulement sur le réseau du bureau.
+- [ ] Marques de suppression : `forget` ne se propage pas, et un fait devenu `critical`, dormant ou
+      client après son envoi reste chez les pairs. **Reporté.**
 - [ ] Incrément 6 : relais NAS de secours et `sync verify` (réconciliation / anti-dérive) — absents.
       Sans eux, le risque assumé par la spec (perte du hub = état canonique perdu) n'a aucun filet.
-- [ ] `sync rotate-key` absent : aucun moyen de faire tourner la clé du groupe si une machine est perdue.
-- [ ] Aucune découverte réseau (pas de mDNS/Bonjour) → il faut connaître et taper l'IP:port du hub à
-      la main, et cette IP change au gré du DHCP.
+- [ ] `sync rotate-key` absent : aucun moyen de faire tourner la clé du groupe si une machine est perdue
+      (un Mac révoqué garde les clés). **Reporté.**
+- [ ] Aucune découverte réseau (pas de mDNS/Bonjour) : `invite` affiche désormais l'IP du réseau
+      local et le nom `<nom>.local`, mais il faut encore la taper sur l'autre Mac.
 - [ ] `SyncEngine.shareSecret` n'a **aucun appelant** : le partage de secrets n'est branché sur aucun bouton.
 - [ ] Machines A (Mac Studio) et B (iMac) : **état inconnu depuis le 04/08** — ni version, ni
       `[llm.embeddings]`, ni `built_sha`. À vérifier sur place (`memoria doctor` + `/v1/health`).
@@ -549,8 +577,9 @@ de l'équipe.
       `org` des agents choisis) ; refus clair sinon ;
 - [ ] écran Organisations & projets (cf. T25) ou au minimum une commande CLI pour créer l'org et poser
       les politiques ;
-- [ ] `allowed_scopes` par pair : un Mac d'équipe ne reçoit que `org` par défaut (jamais `user`) ; test
-      automatisé d'isolation dans le benchmark ;
+- [x] `allowed_scopes` par pair : un Mac d'équipe ne reçoit que `org` par défaut (jamais `user`), contrôlé
+      côté hub à chaque requête ; tests d'isolation `packages/core/test/sync-isolation.test.ts` et
+      `packages/daemon/test/sync-team.test.ts` (16/11) ;
 - [ ] test réel à deux machines (même build, hub = le Mac toujours allumé) : **positif** = un fait `org`
       écrit par l'agent d'un collègue est rappelé ici ; **négatif** = un fait `user` du propriétaire
       n'apparaît pas chez le collègue ; consigner les timings et les obstacles (IP, pare-feu).

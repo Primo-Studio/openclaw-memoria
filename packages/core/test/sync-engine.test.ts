@@ -27,7 +27,7 @@ function hubFetch(hub: Memoria): FetchLike {
       sig: h['x-memoria-sig'],
       ts: h['x-memoria-ts'],
       nonce: h['x-memoria-nonce'],
-      remoteHost: '192.168.1.30',
+      remoteHost: '10.20.30.41',
     })
     return { ok: r.status < 400, status: r.status, json: async () => r.body }
   }

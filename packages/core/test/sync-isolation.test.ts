@@ -29,7 +29,7 @@ import {
   type SyncHttpResponse,
 } from '../src/index.js'
 
-const HUB_ADDR = '192.168.1.20:47600'
+const HUB_ADDR = '10.20.30.40:47600'
 
 let dir: string
 const opened: Memoria[] = []
@@ -61,7 +61,7 @@ function hubFetch(hub: Memoria, opts: { fail?: (path: string) => boolean } = {})
       sig: h['x-memoria-sig'],
       ts: h['x-memoria-ts'],
       nonce: h['x-memoria-nonce'],
-      remoteHost: '192.168.1.31',
+      remoteHost: '10.20.30.41',
     })
     return { ok: r.status < 400, status: r.status, json: async () => r.body }
   }
@@ -453,16 +453,16 @@ describe('clés de groupe et adresses', () => {
     const ifaces = {
       lo0: [{ address: '127.0.0.1', family: 'IPv4', internal: true }],
       utun3: [{ address: '100.101.1.2', family: 'IPv4', internal: false }],
-      en0: [{ address: 'fe80::1', family: 'IPv6', internal: false }, { address: '192.168.1.20', family: 'IPv4', internal: false }],
+      en0: [{ address: 'fe80::1', family: 'IPv6', internal: false }, { address: '10.20.30.40', family: 'IPv4', internal: false }],
     } as unknown as Parameters<typeof lanIPv4>[0]
-    expect(lanIPv4(ifaces)).toBe('192.168.1.20')
+    expect(lanIPv4(ifaces)).toBe('10.20.30.40')
     for (const listen of ['0.0.0.0:47600', 'lan:47600', ':47600']) {
       const a = hubAddressesFor(listen, ifaces, 'mac-studio')
-      expect(a.primary).toBe('192.168.1.20:47600')
+      expect(a.primary).toBe('10.20.30.40:47600')
       expect(a.alternatives).toEqual(['mac-studio.local:47600'])
       expect(JSON.stringify(a)).not.toContain('0.0.0.0')
     }
-    expect(resolveListenHost('lan:47600', ifaces)).toEqual({ host: '192.168.1.20', port: 47600 })
+    expect(resolveListenHost('lan:47600', ifaces)).toEqual({ host: '10.20.30.40', port: 47600 })
     // pas de réseau local (Wi-Fi pas encore là) : pas d'adresse, jamais un repli sur 0.0.0.0
     expect(resolveListenHost('lan:47600', { lo0: ifaces!['lo0'] })).toEqual({ host: null, port: 47600 })
     // invitation réelle d'un hub configuré sur une adresse précise

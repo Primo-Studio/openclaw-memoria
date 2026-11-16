@@ -1,10 +1,12 @@
 # Installer Memoria sur une nouvelle machine + partager la mémoire (réseau)
 
-Guide non-technique. Objectif : installer Memoria sur une machine neuve (ex. l'iMac de Luna), la
-relier à la machine « hub » (ex. le Mac Studio, toujours allumé) et partager la mémoire d'équipe.
+Guide non-technique. Objectif : installer Memoria sur une machine neuve (un Mac de l'équipe), la
+relier à la machine « hub » (le Mac toujours allumé) et partager la mémoire d'équipe (`org`).
 
 > Tout ce qui est décrit ici existe dans le code au 27/08/2026 (écrans Réglages / Agents / Partage,
-> commandes `memoria …`). L'onglet **Docs** de l'interface reprend le même contenu en 5 langues.
+> commandes `memoria …`) ; les parties 2 à 4 et la sécurité réseau sont à jour au 16/11/2026 (seul
+> `org` part vers les Mac de l'équipe). L'onglet **Docs** de l'interface reprend l'ancien contenu en
+> 5 langues : il n'a pas encore suivi ces changements.
 
 ## 1. Installer sur une machine neuve
 
@@ -77,42 +79,112 @@ quelle. Sur le poste de Néto, un import automatique tourne toutes les 6 h (`scr
 
 ## 2. Désigner le hub (la machine toujours allumée)
 
-Sur le hub, dans l'interface : **Réglages → Synchro entre machines → « Faire de cette machine le
-hub »**, puis redémarrer le service (le bouton l'indique, ou `memoria stop && memoria start`).
+> **Ce qui part vers les Mac de l'équipe : l'espace d'équipe `org`, et lui seul.** L'espace `user`
+> (ce qui concerne le propriétaire), les mémoires privées des agents, la Revue et les secrets ne
+> quittent jamais ce Mac. Le hub contrôle **chaque** requête d'un Mac relié : un autre espace
+> demandé, et c'est un refus (403).
 
-En terminal, l'équivalent : `memoria sync init-hub` puis `memoria stop && memoria start`.
+> **L'appairage passe en clair sur le réseau.** Le faire **seulement sur le réseau du bureau**,
+> jamais sur un Wi-Fi invité, public ou partagé (voir « Sécurité réseau » plus bas).
 
-## 3. Inviter une machine
-
-Sur le hub : **Réglages → Synchro → « Inviter une machine »** → un **code** s'affiche (valable
-10 min) avec l'adresse du hub. En terminal : `memoria sync invite`.
-
-## 4. Relier la nouvelle machine au hub
-
-Sur la nouvelle machine : **Réglages → Synchro → « Relier au hub »** → coller l'**adresse du hub**
-(ex. `192.168.1.20:47600`) + le **code**. En terminal :
+Sur le hub, en terminal :
 
 ```sh
-memoria sync join --hub 192.168.1.20:47600 --code XXXX-XXXX
+memoria sync init-hub          # = --listen lan:47600 --scopes org
+memoria stop && memoria start  # le hub n'écoute le réseau qu'après ce redémarrage
+memoria sync status
 ```
 
-La machine récupère alors **tout l'historique partagé** (infos sur l'utilisateur, l'entreprise, les
-projets) et reste synchronisée. Pour couper un pair depuis le hub : `memoria sync revoke <machine_id>`
-(terminal uniquement) ; pour quitter : **« Se déconnecter »** (`memoria sync leave`).
+`sync status` doit afficher :
+- `écoute LAN : lan:47600 → 192.168.x.y:47600 (active)` ;
+- `à donner aux autres Mac : 192.168.x.y:47600 (ou <nom>.local:47600)` ;
+- `espaces partagés avec les Mac reliés : org`.
+
+Dans l'interface : **Réglages → Synchro entre machines → « Faire de cette machine le hub »**, puis
+redémarrer le service.
+
+**Ce que fait `init-hub`** :
+- **Écoute** : `lan:47600` veut dire « l'adresse IPv4 privée de l'interface du réseau local »
+  (Wi-Fi ou Ethernet), retrouvée **à chaque démarrage**. Le hub n'écoute donc ni sur un VPN ni sur un
+  autre réseau, et un changement d'IP par le DHCP est rattrapé au redémarrage suivant. S'il n'y a pas
+  encore de réseau au démarrage (Wi-Fi pas prêt à l'ouverture de session), il réessaie toutes les
+  30 s et le note une fois dans le journal. `--listen 0.0.0.0:47600` (toutes les interfaces) reste
+  possible mais **déconseillé**.
+- **Espaces** : `org` par défaut. `--scopes org,project` ajoute les projets. `user`, `private` et la
+  quarantaine sont **refusés** (erreur), même écrits à la main dans `config.toml`.
+- **Clés du groupe** : tirées **neuves** tant qu'aucun Mac n'est relié. Les clés qu'un ancien essai
+  aurait laissées au Trousseau ne sont jamais reprises. Avec des Mac déjà reliés, relancer
+  `init-hub` (pour changer l'adresse, par exemple) **garde** les clés, sinon tous seraient coupés.
+- **Pare-feu macOS** : s'il est activé, autoriser les connexions entrantes de `node` (port 47600).
+
+## 3. Inviter un Mac de l'équipe
+
+Sur le hub : `memoria sync invite --name "Mac de l'équipe"` (ou **Réglages → Synchro → « Inviter
+une machine »**). S'affichent :
+- un **code** valable **10 min** ; 5 codes faux de suite annulent l'invitation ;
+- les **espaces** que ce Mac recevra (`org`) ;
+- la **commande exacte** à taper sur l'autre Mac, avec l'adresse réseau local du hub (jamais
+  `0.0.0.0`), et le nom `<nom>.local:47600` en second choix si l'IP a changé.
+
+`--scopes org,project` limite ou élargit ce que CE Mac recevra (dans la liste du hub, jamais `user`).
+
+## 4. Relier le Mac de l'équipe au hub
+
+**Avant** : même version de Memoria sur les deux Mac (`built_sha` de `/v1/health`), même réseau de
+bureau, horloges à l'heure (plus de 60 s d'écart = refus).
+
+Sur le Mac de l'équipe, la commande donnée par `invite` :
+
+```sh
+memoria sync join --hub 192.168.x.y:47600 --code XXXX-XXXX
+```
+
+(ou **Réglages → Synchro → « Relier au hub »** : adresse + code).
+
+**Ce que fait le join** :
+- Il récupère l'historique de l'espace `org` du hub, puis la **synchro automatique démarre tout de
+  suite** (toutes les 2 min), **sans redémarrer** Memoria.
+- Un Mac qui a **déjà des agents et des souvenirs** garde tout : son espace `org` local prend
+  l'identifiant de celui du hub en emmenant ses faits, les droits de ses agents et ses réglages ; ses
+  faits `org` partent ensuite vers le hub. Son espace `user` reste le sien et ne part jamais.
+- **S'il échoue** (réseau coupé, hub arrêté…) : le Mac est remis comme avant (clés du groupe, lien
+  au hub, réglages), le hub est prévenu et coupe l'appairage. Relancer **la même commande** (même
+  code, dans les 10 min) ou demander une nouvelle invitation. Si le hub était injoignable au moment
+  de l'échec, il coupe seul l'appairage jamais confirmé au bout de 15 min. Les faits d'équipe déjà
+  reçus avant la panne restent sur le Mac.
+
+**Vérifier** : `memoria sync status` sur le Mac de l'équipe → hub, espaces `org`, « synchro
+automatique : armée », dernière passe et ses éventuelles erreurs. Sur le hub, chaque Mac relié est
+listé avec ses espaces (`org`) et « appairage en cours » tant qu'il n'a pas tout reçu.
+
+Les agents du Mac de l'équipe lisent l'espace `org` selon la matrice **Partage** ; leur droit d'y
+écrire est suivi dans T29.
+
+**Couper un Mac** depuis le hub : `memoria sync revoke <machine_id>`. **Quitter** depuis le Mac de
+l'équipe : **« Se déconnecter »** (`memoria sync leave`) ; le hub est prévenu et le coupe (s'il est
+injoignable, faire aussi `revoke` sur le hub).
 
 ### Ce qui se partage — et ce qui NE se partage PAS
 
-| Partagé entre machines | JAMAIS partagé |
+| Part vers les Mac de l'équipe | Ne part JAMAIS (ni envoyé, ni accepté d'un Mac relié) |
 |---|---|
-| Scope **user** (faits sur l'utilisateur) | Mémoire **privée** de chaque agent |
-| Scope **org** (entreprise, conventions) | Quarantaine de revue (`legacy_to_review`, imports) |
-| Scopes **projet / client / sujets** | Télémétrie d'usage locale |
-| — | **Secrets** : le coffre inter-machines existe côté moteur (chiffré GVK), mais aucun secret ne peut encore être marqué « partageable » depuis l'interface → en pratique, aucun secret ne circule |
+| Espace **`org`** : process, savoirs, leçons d'équipe | Espace **`user`** (personnel au propriétaire) |
+| Projets et sujets, **seulement** si `--scopes` les ajoute | Mémoire **privée** de chaque agent, quarantaine de revue (imports) |
+| L'expiration d'un fait (il s'efface partout à la même date) | Faits **`critical`**, faits **en attente de revue** (dormants), faits **marqués d'un client** |
+| — | Télémétrie d'usage locale |
+| — | **Secrets** : le coffre inter-machines existe côté moteur (chiffré GVK), mais aucun secret n'est partagé |
 
-### Qui écrit dans la mémoire partagée `user` ?
+**Règles appliquées par le hub** à ce qu'envoie un Mac relié :
+- chaque fait doit appartenir à l'espace de la requête, sinon il est refusé ;
+- un fait `critical` ou marqué d'un client est refusé ;
+- un Mac ne modifie ou ne supprime **que les faits nés sur sa machine**, jamais ceux du hub ni d'un
+  autre collègue ;
+- les refus sont comptés (journal d'audit du hub ; `memoria sync now` affiche le nombre).
+
+### Qui écrit dans l'espace `user` ? (il reste sur chaque Mac)
 - Tes agents (Claude Code, Codex…) peuvent **déclarer directement un fait sur toi** dans `user`
-  (préférence, façon de travailler) : il est visible par tous tes assistants, sur toutes les machines
-  reliées. Tu le vois, le corriges ou l'oublies dans **Partage** (contenu de l'espace) ou **Mémoire**.
+  (préférence, façon de travailler) : il est visible par tes assistants **de ce Mac**, et ne part
+  vers aucun Mac de l'équipe. Tu le vois, le corriges ou l'oublies dans **Partage** ou **Mémoire**.
 - Les **bots de canal OpenClaw** (WhatsApp, Telegram — exposés à des tiers) sont en **lecture seule** :
   leurs propositions passent par la **Revue**.
 - Un souvenir **privé** ne devient partagé que par ton clic : **Partage → « Faits sur toi »** propose,
@@ -134,12 +206,30 @@ client) avec leurs identifiants (Telegram, WhatsApp, e-mail, handle). Les agents
 
 ## Sécurité réseau (résumé)
 
-- Seules les routes `/v1/sync/*` sortent du loopback, **uniquement sur le LAN**, derrière un **token
-  de pair + signature HMAC** (anti-rejeu/anti-MITM). Les routes d'administration et de mémoire restent
-  strictement locales (127.0.0.1).
-- Les clés (coffre de groupe GVK, clé de pairing CPK, token de pair) vivent dans le **Trousseau**
-  (Keychain) / coffre chiffré AES — **jamais** dans un fichier en clair, jamais dans les logs.
+- **L'appairage et les échanges passent en clair (HTTP, pas de TLS).** Pendant l'appairage, le code,
+  le jeton du Mac et la clé de signature transitent sans chiffrement : quelqu'un qui écoute ce
+  réseau à ce moment-là peut tout récupérer. Ensuite, le texte des faits `org` circule signé mais
+  non chiffré (seules les valeurs de secrets le seraient). **Appairer et synchroniser seulement sur
+  le réseau du bureau.**
+- Le hub n'écoute que sur l'interface du réseau local (`lan:47600`), et seulement les routes
+  `/v1/sync/*`, derrière un **jeton de pair + signature HMAC + anti-rejeu** (horodatage à ±60 s). Les
+  routes d'administration et de mémoire restent strictement locales (127.0.0.1).
+- Chaque requête d'un Mac relié est contrôlée **par Mac** : espaces accordés à son invitation, encore
+  synchronisés par le hub, jamais `user`, privé ni quarantaine.
+- Les clés (coffre de groupe GVK, clé de signature CPK, jeton de pair) vivent dans le **Trousseau**
+  (Keychain) / coffre chiffré AES — **jamais** dans un fichier en clair, jamais dans les journaux.
+  Un Mac révoqué garde les clés du groupe : pas encore de rotation (voir « Reporté »).
 - En cas d'édition concurrente du même fait sur deux machines, la dernière écriture gagne (règle
   déterministe) ; la version perdante n'est pas conservée.
+- **Oublier ne se propage pas encore** : un fait `org` parti par erreur doit être oublié sur chaque
+  Mac. De même, un fait passé `critical`, en revue ou marqué d'un client **après** son envoi reste
+  chez les Mac qui l'ont déjà reçu.
 - Se déconnecter : **Réglages → Synchro → « Se déconnecter »** (`memoria sync leave`). Les souvenirs
   déjà reçus restent disponibles hors-ligne.
+
+### Reporté (pas encore dans le code)
+- Chiffrement (TLS, ou au moins appairage scellé par le code).
+- Marques de suppression : propager un oubli, retirer un fait devenu non partageable.
+- `sync rotate-key` : changer les clés du groupe après la perte ou la révocation d'un Mac.
+- Relais NAS de secours, `sync verify`, découverte réseau automatique.
+- Synchro de l'espace `user` entre les seuls Mac du propriétaire.
