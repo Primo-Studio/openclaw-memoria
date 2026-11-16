@@ -98,11 +98,13 @@ export const TEAM_CANDIDATE_RUBRIQUES: readonly Rubrique[] = ['app', 'outils', '
  *  - `client` : fait marqué d'un client (ou d'un projet de client) ;
  *  - `redite` : fait supersédé (une redite ne voyage pas sans son représentant) ;
  *  - `sans_tri` : aucune ligne de tri, ou classement sans genre ;
+ *  - `portee` : fait sur une personne (portée `user` ou `perso`, ou `person_id`),
+ *    ou fait de l'espace `user` sans portée `entite` confirmée à la main ;
  *  - `faux` : marqué faux au tri ;
  *  - `rubrique` : rubrique refusée (rh, finance, juridique, clients, vente) ;
  *  - `genre` : genre hors de la liste d'autorisation.
  */
-export const TEAM_SHARE_REFUSALS = ['critical', 'sensible', 'secret', 'client', 'redite', 'sans_tri', 'faux', 'rubrique', 'genre'] as const
+export const TEAM_SHARE_REFUSALS = ['critical', 'sensible', 'secret', 'client', 'redite', 'sans_tri', 'portee', 'faux', 'rubrique', 'genre'] as const
 export type TeamShareRefusal = (typeof TEAM_SHARE_REFUSALS)[number]
 
 /** Faits écartés d'un partage vers l'espace d'équipe, par raison (toutes les clés, 0 compris). */

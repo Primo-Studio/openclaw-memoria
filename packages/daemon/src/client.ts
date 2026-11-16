@@ -147,7 +147,7 @@ export class DaemonClient {
   async syncJoin(hub: string, code: string): Promise<{ scopes: number; facts: number; secrets: number; auto_sync?: boolean }> {
     return this.post('/v1/admin/sync/join', { hub, code })
   }
-  async syncNow(): Promise<{ pulled: number; pushed: number; refused?: number; errors?: string[] }> {
+  async syncNow(): Promise<{ pulled: number; pushed: number; refused?: number; refused_received?: number; errors?: string[] }> {
     return this.post('/v1/admin/sync/now', {})
   }
   async syncRevoke(machineId: string): Promise<{ revoked: boolean }> {

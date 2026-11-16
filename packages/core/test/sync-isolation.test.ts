@@ -9,7 +9,7 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   Memoria,
   clusterPairingKey,
@@ -263,6 +263,10 @@ describe('ce qui ne part jamais', () => {
     const temp = store.insertFact({ fact: 'Essai fictif : consigne temporaire', scope_id: orgId, ...prov(4) })
     store.db.prepare('UPDATE facts SET expires_at = ? WHERE id = ?').run('2031-01-01T00:00:00.000Z', temp.id)
 
+    // à l'envoi même : ni critical, ni dormant, ni client sur le réseau (le refus à l'arrivée n'est qu'une seconde couche)
+    expect(hub.sync.collectDelta(orgId, '0').facts.map(f => f.fact).sort()).toEqual(
+      ['Essai fictif : consigne temporaire', 'Essai fictif : process d’export vidéo en H.265 pour l’équipe'].sort(),
+    )
     const spoke = mk('spoke')
     await joinTo(spoke, hub)
     expect(hasFact(spoke, orgId, 'Essai fictif : fait critical')).toBe(false)
@@ -285,6 +289,108 @@ describe('ce qui ne part jamais', () => {
     const crit = s.db.prepare("SELECT * FROM facts WHERE sensitivity = 'critical' LIMIT 1").get() as Record<string, unknown>
     const r = asPeer(spoke, hub, 'POST', '/v1/sync/push', { scope_id: orgId, facts: [crit], tombstones: [] })
     expect((r.body as { refused: { critical: number } }).refused.critical).toBe(1)
+  })
+})
+
+/** Fait au format du réseau, prêt à être poussé par un pair (données fictives). */
+function wireFact(scopeId: string, origin: string, id: string, fact: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
+  const now = nowISO()
+  return {
+    id, fact, category: 'general', fact_type: 'statement', confidence: 0.8, source: 'sync', scope_id: scopeId,
+    sensitivity: 'normal', visibility: 'shared', tags: '[]', entity_ids: '[]', lifecycle_state: 'active', superseded: 0,
+    superseded_by: null, origin_machine_id: origin, origin_rev: 1, content_hash: null, deleted_at: null, created_at: now, updated_at: now,
+    ...extra,
+  }
+}
+
+const SALARY = 'Essai fictif : le salaire du monteur passe à 2 100 euros'
+const SECRET = 'Essai fictif : la clé du service de rendu est api_key=Zx9fictif00112233445566'
+const SECRET_REFERENCE = 'Essai fictif : le service de rendu utilise [secret:generic-token-1]'
+
+describe('sensible et secrets : ni envoyés, ni acceptés (hub et Mac relié)', () => {
+  it('le hub ne sert ni un fait sensitive, ni un sujet sensible, ni un secret', async () => {
+    const { hub } = makeHub()
+    const orgId = orgOf(hub).id
+    const store = hub.sharedContentStore(orgId)!
+    const prov = (n: number) => ({ origin_machine_id: hub.sync.machineId, origin_rev: 3000 + n })
+    store.insertFact({ fact: 'Essai fictif : planning du tournage', scope_id: orgId, sensitivity: 'sensitive', ...prov(1) })
+    store.insertFact({ fact: SALARY, scope_id: orgId, ...prov(2) })
+    store.insertFact({ fact: SECRET, scope_id: orgId, ...prov(3) })
+    store.insertFact({ fact: SECRET_REFERENCE, scope_id: orgId, ...prov(4) })
+    // à l'envoi même (pas seulement au refus de l'arrivée) : rien de tout cela ne part sur le réseau
+    const served = hub.sync.collectDelta(orgId, '0').facts.map(f => f.fact)
+    expect(served).toEqual(['Essai fictif : process d’export vidéo en H.265 pour l’équipe'])
+    const spoke = mk('spoke')
+    await joinTo(spoke, hub)
+    for (const c of ['Essai fictif : planning du tournage', SALARY, SECRET, SECRET_REFERENCE]) expect(hasFact(spoke, orgId, c)).toBe(false)
+    // le fait ordinaire du hub, lui, est arrivé
+    expect(countIn(spoke, orgId)).toBe(1)
+    // le Mac relié n'envoie pas non plus les siens
+    const s = spoke.sharedContentStore(orgId)!
+    const sp = (n: number) => ({ origin_machine_id: spoke.sync.machineId, origin_rev: 4000 + n })
+    s.insertFact({ fact: 'Essai fictif : planning du collègue', scope_id: orgId, sensitivity: 'sensitive', ...sp(1) })
+    s.insertFact({ fact: SALARY + ' (collègue)', scope_id: orgId, ...sp(2) })
+    s.insertFact({ fact: SECRET + ' (collègue)', scope_id: orgId, ...sp(3) })
+    expect(spoke.sync.collectDelta(orgId, '0', { originOnly: spoke.sync.machineId }).facts).toEqual([])
+    const before = countIn(hub, orgId)
+    const r = await spoke.sync.syncAll(hubFetch(hub))
+    expect(r.pushed).toBe(0)
+    expect(countIn(hub, orgId)).toBe(before)
+  })
+
+  it('le hub refuse d’un pair un fait sensitive, un sujet sensible, un secret ou un dormant ; rien au coffre', async () => {
+    const { hub } = makeHub()
+    const orgId = orgOf(hub).id
+    const spoke = mk('spoke')
+    await joinTo(spoke, hub)
+    const vaulted = vi.spyOn(hub.secrets, 'set')
+    const me = spoke.sync.machineId
+    const facts = [
+      wireFact(orgId, me, 'fictif-s1', 'Essai fictif : planning du collègue', { sensitivity: 'sensitive' }),
+      wireFact(orgId, me, 'fictif-s2', SALARY),
+      wireFact(orgId, me, 'fictif-s3', SECRET),
+      wireFact(orgId, me, 'fictif-s4', SECRET_REFERENCE),
+      wireFact(orgId, me, 'fictif-s5', 'Essai fictif : fait en attente de revue', { lifecycle_state: 'dormant' }),
+      wireFact(orgId, me, 'fictif-s6', 'Essai fictif : fait archivé', { lifecycle_state: 'archived' }),
+      wireFact(orgId, me, 'fictif-s7', 'Essai fictif : fait d’un client', { client_org_id: 'client-fictif' }),
+    ]
+    const before = countIn(hub, orgId)
+    const r = asPeer(spoke, hub, 'POST', '/v1/sync/push', { scope_id: orgId, facts, tombstones: [] })
+    expect(r.status).toBe(200)
+    expect(r.body).toMatchObject({ applied: 0, refused: { sensitive: 2, secret: 2, dormant: 2, client: 1, not_owner: 0 } })
+    expect(countIn(hub, orgId)).toBe(before)
+    expect(vaulted).not.toHaveBeenCalled()
+    // témoin : un fait ordinaire du même pair passe
+    const ok = asPeer(spoke, hub, 'POST', '/v1/sync/push', { scope_id: orgId, facts: [wireFact(orgId, me, 'fictif-s8', 'Essai fictif : leçon sur les sous-titres')], tombstones: [] })
+    expect((ok.body as { applied: number }).applied).toBe(1)
+  })
+
+  it('le Mac relié écarte aussi ce qu’un hub d’avant lui servirait, et le compte', async () => {
+    const { hub } = makeHub()
+    const orgId = orgOf(hub).id
+    const spoke = mk('spoke')
+    await joinTo(spoke, hub)
+    const origin = hub.sync.machineId
+    const forged = [
+      wireFact(orgId, origin, 'fictif-h1', 'Essai fictif : planning du hub', { sensitivity: 'sensitive' }),
+      wireFact(orgId, origin, 'fictif-h2', SALARY),
+      wireFact(orgId, origin, 'fictif-h3', SECRET),
+      wireFact(orgId, origin, 'fictif-h4', 'Essai fictif : dormant du hub', { lifecycle_state: 'dormant' }),
+    ]
+    // un hub sur un ancien code (ou modifié) glisserait ces faits dans sa réponse
+    const inner = hubFetch(hub)
+    const oldHub: FetchLike = async (url, init) => {
+      const res = await inner(url, init)
+      if (!new URL(url).pathname.endsWith('/pull')) return res
+      const body = (await res.json()) as { facts: unknown[] }
+      return { ...res, json: async () => ({ ...body, facts: [...body.facts, ...forged] }) }
+    }
+    const vaulted = vi.spyOn(spoke.secrets, 'set')
+    const r = await spoke.sync.syncAll(oldHub)
+    expect(r.refused_received).toBe(4)
+    for (const id of ['fictif-h1', 'fictif-h2', 'fictif-h3', 'fictif-h4']) expect(countIn(spoke, orgId, `id = '${id}'`)).toBe(0)
+    expect(vaulted).not.toHaveBeenCalled()
+    expect(spoke.sync.lastRunStatus()).toMatchObject({ refused_received: 4 })
   })
 })
 
@@ -440,6 +546,40 @@ describe('curseur fiable', () => {
 
     const all = ['A', 'B', 'C'].map(x => `Essai fictif : fait du Mac ${x}`).concat('Essai fictif : fait du hub')
     for (const m of [hub, ...macs]) for (const c of all) expect(hasFact(m, orgId, c)).toBe(true)
+  })
+
+  it('modifier ou oublier le fait le plus récent : le numéro ne redescend jamais, rien ne se perd (hub et Mac relié)', async () => {
+    const { hub, agent } = makeHub()
+    const orgId = orgOf(hub).id
+    const spoke = mk('spoke')
+    await joinTo(spoke, hub)
+    const expiresOn = (m: Memoria, id: string) =>
+      (m.sharedContentStore(orgId)!.db.prepare('SELECT expires_at FROM facts WHERE id = ?').get(id) as { expires_at: string | null } | undefined)?.expires_at
+
+    // hub : le fait le plus récent reçoit une expiration, puis il est oublié et un fait neuf le suit
+    const last = hub.storeFact({ instance: agent.assistant_instance_id, scope: orgId, content: 'Essai fictif : dernier fait du hub' })
+    await spoke.sync.pull(orgId, hubFetch(hub))
+    expect(hasFact(spoke, orgId, 'Essai fictif : dernier fait du hub')).toBe(true)
+    expect(hub.setExpiry(agent.assistant_instance_id, last.id, '2031-01-01T00:00:00.000Z')).toBe(true)
+    await spoke.sync.pull(orgId, hubFetch(hub))
+    expect(expiresOn(spoke, last.id)).toBe('2031-01-01T00:00:00.000Z')
+    expect(hub.forget({ ids: [last.id] }).deleted).toBe(1)
+    hub.storeFact({ instance: agent.assistant_instance_id, scope: orgId, content: 'Essai fictif : fait neuf du hub après oubli' })
+    await spoke.sync.pull(orgId, hubFetch(hub))
+    expect(hasFact(spoke, orgId, 'Essai fictif : fait neuf du hub après oubli')).toBe(true)
+
+    // Mac relié : même chose à l'envoi
+    const a = spoke.pairAssistant({ type: 'claude-code', display_name: 'Agent du collègue' })
+    spoke.setScopeAccess(a.assistant_id, orgId, { can_read: true, can_write: true })
+    const mine = spoke.storeFact({ instance: a.assistant_instance_id, scope: orgId, content: 'Essai fictif : dernier fait du collègue' })
+    await spoke.sync.push(orgId, hubFetch(hub))
+    expect(spoke.setExpiry(a.assistant_instance_id, mine.id, '2032-01-01T00:00:00.000Z')).toBe(true)
+    await spoke.sync.push(orgId, hubFetch(hub))
+    expect(expiresOn(hub, mine.id)).toBe('2032-01-01T00:00:00.000Z')
+    expect(spoke.forget({ ids: [mine.id] }).deleted).toBe(1)
+    spoke.storeFact({ instance: a.assistant_instance_id, scope: orgId, content: 'Essai fictif : fait neuf du collègue après oubli' })
+    await spoke.sync.push(orgId, hubFetch(hub))
+    expect(hasFact(hub, orgId, 'Essai fictif : fait neuf du collègue après oubli')).toBe(true)
   })
 })
 

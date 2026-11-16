@@ -102,6 +102,7 @@ import { localMachineId, nextRev } from '../sync/clock.js'
 import { contentHash } from '../sync/merge.js'
 import { SyncEngine, type SyncConfig } from '../sync/engine.js'
 import { effectiveSyncTypes, normalizeSyncTypes, repointScopeColumns } from '../sync/scopes.js'
+import { SECRET_REF, teamTextRefusal } from '../sync/team-text.js'
 import { freshGroupKeys } from '../secrets/index.js'
 import { TriageService, type TriageServiceHost } from '../triage/service.js'
 import { copyTriageRows, emptyRow, readTriageRows, rowFromDb as rowFromTriageDb, upsertTriageRows } from '../triage/store.js'
@@ -239,9 +240,6 @@ export interface ShareFactsResult {
   scope: string
   refused?: TeamShareRefusedCounts
 }
-
-/** Référence posée par le masquage à la place d'un secret (`[secret:<nom>]`). */
-const SECRET_REF = '[secret:'
 
 /** Agents qui, sur un Mac d'équipe, écrivent dans l'espace d'équipe dès l'appairage. Jamais OpenClaw. */
 const TEAM_WRITER_TYPES: readonly AssistantType[] = ['claude-code', 'codex']
@@ -700,11 +698,23 @@ export class Memoria {
     return orgs.length === 1 ? orgs[0]! : null
   }
 
-  /** Tous les scopes de type org (doublon de reprise compris) : ce qui y est déjà n'est plus un candidat équipe. */
+  /** Tous les scopes de type org (doublon de reprise compris). */
   private teamScopeIds(): string[] {
     return this.registry
       .listScopes()
       .filter(s => s.type === 'org')
+      .map(s => s.id)
+  }
+
+  /**
+   * Scopes dont les faits ne sont jamais des « candidats équipe » : l'org (ce
+   * qui y est déjà) et l'espace `user`, personnel au propriétaire (il ne part
+   * que fait par fait, portée `entite` confirmée à la main : teamShareRefusal).
+   */
+  private teamExcludedScopeIds(): string[] {
+    return this.registry
+      .listScopes()
+      .filter(s => s.type === 'org' || s.type === 'user')
       .map(s => s.id)
   }
 
@@ -778,10 +788,11 @@ export class Memoria {
     if (input.sensitivity === 'sensitive' || input.sensitivity === 'critical') {
       refuse(`un fait ${input.sensitivity} n'entre jamais dans l'espace d'équipe ; garde-le privé`)
     }
-    if (isTriageSensitive(content)) {
+    const text = teamTextRefusal(content, this.redactor)
+    if (text === 'sensitive') {
       refuse("le fait touche un sujet sensible (paie, impôts, santé, identité…) ; garde-le privé")
     }
-    if (content.includes(SECRET_REF) || this.redactor.redact(content).found.length > 0) {
+    if (text === 'secret') {
       refuse("le fait contient un secret ; rien n'a été écrit, ni le fait ni le secret")
     }
     const project = input.project_id ? this.registry.getProject(input.project_id) : null
@@ -795,18 +806,30 @@ export class Memoria {
    * (ordre de TEAM_SHARE_REFUSALS), ou null s'il peut y entrer. Le texte
    * stocké est déjà masqué : le secret se lit dans la marque du tri et dans
    * la référence `[secret:…]`, le masquage relu ne sert qu'aux anciens faits.
+   * `sourceType` : type de l'espace où le fait se trouve (`user` = l'espace
+   * personnel du propriétaire).
    */
-  private teamShareRefusal(row: FactRow, triage: TriageRow | null): TeamShareRefusal | null {
+  private teamShareRefusal(row: FactRow, triage: TriageRow | null, sourceType: string | undefined): TeamShareRefusal | null {
     if (row.sensitivity === 'critical') return 'critical'
     if (row.sensitivity === 'sensitive') return 'sensible'
-    // Marque levée à la main par le propriétaire (correction `sensible: false`) : son choix prime, comme à la validation.
-    const ownerLifted = triage !== null && !triage.sensible && triage.corrected_fields.includes('sensible')
-    if (triage?.sensible || (!ownerLifted && isTriageSensitive(row.fact))) return 'sensible'
-    if (triage?.secret_found || row.fact.includes(SECRET_REF) || this.redactor.redact(row.fact).found.length > 0) return 'secret'
+    // Sujet sensible : marque du tri, ou filtre local relu sur le texte. Une
+    // marque levée à la main (`sensible: false`) vaut pour la validation, pas
+    // ici : la synchro refuse tout texte qui touche un sujet sensible, à
+    // l'envoi comme à l'arrivée. Le partage le dit donc tout de suite, plutôt
+    // qu'un fait rangé dans `org` qui ne partirait jamais.
+    const text = teamTextRefusal(row.fact, this.redactor)
+    if (triage?.sensible || text === 'sensitive') return 'sensible'
+    if (triage?.secret_found || text === 'secret') return 'secret'
     const project = row.project_id ? this.registry.getProject(row.project_id) : null
     if (row.client_org_id || project?.client_org_id) return 'client'
     if (row.superseded) return 'redite'
     if (!triage || !triage.genre) return 'sans_tri'
+    // Portée : un fait sur une personne (le propriétaire, portée `user` ou
+    // `perso`, ou quelqu'un d'autre, `person_id`) ne part jamais. Depuis
+    // l'espace `user`, personnel au propriétaire, il faut en plus la portée
+    // `entite` CONFIRMÉE à la main : la proposition du tri ne suffit pas.
+    if (triage.person_id !== null || triage.portee === 'user' || triage.portee === 'perso') return 'portee'
+    if (sourceType === 'user' && !(triage.portee === 'entite' && triage.corrected_fields.includes('portee'))) return 'portee'
     if (triage.verdict === 'faux') return 'faux'
     if (triage.rubriques.some(r => TEAM_REFUSED_RUBRIQUES.includes(r))) return 'rubrique'
     if (!TEAM_SHARE_GENRES.includes(triage.genre)) return 'genre'
@@ -3859,8 +3882,13 @@ export class Memoria {
       if (rows.length === 0) continue
       if (refused) {
         const triage = new Map(readTriageRows(store.db, rows.map(r => r.id)).map(t => [t.fact_id, t]))
+        const typeOf = new Map<string, string | undefined>()
+        const sourceType = (scopeId: string): string | undefined => {
+          if (!typeOf.has(scopeId)) typeOf.set(scopeId, this.registry.getScope(scopeId)?.type)
+          return typeOf.get(scopeId)
+        }
         rows = rows.filter(row => {
-          const why = this.teamShareRefusal(row, triage.get(row.id) ?? null)
+          const why = this.teamShareRefusal(row, triage.get(row.id) ?? null, sourceType(row.scope_id))
           if (why) refused[why]++
           return why === null
         })
@@ -5220,7 +5248,7 @@ export class Memoria {
       audit: (action, reason) =>
         this.registry.audit({ actor_type: 'user', actor_id: 'local', action, target_id_hash: null, scope_id: null, reason }),
       promote: opts => this.promoteTriaged(opts),
-      teamScopeIds: () => this.teamScopeIds(),
+      teamExcludedScopeIds: () => this.teamExcludedScopeIds(),
       ideas: (id, filter, context) => this.ideasForInstance(id, filter, context),
       styles: (id, query) => this.stylesForInstance(id, query),
       storePendingTriaged: input => this.storePendingTriaged(input),
@@ -5327,8 +5355,8 @@ export class Memoria {
     const now = nowISO()
     // `true` reste l'espace `user` ; `'org'` passe par les garde-fous de l'espace d'équipe (shareFacts).
     const shareTo = opts.share === 'org' ? TEAM_SCOPE_ALIAS : opts.share === true || opts.share === 'user' ? 'user' : null
-    // Filtre « candidats équipe » : ce qui est déjà dans l'espace d'équipe n'y est pas proposé.
-    const listQuery = opts.filter?.team ? { excludeScopeIds: this.teamScopeIds() } : {}
+    // Filtre « candidats équipe » : ni ce qui est déjà dans l'espace d'équipe, ni l'espace `user`.
+    const listQuery = opts.filter?.team ? { excludeScopeIds: this.teamExcludedScopeIds() } : {}
     for (const path of this.contentDbPathsFor(wanted ? undefined : opts.filter?.instance)) {
       if (left <= 0) break
       const store = this.openContent(path)

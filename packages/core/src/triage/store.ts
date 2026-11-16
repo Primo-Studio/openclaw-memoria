@@ -250,7 +250,7 @@ interface ListQuery {
 /** Conditions SQL d'un filtre de liste (alias t = fact_triage, f = facts). */
 /** Réglages de la requête qui ne viennent pas du filtre public. */
 export interface ListQueryOptions {
-  /** Faits de ces scopes écartés (filtre « candidats équipe » : ce qui est déjà dans l'espace d'équipe). */
+  /** Faits de ces scopes écartés (filtre « candidats équipe » : espace d'équipe, déjà dedans, et espace `user`). */
   excludeScopeIds?: readonly string[]
 }
 
@@ -334,10 +334,12 @@ export function filterConditions(filter: TriageListFilter, opts: ListQueryOption
 const placeholders = (values: readonly unknown[]): string => values.map(() => '?').join(',')
 
 /**
- * Filtre « candidats équipe » : une liste d'AUTORISATION (genre et rubrique
- * métier), plus les refus du partage vers l'espace d'équipe, pour que la
- * liste ne propose jamais un fait que le partage écarterait. Aucun index
- * dédié : le filtre s'ajoute aux conditions de la liste (règle n°27).
+ * Filtre « candidats équipe » : une liste d'AUTORISATION (genre, rubrique
+ * métier, portée `entite`), plus les refus du partage vers l'espace d'équipe,
+ * pour que la liste ne propose jamais un fait que le partage écarterait.
+ * `excludeScopeIds` écarte l'espace d'équipe (déjà dedans) et l'espace `user`
+ * (personnel : il ne part que fait par fait, portée confirmée à la main).
+ * Aucun index dédié : le filtre s'ajoute aux conditions de la liste (règle n°27).
  */
 function teamConditions(where: string[], params: unknown[], opts: ListQueryOptions): void {
   where.push(`t.genre IN (${placeholders(TEAM_CANDIDATE_GENRES)})`)
@@ -347,6 +349,10 @@ function teamConditions(where: string[], params: unknown[], opts: ListQueryOptio
   where.push(`NOT EXISTS (SELECT 1 FROM json_each(t.rubriques) WHERE value IN (${placeholders(TEAM_REFUSED_RUBRIQUES)}))`)
   params.push(...TEAM_REFUSED_RUBRIQUES)
   where.push(
+    // Portée `entite` seulement : jamais un fait sur une personne (le
+    // propriétaire ou quelqu'un d'autre), comme au partage (raison `portee`).
+    "t.portee = 'entite'",
+    't.person_id IS NULL',
     'f.client_org_id IS NULL',
     "f.sensitivity = 'normal'",
     't.sensible = 0',

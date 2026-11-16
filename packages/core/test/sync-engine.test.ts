@@ -95,7 +95,8 @@ describe('pull / push (convergence Koda↔Luna)', () => {
     await spoke.sync.join({ hub: hubAddr, code: hub.sync.invite().code, fetchImpl: hubFetch(hub) })
     // le hub apprend un nouveau fait
     const a = hub.listAgents().find(x => x.assistant_type === 'openclaw')!
-    hub.storeFact({ instance: a.instance.id, scope: orgScopeId, content: 'Le mot de passe du NAS QNAP tourne tous les 90 jours' })
+    // (un texte qui touche un mot de passe ne voyage plus : sujet sensible, refusé à l'envoi)
+    hub.storeFact({ instance: a.instance.id, scope: orgScopeId, content: 'Le NAS QNAP redémarre le premier lundi du mois' })
 
     const r = await spoke.sync.pull(orgScopeId, hubFetch(hub))
     expect(r.applied).toBeGreaterThanOrEqual(1)

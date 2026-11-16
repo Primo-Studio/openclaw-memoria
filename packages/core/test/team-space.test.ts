@@ -297,25 +297,77 @@ describe("partage vers l'espace d'équipe : garde-fous côté serveur", () => {
   it('refuse sensible, critical, secret, client, redite, sans tri et faux, chacun à sa raison', async () => {
     const ids = await triaged([
       { text: 'Le salaire de Zorba passe à 2 100 euros' },
+      { text: 'Le process de veille du serveur Nimbus', genre: 'process', rubriques: ['infra'] },
       { text: 'Le process de sauvegarde du serveur Nimbus', genre: 'process', rubriques: ['infra'] },
       { text: 'Le process de clé du service Nimbus', genre: 'process', rubriques: ['infra'] },
       { text: 'Le process de livraison au client Nimbus', genre: 'process', rubriques: ['contenu'] },
       { text: 'Le process d’export du banc Nimbus', genre: 'process', rubriques: ['outils'] },
       { text: 'Le process de nettoyage du banc Nimbus', genre: 'process', rubriques: ['outils'] },
     ])
-    const [salary, critical, secret, client, redite, faux] = ids as [string, string, string, string, string, string]
+    const [salary, sensitive, critical, secret, client, redite, faux] = ids as [string, string, string, string, string, string, string]
     const db = env!.db()
+    // Sensibilité posée sur le fait lui-même (texte anodin) : refusé aussi.
+    db.prepare("UPDATE facts SET sensitivity = 'sensitive' WHERE id = ?").run(sensitive)
     db.prepare("UPDATE facts SET sensitivity = 'critical' WHERE id = ?").run(critical)
     db.prepare('UPDATE facts SET fact = ? WHERE id = ?').run('Le process de clé du service Nimbus utilise [secret:generic-token-9]', secret)
     db.prepare("UPDATE facts SET client_org_id = 'client-fictif' WHERE id = ?").run(client)
     db.prepare('UPDATE facts SET superseded = 1, superseded_by = ? WHERE id = ?').run(faux, redite)
     env!.m.triage.setVerdict([faux], 'faux')
     const untriaged = env!.m.storeFact({ instance: env!.instance, content: 'Le process de rangement des rushes' }).id
-    const r = env!.m.shareFacts([salary, critical, secret, client, redite, faux, untriaged], 'org')
+    const r = env!.m.shareFacts([salary, sensitive, critical, secret, client, redite, faux, untriaged], 'org')
     expect(r).toMatchObject({
       shared: 0,
-      refused: { sensible: 1, critical: 1, secret: 1, client: 1, redite: 1, faux: 1, sans_tri: 1, rubrique: 0, genre: 0 },
+      refused: { sensible: 2, critical: 1, secret: 1, client: 1, redite: 1, faux: 1, sans_tri: 1, portee: 0, rubrique: 0, genre: 0 },
     })
+  })
+
+  it('sujet sensible levé à la main : refusé quand même vers l’équipe (la synchro le refuserait)', async () => {
+    const [salary] = await triaged([{ text: 'Le salaire de Zorba passe à 2 100 euros', genre: 'process', rubriques: ['outils'] }])
+    env!.m.triage.correct({ fact_id: salary!, sensible: false })
+    expect(env!.m.shareFacts([salary!], 'org')).toMatchObject({ shared: 0, refused: { sensible: 1 } })
+  })
+
+  it('refuse un fait sur une personne (portée user ou perso, person_id) ; la portée entité passe', async () => {
+    const ids = await triaged([
+      { text: 'Le process de veille du banc Orion', genre: 'process', rubriques: ['outils'] },
+      { text: 'Le process de rangement du banc Orion', genre: 'process', rubriques: ['outils'] },
+      { text: 'Le process d’étalonnage du banc Orion', genre: 'process', rubriques: ['outils'] },
+      { text: 'Le process d’archivage du banc Orion', genre: 'process', rubriques: ['outils'] },
+    ])
+    const [user, perso, person, entite] = ids as [string, string, string, string]
+    env!.m.triage.correct({ fact_id: user, portee: 'user' })
+    env!.m.triage.correct({ fact_id: perso, portee: 'perso' })
+    env!.m.triage.correct({ fact_id: person, portee: 'entite', person_id: 'personne-fictive' })
+    env!.m.triage.correct({ fact_id: entite, portee: 'entite' })
+    const r = env!.m.shareFacts(ids, 'org')
+    expect(r).toMatchObject({ shared: 1, refused: { portee: 3 } })
+    expect(env!.m.scopeFacts(orgScope(env!.m).id).map(f => f.id)).toEqual([entite])
+  })
+
+  it('promotion par filtre `portee: user` vers l’équipe : rien ne part', async () => {
+    env = setupTriage()
+    const a = seedPending(env, 'Le banc Orion se règle en mode nuit')
+    const b = seedPending(env, 'Le banc Orion garde ses presets dans le dossier commun')
+    await env.m.triage.run()
+    env.m.triage.correct({ fact_id: a, genre: 'lecon', rubriques: ['outils'], portee: 'user' })
+    env.m.triage.correct({ fact_id: b, genre: 'savoir', rubriques: ['outils'], portee: 'user' })
+    const r = env.m.triage.promote({ filter: { portee: 'user' }, share: 'org' })
+    expect(r.shared).toBe(0)
+    expect(r.share_refused).toMatchObject({ portee: 2 })
+    expect(env.m.scopeFacts(orgScope(env.m).id)).toEqual([])
+  })
+
+  it('fait de l’espace `user` (personnel) : il faut la portée entité confirmée à la main', async () => {
+    env = setupTriage()
+    const userScope = env.m.registry.getScopeByName('user')!
+    const id = env.m.storeFact({ instance: env.instance, scope: userScope.id, content: 'Le process de veille du banc Orion' }).id
+    await env.m.triage.run()
+    env.m.triage.correct({ fact_id: id, genre: 'process', rubriques: ['outils'] })
+    expect(env.m.shareFacts([id], 'org')).toMatchObject({ shared: 0, refused: { portee: 1 } })
+    env.m.triage.correct({ fact_id: id, portee: 'entite', importance: 3 })
+    // Jamais proposé par le filtre « candidats équipe » : il ne part que désigné, fait par fait.
+    expect(env.m.triage.list({ team: true }).items.map(i => i.fact_id)).not.toContain(id)
+    expect(env.m.shareFacts([id], 'org').shared).toBe(1)
   })
 
   it('le partage vers `user` ne change pas (aucun garde-fou d’équipe, pas de `refused`)', async () => {
@@ -333,9 +385,9 @@ describe("tri : promotion vers l'équipe et filtre « candidats équipe »", () 
     const finance = seedPending(env, 'Le banc de montage suit les achats de disques')
     const noRubric = seedPending(env, 'Le banc de montage se nettoie le vendredi')
     await env.m.triage.run()
-    env.m.triage.correct({ fact_id: good, genre: 'process', rubriques: ['outils'] })
-    env.m.triage.correct({ fact_id: finance, genre: 'process', rubriques: ['outils', 'finance'] })
-    env.m.triage.correct({ fact_id: noRubric, genre: 'savoir', rubriques: [] })
+    env.m.triage.correct({ fact_id: good, genre: 'process', rubriques: ['outils'], portee: 'entite' })
+    env.m.triage.correct({ fact_id: finance, genre: 'process', rubriques: ['outils', 'finance'], portee: 'entite' })
+    env.m.triage.correct({ fact_id: noRubric, genre: 'savoir', rubriques: [], portee: 'entite' })
     return { good, idea, finance, noRubric }
   }
 
@@ -346,6 +398,13 @@ describe("tri : promotion vers l'équipe et filtre « candidats équipe »", () 
     env!.m.triage.correct({ fact_id: good, importance: 1 })
     expect(env!.m.triage.list({ team: true }).items).toEqual([])
     env!.m.triage.correct({ fact_id: good, importance: 3 })
+    // Fait sur une personne (portée user, ou person_id) : jamais proposé.
+    env!.m.triage.correct({ fact_id: good, portee: 'user' })
+    expect(env!.m.triage.list({ team: true }).items).toEqual([])
+    env!.m.triage.correct({ fact_id: good, portee: 'entite', person_id: 'personne-fictive' })
+    expect(env!.m.triage.list({ team: true }).items).toEqual([])
+    env!.m.triage.correct({ fact_id: good, person_id: null })
+    expect(env!.m.triage.list({ team: true }).items.map(i => i.fact_id)).toEqual([good])
     // Déjà dans l'espace d'équipe : plus proposé.
     expect(env!.m.shareFacts([good], 'org').shared).toBe(1)
     expect(env!.m.triage.list({ team: true }).items).toEqual([])

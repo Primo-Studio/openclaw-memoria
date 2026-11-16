@@ -8,8 +8,11 @@
  * Ce qui voyage : seulement les espaces d'ÉQUIPE (`org` par défaut). L'espace
  * `user` du propriétaire, les mémoires privées et la quarantaine ne sont
  * jamais servis ni acceptés (scopes.ts). Le hub contrôle CHAQUE requête d'un
- * pair : espace autorisé pour ce pair, faits du bon espace, jamais `critical`,
- * et un pair ne modifie que les faits venus de sa machine.
+ * pair : espace autorisé pour ce pair, faits du bon espace, et un pair ne
+ * modifie que les faits venus de sa machine. Le contenu est contrôlé à
+ * l'envoi ET à l'arrivée, sur le hub comme sur les Mac reliés : jamais un
+ * fait `critical` ou `sensitive`, en attente de revue, marqué d'un client,
+ * ni un texte qui touche un sujet sensible ou porte un secret (team-text.ts).
  *
  * Aucune valeur de secret en clair sur le réseau (enveloppes GVK). Best-effort :
  * jamais bloquant, jamais dans le chemin recall/store_fact.
@@ -34,6 +37,7 @@ import { applyDelta, contentHash, winner, type ApplyReport, type SyncFact, type 
 import { newNonce, signRequest, verifyRequest, type SigParts } from './peer-auth.js'
 import { SYNC_ALLOWED_TYPES, SYNC_FORBIDDEN_TYPES, effectiveSyncTypes, normalizeSyncTypes, SyncScopeError } from './scopes.js'
 import { ensureSyncSeq, maxSyncSeq, parseSeq } from './seq.js'
+import { teamTextRefusal } from './team-text.js'
 import { openEnvelope, openGvk, sealGvk, sealValue, type Envelope } from './secrets-sync.js'
 
 export interface SyncConfig {
@@ -98,8 +102,14 @@ export interface RefusedCounts {
   scope: number
   /** Fait `critical` : ne voyage jamais. */
   critical: number
+  /** Fait `sensitive`, ou texte qui touche un sujet sensible (paie, impôts, santé…). */
+  sensitive: number
+  /** Texte qui porte un secret (référence au coffre ou valeur en clair). */
+  secret: number
   /** Fait marqué d'un client : ne voyage pas. */
   client: number
+  /** Fait en attente de revue (dormant) ou archivé : la revue est locale, il resterait invisible. */
+  dormant: number
   /** Le pair n'est pas la machine d'origine du fait (ni du fait qu'il remplacerait). */
   not_owner: number
   /** Forme invalide. */
@@ -117,6 +127,8 @@ export interface SyncRunReport {
   pushed: number
   /** Faits refusés par le hub pendant l'envoi (voir le journal du hub pour les motifs). */
   refused: number
+  /** Faits reçus du hub et écartés ici (sensible, secret, dormant, client…). */
+  refused_received: number
   /** Une ligne par espace en échec (message court, sans contenu de souvenir). */
   errors: string[]
 }
@@ -467,8 +479,10 @@ export class SyncEngine {
   /**
    * Faits d'un espace changés après le numéro `since` (pagination par numéro
    * d'ordre local). JAMAIS envoyés : les faits dormants (revue en attente),
-   * `critical`, et ceux marqués d'un client. `originOnly` : seulement les faits
-   * nés sur cette machine (envoi d'un spoke : il ne repousse pas ceux des autres).
+   * `critical` ou `sensitive`, ceux marqués d'un client, et un texte qui
+   * touche un sujet sensible ou porte un secret. `originOnly` : seulement les
+   * faits nés sur cette machine (envoi d'un spoke : il ne repousse pas ceux
+   * des autres). Le curseur avance aussi sur les faits écartés.
    */
   collectDelta(scopeId: string, since: string, opts: { limit?: number; originOnly?: string } = {}): SyncDelta {
     const sinceSeq = parseSeq(since)
@@ -485,7 +499,7 @@ export class SyncEngine {
         `SELECT f.*, s.seq AS sync_seq_no FROM sync_seq s JOIN facts f ON f.id = s.fact_id
          WHERE s.seq > ? AND f.scope_id = ?${opts.originOnly ? ' AND f.origin_machine_id = ?' : ''}
            AND (f.deleted_at IS NOT NULL OR (
-             f.lifecycle_state != 'dormant' AND f.sensitivity != 'critical' AND COALESCE(f.client_org_id, '') = ''
+             f.lifecycle_state = 'active' AND f.sensitivity = 'normal' AND COALESCE(f.client_org_id, '') = ''
            ))
          ORDER BY s.seq ASC LIMIT ?`,
       )
@@ -497,7 +511,7 @@ export class SyncEngine {
     for (const r of page) {
       if (r['deleted_at']) {
         tombstones.push({ id: String(r['id']), deleted_at: String(r['deleted_at']), origin_machine_id: (r['origin_machine_id'] as string) ?? null, origin_rev: Number(r['origin_rev'] ?? 0), updated_at: String(r['updated_at']) })
-      } else {
+      } else if (teamTextRefusal(String(r['fact'] ?? '')) === null) {
         facts.push(toSyncFact(r))
       }
     }
@@ -529,7 +543,7 @@ export class SyncEngine {
     })()
   }
 
-  /** (spoke) Applique ce que le hub envoie : forme contrôlée, espace forcé, jamais `critical`. */
+  /** (spoke) Applique ce que le hub envoie : forme contrôlée, espace forcé, mêmes refus de contenu qu'au hub. */
   applyIncoming(scopeId: string, facts: unknown[], tombstones: unknown[]): IncomingReport {
     return this.applyChecked(scopeId, facts, tombstones, null)
   }
@@ -540,7 +554,7 @@ export class SyncEngine {
   }
 
   private applyChecked(scopeId: string, facts: unknown[], tombstones: unknown[], owner: string | null): IncomingReport {
-    const refused: RefusedCounts = { scope: 0, critical: 0, client: 0, not_owner: 0, invalid: 0 }
+    const refused: RefusedCounts = { scope: 0, critical: 0, sensitive: 0, secret: 0, client: 0, dormant: 0, not_owner: 0, invalid: 0 }
     const store = this.storeFor(scopeId)
     if (!store) return { applied: 0, skipped_lww: 0, deduped: 0, tombstoned: 0, refused, hub_watermark: '0' }
     const okFacts: SyncFact[] = []
@@ -735,24 +749,29 @@ export class SyncEngine {
     return { scopes: opts.scopes.length, facts: totalFacts, secrets: totalSecrets }
   }
 
-  /** (spoke) Tire les nouveautés d'un scope depuis le hub (curseur = numéro d'ordre du hub). */
-  async pull(scopeId: string, fetchImpl?: FetchLike): Promise<{ applied: number }> {
+  /**
+   * (spoke) Tire les nouveautés d'un scope depuis le hub (curseur = numéro
+   * d'ordre du hub). `refused` : faits reçus et écartés ici (comptés, jamais rangés).
+   */
+  async pull(scopeId: string, fetchImpl?: FetchLike): Promise<{ applied: number; refused: number }> {
     const hub = this.hubPeer()
-    if (!hub?.host) return { applied: 0 }
+    if (!hub?.host) return { applied: 0, refused: 0 }
     const f = fetchImpl ?? globalFetch()
     const cur = this.registry.getCursor(hubKey(hub.host), scopeId)
     let applied = 0
+    let refused = 0
     let since = String(parseSeq(cur.watermark))
     for (;;) {
       const delta = await this.signedGet<SyncDelta>(hub.host, `/v1/sync/pull?scope=${encodeURIComponent(scopeId)}&since=${encodeURIComponent(since)}`, f)
       const r = this.applyIncoming(scopeId, delta.facts, delta.tombstones)
       applied += r.applied + r.tombstoned
+      refused += sumRefused(r.refused)
       const advanced = parseSeq(delta.next_cursor) > parseSeq(since)
       since = delta.next_cursor
       this.registry.setCursor(hubKey(hub.host), scopeId, { watermark: since })
       if (!delta.has_more || !advanced) break
     }
-    return { applied }
+    return { applied, refused }
   }
 
   /**
@@ -793,12 +812,14 @@ export class SyncEngine {
    * (pas la config locale) : un espace en échec n'arrête pas les autres.
    */
   async syncAll(fetchImpl?: FetchLike): Promise<SyncRunReport> {
-    const report: SyncRunReport = { pulled: 0, pushed: 0, refused: 0, errors: [] }
+    const report: SyncRunReport = { pulled: 0, pushed: 0, refused: 0, refused_received: 0, errors: [] }
     const hub = this.hubPeer()
     if (hub?.host) {
       for (const scope of this.spokeScopes(hub)) {
         try {
-          report.pulled += (await this.pull(scope.id, fetchImpl)).applied
+          const p = await this.pull(scope.id, fetchImpl)
+          report.pulled += p.applied
+          report.refused_received += p.refused
         } catch (err) {
           report.errors.push(`${scope.type} (réception) : ${describeError(err)}`)
           continue // sans réception à jour, on n'envoie pas sur cet espace
@@ -836,7 +857,7 @@ export class SyncEngine {
     try {
       report = await this.syncAll(fetchImpl)
     } catch (err) {
-      report = { pulled: 0, pushed: 0, refused: 0, errors: [describeError(err)] }
+      report = { pulled: 0, pushed: 0, refused: 0, refused_received: 0, errors: [describeError(err)] }
       this.lastRun = { ...report, at: nowISO(), ok: false }
     }
     const errors = report.errors.join(' ; ')
@@ -847,7 +868,8 @@ export class SyncEngine {
       console.warn('[memoria] synchro automatique rétablie')
       this.lastLoggedError = null
     }
-    if (report.refused > 0) console.warn(`[memoria] synchro : ${report.refused} fait(s) refusé(s) par le hub (faits d'une autre machine, critical ou hors espace)`)
+    if (report.refused > 0) console.warn(`[memoria] synchro : ${report.refused} fait(s) refusé(s) par le hub (faits d'une autre machine, sensibles, secrets ou hors espace)`)
+    if (report.refused_received > 0) console.warn(`[memoria] synchro : ${report.refused_received} fait(s) reçu(s) du hub écarté(s) ici (sensibles, secrets, en revue ou marqués d'un client)`)
     return report
   }
 
@@ -982,7 +1004,7 @@ function parseJsonObject(body: string): Record<string, unknown> | null {
 }
 
 function sumRefused(r: Partial<RefusedCounts>): number {
-  return (r.scope ?? 0) + (r.critical ?? 0) + (r.client ?? 0) + (r.not_owner ?? 0) + (r.invalid ?? 0)
+  return Object.values(r).reduce<number>((n, c) => n + (typeof c === 'number' ? c : 0), 0)
 }
 
 function refusedReason(r: RefusedCounts): string {
@@ -1007,9 +1029,12 @@ const optStr = (v: unknown): string | null => (typeof v === 'string' && v.length
 
 /**
  * Contrôle un fait reçu d'une autre machine : forme, espace (celui de la
- * requête, sinon refus), jamais `critical`, jamais marqué d'un client. Le
- * fait rangé est RECONSTRUIT champ par champ (rien d'inattendu ne passe) :
- * espace forcé, visibilité partagée, empreinte de contenu recalculée.
+ * requête, sinon refus), jamais `critical` ni `sensitive`, jamais marqué d'un
+ * client, jamais en attente de revue, jamais un texte qui touche un sujet
+ * sensible ou porte un secret (refusé, pas masqué : rien n'en est rangé, ni
+ * au coffre). Le fait rangé est RECONSTRUIT champ par champ (rien
+ * d'inattendu ne passe) : espace forcé, visibilité partagée, empreinte de
+ * contenu recalculée.
  */
 function sanitizeIncomingFact(raw: unknown, scopeId: string): { fact: SyncFact } | { reason: keyof RefusedCounts } {
   if (!raw || typeof raw !== 'object') return { reason: 'invalid' }
@@ -1024,9 +1049,14 @@ function sanitizeIncomingFact(raw: unknown, scopeId: string): { fact: SyncFact }
   const sensitivity = str(r['sensitivity']) ?? 'normal'
   if (!SENSITIVITIES.includes(sensitivity)) return { reason: 'invalid' }
   if (sensitivity === 'critical') return { reason: 'critical' }
+  if (sensitivity === 'sensitive') return { reason: 'sensitive' }
   if (optStr(r['client_org_id'])) return { reason: 'client' }
   const lifecycle = str(r['lifecycle_state']) ?? 'active'
   if (!LIFECYCLES.includes(lifecycle)) return { reason: 'invalid' }
+  // La revue est locale : un dormant reçu resterait invisible et jamais revu.
+  if (lifecycle !== 'active') return { reason: 'dormant' }
+  const text = teamTextRefusal(fact)
+  if (text) return { reason: text }
   const rev = Number(r['origin_rev'] ?? 0)
   if (!Number.isSafeInteger(rev) || rev < 0) return { reason: 'invalid' }
   const confidence = Number(r['confidence'] ?? 0.8)

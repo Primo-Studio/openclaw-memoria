@@ -596,7 +596,7 @@ export async function setPolicy(
  * Raisons d'un refus de partage vers l'espace d'équipe (miroir de
  * TEAM_SHARE_REFUSALS, core/triage/types.ts), dans l'ordre où le moteur les teste.
  */
-export const TEAM_SHARE_REFUSALS = ['critical', 'sensible', 'secret', 'client', 'redite', 'sans_tri', 'faux', 'rubrique', 'genre'] as const
+export const TEAM_SHARE_REFUSALS = ['critical', 'sensible', 'secret', 'client', 'redite', 'sans_tri', 'portee', 'faux', 'rubrique', 'genre'] as const
 export type TeamShareRefusal = (typeof TEAM_SHARE_REFUSALS)[number]
 export type TeamShareRefusedCounts = Record<TeamShareRefusal, number>
 

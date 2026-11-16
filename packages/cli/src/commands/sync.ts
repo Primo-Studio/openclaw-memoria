@@ -54,7 +54,7 @@ interface StatusPayload {
   scope_types?: string[]
   peers: StatusPeer[]
   auto?: { armed: boolean; interval_sec: number | null }
-  last_sync?: { at: string; ok: boolean; pulled: number; pushed: number; refused: number; errors: string[] } | null
+  last_sync?: { at: string; ok: boolean; pulled: number; pushed: number; refused: number; refused_received?: number; errors: string[] } | null
 }
 
 export class SyncStatusCommand extends SyncBase {
@@ -84,7 +84,7 @@ export class SyncStatusCommand extends SyncBase {
         out.write(`  synchro automatique : ${s.auto?.armed ? `armée (toutes les ${s.auto.interval_sec ?? '?'} s)` : 'non armée'}\n`)
         const last = s.last_sync
         if (last) {
-          out.write(`  dernière passe : ${last.at} · ${last.ok ? 'ok' : 'en échec'} · ${last.pulled} reçus, ${last.pushed} poussés${last.refused ? `, ${last.refused} refusés par le hub` : ''}\n`)
+          out.write(`  dernière passe : ${last.at} · ${last.ok ? 'ok' : 'en échec'} · ${last.pulled} reçus, ${last.pushed} poussés${last.refused ? `, ${last.refused} refusés par le hub` : ''}${last.refused_received ? `, ${last.refused_received} reçus écartés ici` : ''}\n`)
           for (const e of last.errors) out.write(`    ⚠ ${e}\n`)
         }
       }
@@ -171,7 +171,7 @@ export class SyncNowCommand extends SyncBase {
     try {
       const { client } = await this.daemon()
       const r = await client.syncNow()
-      this.context.stdout.write(`✓ Synchro : ${r.pulled} reçus, ${r.pushed} poussés${r.refused ? `, ${r.refused} refusés par le hub` : ''}.\n`)
+      this.context.stdout.write(`✓ Synchro : ${r.pulled} reçus, ${r.pushed} poussés${r.refused ? `, ${r.refused} refusés par le hub` : ''}${r.refused_received ? `, ${r.refused_received} reçus écartés ici (sensibles, secrets, en revue)` : ''}.\n`)
       for (const e of r.errors ?? []) this.context.stdout.write(`  ⚠ ${e}\n`)
       return r.errors && r.errors.length > 0 ? 1 : 0
     } catch (err) {

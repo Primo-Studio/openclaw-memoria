@@ -9,6 +9,13 @@
  * sert (le hub pour la réception, le Mac lui-même pour son envoi) au moment de
  * l'écriture : un fait appliqué plus tard a toujours un numéro plus grand.
  *
+ * Le numéro ne REDESCEND jamais (AUTOINCREMENT : SQLite garde le plus haut
+ * attribué dans `sqlite_sequence`, même quand sa ligne disparaît). La première
+ * version reprenait `MAX(seq) + 1` après avoir retiré la ligne du fait : une
+ * modification du fait le plus récent retrouvait SON numéro, et le fait écrit
+ * après l'oubli du plus récent reprenait celui de l'oublié. Les pairs, déjà à
+ * ce numéro, ne les recevaient jamais (expiration, correction, fait neuf perdus).
+ *
  * Coût : la table et ses déclencheurs ne sont créés qu'à la demande, par le
  * moteur de synchro, et seulement dans les bases PARTAGÉES qu'il touche
  * (jamais les bases privées des agents, jamais au démarrage). Une seule
@@ -30,7 +37,12 @@ const SEQ_COLUMNS = [
   'origin_machine_id', 'origin_rev', 'content_hash', 'updated_at',
 ] as const
 
-const TRIGGER_AU = 'facts_sync_seq_au'
+/** Déclencheurs de cette version (le nom change avec le schéma : une base d'avant est reprise). */
+const TRIGGER_AI = 'facts_sync_seq2_ai'
+const TRIGGER_AU = 'facts_sync_seq2_au'
+const TRIGGER_AD = 'facts_sync_seq2_ad'
+/** Déclencheurs de la première version (numéro réutilisable), retirés à la reprise. */
+const OLD_TRIGGERS = ['facts_sync_seq_ai', 'facts_sync_seq_au', 'facts_sync_seq_ad']
 
 /** Bases déjà prêtes dans ce processus (une vérification de schéma par connexion). */
 const ready = new WeakSet<Database>()
@@ -45,29 +57,44 @@ export function ensureSyncSeq(db: Database): void {
     // DELETE puis INSERT, sans clause de conflit : dans un déclencheur, la
     // politique de conflit de l'instruction extérieure (INSERT OR IGNORE du
     // partage, par exemple) remplacerait celle d'un « INSERT OR REPLACE ».
+    // Le numéro vient d'AUTOINCREMENT : jamais celui d'une ligne retirée.
     const bump = `
         DELETE FROM sync_seq WHERE fact_id = new.id;
-        INSERT INTO sync_seq (fact_id, seq) VALUES (new.id, (SELECT COALESCE(MAX(seq), 0) + 1 FROM sync_seq));`
+        INSERT INTO sync_seq (fact_id) VALUES (new.id);`
     db.transaction(() => {
+      // Base d'une version d'avant : ses numéros sont gardés (les curseurs des
+      // pairs y renvoient), seuls la table et les déclencheurs changent.
+      for (const t of OLD_TRIGGERS) db.exec(`DROP TRIGGER IF EXISTS ${t}`)
+      const old = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'sync_seq'").get() as { sql: string } | undefined
+      if (old && !/AUTOINCREMENT/i.test(old.sql)) {
+        db.exec(`
+          DROP INDEX IF EXISTS idx_sync_seq_seq;
+          ALTER TABLE sync_seq RENAME TO sync_seq_v1;
+        `)
+      }
       db.exec(`
         CREATE TABLE IF NOT EXISTS sync_seq (
-          fact_id TEXT PRIMARY KEY,
-          seq     INTEGER NOT NULL
+          seq     INTEGER PRIMARY KEY AUTOINCREMENT,
+          fact_id TEXT NOT NULL UNIQUE
         );
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_seq_seq ON sync_seq(seq);
       `)
-      // Amorçage : les faits déjà là reçoivent un numéro, dans l'ordre de leur date.
+      if (old && !/AUTOINCREMENT/i.test(old.sql)) {
+        db.exec(`
+          INSERT INTO sync_seq (seq, fact_id) SELECT seq, fact_id FROM sync_seq_v1 ORDER BY seq;
+          DROP TABLE sync_seq_v1;
+        `)
+      }
+      // Amorçage : les faits sans numéro en reçoivent un, dans l'ordre de leur date.
       db.exec(`
-        INSERT OR IGNORE INTO sync_seq (fact_id, seq)
-        SELECT id, (SELECT COALESCE(MAX(seq), 0) FROM sync_seq) + ROW_NUMBER() OVER (ORDER BY updated_at, rowid)
-        FROM facts
+        INSERT OR IGNORE INTO sync_seq (fact_id)
+        SELECT id FROM facts WHERE id NOT IN (SELECT fact_id FROM sync_seq) ORDER BY updated_at, rowid
       `)
       db.exec(`
-        CREATE TRIGGER IF NOT EXISTS facts_sync_seq_ai AFTER INSERT ON facts BEGIN${bump}
+        CREATE TRIGGER IF NOT EXISTS ${TRIGGER_AI} AFTER INSERT ON facts BEGIN${bump}
         END;
         CREATE TRIGGER IF NOT EXISTS ${TRIGGER_AU} AFTER UPDATE OF ${cols} ON facts BEGIN${bump}
         END;
-        CREATE TRIGGER IF NOT EXISTS facts_sync_seq_ad AFTER DELETE ON facts BEGIN
+        CREATE TRIGGER IF NOT EXISTS ${TRIGGER_AD} AFTER DELETE ON facts BEGIN
           DELETE FROM sync_seq WHERE fact_id = old.id;
         END;
       `)
@@ -76,9 +103,12 @@ export function ensureSyncSeq(db: Database): void {
   ready.add(db)
 }
 
-/** Numéro le plus haut attribué dans cette base (0 si aucun). */
+/**
+ * Numéro le plus haut JAMAIS attribué dans cette base (0 si aucun) : celui
+ * d'une ligne retirée compte, comme pour le prochain numéro.
+ */
 export function maxSyncSeq(db: Database): number {
-  const r = db.prepare('SELECT COALESCE(MAX(seq), 0) AS m FROM sync_seq').get() as { m: number }
+  const r = db.prepare("SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name = 'sync_seq'), (SELECT MAX(seq) FROM sync_seq), 0) AS m").get() as { m: number }
   return Number(r.m)
 }
 
