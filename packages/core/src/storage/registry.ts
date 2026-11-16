@@ -10,6 +10,7 @@ import { registryMigrations } from './registry-schema.js'
 import type { LlmCall } from '../llm/usage-meter.js'
 import type { LlmUsageAggregate } from '../types.js'
 import { fromJsonArray, newId, newPairingCode, newToken, nowISO, sha256Hex, toJson } from '../util.js'
+import { SYNC_FORBIDDEN_TYPES, replaceInJsonList, repointScopeColumns } from '../sync/scopes.js'
 import type {
   Assistant,
   AssistantInstance,
@@ -47,6 +48,15 @@ function rowToPeer(r: Record<string, unknown>): SyncPeer {
 }
 
 const PAIRING_TTL_MS = 10 * 60 * 1000 // 10 minutes
+
+/** Marque d'un changement d'identifiant d'espace en cours (contenu déplacé, registre pas encore). */
+export const SCOPE_MOVE_KEY = 'sync.scope_move'
+
+/**
+ * Déplace le contenu d'un espace partagé (sa base : facts.scope_id, etc.)
+ * vers un nouvel identifiant, dans une transaction de cette base. Idempotent.
+ */
+export type ScopeContentMover = (from: MemoryScope, toId: string) => void
 
 /**
  * Normalise un identifiant pour le matching d'interlocuteur :
@@ -104,7 +114,12 @@ export class RegistryStore {
       }
       this.ensureScope('user', 'user', { owner_user_id: user.id })
       this.ensureScope('legacy_to_review', 'legacy_to_review', {})
-      this.ensureScope('org', `org:${org.id}`, { org_id: org.id })
+      // L'espace de l'entreprise se retrouve par son TYPE et son organisation,
+      // jamais par son nom : repris du hub (synchro), il garde son organisation
+      // locale mais porte l'identifiant du hub. Le chercher par nom en recréait
+      // un second à chaque démarrage, où les faits écrits se perdaient.
+      const orgScope = this.db.prepare("SELECT id FROM memory_scopes WHERE type = 'org' AND org_id = ? LIMIT 1").get(org.id)
+      if (!orgScope) this.ensureScope('org', `org:${org.id}`, { org_id: org.id })
       return { user, ownCompany: org }
     })
     return tx()
@@ -139,26 +154,116 @@ export class RegistryStore {
 
   /**
    * Adopte un scope d'un PAIR (synchro) : aligne l'identité de scope entre
-   * machines. Pour les scopes SINGLETON (user/org/legacy), repointe le scope
-   * local (vide sur une machine neuve) vers l'id du hub ; sinon crée la ligne.
-   * Sans ça, chaque machine a des ids de scope différents → la synchro casse.
+   * machines, sinon chaque Mac a des ids différents et la synchro casse.
+   *
+   * - `user`, `private`, `legacy_to_review` : JAMAIS repris d'un pair (null).
+   *   L'espace personnel d'un Mac d'équipe reste le sien.
+   * - `org` (un seul par machine) : l'espace de l'entreprise locale prend
+   *   l'identifiant du hub. Tout ce qui y renvoie le suit, sans perte
+   *   (voir `reIdScope`) : le Mac peut déjà avoir des agents et des souvenirs.
+   *   Son nom et son organisation locale restent : sa base ne bouge pas.
+   * - autres (projet, sujet) : ligne créée sous l'identifiant du hub.
    */
-  adoptScope(def: { id: string; type: ScopeKind; name: string }): MemoryScope {
+  adoptScope(def: { id: string; type: ScopeKind; name: string }, opts: { moveContent?: ScopeContentMover } = {}): MemoryScope | null {
+    if (SYNC_FORBIDDEN_TYPES.includes(def.type)) return null
     const byId = this.getScope(def.id)
-    if (byId) return byId
-    const SINGLETON: ScopeKind[] = ['user', 'org', 'legacy_to_review']
-    if (SINGLETON.includes(def.type)) {
-      const local = this.db.prepare('SELECT id FROM memory_scopes WHERE type = ? LIMIT 1').get(def.type) as { id: string } | undefined
-      if (local) {
-        // machine neuve : repointer l'id local vers celui du hub (un seul scope de ce type)
-        this.db.prepare('UPDATE memory_scopes SET id = ?, name = ? WHERE id = ?').run(def.id, def.name, local.id)
-        return this.getScope(def.id)!
-      }
+    if (byId) return byId.type === def.type ? byId : null
+    if (def.type === 'org') {
+      const local = this.ownOrgScope() ?? ((this.db.prepare("SELECT * FROM memory_scopes WHERE type = 'org' ORDER BY created_at LIMIT 1").get() as MemoryScope | undefined) ?? null)
+      if (local) return this.reIdScope(local, def.id, opts.moveContent)
     }
     this.db
       .prepare('INSERT OR IGNORE INTO memory_scopes (id, type, name, owner_user_id, org_id, client_org_id, project_id, created_at) VALUES (?, ?, ?, NULL, NULL, NULL, NULL, ?)')
       .run(def.id, def.type, def.name, nowISO())
-    return this.getScope(def.id)!
+    return this.getScope(def.id)
+  }
+
+  /** Espace `org` de l'entreprise locale, retrouvé par type + organisation (jamais par nom). */
+  ownOrgScope(): MemoryScope | null {
+    const own = this.ownCompany()
+    if (!own) return null
+    return (
+      (this.db.prepare("SELECT * FROM memory_scopes WHERE type = 'org' AND org_id = ? ORDER BY created_at LIMIT 1").get(own.id) as
+        | MemoryScope
+        | undefined) ?? null
+    )
+  }
+
+  /**
+   * Change l'identifiant d'un espace en emmenant TOUT ce qui y renvoie.
+   *
+   * Registre, en UNE transaction : copie de la ligne sous le nouvel id, puis
+   * chaque colonne `scope_id`/`*_scope_id` (politiques des agents, registre
+   * des bases, secrets, enveloppes, curseurs…), puis les listes JSON
+   * (`allowed_scopes`, `default_scopes`), puis suppression de l'ancienne
+   * ligne. Copier avant de supprimer : les clés étrangères n'ont pas de
+   * cascade à la mise à jour, et la cascade à la SUPPRESSION effacerait les
+   * politiques. Le journal d'audit n'est pas réécrit (historique) : une ligne
+   * y note le changement.
+   *
+   * Contenu (facts.scope_id…, dans la base partagée) : un autre fichier, donc
+   * une autre transaction, faite AVANT celle du registre. Une marque posée au
+   * registre l'encadre : si la transaction du registre échoue, le contenu est
+   * remis sur l'ancien id ; après un arrêt brutal entre les deux,
+   * `recoverScopeMove` fait de même au join suivant.
+   */
+  private reIdScope(local: MemoryScope, newId: string, moveContent?: ScopeContentMover): MemoryScope {
+    // La base de l'espace org est rangée par organisation : sans elle, son
+    // chemin dépendrait de l'id et le contenu serait laissé derrière.
+    if (local.type === 'org' && !local.org_id) throw new Error('espace org sans organisation : reprise de l’identité du hub impossible sans risque de perte')
+    this.setSetting(SCOPE_MOVE_KEY, JSON.stringify({ from: local.id, to: newId, at: nowISO() }))
+    try {
+      moveContent?.(local, newId)
+    } catch (err) {
+      // la transaction du contenu a été annulée : rien n'a bougé
+      this.deleteSetting(SCOPE_MOVE_KEY)
+      throw err
+    }
+    try {
+      this.db.transaction(() => {
+        this.db
+          .prepare(
+            `INSERT INTO memory_scopes (id, type, name, owner_user_id, org_id, client_org_id, project_id, created_at)
+             SELECT ?, type, name, owner_user_id, org_id, client_org_id, project_id, created_at FROM memory_scopes WHERE id = ?`,
+          )
+          .run(newId, local.id)
+        const moved = repointScopeColumns(this.db, local.id, newId, ['memory_scopes', 'audit_log'])
+        for (const [table, col] of [['sync_peers', 'allowed_scopes'], ['assistants', 'default_scopes']] as const) {
+          const rows = this.db.prepare(`SELECT id, ${col} AS v FROM ${table} WHERE instr(${col}, ?) > 0`).all(local.id) as Array<{ id: string; v: string }>
+          for (const r of rows) {
+            const next = replaceInJsonList(r.v, local.id, newId)
+            if (next) this.db.prepare(`UPDATE ${table} SET ${col} = ? WHERE id = ?`).run(next, r.id)
+          }
+        }
+        this.db.prepare('DELETE FROM memory_scopes WHERE id = ?').run(local.id)
+        this.db.prepare('DELETE FROM settings WHERE key = ?').run(SCOPE_MOVE_KEY)
+        this.audit({ actor_type: 'system', actor_id: 'sync', action: 'sync_scope_adopted', target_id_hash: sha256Hex(newId), scope_id: newId, reason: `from=${local.id};rows=${moved}` })
+      })()
+    } catch (err) {
+      try {
+        moveContent?.({ ...local, id: newId }, local.id)
+      } finally {
+        this.deleteSetting(SCOPE_MOVE_KEY)
+      }
+      throw err
+    }
+    return this.getScope(newId)!
+  }
+
+  /**
+   * Après un arrêt brutal entre le déplacement du contenu et celui du
+   * registre : le registre a gardé l'ancien id, on y remet le contenu.
+   */
+  recoverScopeMove(moveContent?: ScopeContentMover): void {
+    const raw = this.getSetting(SCOPE_MOVE_KEY)
+    if (!raw) return
+    try {
+      const m = JSON.parse(raw) as { from?: string; to?: string }
+      const scope = m.from ? this.getScope(m.from) : null
+      if (scope && m.to && !this.getScope(m.to)) moveContent?.({ ...scope, id: m.to }, scope.id)
+    } finally {
+      this.deleteSetting(SCOPE_MOVE_KEY)
+    }
   }
 
   createProject(name: string, ownerOrgId: string, clientOrgId?: string | null): Project {
@@ -583,7 +688,26 @@ export class RegistryStore {
       .run(key, value, nowISO())
   }
 
+  deleteSetting(key: string): void {
+    this.db.prepare('DELETE FROM settings WHERE key = ?').run(key)
+  }
+
   // ------------------------------------------------------------------ synchro (pairs, nonces, curseurs)
+
+  /** Retire un pair (join raté : le Mac redevient comme avant). */
+  deletePeer(machineId: string): void {
+    this.db.prepare('DELETE FROM sync_peers WHERE machine_id = ?').run(machineId)
+  }
+
+  /** Rétablit un pair coupé le temps d'un join qui a échoué. */
+  restorePeer(machineId: string): void {
+    this.db.prepare('UPDATE sync_peers SET revoked_at = NULL WHERE machine_id = ?').run(machineId)
+  }
+
+  /** Retire les curseurs d'un pair (join raté). */
+  deleteCursors(peerMachineId: string): void {
+    this.db.prepare('DELETE FROM sync_cursor WHERE peer_machine_id = ?').run(peerMachineId)
+  }
 
   addPeer(input: {
     machine_id: string

@@ -1,21 +1,39 @@
 /**
  * SyncEngine — synchro inter-machines hub-and-spoke (SYNC-INTER-MACHINES.md).
  *
- * HUB (Koda/Mac Studio) : détient les scopes partagés canoniques, sert
- * `/v1/sync/*` sur le LAN derrière peer_token + HMAC. SPOKE (Luna/iMac, Claude
- * Code) : copie locale complète, tire (pull) et pousse (push) vers le hub.
+ * HUB (le Mac toujours allumé) : détient les espaces d'équipe canoniques, sert
+ * `/v1/sync/*` sur le réseau local derrière peer_token + HMAC. SPOKE (Mac de
+ * l'équipe) : copie locale, tire (pull) et pousse (push) vers le hub.
+ *
+ * Ce qui voyage : seulement les espaces d'ÉQUIPE (`org` par défaut). L'espace
+ * `user` du propriétaire, les mémoires privées et la quarantaine ne sont
+ * jamais servis ni acceptés (scopes.ts). Le hub contrôle CHAQUE requête d'un
+ * pair : espace autorisé pour ce pair, faits du bon espace, jamais `critical`,
+ * et un pair ne modifie que les faits venus de sa machine.
  *
  * Aucune valeur de secret en clair sur le réseau (enveloppes GVK). Best-effort :
  * jamais bloquant, jamais dans le chemin recall/store_fact.
  */
 import type { ContentStore } from '../storage/content.js'
-import type { RegistryStore } from '../storage/registry.js'
+import { SCOPE_MOVE_KEY, type RegistryStore, type ScopeContentMover } from '../storage/registry.js'
 import type { SecretProvider } from '../secrets/types.js'
 import type { MemoryScope, SyncPeer } from '../types.js'
 import { newToken, nowISO, sha256Hex } from '../util.js'
-import { clusterPairingKey, groupVaultKey, setClusterPairingKey, setGroupVaultKey } from '../secrets/index.js'
-import { applyDelta, type ApplyReport, type SyncFact, type Tombstone } from './merge.js'
+import {
+  clusterPairingKey,
+  groupVaultKey,
+  restoreGroupKeys,
+  setClusterPairingKey,
+  setGroupVaultKey,
+  snapshotGroupKeys,
+  type GroupKeysSnapshot,
+} from '../secrets/index.js'
+import { reserveRevs } from './clock.js'
+import { hubAddressesFor } from './lan.js'
+import { applyDelta, contentHash, winner, type ApplyReport, type SyncFact, type Tombstone } from './merge.js'
 import { newNonce, signRequest, verifyRequest, type SigParts } from './peer-auth.js'
+import { SYNC_ALLOWED_TYPES, SYNC_FORBIDDEN_TYPES, effectiveSyncTypes, normalizeSyncTypes, SyncScopeError } from './scopes.js'
+import { ensureSyncSeq, maxSyncSeq, parseSeq } from './seq.js'
 import { openEnvelope, openGvk, sealGvk, sealValue, type Envelope } from './secrets-sync.js'
 
 export interface SyncConfig {
@@ -35,63 +53,182 @@ export interface SyncDeps {
   registry: RegistryStore
   secrets: SecretProvider
   machineId: string
-  config: SyncConfig
+  /** Config [sync] COURANTE, relue à chaque usage : join et leave la remplacent. */
+  config: () => SyncConfig
   sharedStore: (scopeId: string) => ContentStore | null
   listSyncableScopes: (whitelist: readonly string[]) => MemoryScope[]
   persistConfig: () => void
   setSyncConfig: (patch: Record<string, unknown>) => void
+  /** Remet la config [sync] telle qu'elle était (join raté). Absent : fusion avec setSyncConfig. */
+  replaceSyncConfig?: (config: SyncConfig | undefined) => void
+  /** Déplace le contenu d'un espace partagé vers un nouvel identifiant (reprise de l'identité du hub). */
+  moveScopeContent?: ScopeContentMover
 }
 
-const DEFAULT_SCOPES = ['user', 'org', 'client', 'project', 'shared_topic'] as const
 const INVITE_TTL_MS = 10 * 60_000
-const PAGE = 500
+/** Délai laissé au Mac invité pour confirmer son appairage (bootstrap compris). */
+const PAIRING_CONFIRM_TTL_MS = 15 * 60_000
+/** Codes faux tolérés avant d'annuler l'invitation (le code fait ~40 bits). */
+const MAX_PAIRING_ATTEMPTS = 5
+/**
+ * Faits par page (lecture et envoi). Mesuré sur données fictives : appliquer
+ * 500 faits bloque 100 à 130 ms ; 250 garde la marge de la règle n°27 sur un
+ * Mac plus lent (le réseau rend la main entre deux pages).
+ */
+const PAGE = 250
+/** Faits sans provenance marqués par passe (borne de temps, règle n°27). */
+const STAMP_BATCH = 500
+const PENDING_INVITE_KEY = 'sync.pending_invite'
+const PENDING_PAIRING_PREFIX = 'sync.pairing_pending.'
+/** Délai d'un appel d'adieu au hub (abandon, départ) : il ne doit jamais bloquer. */
+const FAREWELL_TIMEOUT_MS = 5_000
 
 export interface SyncDelta {
   scope_id: string
   facts: SyncFact[]
   tombstones: Tombstone[]
+  /** Numéro d'ordre du dernier fait parcouru, à renvoyer comme `since`. */
   next_cursor: string
   has_more: boolean
 }
 
+/** Faits refusés à l'arrivée, par motif (comptes seulement). */
+export interface RefusedCounts {
+  /** Le fait déclare un autre espace que celui de la requête. */
+  scope: number
+  /** Fait `critical` : ne voyage jamais. */
+  critical: number
+  /** Fait marqué d'un client : ne voyage pas. */
+  client: number
+  /** Le pair n'est pas la machine d'origine du fait (ni du fait qu'il remplacerait). */
+  not_owner: number
+  /** Forme invalide. */
+  invalid: number
+}
+
+export interface IncomingReport extends ApplyReport {
+  refused: RefusedCounts
+  /** Plus haut numéro d'ordre de l'espace après application. */
+  hub_watermark: string
+}
+
+export interface SyncRunReport {
+  pulled: number
+  pushed: number
+  /** Faits refusés par le hub pendant l'envoi (voir le journal du hub pour les motifs). */
+  refused: number
+  /** Une ligne par espace en échec (message court, sans contenu de souvenir). */
+  errors: string[]
+}
+
+export interface SyncRunStatus extends SyncRunReport {
+  at: string
+  ok: boolean
+}
+
+/** Pair vu par l'écran et `sync status` : espaces autorisés lisibles + appairage en cours. */
+export interface SyncPeerView extends SyncPeer {
+  pending: boolean
+  allowed: Array<{ id: string; type: string | null; name: string | null }>
+}
+
+/** Requête HTTP reçue sur le port LAN (le daemon la décode, le moteur décide). */
+export interface SyncHttpRequest {
+  method: string
+  /** Chemin + requête, exactement ce qui a été signé. */
+  pathWithQuery: string
+  body: string
+  bearer?: string | null
+  sig?: string
+  ts?: string
+  nonce?: string
+  /** Adresse de l'appelant (enregistrée comme hôte du pair à l'appairage). */
+  remoteHost?: string
+}
+
+export interface SyncHttpResponse {
+  status: number
+  body: unknown
+}
+
+interface PendingInvite {
+  code_hash: string
+  expires_at: string
+  display_name: string
+  scopes: string[]
+  /** Machine qui a présenté le bon code : elle seule peut le représenter (relance d'un join raté). */
+  claimed_by: string | null
+  attempts: number
+}
+
 export class SyncEngine {
+  private lastRun: SyncRunStatus | null = null
+  private lastLoggedError: string | null = null
+
   constructor(private readonly deps: SyncDeps) {}
 
   private get registry(): RegistryStore {
     return this.deps.registry
   }
 
+  private get config(): SyncConfig {
+    return this.deps.config()
+  }
+
   get role(): 'hub' | 'spoke' {
-    return this.deps.config.role ?? 'spoke'
+    return this.config.role ?? 'spoke'
   }
 
   get machineId(): string {
     return this.deps.machineId
   }
 
-  private scopeWhitelist(): readonly string[] {
-    return this.deps.config.scopes ?? DEFAULT_SCOPES
+  /** Types d'espaces que cette machine synchronise (liste blanche sans types interdits ; défaut `org`). */
+  syncTypes(): string[] {
+    return effectiveSyncTypes(this.config.scopes)
   }
 
-  /** Scopes synchronisables locaux (jamais private/legacy). */
+  /** Espaces synchronisables locaux (jamais user, private ni la quarantaine). */
   syncScopes(): MemoryScope[] {
-    return this.deps.listSyncableScopes(this.scopeWhitelist())
+    return this.deps.listSyncableScopes(this.syncTypes())
   }
 
-  // ============================================================ HUB : pairing & auth
+  /** Dernière passe de synchro (automatique ou « sync now ») : quand, combien, quelles erreurs. */
+  lastRunStatus(): SyncRunStatus | null {
+    return this.lastRun
+  }
 
-  /** (hub) Génère une invitation one-shot (code + adresse LAN). */
-  invite(displayName?: string): { code: string; expires_at: string; hub_lan: string | null } {
+  // ============================================================ HUB : appairage & auth
+
+  /**
+   * (hub) Génère une invitation one-shot : code + adresse du hub joignable
+   * depuis un autre Mac + espaces que ce Mac recevra (défaut : `org`).
+   */
+  invite(
+    displayName?: string,
+    scopes?: readonly string[] | string | null,
+  ): { code: string; expires_at: string; hub_lan: string | null; hub_alternatives: string[]; scopes: string[] } {
+    if (this.role !== 'hub') throw new SyncScopeError('cette machine n’est pas le hub : lance d’abord « memoria sync init-hub »')
+    const hubTypes = this.syncTypes()
+    const types = normalizeSyncTypes(scopes)
+    const outside = types.filter(t => !hubTypes.includes(t))
+    if (outside.length > 0) {
+      throw new SyncScopeError(`ce hub ne synchronise pas ${outside.join(', ')} (espaces du hub : ${hubTypes.join(', ')}) — relance « memoria sync init-hub --scopes … »`)
+    }
+    this.expireStalePairings()
     const code = `${rand4()}-${rand4()}`
     const expires_at = new Date(Date.now() + INVITE_TTL_MS).toISOString()
-    this.registry.setSetting(
-      'sync.pending_invite',
-      JSON.stringify({ code_hash: sha256Hex(code), expires_at, display_name: displayName ?? 'machine' }),
-    )
-    return { code, expires_at, hub_lan: this.deps.config.listen_lan ?? null }
+    const invite: PendingInvite = { code_hash: sha256Hex(code), expires_at, display_name: displayName ?? 'machine', scopes: types, claimed_by: null, attempts: 0 }
+    this.registry.setSetting(PENDING_INVITE_KEY, JSON.stringify(invite))
+    const addr = hubAddressesFor(this.config.listen_lan)
+    return { code, expires_at, hub_lan: addr.primary, hub_alternatives: addr.alternatives, scopes: types }
   }
 
-  /** (hub) Le spoke présente le code → on crée le pair + on renvoie ses clés. */
+  /**
+   * (hub) Le spoke présente le code → on crée le pair (en attente de
+   * confirmation) + on renvoie ses clés et SES espaces. Le même Mac peut
+   * représenter le même code tant qu'il est valable : un join raté se relance.
+   */
   completePairing(input: { code: string; machine_id: string; display_name?: string; host?: string }): {
     peer_token: string
     cpk: string
@@ -99,21 +236,45 @@ export class SyncEngine {
     hub_machine_id: string
     scopes: Array<{ id: string; type: string; name: string }>
   } {
-    const raw = this.registry.getSetting('sync.pending_invite')
+    const raw = this.registry.getSetting(PENDING_INVITE_KEY)
     if (!raw) throw new Error('aucune invitation de synchro en attente')
-    const inv = JSON.parse(raw) as { code_hash: string; expires_at: string; display_name: string }
+    const inv = parseInvite(raw)
+    if (!inv) {
+      this.registry.deleteSetting(PENDING_INVITE_KEY)
+      throw new Error('aucune invitation de synchro en attente')
+    }
     if (Date.parse(inv.expires_at) < Date.now()) {
-      this.registry.setSetting('sync.pending_invite', '')
+      this.registry.deleteSetting(PENDING_INVITE_KEY)
       throw new Error('invitation de synchro expirée')
     }
-    if (sha256Hex(input.code) !== inv.code_hash) throw new Error('code de synchro invalide')
+    if (sha256Hex(input.code) !== inv.code_hash) {
+      // Essais limités : au-delà, l'invitation est annulée (le hub en refera une).
+      const attempts = inv.attempts + 1
+      if (attempts >= MAX_PAIRING_ATTEMPTS) {
+        this.registry.deleteSetting(PENDING_INVITE_KEY)
+        this.registry.audit({ actor_type: 'system', actor_id: 'sync', action: 'sync_invite_cancelled', target_id_hash: null, scope_id: null, reason: `attempts=${attempts}` })
+      } else {
+        this.registry.setSetting(PENDING_INVITE_KEY, JSON.stringify({ ...inv, attempts }))
+      }
+      throw new Error('code de synchro invalide')
+    }
+    const machineId = String(input.machine_id ?? '').trim()
+    if (!machineId) throw new Error('identifiant de machine manquant')
+    if (machineId === this.machineId) throw new Error('une machine ne peut pas se relier à elle-même')
+    if (inv.claimed_by && inv.claimed_by !== machineId) throw new Error('invitation déjà utilisée par une autre machine')
+
+    // Espaces de CE pair : ceux de l'invitation, encore synchronisés par le hub.
+    const hubTypes = this.syncTypes()
+    const types = inv.scopes.filter(t => hubTypes.includes(t))
+    const scopes = this.syncScopes()
+      .filter(s => types.includes(s.type))
+      .map(s => ({ id: s.id, type: s.type, name: s.name }))
 
     const gvk = groupVaultKey(this.deps.secrets)
     const cpk = clusterPairingKey(this.deps.secrets)
     const peerToken = newToken()
-    const scopes = this.syncScopes().map(s => ({ id: s.id, type: s.type, name: s.name }))
     this.registry.addPeer({
-      machine_id: input.machine_id,
+      machine_id: machineId,
       display_name: input.display_name ?? inv.display_name,
       role: 'spoke',
       host: input.host ?? null,
@@ -121,8 +282,10 @@ export class SyncEngine {
       cpk_location: this.deps.secrets.locationFor('__cluster_pairing_key'),
       allowed_scopes: scopes.map(s => s.id),
     })
-    this.registry.setSetting('sync.pending_invite', '') // one-shot consommé
-    this.registry.audit({ actor_type: 'system', actor_id: 'sync', action: 'sync_peer_paired', target_id_hash: sha256Hex(input.machine_id), scope_id: null, reason: null })
+    // Le code reste réservé à CE Mac jusqu'à sa confirmation (ou l'expiration).
+    this.registry.setSetting(PENDING_INVITE_KEY, JSON.stringify({ ...inv, claimed_by: machineId }))
+    this.registry.setSetting(PENDING_PAIRING_PREFIX + machineId, new Date(Date.now() + PAIRING_CONFIRM_TTL_MS).toISOString())
+    this.registry.audit({ actor_type: 'system', actor_id: 'sync', action: 'sync_peer_paired', target_id_hash: sha256Hex(machineId), scope_id: null, reason: `scopes=${types.join(',')}` })
     return {
       peer_token: peerToken,
       cpk: cpk.toString('hex'),
@@ -132,12 +295,49 @@ export class SyncEngine {
     }
   }
 
+  /** (hub) Le Mac invité a tout reçu : appairage définitif, code consommé. */
+  confirmPairing(peer: SyncPeer): void {
+    this.registry.deleteSetting(PENDING_PAIRING_PREFIX + peer.machine_id)
+    const inv = parseInvite(this.registry.getSetting(PENDING_INVITE_KEY))
+    if (inv?.claimed_by === peer.machine_id) this.registry.deleteSetting(PENDING_INVITE_KEY)
+    this.registry.audit({ actor_type: 'system', actor_id: 'sync', action: 'sync_peer_confirmed', target_id_hash: sha256Hex(peer.machine_id), scope_id: null, reason: null })
+  }
+
+  /** (hub) Le Mac invité a échoué ou s'en va : pair coupé, invitation de nouveau libre pour lui. */
+  dropPeer(peer: SyncPeer, reason: 'abort' | 'leave'): void {
+    this.registry.revokePeer(peer.machine_id)
+    this.registry.deleteSetting(PENDING_PAIRING_PREFIX + peer.machine_id)
+    const inv = parseInvite(this.registry.getSetting(PENDING_INVITE_KEY))
+    if (inv?.claimed_by === peer.machine_id) this.registry.setSetting(PENDING_INVITE_KEY, JSON.stringify({ ...inv, claimed_by: null }))
+    this.registry.audit({ actor_type: 'system', actor_id: 'sync', action: reason === 'leave' ? 'sync_peer_left' : 'sync_peer_pairing_aborted', target_id_hash: sha256Hex(peer.machine_id), scope_id: null, reason: null })
+  }
+
+  /** (hub) Un appairage jamais confirmé dans le délai est coupé : pas de pair à moitié actif. */
+  expireStalePairings(): void {
+    const rows = this.registry.db
+      .prepare('SELECT key, value FROM settings WHERE key LIKE ?')
+      .all(`${PENDING_PAIRING_PREFIX}%`) as Array<{ key: string; value: string }>
+    const now = Date.now()
+    for (const r of rows) {
+      if (!(Date.parse(r.value) < now)) continue
+      const machineId = r.key.slice(PENDING_PAIRING_PREFIX.length)
+      this.registry.revokePeer(machineId)
+      this.registry.deleteSetting(r.key)
+      this.registry.audit({ actor_type: 'system', actor_id: 'sync', action: 'sync_peer_pairing_expired', target_id_hash: sha256Hex(machineId), scope_id: null, reason: null })
+    }
+  }
+
+  private isPendingPairing(machineId: string): boolean {
+    return this.registry.getSetting(PENDING_PAIRING_PREFIX + machineId) !== null
+  }
+
   /**
    * (hub) Authentifie une requête `/v1/sync/*` : peer_token + HMAC + anti-rejeu.
    * Lève une erreur explicite si refusée. Renvoie le pair.
    */
   authenticate(peerToken: string | undefined, sig: string | undefined, parts: SigParts): SyncPeer {
     if (!peerToken) throw new SyncAuthError('peer_token requis')
+    this.expireStalePairings()
     const peer = this.registry.verifyPeerToken(peerToken)
     if (!peer) throw new SyncAuthError('peer inconnu ou révoqué')
     if (!sig) throw new SyncAuthError('signature requise')
@@ -148,17 +348,148 @@ export class SyncEngine {
     return peer
   }
 
-  // ============================================================ HUB : delta & snapshot
+  /**
+   * (hub) Contrôle d'accès PAR PAIR, à chaque requête : l'espace existe, son
+   * type n'est pas interdit, le hub le synchronise encore (liste blanche
+   * actuelle, pas celle du jour de l'appairage), et il est dans les espaces
+   * autorisés de ce pair. Même réponse dans tous les cas : un pair n'apprend
+   * pas si l'espace existe.
+   */
+  authorizeScope(peer: SyncPeer, scopeId: string | null | undefined): MemoryScope {
+    const scope = scopeId ? this.registry.getScope(scopeId) : null
+    const ok =
+      !!scope &&
+      !SYNC_FORBIDDEN_TYPES.includes(scope.type) &&
+      this.syncTypes().includes(scope.type) &&
+      peer.allowed_scopes.includes(scope.id)
+    if (!ok) throw new SyncForbiddenError('espace non autorisé pour ce Mac')
+    return scope
+  }
 
-  /** (hub) Faits d'un scope modifiés après `since` (pagination par updated_at). */
-  collectDelta(scopeId: string, since: string, limit = PAGE): SyncDelta {
+  // ============================================================ HUB : routes LAN
+
+  /**
+   * (hub) Une requête du port LAN, de bout en bout : appairage, authentification
+   * (401), contrôle d'accès par pair (403), puis la route. Le daemon et les
+   * tests passent par ici : les contrôles éprouvés sont ceux qui tournent.
+   */
+  handleHttp(req: SyncHttpRequest): SyncHttpResponse {
+    const url = new URL(req.pathWithQuery, 'http://lan')
+    const path = url.pathname
+    const method = req.method.toUpperCase()
+    if (!path.startsWith('/v1/sync/')) return { status: 403, body: null }
+    if (this.role !== 'hub') return { status: 403, body: { error: 'cette machine n’est pas un hub de synchro' } }
+
+    // Appairage : pas de Bearer (le code one-shot TTL EST le secret).
+    if (method === 'POST' && path === '/v1/sync/pairing/complete') {
+      const parsed = parseJsonObject(req.body)
+      if (!parsed) return { status: 400, body: { error: 'JSON invalide' } }
+      try {
+        return {
+          status: 200,
+          body: this.completePairing({
+            code: String(parsed['code'] ?? ''),
+            machine_id: String(parsed['machine_id'] ?? ''),
+            display_name: typeof parsed['display_name'] === 'string' ? parsed['display_name'] : undefined,
+            host: req.remoteHost || undefined,
+          }),
+        }
+      } catch (err) {
+        // Motif exact au journal d'audit seulement : la réponse ne dit pas à un
+        // inconnu du réseau si une invitation est ouverte.
+        this.registry.audit({ actor_type: 'system', actor_id: 'sync', action: 'sync_pairing_refused', target_id_hash: null, scope_id: null, reason: (err as Error).message.slice(0, 120) })
+        return { status: 400, body: { error: 'invitation refusée (code expiré, déjà utilisé ou erroné)' } }
+      }
+    }
+
+    let peer: SyncPeer
+    try {
+      peer = this.authenticate(req.bearer ?? undefined, req.sig, {
+        method,
+        path: req.pathWithQuery,
+        body: req.body,
+        ts: req.ts ?? '',
+        nonce: req.nonce ?? '',
+      })
+    } catch (err) {
+      return { status: 401, body: { error: (err as Error).message } }
+    }
+
+    try {
+      if (method === 'POST' && path === '/v1/sync/pairing/confirm') {
+        this.confirmPairing(peer)
+        return { status: 200, body: { ok: true } }
+      }
+      if (method === 'POST' && (path === '/v1/sync/pairing/abort' || path === '/v1/sync/leave')) {
+        this.dropPeer(peer, path === '/v1/sync/leave' ? 'leave' : 'abort')
+        return { status: 200, body: { ok: true } }
+      }
+      if (method === 'GET' && (path === '/v1/sync/snapshot' || path === '/v1/sync/pull')) {
+        const scope = this.authorizeScope(peer, url.searchParams.get('scope'))
+        return { status: 200, body: this.collectDelta(scope.id, url.searchParams.get('since') ?? '0') }
+      }
+      if (method === 'POST' && path === '/v1/sync/push') {
+        const b = parseJsonObject(req.body)
+        if (!b) return { status: 400, body: { error: 'JSON invalide' } }
+        const scope = this.authorizeScope(peer, typeof b['scope_id'] === 'string' ? b['scope_id'] : null)
+        // Identité = le pair AUTHENTIFIÉ, jamais `peer_machine_id` du corps.
+        const facts = Array.isArray(b['facts']) ? (b['facts'] as unknown[]) : []
+        const tombstones = Array.isArray(b['tombstones']) ? (b['tombstones'] as unknown[]) : []
+        const report = this.applyFromPeer(peer, scope, facts, tombstones)
+        const refused = sumRefused(report.refused)
+        if (refused > 0) {
+          this.registry.audit({ actor_type: 'system', actor_id: 'sync', action: 'sync_push_refused', target_id_hash: sha256Hex(peer.machine_id), scope_id: scope.id, reason: refusedReason(report.refused) })
+        }
+        return { status: 200, body: report }
+      }
+      if (method === 'GET' && path === '/v1/sync/secrets') {
+        const scope = this.authorizeScope(peer, url.searchParams.get('scope'))
+        return { status: 200, body: { secrets: this.serveSecrets(scope.id).map(s => ({ name: s.name, env: s.env })) } }
+      }
+    } catch (err) {
+      if (err instanceof SyncForbiddenError) return { status: 403, body: { error: err.message } }
+      throw err
+    }
+    return { status: 404, body: { error: `route sync inconnue : ${method} ${path}` } }
+  }
+
+  // ============================================================ delta & snapshot
+
+  /** Base partagée d'un espace synchronisable, avec sa table de numéros d'ordre. null si interdit/inconnu. */
+  private storeFor(scopeId: string): ContentStore | null {
+    const scope = this.registry.getScope(scopeId)
+    if (!scope || SYNC_FORBIDDEN_TYPES.includes(scope.type)) return null
     const store = this.deps.sharedStore(scopeId)
-    if (!store) return { scope_id: scopeId, facts: [], tombstones: [], next_cursor: since, has_more: false }
+    if (store) ensureSyncSeq(store.db)
+    return store
+  }
+
+  /**
+   * Faits d'un espace changés après le numéro `since` (pagination par numéro
+   * d'ordre local). JAMAIS envoyés : les faits dormants (revue en attente),
+   * `critical`, et ceux marqués d'un client. `originOnly` : seulement les faits
+   * nés sur cette machine (envoi d'un spoke : il ne repousse pas ceux des autres).
+   */
+  collectDelta(scopeId: string, since: string, opts: { limit?: number; originOnly?: string } = {}): SyncDelta {
+    const sinceSeq = parseSeq(since)
+    const empty: SyncDelta = { scope_id: scopeId, facts: [], tombstones: [], next_cursor: String(sinceSeq), has_more: false }
+    const store = this.storeFor(scopeId)
+    if (!store) return empty
+    this.stampProvenance(store, scopeId)
+    const limit = Math.max(1, opts.limit ?? PAGE)
+    const params: unknown[] = [sinceSeq, scopeId]
+    if (opts.originOnly) params.push(opts.originOnly)
+    params.push(limit + 1)
     const rows = store.db
       .prepare(
-        `SELECT * FROM facts WHERE scope_id = ? AND updated_at > ? ORDER BY updated_at ASC LIMIT ?`,
+        `SELECT f.*, s.seq AS sync_seq_no FROM sync_seq s JOIN facts f ON f.id = s.fact_id
+         WHERE s.seq > ? AND f.scope_id = ?${opts.originOnly ? ' AND f.origin_machine_id = ?' : ''}
+           AND (f.deleted_at IS NOT NULL OR (
+             f.lifecycle_state != 'dormant' AND f.sensitivity != 'critical' AND COALESCE(f.client_org_id, '') = ''
+           ))
+         ORDER BY s.seq ASC LIMIT ?`,
       )
-      .all(scopeId, since, limit + 1) as Array<Record<string, unknown>>
+      .all(...params) as Array<Record<string, unknown>>
     const has_more = rows.length > limit
     const page = rows.slice(0, limit)
     const facts: SyncFact[] = []
@@ -171,22 +502,83 @@ export class SyncEngine {
       }
     }
     const last = page.at(-1)
-    const next_cursor = last ? String(last['updated_at']) : since
+    const next_cursor = last ? String(last['sync_seq_no']) : String(sinceSeq)
     return { scope_id: scopeId, facts, tombstones, next_cursor, has_more }
   }
 
   /** (hub) Snapshot complet d'un scope (bootstrap/réconciliation). */
-  snapshot(scopeId: string, since = '1970-01-01T00:00:00.000Z', limit = PAGE): SyncDelta {
-    return this.collectDelta(scopeId, since, limit)
+  snapshot(scopeId: string, since = '0', limit = PAGE): SyncDelta {
+    return this.collectDelta(scopeId, since, { limit })
   }
 
-  /** (hub ou spoke) Applique un delta entrant sur la copie locale du scope. */
-  applyIncoming(scopeId: string, facts: SyncFact[], tombstones: Tombstone[]): ApplyReport & { hub_watermark: string } {
-    const store = this.deps.sharedStore(scopeId)
-    if (!store) return { applied: 0, skipped_lww: 0, deduped: 0, tombstoned: 0, hub_watermark: nowISO() }
-    const report = applyDelta(store, facts, tombstones)
-    const wm = store.db.prepare('SELECT MAX(updated_at) AS m FROM facts WHERE scope_id = ?').get(scopeId) as { m: string | null }
-    return { ...report, hub_watermark: wm.m ?? nowISO() }
+  /**
+   * Pose la provenance (machine + révision + empreinte) des faits qui n'en ont
+   * pas : le partage depuis une mémoire privée recopie la ligne sans elle. Un
+   * fait sans origine dans un espace partagé de CETTE machine est né ici.
+   * Bornée par passe (règle n°27) ; la suite à la passe suivante.
+   */
+  private stampProvenance(store: ContentStore, scopeId: string): void {
+    const rows = store.db
+      .prepare('SELECT id, fact, category FROM facts WHERE scope_id = ? AND origin_machine_id IS NULL AND deleted_at IS NULL LIMIT ?')
+      .all(scopeId, STAMP_BATCH) as Array<{ id: string; fact: string; category: string }>
+    if (rows.length === 0) return
+    const first = reserveRevs(this.registry, rows.length)
+    const upd = store.db.prepare('UPDATE facts SET origin_machine_id = ?, origin_rev = ?, content_hash = ? WHERE id = ? AND origin_machine_id IS NULL')
+    store.db.transaction(() => {
+      rows.forEach((r, i) => upd.run(this.machineId, first + i, contentHash({ fact: r.fact, category: r.category, scope_id: scopeId }), r.id))
+    })()
+  }
+
+  /** (spoke) Applique ce que le hub envoie : forme contrôlée, espace forcé, jamais `critical`. */
+  applyIncoming(scopeId: string, facts: unknown[], tombstones: unknown[]): IncomingReport {
+    return this.applyChecked(scopeId, facts, tombstones, null)
+  }
+
+  /** (hub) Applique l'envoi d'un pair : mêmes contrôles + il ne touche qu'aux faits nés sur sa machine. */
+  applyFromPeer(peer: SyncPeer, scope: MemoryScope, facts: unknown[], tombstones: unknown[]): IncomingReport {
+    return this.applyChecked(scope.id, facts, tombstones, peer.machine_id)
+  }
+
+  private applyChecked(scopeId: string, facts: unknown[], tombstones: unknown[], owner: string | null): IncomingReport {
+    const refused: RefusedCounts = { scope: 0, critical: 0, client: 0, not_owner: 0, invalid: 0 }
+    const store = this.storeFor(scopeId)
+    if (!store) return { applied: 0, skipped_lww: 0, deduped: 0, tombstoned: 0, refused, hub_watermark: '0' }
+    const okFacts: SyncFact[] = []
+    for (const raw of facts ?? []) {
+      const checked = sanitizeIncomingFact(raw, scopeId)
+      if ('reason' in checked) {
+        refused[checked.reason]++
+        continue
+      }
+      const f = checked.fact
+      if (owner !== null) {
+        const local = store.getMergeFields(f.id)
+        // Écho d'un fait déjà là (le pair renvoie ce qu'il a reçu) : simple « déjà vu ».
+        if (winner(local, f) === 'apply' && (f.origin_machine_id !== owner || (local && local.origin_machine_id !== owner))) {
+          refused.not_owner++
+          continue
+        }
+      }
+      okFacts.push(f)
+    }
+    const okTombs: Tombstone[] = []
+    for (const raw of tombstones ?? []) {
+      const t = sanitizeTombstone(raw)
+      if (!t) {
+        refused.invalid++
+        continue
+      }
+      if (owner !== null) {
+        const local = store.getMergeFields(t.id)
+        if (local && winner(local, t) === 'apply' && (t.origin_machine_id !== owner || local.origin_machine_id !== owner)) {
+          refused.not_owner++
+          continue
+        }
+      }
+      okTombs.push(t)
+    }
+    const report = store.db.transaction(() => applyDelta(store, okFacts, okTombs))()
+    return { ...report, refused, hub_watermark: String(maxSyncSeq(store.db)) }
   }
 
   // ============================================================ HUB : secrets
@@ -218,9 +610,18 @@ export class SyncEngine {
 
   // ============================================================ SPOKE : join / pull / push
 
-  /** (spoke) S'appaire au hub puis bootstrap (snapshot + secrets). 1 commande. */
+  /**
+   * (spoke) S'appaire au hub puis bootstrap (snapshot + secrets). 1 commande.
+   * Un échec à n'importe quelle étape remet le Mac comme avant (clés, pair du
+   * hub, config) et prévient le hub, qui coupe l'appairage : on peut relancer.
+   * La reprise de l'identité de l'espace `org` reste faite : elle est sans
+   * perte et sans effet tant qu'aucun hub n'est relié.
+   */
   async join(opts: { hub: string; code: string; fetchImpl?: FetchLike }): Promise<{ scopes: number; facts: number; secrets: number }> {
     const f = opts.fetchImpl ?? globalFetch()
+    this.registry.recoverScopeMove(this.deps.moveScopeContent)
+    const keysBefore = snapshotGroupKeys(this.deps.secrets)
+    const configBefore: SyncConfig = { ...this.config }
     const res = await f(`http://${opts.hub}/v1/sync/pairing/complete`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -232,31 +633,70 @@ export class SyncEngine {
       scopes: Array<{ id: string; type: string; name: string }>
     }
 
-    // installer les clés du groupe
-    setClusterPairingKey(this.deps.secrets, Buffer.from(data.cpk, 'hex'))
-    const gvk = openGvk(data.sealed_gvk, opts.code)
-    if (!gvk) throw new Error('échec du descellement de la clé de coffre (code invalide ?)')
-    setGroupVaultKey(this.deps.secrets, gvk)
+    let hubRegistered = false
+    // Un seul hub à la fois : un ancien hub encore actif (nouveau join sans
+    // « leave ») est coupé, sinon les requêtes partiraient signées avec son
+    // jeton. Rétabli si ce join échoue.
+    const previousHubs = this.registry.listPeers().filter(p => p.role === 'hub' && p.machine_id !== data.hub_machine_id)
+    try {
+      for (const p of previousHubs) this.registry.revokePeer(p.machine_id)
+      // installer les clés du groupe
+      setClusterPairingKey(this.deps.secrets, Buffer.from(data.cpk, 'hex'))
+      const gvk = openGvk(data.sealed_gvk, opts.code)
+      if (!gvk) throw new Error('échec du descellement de la clé de coffre (code invalide ?)')
+      setGroupVaultKey(this.deps.secrets, gvk)
 
-    // ADOPTER les scopes du hub → aligner les identités de scope entre machines
-    for (const s of data.scopes) this.registry.adoptScope({ id: s.id, type: s.type as never, name: s.name })
+      // Espaces d'équipe seulement, même si un hub d'avant propose `user`.
+      const offered = (data.scopes ?? []).filter(s => SYNC_ALLOWED_TYPES.includes(s.type) && !SYNC_FORBIDDEN_TYPES.includes(s.type))
 
-    // enregistrer le hub comme pair (hash) + garder le token EN CLAIR localement
-    // (le spoke doit le présenter en Bearer ; registry.sqlite est local + protégé).
-    this.registry.addPeer({
-      machine_id: data.hub_machine_id,
-      display_name: `hub (${opts.hub})`,
-      role: 'hub',
-      host: opts.hub,
-      peer_token: data.peer_token,
-      cpk_location: this.deps.secrets.locationFor('__cluster_pairing_key'),
-      allowed_scopes: data.scopes.map(s => s.id),
-    })
-    this.registry.setSetting(`sync.peer_token.${data.hub_machine_id}`, data.peer_token)
-    this.deps.setSyncConfig({ enabled: true, role: 'spoke', hub: opts.hub })
+      // Le hub est enregistré tout de suite : l'abandon doit pouvoir être signé.
+      this.registry.addPeer({
+        machine_id: data.hub_machine_id,
+        display_name: `hub (${opts.hub})`,
+        role: 'hub',
+        host: opts.hub,
+        peer_token: data.peer_token,
+        cpk_location: this.deps.secrets.locationFor('__cluster_pairing_key'),
+        allowed_scopes: offered.map(s => s.id),
+      })
+      this.registry.setSetting(`sync.peer_token.${data.hub_machine_id}`, data.peer_token)
+      hubRegistered = true
+
+      // ADOPTER les scopes du hub → aligner les identités de scope entre machines
+      for (const s of offered) {
+        this.registry.adoptScope({ id: s.id, type: s.type as never, name: s.name }, { moveContent: this.deps.moveScopeContent })
+      }
+
+      this.deps.setSyncConfig({ enabled: true, role: 'spoke', hub: opts.hub })
+      this.deps.persistConfig()
+
+      const report = await this.bootstrap({ hub: opts.hub, scopes: offered.map(s => s.id), fetchImpl: f })
+      await this.signedPost(opts.hub, '/v1/sync/pairing/confirm', {}, f)
+      this.registry.audit({ actor_type: 'system', actor_id: 'sync', action: 'sync_joined', target_id_hash: sha256Hex(data.hub_machine_id), scope_id: null, reason: `scopes=${offered.map(s => s.type).join(',')}` })
+      return report
+    } catch (err) {
+      if (hubRegistered) {
+        try {
+          await this.signedPost(opts.hub, '/v1/sync/pairing/abort', {}, f, FAREWELL_TIMEOUT_MS)
+        } catch {
+          // hub injoignable : il coupera seul l'appairage non confirmé (15 min)
+        }
+      }
+      this.undoJoin(data.hub_machine_id, opts.hub, keysBefore, configBefore)
+      for (const p of previousHubs) this.registry.restorePeer(p.machine_id)
+      throw err
+    }
+  }
+
+  /** (spoke) Défait un join raté : pair du hub, jeton, curseurs, clés et config d'avant. */
+  private undoJoin(hubMachineId: string, hubHost: string, keys: GroupKeysSnapshot, configBefore: SyncConfig): void {
+    this.registry.deletePeer(hubMachineId)
+    this.registry.deleteSetting(`sync.peer_token.${hubMachineId}`)
+    this.registry.deleteCursors(hubKey(hubHost))
+    restoreGroupKeys(this.deps.secrets, keys)
+    if (this.deps.replaceSyncConfig) this.deps.replaceSyncConfig(Object.keys(configBefore).length > 0 ? configBefore : undefined)
+    else this.deps.setSyncConfig({ enabled: configBefore.enabled ?? false, role: configBefore.role, hub: configBefore.hub })
     this.deps.persistConfig()
-
-    return this.bootstrap({ hub: opts.hub, scopes: data.scopes.map(s => s.id), fetchImpl: f })
   }
 
   /** (spoke) Récupère l'historique complet des scopes + les secrets (1re fois). */
@@ -265,15 +705,16 @@ export class SyncEngine {
     let totalFacts = 0
     let totalSecrets = 0
     for (const scopeId of opts.scopes) {
-      // snapshot paginé
-      let cursor = '1970-01-01T00:00:00.000Z'
+      // snapshot paginé par numéro d'ordre du hub
+      let cursor = '0'
       for (;;) {
         const delta = await this.signedGet<SyncDelta>(opts.hub, `/v1/sync/snapshot?scope=${encodeURIComponent(scopeId)}&since=${encodeURIComponent(cursor)}`, f)
         const r = this.applyIncoming(scopeId, delta.facts, delta.tombstones)
         totalFacts += r.applied
+        const advanced = parseSeq(delta.next_cursor) > parseSeq(cursor)
         cursor = delta.next_cursor
         this.registry.setCursor(hubKey(opts.hub), scopeId, { watermark: cursor })
-        if (!delta.has_more) break
+        if (!delta.has_more || !advanced) break
       }
       // secrets du scope
       const secrets = await this.signedGet<{ secrets: Array<{ name: string; env: Envelope }> }>(opts.hub, `/v1/sync/secrets?scope=${encodeURIComponent(scopeId)}`, f)
@@ -289,77 +730,159 @@ export class SyncEngine {
     return { scopes: opts.scopes.length, facts: totalFacts, secrets: totalSecrets }
   }
 
-  /** (spoke) Tire les nouveautés d'un scope depuis le hub. */
+  /** (spoke) Tire les nouveautés d'un scope depuis le hub (curseur = numéro d'ordre du hub). */
   async pull(scopeId: string, fetchImpl?: FetchLike): Promise<{ applied: number }> {
     const hub = this.hubPeer()
     if (!hub?.host) return { applied: 0 }
     const f = fetchImpl ?? globalFetch()
     const cur = this.registry.getCursor(hubKey(hub.host), scopeId)
     let applied = 0
-    let since = cur.watermark
+    let since = String(parseSeq(cur.watermark))
     for (;;) {
       const delta = await this.signedGet<SyncDelta>(hub.host, `/v1/sync/pull?scope=${encodeURIComponent(scopeId)}&since=${encodeURIComponent(since)}`, f)
       const r = this.applyIncoming(scopeId, delta.facts, delta.tombstones)
       applied += r.applied + r.tombstoned
+      const advanced = parseSeq(delta.next_cursor) > parseSeq(since)
       since = delta.next_cursor
       this.registry.setCursor(hubKey(hub.host), scopeId, { watermark: since })
-      if (!delta.has_more) break
+      if (!delta.has_more || !advanced) break
     }
     return { applied }
   }
 
-  /** (spoke) Pousse ses changements locaux d'un scope vers le hub. */
-  async push(scopeId: string, fetchImpl?: FetchLike): Promise<{ applied: number; skipped_lww: number }> {
+  /**
+   * (spoke) Pousse ses changements locaux d'un scope vers le hub : seulement
+   * les faits nés ici (curseur = numéro d'ordre local, pas la date du fait).
+   */
+  async push(scopeId: string, fetchImpl?: FetchLike): Promise<{ applied: number; skipped_lww: number; refused: number }> {
     const hub = this.hubPeer()
-    if (!hub?.host) return { applied: 0, skipped_lww: 0 }
+    if (!hub?.host) return { applied: 0, skipped_lww: 0, refused: 0 }
     const f = fetchImpl ?? globalFetch()
     const cur = this.registry.getCursor(hubKey(hub.host), scopeId)
-    const delta = this.collectDelta(scopeId, cur.last_push_at)
-    if (delta.facts.length === 0 && delta.tombstones.length === 0) return { applied: 0, skipped_lww: 0 }
-    const resp = await this.signedPost<{ applied: number; skipped_lww: number; hub_watermark: string }>(
-      hub.host,
-      '/v1/sync/push',
-      { scope_id: scopeId, peer_machine_id: this.machineId, facts: delta.facts, tombstones: delta.tombstones },
-      f,
-    )
-    this.registry.setCursor(hubKey(hub.host), scopeId, { last_push_at: delta.next_cursor })
-    return { applied: resp.applied, skipped_lww: resp.skipped_lww }
-  }
-
-  /** (spoke) Une passe complète : pull + push sur tous les scopes. */
-  async syncAll(fetchImpl?: FetchLike): Promise<{ pulled: number; pushed: number }> {
-    let pulled = 0
-    let pushed = 0
-    for (const scope of this.syncScopes()) {
-      pulled += (await this.pull(scope.id, fetchImpl)).applied
-      pushed += (await this.push(scope.id, fetchImpl)).applied
+    let since = String(parseSeq(cur.last_push_at))
+    let applied = 0
+    let skipped = 0
+    let refused = 0
+    for (;;) {
+      const delta = this.collectDelta(scopeId, since, { originOnly: this.machineId })
+      if (delta.facts.length === 0 && delta.tombstones.length === 0) break
+      const resp = await this.signedPost<IncomingReport>(
+        hub.host,
+        '/v1/sync/push',
+        { scope_id: scopeId, peer_machine_id: this.machineId, facts: delta.facts, tombstones: delta.tombstones },
+        f,
+      )
+      applied += (resp.applied ?? 0) + (resp.tombstoned ?? 0)
+      skipped += resp.skipped_lww ?? 0
+      refused += resp.refused ? sumRefused(resp.refused) : 0
+      const advanced = parseSeq(delta.next_cursor) > parseSeq(since)
+      since = delta.next_cursor
+      this.registry.setCursor(hubKey(hub.host), scopeId, { last_push_at: since })
+      if (!delta.has_more || !advanced) break
     }
-    return { pulled, pushed }
+    return { applied, skipped_lww: skipped, refused }
   }
 
-  /** Une passe best-effort (appelée au boot + par le timer). Jamais throw. */
-  async tick(fetchImpl?: FetchLike): Promise<{ pulled: number; pushed: number } | null> {
-    if (this.deps.config.enabled === false) return null
+  /**
+   * (spoke) Une passe complète sur les espaces que le HUB a accordés à ce Mac
+   * (pas la config locale) : un espace en échec n'arrête pas les autres.
+   */
+  async syncAll(fetchImpl?: FetchLike): Promise<SyncRunReport> {
+    const report: SyncRunReport = { pulled: 0, pushed: 0, refused: 0, errors: [] }
+    const hub = this.hubPeer()
+    if (hub?.host) {
+      for (const scope of this.spokeScopes(hub)) {
+        try {
+          report.pulled += (await this.pull(scope.id, fetchImpl)).applied
+        } catch (err) {
+          report.errors.push(`${scope.type} (réception) : ${describeError(err)}`)
+          continue // sans réception à jour, on n'envoie pas sur cet espace
+        }
+        try {
+          const p = await this.push(scope.id, fetchImpl)
+          report.pushed += p.applied
+          report.refused += p.refused
+        } catch (err) {
+          report.errors.push(`${scope.type} (envoi) : ${describeError(err)}`)
+        }
+      }
+    }
+    this.lastRun = { ...report, at: nowISO(), ok: report.errors.length === 0 }
+    return report
+  }
+
+  /** Espaces accordés par le hub (enregistrés au join), filtrés : jamais un type interdit. */
+  private spokeScopes(hub: SyncPeer): MemoryScope[] {
+    return hub.allowed_scopes
+      .map(id => this.registry.getScope(id))
+      .filter((s): s is MemoryScope => !!s && SYNC_ALLOWED_TYPES.includes(s.type) && !SYNC_FORBIDDEN_TYPES.includes(s.type))
+  }
+
+  /**
+   * Une passe best-effort (appelée par la minuterie du daemon). Jamais throw.
+   * Les erreurs sont JOURNALISÉES (une fois par panne, puis le retour à la
+   * normale) : plus de panne muette.
+   */
+  async tick(fetchImpl?: FetchLike): Promise<SyncRunReport | null> {
+    if (this.config.enabled !== true) return null
     if (this.role !== 'spoke') return null // le hub est canonique : il ne tire pas
     if (!this.hubPeer()?.host) return null
+    let report: SyncRunReport
     try {
-      return await this.syncAll(fetchImpl)
-    } catch {
-      return null // skip + warn géré par l'appelant (best-effort)
+      report = await this.syncAll(fetchImpl)
+    } catch (err) {
+      report = { pulled: 0, pushed: 0, refused: 0, errors: [describeError(err)] }
+      this.lastRun = { ...report, at: nowISO(), ok: false }
     }
+    const errors = report.errors.join(' ; ')
+    if (errors) {
+      if (errors !== this.lastLoggedError) console.warn(`[memoria] synchro automatique en échec : ${errors}`)
+      this.lastLoggedError = errors
+    } else if (this.lastLoggedError) {
+      console.warn('[memoria] synchro automatique rétablie')
+      this.lastLoggedError = null
+    }
+    if (report.refused > 0) console.warn(`[memoria] synchro : ${report.refused} fait(s) refusé(s) par le hub (faits d'une autre machine, critical ou hors espace)`)
+    return report
   }
 
-  /** (spoke) Se déconnecte du hub : révoque le pair local, GARDE les données reçues. */
-  leave(): void {
+  /**
+   * (spoke) Se déconnecte du hub : prévient le hub (qui coupe ce Mac), révoque
+   * le pair local, GARDE les données reçues.
+   */
+  async leave(fetchImpl?: FetchLike): Promise<{ hub_notified: boolean | null }> {
     const hub = this.hubPeer()
-    if (hub) this.registry.revokePeer(hub.machine_id)
+    let notified: boolean | null = null
+    if (hub?.host) {
+      notified = false
+      try {
+        await this.signedPost(hub.host, '/v1/sync/leave', {}, fetchImpl ?? globalFetch(), FAREWELL_TIMEOUT_MS)
+        notified = true
+      } catch {
+        // hub injoignable : la révocation côté hub reste à faire (« memoria sync revoke »)
+      }
+      this.registry.revokePeer(hub.machine_id)
+    }
     this.deps.setSyncConfig({ enabled: false })
     this.deps.persistConfig()
+    return { hub_notified: notified }
   }
 
-  /** Liste des pairs (UI admin). */
-  peers(): SyncPeer[] {
-    return this.registry.listPeers()
+  /** Liste des pairs (UI admin, `sync status`) avec leurs espaces autorisés lisibles. */
+  peers(): SyncPeerView[] {
+    return this.registry.listPeers().map(p => ({
+      ...p,
+      pending: p.role === 'spoke' && this.isPendingPairing(p.machine_id),
+      allowed: p.allowed_scopes.map(id => {
+        const s = this.registry.getScope(id)
+        return { id, type: s?.type ?? null, name: s?.name ?? null }
+      }),
+    }))
+  }
+
+  /** Reprend un déplacement d'espace interrompu (arrêt brutal pendant un join). */
+  recoverPendingScopeMove(): void {
+    if (this.registry.getSetting(SCOPE_MOVE_KEY)) this.registry.recoverScopeMove(this.deps.moveScopeContent)
   }
 
   // ------------------------------------------------------------ internes
@@ -370,13 +893,15 @@ export class SyncEngine {
 
   private async signedGet<T>(host: string, path: string, f: FetchLike): Promise<T> {
     const res = await f(`http://${host}${path}`, { method: 'GET', headers: this.signHeaders('GET', path, '') })
-    if (!res.ok) throw new Error(`sync GET ${path} → ${res.status}`)
+    if (!res.ok) throw new Error(`sync GET ${path.split('?')[0]} → ${res.status}`)
     return (await res.json()) as T
   }
 
-  private async signedPost<T>(host: string, path: string, body: unknown, f: FetchLike): Promise<T> {
+  private async signedPost<T>(host: string, path: string, body: unknown, f: FetchLike, timeoutMs?: number): Promise<T> {
     const payload = JSON.stringify(body)
-    const res = await f(`http://${host}${path}`, { method: 'POST', headers: { 'content-type': 'application/json', ...this.signHeaders('POST', path, payload) }, body: payload })
+    const init: Parameters<FetchLike>[1] = { method: 'POST', headers: { 'content-type': 'application/json', ...this.signHeaders('POST', path, payload) }, body: payload }
+    if (timeoutMs) init.signal = AbortSignal.timeout(timeoutMs)
+    const res = await f(`http://${host}${path}`, init)
     if (!res.ok) throw new Error(`sync POST ${path} → ${res.status}`)
     return (await res.json()) as T
   }
@@ -400,8 +925,13 @@ export class SyncEngine {
 }
 
 export class SyncAuthError extends Error {}
+/** Espace refusé à ce pair (→ 403). */
+export class SyncForbiddenError extends Error {}
 
-export type FetchLike = (url: string, init: { method: string; headers?: Record<string, string>; body?: string }) => Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }>
+export type FetchLike = (
+  url: string,
+  init: { method: string; headers?: Record<string, string>; body?: string; signal?: AbortSignal },
+) => Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }>
 
 function globalFetch(): FetchLike {
   return globalThis.fetch as unknown as FetchLike
@@ -415,6 +945,122 @@ function rand4(): string {
   const A = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
   const b = globalThis.crypto.getRandomValues(new Uint8Array(4))
   return Array.from(b, x => A[x % A.length]).join('')
+}
+
+function parseInvite(raw: string | null): PendingInvite | null {
+  if (!raw) return null
+  try {
+    const v = JSON.parse(raw) as Partial<PendingInvite>
+    if (typeof v.code_hash !== 'string' || typeof v.expires_at !== 'string') return null
+    return {
+      code_hash: v.code_hash,
+      expires_at: v.expires_at,
+      display_name: typeof v.display_name === 'string' ? v.display_name : 'machine',
+      // invitation d'avant (sans liste) : l'espace d'équipe seulement
+      scopes: Array.isArray(v.scopes) ? v.scopes.filter(t => SYNC_ALLOWED_TYPES.includes(t)) : ['org'],
+      claimed_by: typeof v.claimed_by === 'string' ? v.claimed_by : null,
+      attempts: Number.isInteger(v.attempts) ? Number(v.attempts) : 0,
+    }
+  } catch {
+    return null
+  }
+}
+
+function parseJsonObject(body: string): Record<string, unknown> | null {
+  if (!body) return {}
+  try {
+    const v = JSON.parse(body) as unknown
+    return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null
+  } catch {
+    return null
+  }
+}
+
+function sumRefused(r: Partial<RefusedCounts>): number {
+  return (r.scope ?? 0) + (r.critical ?? 0) + (r.client ?? 0) + (r.not_owner ?? 0) + (r.invalid ?? 0)
+}
+
+function refusedReason(r: RefusedCounts): string {
+  return Object.entries(r)
+    .filter(([, n]) => n > 0)
+    .map(([k, n]) => `${k}=${n}`)
+    .join(',')
+}
+
+/** Message court d'une panne (code réseau si c'en est une), sans contenu. */
+function describeError(err: unknown): string {
+  const e = err as { message?: string; cause?: { code?: string } }
+  const code = e?.cause?.code
+  return code ? `${e.message ?? 'erreur'} (${code})` : (e?.message ?? String(err))
+}
+
+const SENSITIVITIES = ['normal', 'sensitive', 'critical']
+const LIFECYCLES = ['active', 'dormant', 'archived']
+
+const str = (v: unknown): string | null => (typeof v === 'string' ? v : null)
+const optStr = (v: unknown): string | null => (typeof v === 'string' && v.length > 0 ? v : null)
+
+/**
+ * Contrôle un fait reçu d'une autre machine : forme, espace (celui de la
+ * requête, sinon refus), jamais `critical`, jamais marqué d'un client. Le
+ * fait rangé est RECONSTRUIT champ par champ (rien d'inattendu ne passe) :
+ * espace forcé, visibilité partagée, empreinte de contenu recalculée.
+ */
+function sanitizeIncomingFact(raw: unknown, scopeId: string): { fact: SyncFact } | { reason: keyof RefusedCounts } {
+  if (!raw || typeof raw !== 'object') return { reason: 'invalid' }
+  const r = raw as Record<string, unknown>
+  const id = optStr(r['id'])
+  const fact = str(r['fact'])
+  const category = str(r['category']) ?? 'general'
+  const created = optStr(r['created_at'])
+  const updated = optStr(r['updated_at'])
+  if (!id || fact === null || !created || !updated) return { reason: 'invalid' }
+  if (r['scope_id'] !== scopeId) return { reason: 'scope' }
+  const sensitivity = str(r['sensitivity']) ?? 'normal'
+  if (!SENSITIVITIES.includes(sensitivity)) return { reason: 'invalid' }
+  if (sensitivity === 'critical') return { reason: 'critical' }
+  if (optStr(r['client_org_id'])) return { reason: 'client' }
+  const lifecycle = str(r['lifecycle_state']) ?? 'active'
+  if (!LIFECYCLES.includes(lifecycle)) return { reason: 'invalid' }
+  const rev = Number(r['origin_rev'] ?? 0)
+  if (!Number.isSafeInteger(rev) || rev < 0) return { reason: 'invalid' }
+  const confidence = Number(r['confidence'] ?? 0.8)
+  return {
+    fact: {
+      id,
+      fact,
+      category,
+      fact_type: str(r['fact_type']) ?? 'statement',
+      confidence: Number.isFinite(confidence) ? Math.min(1, Math.max(0, confidence)) : 0.8,
+      source: str(r['source']) ?? 'sync',
+      scope_id: scopeId,
+      sensitivity,
+      visibility: 'shared',
+      tags: str(r['tags']) ?? '[]',
+      entity_ids: str(r['entity_ids']) ?? '[]',
+      lifecycle_state: lifecycle,
+      superseded: r['superseded'] ? 1 : 0,
+      superseded_by: optStr(r['superseded_by']),
+      origin_machine_id: optStr(r['origin_machine_id']),
+      origin_rev: rev,
+      content_hash: contentHash({ fact, category, scope_id: scopeId }),
+      deleted_at: optStr(r['deleted_at']),
+      created_at: created,
+      updated_at: updated,
+      expires_at: optStr(r['expires_at']),
+    },
+  }
+}
+
+function sanitizeTombstone(raw: unknown): Tombstone | null {
+  if (!raw || typeof raw !== 'object') return null
+  const r = raw as Record<string, unknown>
+  const id = optStr(r['id'])
+  const deleted = optStr(r['deleted_at'])
+  const updated = optStr(r['updated_at'])
+  const rev = Number(r['origin_rev'] ?? 0)
+  if (!id || !deleted || !updated || !Number.isSafeInteger(rev) || rev < 0) return null
+  return { id, deleted_at: deleted, origin_machine_id: optStr(r['origin_machine_id']), origin_rev: rev, updated_at: updated }
 }
 
 function toSyncFact(r: Record<string, unknown>): SyncFact {
@@ -439,5 +1085,6 @@ function toSyncFact(r: Record<string, unknown>): SyncFact {
     deleted_at: (r['deleted_at'] as string) ?? null,
     created_at: String(r['created_at']),
     updated_at: String(r['updated_at']),
+    expires_at: (r['expires_at'] as string | null | undefined) ?? null,
   }
 }

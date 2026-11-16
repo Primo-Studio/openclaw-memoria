@@ -41,6 +41,17 @@ export function nextRev(registry: RegistryStore): number {
   return next
 }
 
+/**
+ * Réserve `n` révisions d'un coup (une seule écriture au registre) et renvoie
+ * la première. Sert à poser la provenance de plusieurs faits en une passe.
+ */
+export function reserveRevs(registry: RegistryStore, n: number): number {
+  const cur = Number.parseInt(registry.getSetting(REV_KEY) ?? '0', 10)
+  const base = Number.isFinite(cur) ? cur : 0
+  registry.setSetting(REV_KEY, String(base + Math.max(0, n)))
+  return base + 1
+}
+
 /** Révision courante sans incrémenter (diagnostic). */
 export function currentRev(registry: RegistryStore): number {
   const cur = Number.parseInt(registry.getSetting(REV_KEY) ?? '0', 10)

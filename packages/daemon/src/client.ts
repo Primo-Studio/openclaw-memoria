@@ -138,22 +138,22 @@ export class DaemonClient {
   async syncStatus(): Promise<unknown> {
     return this.get('/v1/admin/sync/status')
   }
-  async syncInitHub(listenLan: string): Promise<unknown> {
-    return this.post('/v1/admin/sync/init_hub', { listen_lan: listenLan })
+  async syncInitHub(listenLan: string, scopes?: string[]): Promise<{ listen_lan: string; scopes: string[]; keys: 'new' | 'kept'; machine_id: string }> {
+    return this.post('/v1/admin/sync/init_hub', { listen_lan: listenLan, ...(scopes ? { scopes } : {}) })
   }
-  async syncInvite(displayName?: string): Promise<{ code: string; expires_at: string; hub_lan: string | null }> {
-    return this.post('/v1/admin/sync/invite', { display_name: displayName })
+  async syncInvite(displayName?: string, scopes?: string[]): Promise<{ code: string; expires_at: string; hub_lan: string | null; hub_alternatives?: string[]; scopes?: string[] }> {
+    return this.post('/v1/admin/sync/invite', { display_name: displayName, ...(scopes ? { scopes } : {}) })
   }
-  async syncJoin(hub: string, code: string): Promise<{ scopes: number; facts: number; secrets: number }> {
+  async syncJoin(hub: string, code: string): Promise<{ scopes: number; facts: number; secrets: number; auto_sync?: boolean }> {
     return this.post('/v1/admin/sync/join', { hub, code })
   }
-  async syncNow(): Promise<{ pulled: number; pushed: number }> {
+  async syncNow(): Promise<{ pulled: number; pushed: number; refused?: number; errors?: string[] }> {
     return this.post('/v1/admin/sync/now', {})
   }
   async syncRevoke(machineId: string): Promise<{ revoked: boolean }> {
     return this.post('/v1/admin/sync/revoke', { machine_id: machineId })
   }
-  async syncLeave(): Promise<{ ok: boolean }> {
+  async syncLeave(): Promise<{ ok: boolean; hub_notified?: boolean | null }> {
     return this.post('/v1/admin/sync/leave', {})
   }
 

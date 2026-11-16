@@ -99,7 +99,9 @@ import { isProceduralQuery, passesClientIsolation, scoreFact } from './scoring.j
 import { applyRecallCutoff, buildRecallBlocks, rankEntities } from './recall-format.js'
 import { localMachineId, nextRev } from '../sync/clock.js'
 import { contentHash } from '../sync/merge.js'
-import { SyncEngine } from '../sync/engine.js'
+import { SyncEngine, type SyncConfig } from '../sync/engine.js'
+import { effectiveSyncTypes, normalizeSyncTypes, repointScopeColumns } from '../sync/scopes.js'
+import { freshGroupKeys } from '../secrets/index.js'
 import { TriageService, type TriageServiceHost } from '../triage/service.js'
 import { copyTriageRows, emptyRow, rowFromDb as rowFromTriageDb, upsertTriageRows } from '../triage/store.js'
 import { dot, float32FromBlob, normalizeVector, numberSignature, quantizeInt8, REDITE_THRESHOLD } from '../triage/dedup.js'
@@ -3706,19 +3708,55 @@ export class Memoria {
     return this.registry.listScopes().filter(s => whitelist.includes(s.type))
   }
 
-  /** Configure cette machine comme HUB de synchro (persiste). Redémarrage requis pour le listener LAN. */
-  configureSyncHub(listenLan: string, scopes?: string[]): void {
+  /**
+   * Configure cette machine comme HUB de synchro (persiste). Redémarrage requis
+   * pour le listener LAN.
+   *
+   * - Espaces : `scopes` (types) validés, `org` par défaut ; jamais `user`,
+   *   privé ni quarantaine. Sans `scopes`, la liste déjà en place est gardée
+   *   (filtrée des types interdits).
+   * - Clés du groupe : NEUVES tant qu'aucun Mac n'est relié. Un coffre peut
+   *   garder des clés d'un ancien essai, qu'un nouveau groupe ne doit pas
+   *   reprendre. Avec des Mac déjà reliés, elles sont gardées : les changer
+   *   les couperait tous sans un mot (changer la clé = `rotate-key`, reporté).
+   */
+  configureSyncHub(listenLan: string, scopes?: readonly string[] | string | null): { listen_lan: string; scopes: string[]; keys: 'new' | 'kept' } {
     this.assertOpen()
+    const types = scopes === undefined || scopes === null ? effectiveSyncTypes(this.resolved.config.sync?.scopes) : normalizeSyncTypes(scopes)
+    const linked = this.registry.listPeers().filter(p => p.role === 'spoke')
+    const keys: 'new' | 'kept' = linked.length === 0 ? 'new' : 'kept'
+    if (keys === 'new') freshGroupKeys(this.secretProvider)
     this.resolved.config.sync = {
       ...this.resolved.config.sync,
       enabled: true,
       role: 'hub',
       machine_id: localMachineId(this.registry),
       listen_lan: listenLan,
-      ...(scopes ? { scopes } : {}),
+      scopes: types,
     }
     saveConfigFile(this.resolved.config, this.resolved.configPath)
+    this.registry.audit({ actor_type: 'user', actor_id: 'local', action: 'sync_hub_configured', target_id_hash: null, scope_id: null, reason: `scopes=${types.join(',')};keys=${keys}` })
     this.syncEngine = undefined // re-construire avec la nouvelle config
+    return { listen_lan: listenLan, scopes: types, keys }
+  }
+
+  /**
+   * Déplace le contenu d'un espace partagé vers un nouvel identifiant (reprise
+   * de l'identité du hub au join) : toutes les colonnes d'espace de sa base, et
+   * l'empreinte de contenu, qui contient l'identifiant de l'espace. Une seule
+   * transaction de cette base ; sans effet si la base n'existe pas encore.
+   */
+  private moveScopeContent(from: MemoryScope, toId: string): void {
+    if (from.type === 'private' || from.type === 'legacy_to_review') throw new Error(`espace ${from.type} : jamais déplacé par la synchro`)
+    const path = this.sharedDbPath(from)
+    if (!existsSync(path)) return
+    const store = this.openContent(path)
+    const rows = store.db.prepare('SELECT id, fact, category FROM facts WHERE scope_id = ? AND content_hash IS NOT NULL').all(from.id) as Array<{ id: string; fact: string; category: string }>
+    const rehash = store.db.prepare('UPDATE facts SET content_hash = ? WHERE id = ?')
+    store.db.transaction(() => {
+      repointScopeColumns(store.db, from.id, toId)
+      for (const r of rows) rehash.run(contentHash({ fact: r.fact, category: r.category, scope_id: toId }), r.id)
+    })()
   }
 
   /** Coffre local (pour le module de synchro — clés GVK/CPK + valeurs scellées). */
@@ -3733,13 +3771,19 @@ export class Memoria {
         registry: this.registry,
         secrets: this.secretProvider,
         machineId: localMachineId(this.registry),
-        config: this.resolved.config.sync ?? {},
+        // relue à chaque usage : join et leave remplacent l'objet de config
+        config: () => this.resolved.config.sync ?? {},
         sharedStore: (scopeId: string) => this.sharedContentStore(scopeId),
         listSyncableScopes: (whitelist: readonly string[]) => this.syncableScopes(whitelist),
         persistConfig: () => saveConfigFile(this.resolved.config, this.resolved.configPath),
         setSyncConfig: (patch: Record<string, unknown>) => {
           this.resolved.config.sync = { ...this.resolved.config.sync, ...patch }
         },
+        replaceSyncConfig: (cfg: SyncConfig | undefined) => {
+          if (cfg) this.resolved.config.sync = { ...cfg }
+          else delete this.resolved.config.sync
+        },
+        moveScopeContent: (from: MemoryScope, toId: string) => this.moveScopeContent(from, toId),
       })
     }
     return this.syncEngine

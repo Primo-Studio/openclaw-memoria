@@ -3,7 +3,7 @@
  * `createSecretProvider()` choisit le coffre : Keychain macOS si disponible,
  * sinon fallback AES-256-GCM. L'appelant peut forcer un kind (tests, doctor).
  */
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import type { SecretProvider } from './types.js'
 import { KeychainMacProvider } from './keychain-macos.js'
 import { AesVaultProvider } from './aes-vault.js'
@@ -81,6 +81,48 @@ export function setGroupVaultKey(provider: SecretProvider, key: Buffer): void {
 }
 export function setClusterPairingKey(provider: SecretProvider, key: Buffer): void {
   provider.set(CPK_NAME, key.toString('hex'))
+}
+
+/**
+ * Tire des clés de groupe NEUVES (coffre + signature) et remplace les
+ * anciennes. Appelé par `sync init-hub` : un coffre peut garder des clés d'un
+ * essai passé (le Trousseau survit aux réinstallations), qu'aucun nouveau
+ * groupe ne doit reprendre par erreur. Renvoie les empreintes (jamais les clés).
+ */
+export function freshGroupKeys(provider: SecretProvider): { gvk_fingerprint: string; cpk_fingerprint: string } {
+  const gvk = randomBytes(32)
+  const cpk = randomBytes(32)
+  for (const [name, key] of [[GVK_NAME, gvk], [CPK_NAME, cpk]] as const) {
+    provider.set(name, key.toString('hex'))
+    // Relecture : une écriture qui n'aurait pas remplacé l'ancienne clé
+    // (Trousseau, coffre) laisserait l'ancien groupe en place sans un mot.
+    if (provider.get(name) !== key.toString('hex')) throw new Error(`clé de groupe ${name} : la nouvelle valeur n'a pas remplacé l'ancienne dans le coffre (${provider.kind})`)
+  }
+  return { gvk_fingerprint: keyFingerprint(gvk), cpk_fingerprint: keyFingerprint(cpk) }
+}
+
+/** Empreinte courte d'une clé (diagnostic, tests) : jamais réversible. */
+export function keyFingerprint(key: Buffer): string {
+  return createHash('sha256').update(key).digest('hex').slice(0, 12)
+}
+
+/** Clés de groupe présentes AVANT une opération (valeurs, ou null si absentes). */
+export interface GroupKeysSnapshot {
+  gvk: string | null
+  cpk: string | null
+}
+
+/** Relève les clés de groupe sans en créer (le join peut ainsi tout remettre comme avant). */
+export function snapshotGroupKeys(provider: SecretProvider): GroupKeysSnapshot {
+  return { gvk: provider.get(GVK_NAME), cpk: provider.get(CPK_NAME) }
+}
+
+/** Remet les clés relevées : une clé absente avant est retirée (un join raté ne laisse pas les clés du groupe). */
+export function restoreGroupKeys(provider: SecretProvider, snap: GroupKeysSnapshot): void {
+  for (const [name, value] of [[GVK_NAME, snap.gvk], [CPK_NAME, snap.cpk]] as const) {
+    if (value === null) provider.delete(name)
+    else provider.set(name, value)
+  }
 }
 
 function getOrCreateKey(provider: SecretProvider, name: string): Buffer {

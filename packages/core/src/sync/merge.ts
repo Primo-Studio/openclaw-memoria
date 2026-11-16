@@ -59,6 +59,8 @@ export interface SyncFact {
   deleted_at: string | null
   created_at: string
   updated_at: string
+  /** Expiration (au-delà, le fait n'est plus rappelé). Absente chez un pair d'avant. */
+  expires_at?: string | null
 }
 
 export interface Tombstone {

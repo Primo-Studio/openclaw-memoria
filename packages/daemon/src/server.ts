@@ -42,6 +42,10 @@ import {
   serveInvocation,
   runUserMessagesPass,
   runStylesPass,
+  DEFAULT_LISTEN_LAN,
+  SyncScopeError,
+  hubAddressesFor,
+  resolveListenHost,
   type AssistantType,
   type AutostartSpec,
   type AutostartStatus,
@@ -125,6 +129,8 @@ export interface DaemonOptions {
   agentsHome?: string
   /** Délai du passage de cognition lancé après la chaîne de démarrage (défaut 60 s ; tests : court). */
   bootCognitionDelayMs?: number
+  /** Délai de la 1re passe de synchro après le démarrage ou un join (défaut 2 s ; tests : court). */
+  syncFirstTickMs?: number
   /** Sonde de présence d'un CLI (tests : jamais les vrais binaires). */
   checkCli?: (bin: string) => boolean
   /** Enregistrement MCP auprès de l'hôte (tests : stub — jamais le vrai ~/.claude.json). */
@@ -250,6 +256,13 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   let bootCognitionTimer: ReturnType<typeof setTimeout> | null = null
   /** Arrêt demandé : la chaîne de démarrage, si elle finit après, ne programme plus rien. */
   let closing = false
+  // Synchro (spoke) : minuterie armée au démarrage ET juste après un join réussi.
+  let syncTimer: ReturnType<typeof setInterval> | null = null
+  let syncFirstTick: ReturnType<typeof setTimeout> | null = null
+  let syncIntervalSec: number | null = null
+  // Hub : écoute LAN active ? (le mot « lan » peut n'avoir aucune adresse au login, avant le Wi-Fi)
+  let lanListening = false
+  let lanRetryTimer: ReturnType<typeof setTimeout> | null = null
   const loopMonitor = startLoopMonitor()
 
   const adminToken = newToken()
@@ -1345,27 +1358,48 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       // ----------------------------------------------------------- synchro inter-machines (admin)
       case 'GET /v1/admin/sync/status': {
         const cfg = memoria.resolved.config.sync ?? {}
+        if (memoria.sync.role === 'hub') memoria.sync.expireStalePairings()
+        const listen = cfg.listen_lan ? resolveListenHost(cfg.listen_lan) : null
         sendJson(res, 200, {
           enabled: cfg.enabled === true,
           role: memoria.sync.role,
           machine_id: memoria.sync.machineId,
           hub: cfg.hub ?? null,
           listen_lan: cfg.listen_lan ?? null,
+          // adresse réellement écoutée (le mot « lan » résolu) et adresses à donner aux autres Mac
+          listen_resolved: listen ? (listen.host ? `${listen.host}:${listen.port}` : null) : null,
+          lan_listening: lanListening,
+          hub_addresses: memoria.sync.role === 'hub' ? hubAddressesFor(cfg.listen_lan) : null,
+          scope_types: memoria.sync.syncTypes(),
           scopes: memoria.sync.syncScopes().map(s => ({ id: s.id, type: s.type, name: s.name })),
           peers: memoria.sync.peers(),
+          auto: { armed: syncTimer !== null, interval_sec: syncIntervalSec },
+          last_sync: memoria.sync.lastRunStatus(),
         })
         return
       }
       case 'POST /v1/admin/sync/init_hub': {
         const body = await readJson(req)
-        const listenLan = String(body['listen_lan'] ?? '0.0.0.0:47600')
-        memoria.configureSyncHub(listenLan, (body['scopes'] as string[] | undefined) ?? undefined)
-        sendJson(res, 200, { role: 'hub', listen_lan: listenLan, machine_id: memoria.sync.machineId, restart_required: true })
+        const listenLan = String(body['listen_lan'] ?? DEFAULT_LISTEN_LAN).trim() || DEFAULT_LISTEN_LAN
+        if (!isHostPort(listenLan)) throw new HttpError(400, `adresse d’écoute invalide : « ${listenLan} » (hôte:port attendu, ex. lan:47600)`)
+        const scopes = body['scopes'] as string[] | string | undefined
+        try {
+          const r = memoria.configureSyncHub(listenLan, scopes ?? undefined)
+          sendJson(res, 200, { role: 'hub', ...r, machine_id: memoria.sync.machineId, restart_required: true })
+        } catch (err) {
+          if (err instanceof SyncScopeError) throw new HttpError(400, err.message)
+          throw err
+        }
         return
       }
       case 'POST /v1/admin/sync/invite': {
         const body = await readJson(req)
-        sendJson(res, 200, memoria.sync.invite((body['display_name'] as string | undefined) ?? undefined))
+        try {
+          sendJson(res, 200, memoria.sync.invite((body['display_name'] as string | undefined) ?? undefined, (body['scopes'] as string[] | string | undefined) ?? undefined))
+        } catch (err) {
+          if (err instanceof SyncScopeError) throw new HttpError(400, err.message)
+          throw err
+        }
         return
       }
       case 'POST /v1/admin/sync/join': {
@@ -1378,7 +1412,10 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         // remontait « fetch failed » en 500 avec une stack : ici 502 avec
         // l'adresse essayée et la piste ; code refusé → 400 (pas une panne).
         try {
-          sendJson(res, 200, await memoria.sync.join({ hub, code }))
+          const joined = await memoria.sync.join({ hub, code })
+          // Synchro automatique tout de suite, sans redémarrer le daemon.
+          armSyncTimer()
+          sendJson(res, 200, { ...joined, auto_sync: syncTimer !== null })
         } catch (err) {
           const message = (err as Error)?.message ?? String(err)
           if (isNetworkFailure(err)) {
@@ -1411,8 +1448,9 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         return
       }
       case 'POST /v1/admin/sync/leave': {
-        memoria.sync.leave()
-        sendJson(res, 200, { ok: true })
+        const r = await memoria.sync.leave()
+        disarmSyncTimer()
+        sendJson(res, 200, { ok: true, ...r })
         return
       }
       // ----------------------------------------------------------- mise à jour
@@ -1632,54 +1670,57 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       res.writeHead(403).end()
       return
     }
-    const method = req.method ?? 'GET'
-    const pathWithQuery = url.pathname + url.search
     const body = await readRawBody(req)
+    // Le moteur décide de tout (appairage, 401, contrôle par pair en 403,
+    // route) : ce sont les mêmes contrôles que ceux des tests du cœur.
+    const r = memoria.sync.handleHttp({
+      method: req.method ?? 'GET',
+      pathWithQuery: url.pathname + url.search,
+      body,
+      bearer: bearerToken(req),
+      sig: headerStr(req, 'x-memoria-sig'),
+      ts: headerStr(req, 'x-memoria-ts'),
+      nonce: headerStr(req, 'x-memoria-nonce'),
+      remoteHost: (req.socket.remoteAddress ?? '').replace(/^::ffff:/, ''),
+    })
+    if (r.body === null) res.writeHead(r.status).end()
+    else sendJson(res, r.status, r.body)
+  }
 
-    // Pairing : pas de Bearer (le code one-shot TTL EST le secret).
-    if (method === 'POST' && url.pathname === '/v1/sync/pairing/complete') {
-      const parsed = body ? (JSON.parse(body) as Record<string, unknown>) : {}
-      const host = (req.socket.remoteAddress ?? '').replace(/^::ffff:/, '')
-      sendJson(res, 200, memoria.sync.completePairing({
-        code: String(parsed['code'] ?? ''),
-        machine_id: String(parsed['machine_id'] ?? ''),
-        display_name: parsed['display_name'] as string | undefined,
-        host: host || undefined,
-      }))
-      return
-    }
+  /** Une passe de synchro automatique (spoke). Les erreurs sont journalisées par le moteur. */
+  function runSyncTick(): void {
+    if (closing) return
+    void memoria.sync
+      .tick()
+      .then(r => {
+        if (r && (r.pulled > 0 || r.pushed > 0)) console.log(`[memoria-daemon] synchro : ${r.pulled} reçus, ${r.pushed} poussés`)
+      })
+      .catch((err: unknown) => console.warn('[memoria-daemon] synchro automatique en échec :', (err as Error).message))
+  }
 
-    // Toutes les autres routes : authenticité HMAC + token de pair.
-    try {
-      memoria.sync.authenticate(
-        bearerToken(req) ?? undefined,
-        headerStr(req, 'x-memoria-sig'),
-        { method, path: pathWithQuery, body, ts: headerStr(req, 'x-memoria-ts') ?? '', nonce: headerStr(req, 'x-memoria-nonce') ?? '' },
-      )
-    } catch (err) {
-      sendJson(res, 401, { error: (err as Error).message })
-      return
-    }
+  /**
+   * Arme la minuterie de synchro (spoke) : au démarrage, et juste après un
+   * join réussi (avant, il fallait redémarrer le daemon pour qu'elle parte).
+   * Sans effet sur un hub ou une synchro désactivée.
+   */
+  function armSyncTimer(): void {
+    const cfg = memoria.resolved.config.sync
+    if (closing || !cfg?.enabled || cfg.role !== 'spoke') return
+    disarmSyncTimer()
+    syncIntervalSec = Math.max(30, cfg.interval_sec ?? 120)
+    syncTimer = setInterval(runSyncTick, syncIntervalSec * 1000)
+    syncTimer.unref()
+    // 1re passe peu après (au boot, laisse replayWal démarrer)
+    syncFirstTick = setTimeout(runSyncTick, opts.syncFirstTickMs ?? 2000)
+    syncFirstTick.unref()
+  }
 
-    if (method === 'GET' && url.pathname === '/v1/sync/snapshot') {
-      sendJson(res, 200, memoria.sync.snapshot(url.searchParams.get('scope') ?? '', url.searchParams.get('since') ?? undefined))
-      return
-    }
-    if (method === 'GET' && url.pathname === '/v1/sync/pull') {
-      sendJson(res, 200, memoria.sync.collectDelta(url.searchParams.get('scope') ?? '', url.searchParams.get('since') ?? '1970-01-01T00:00:00.000Z'))
-      return
-    }
-    if (method === 'POST' && url.pathname === '/v1/sync/push') {
-      const b = JSON.parse(body) as { scope_id: string; facts: never[]; tombstones: never[] }
-      sendJson(res, 200, memoria.sync.applyIncoming(b.scope_id, b.facts ?? [], b.tombstones ?? []))
-      return
-    }
-    if (method === 'GET' && url.pathname === '/v1/sync/secrets') {
-      const secrets = memoria.sync.serveSecrets(url.searchParams.get('scope') ?? '').map(s => ({ name: s.name, env: s.env }))
-      sendJson(res, 200, { secrets })
-      return
-    }
-    throw new HttpError(404, `route sync inconnue : ${method} ${url.pathname}`)
+  function disarmSyncTimer(): void {
+    if (syncTimer) clearInterval(syncTimer)
+    if (syncFirstTick) clearTimeout(syncFirstTick)
+    syncTimer = null
+    syncFirstTick = null
+    syncIntervalSec = null
   }
 
   let port: number
@@ -1723,29 +1764,59 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   }
 
   // ---- SYNCHRO INTER-MACHINES (SYNC §3.10) -------------------------------
-  // (a) HUB : second listener sur le LAN, routes /v1/sync/* uniquement.
   const syncCfg = memoria.resolved.config.sync
+  // Un déplacement d'espace interrompu par un arrêt brutal (join) est repris.
+  if (syncCfg?.enabled) {
+    try {
+      memoria.sync.recoverPendingScopeMove()
+    } catch (err) {
+      console.warn('[memoria-daemon] synchro : reprise d’un déplacement d’espace en échec :', (err as Error).message)
+    }
+  }
+  // (a) HUB : second listener sur le LAN, routes /v1/sync/* uniquement.
+  // `lan:47600` (défaut) = l'IPv4 privée de l'interface du réseau local,
+  // résolue à chaque démarrage. Pas d'adresse (Wi-Fi pas encore là au login)
+  // ou liaison refusée → nouvel essai toutes les 30 s, journalisé une fois.
   let lanServer: Server | null = null
-  let syncTimer: ReturnType<typeof setInterval> | null = null
   if (syncCfg?.enabled && syncCfg.role === 'hub' && syncCfg.listen_lan) {
-    const [lanHost, lanPortStr] = parseHostPort(syncCfg.listen_lan)
-    lanServer = createServer((req, res) => {
-      void handleSync(req, res).catch((err: unknown) => reportAndSend(req, res, err))
-    })
-    lanServer.on('error', e => console.warn('[memoria-daemon] listener LAN sync en échec :', (e as Error).message))
-    lanServer.listen(lanPortStr, lanHost, () => console.log(`[memoria-daemon] synchro HUB à l'écoute sur ${lanHost}:${lanPortStr} (/v1/sync/*)`))
+    const listenLan = syncCfg.listen_lan
+    let lastLanWarning: string | null = null
+    const warnLan = (msg: string): void => {
+      if (msg !== lastLanWarning) console.warn(`[memoria-daemon] synchro HUB : ${msg} — nouvel essai toutes les 30 s`)
+      lastLanWarning = msg
+    }
+    const retryLan = (): void => {
+      if (closing) return
+      lanRetryTimer = setTimeout(startLan, 30_000)
+      lanRetryTimer.unref()
+    }
+    const startLan = (): void => {
+      lanRetryTimer = null
+      if (closing) return
+      const { host, port: lanPort } = resolveListenHost(listenLan)
+      if (!host) {
+        warnLan('aucune adresse de réseau local (Wi-Fi ou Ethernet) pour écouter')
+        retryLan()
+        return
+      }
+      const srv = createServer((req, res) => {
+        void handleSync(req, res).catch((err: unknown) => reportAndSend(req, res, err))
+      })
+      srv.once('error', e => {
+        warnLan(`écoute LAN sur ${host}:${lanPort} en échec (${(e as Error).message})`)
+        srv.close()
+        retryLan()
+      })
+      srv.listen(lanPort, host, () => {
+        lanServer = srv
+        lanListening = true
+        console.log(`[memoria-daemon] synchro HUB à l'écoute sur ${host}:${lanPort} (/v1/sync/*)`)
+      })
+    }
+    startLan()
   }
   // (b) SPOKE : passe de synchro best-effort, au boot puis périodiquement.
-  if (syncCfg?.enabled && syncCfg.role === 'spoke') {
-    const intervalMs = Math.max(30, syncCfg.interval_sec ?? 120) * 1000
-    const runTick = (): void => {
-      void memoria.sync.tick().then(r => {
-        if (r && (r.pulled > 0 || r.pushed > 0)) console.log(`[memoria-daemon] synchro : ${r.pulled} reçus, ${r.pushed} poussés`)
-      }).catch(() => {})
-    }
-    syncTimer = setInterval(runTick, intervalMs)
-    setTimeout(runTick, 2000) // 1re passe peu après le boot (laisse replayWal démarrer)
-  }
+  armSyncTimer()
 
   // Rejeu du WAL au boot (spec §6.2) : best-effort, jamais bloquant pour le
   // démarrage — sans LLM dispo les entrées restent pending (visibles au doctor).
@@ -1793,11 +1864,13 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     })
 
   const close = async (): Promise<void> => {
-    if (syncTimer) clearInterval(syncTimer)
+    disarmSyncTimer()
     closing = true
+    if (lanRetryTimer) clearTimeout(lanRetryTimer)
     if (bootCognitionTimer) clearTimeout(bootCognitionTimer)
     loopMonitor.stop()
-    if (lanServer) await new Promise<void>(r => lanServer!.close(() => r()))
+    const lan = lanServer as Server | null
+    if (lan) await new Promise<void>(r => lan.close(() => r()))
     await new Promise<void>((resolveClose) => server.close(() => resolveClose()))
     // Un import en cours est ANNONCÉ interrompu (persisté) avant de fermer les
     // DB — sinon il mourait en « Memoria est fermé » dans un état perdu avec le
@@ -1841,15 +1914,6 @@ function isNetworkFailure(err: unknown): boolean {
 function describeNetworkFailure(err: unknown): string {
   const cause = (err as { cause?: { code?: string; message?: string } }).cause
   return cause?.code ?? cause?.message ?? (err as Error)?.name ?? ''
-}
-
-/** « host:port » → [host, port]. host vide → 0.0.0.0. */
-function parseHostPort(addr: string): [string, number] {
-  const i = addr.lastIndexOf(':')
-  if (i < 0) return ['0.0.0.0', Number.parseInt(addr, 10) || 47600]
-  const host = addr.slice(0, i) || '0.0.0.0'
-  const port = Number.parseInt(addr.slice(i + 1), 10) || 47600
-  return [host, port]
 }
 
 /**
