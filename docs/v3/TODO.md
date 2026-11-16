@@ -573,8 +573,11 @@ référence (`can_read = 1, can_write = 0`) ; l'outil MCP `memoria_store_fact` n
 **Besoin produit** : les agents des collègues (montage vidéo, publication d'apps) partagent les process
 d'équipe via `org` ; l'espace `user` (personnel au propriétaire) ne doit jamais partir vers les machines
 de l'équipe.
-- [ ] MCP + daemon : `scope: 'org'` accepté par `memoria_store_fact` (+ `can_write = 1` sur la politique
-      `org` des agents choisis) ; refus clair sinon ;
+- [x] MCP + daemon : `scope: 'org'` accepté par `memoria_store_fact` ; écriture donnée à Claude Code et
+      Codex par `[sharing] machine = "team"` (jamais OpenClaw) ; refus clair sinon ; join d'un Mac `team`
+      dont les agents ont déjà ce droit testé (`packages/core/test/team-sync-junction.test.ts`, 16/11) ;
+- [ ] écrans : « Partager à l'équipe » et filtre dans Tri, carte « Espace équipe » dans Partage ;
+      « retirer du partage » ;
 - [ ] écran Organisations & projets (cf. T25) ou au minimum une commande CLI pour créer l'org et poser
       les politiques ;
 - [x] `allowed_scopes` par pair : un Mac d'équipe ne reçoit que `org` par défaut (jamais `user`), contrôlé

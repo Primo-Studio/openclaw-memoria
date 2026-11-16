@@ -656,9 +656,13 @@ export class Memoria {
    * jamais par son nom `org:<uuid>` (renommé ou repris d'un autre Mac, il
    * change). Dans l'ordre :
    *  1. sur un Mac d'équipe relié, l'org repris du hub (dans les scopes
-   *     autorisés du pair hub) : après la reprise, le démarrage suivant recrée
-   *     un org local à côté, et c'est celui du hub qui compte ;
-   *  2. l'org de l'organisation `own_company`, le plus ancien d'abord ;
+   *     autorisés du pair hub). Depuis la reprise sans perte (`adoptScope`),
+   *     c'est le même que le 2 : l'org local a pris l'id du hub en gardant
+   *     son organisation. Le 1 reste pour l'état laissé par l'ancien code
+   *     (une ligne à part, sans organisation, à côté de l'org local) ;
+   *  2. l'org de l'organisation `own_company` : `registry.ownOrgScope()`, le
+   *     MÊME résolveur que la reprise au join et que bootstrap, pour que
+   *     l'alias et la synchro ne visent jamais deux lignes différentes ;
    *  3. le seul scope org, s'il n'y en a qu'un.
    * null : aucun, ou plusieurs sans lien clair (on ne devine pas).
    * Lecture du registre seulement (quelques lignes) : rien n'est balayé.
@@ -670,8 +674,7 @@ export class Memoria {
     const fromHub = new Set(this.registry.listPeers().filter(p => p.role === 'hub').flatMap(p => p.allowed_scopes))
     const adopted = orgs.find(s => fromHub.has(s.id))
     if (adopted) return adopted
-    const own = this.registry.ownCompany()
-    const mine = own ? orgs.find(s => s.org_id === own.id) : undefined
+    const mine = this.registry.ownOrgScope()
     if (mine) return mine
     return orgs.length === 1 ? orgs[0]! : null
   }
@@ -721,7 +724,9 @@ export class Memoria {
 
   /**
    * Même droit au démarrage, pour les agents appairés AVANT le passage en
-   * `team` (ou avant la reprise de l'org du hub, qui change son id).
+   * `team`. L'ordre « join » puis « team », ou l'inverse, est indifférent :
+   * la reprise de l'org du hub change son id en emmenant les politiques
+   * (`reIdScope`), donc un droit déjà posé suit, et n'est pas reposé ici.
    * Idempotent ; registre seulement (quelques lignes), aucune base de contenu.
    * `setScopeAccess` écrit toujours une ligne : un choix du propriétaire (même
    * un retrait) est donc une politique existante, jamais réécrite ici.
@@ -3923,7 +3928,12 @@ export class Memoria {
   /** Scopes synchronisables présents localement (types whitelistés). */
   syncableScopes(whitelist: readonly string[]): MemoryScope[] {
     this.assertOpen()
-    return this.registry.listScopes().filter(s => whitelist.includes(s.type))
+    // Un seul espace d'équipe voyage : celui que vise l'alias `org`
+    // (teamScope), donc celui où le propriétaire partage. Un Mac qui porte
+    // deux scopes org (doublon laissé par un ancien join) les proposerait
+    // sinon tous les deux, et le Mac invité reprendrait deux fois l'identité.
+    const team = whitelist.includes('org') ? this.teamScope() : null
+    return this.registry.listScopes().filter(s => whitelist.includes(s.type) && (s.type !== 'org' || s.id === team?.id))
   }
 
   /**

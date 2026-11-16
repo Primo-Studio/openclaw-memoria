@@ -157,8 +157,31 @@ memoria sync join --hub 192.168.x.y:47600 --code XXXX-XXXX
 automatique : armée », dernière passe et ses éventuelles erreurs. Sur le hub, chaque Mac relié est
 listé avec ses espaces (`org`) et « appairage en cours » tant qu'il n'a pas tout reçu.
 
-Les agents du Mac de l'équipe lisent l'espace `org` selon la matrice **Partage** ; leur droit d'y
-écrire est suivi dans T29.
+### Laisser les agents du collègue écrire dans `org`
+
+Sur le Mac de l'équipe (pas sur celui du propriétaire), ajouter à `~/.memoria/config.toml` :
+
+```toml
+[sharing]
+machine = "team"
+```
+
+puis redémarrer Memoria (`memoria stop && memoria start`). Avant ou après le join, peu importe :
+le droit suit l'espace `org` quand il prend l'identifiant du hub.
+- **Claude Code et Codex** reçoivent lecture + écriture sur `org` : à leur connexion, et au
+  démarrage pour ceux déjà connectés (seulement s'ils n'ont encore aucun réglage sur `org` : un
+  réglage fait dans **Partage** n'est jamais modifié).
+- **OpenClaw** (bots de canal) ne reçoit rien sur `org`, et son écriture y est refusée même avec un
+  droit posé à la main.
+- Un agent écrit dans l'espace d'équipe avec `memoria_store_fact` et `scope: "org"`. Le Memoria du
+  Mac refuse un fait sensible, `critical`, contenant un secret, ou écrit avec un client déclaré
+  (403, le fait n'est écrit nulle part). Au rappel, un fait d'équipe est marqué `org`.
+
+Sur le Mac du propriétaire (`machine = "owner"`, le défaut), rien ne change : ses faits n'entrent
+dans `org` que par sa validation, filtrée côté serveur (seuls process, savoirs, leçons et décisions
+passent ; jamais rh, finance, juridique, clients, vente, ni un fait sensible, secret ou client).
+Pour l'instant par l'API seulement (promotion du tri avec `share: 'org'`, ou `POST /v1/admin/share`
+vers `org`) : les boutons des écrans Tri et Partage sont à venir (T29).
 
 **Couper un Mac** depuis le hub : `memoria sync revoke <machine_id>`. **Quitter** depuis le Mac de
 l'équipe : **« Se déconnecter »** (`memoria sync leave`) ; le hub est prévenu et le coupe (s'il est

@@ -647,7 +647,12 @@ export class SyncEngine {
       setGroupVaultKey(this.deps.secrets, gvk)
 
       // Espaces d'équipe seulement, même si un hub d'avant propose `user`.
-      const offered = (data.scopes ?? []).filter(s => SYNC_ALLOWED_TYPES.includes(s.type) && !SYNC_FORBIDDEN_TYPES.includes(s.type))
+      const allowed = (data.scopes ?? []).filter(s => SYNC_ALLOWED_TYPES.includes(s.type) && !SYNC_FORBIDDEN_TYPES.includes(s.type))
+      // Un seul espace d'équipe par Mac : un hub qui en proposerait deux (doublon
+      // d'un ancien code) ferait reprendre deux fois l'identité de l'org local,
+      // et les faits du premier n'arriveraient nulle part.
+      const firstOrg = allowed.find(s => s.type === 'org')
+      const offered = allowed.filter(s => s.type !== 'org' || s === firstOrg)
 
       // Le hub est enregistré tout de suite : l'abandon doit pouvoir être signé.
       this.registry.addPeer({

@@ -82,16 +82,19 @@ describe("alias `org` : l'espace de l'entreprise, quel que soit son identifiant"
     expect(fact.scope_id).toBe(before)
   })
 
-  it("repris d'un hub : l'org adopté reste la cible, même après le doublon recréé au redémarrage", () => {
+  it("repris d'un hub : l'org adopté reste la cible après redémarrage, sans doublon", () => {
     const first = open()
     first.m.registry.adoptScope({ id: 'org-du-hub-fictif', type: 'org', name: 'org:hub-fictif' })
     expect(orgScope(first.m).id).toBe('org-du-hub-fictif')
     first.m.close()
 
-    // Au redémarrage, bootstrap recrée un org local à côté (même org_id).
+    // Au redémarrage, bootstrap retrouve l'org repris par son organisation :
+    // pas de second org à côté, l'id du hub et l'organisation locale restent.
     const again = open({ root: first.root })
     const orgs = again.m.registry.listScopes().filter(s => s.type === 'org')
-    expect(orgs.length).toBe(2)
+    expect(orgs.length).toBe(1)
+    expect(orgs[0]!.id).toBe('org-du-hub-fictif')
+    expect(orgs[0]!.org_id).toBe(again.m.registry.ownCompany()!.id)
     expect(orgScope(again.m).id).toBe('org-du-hub-fictif')
 
     // Pair hub déclaré : c'est son scope autorisé qui l'emporte.
