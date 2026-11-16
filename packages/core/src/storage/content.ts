@@ -364,17 +364,21 @@ export class ContentStore {
     lifecycle_state: string; superseded: number; superseded_by: string | null
     origin_machine_id: string | null; origin_rev: number; content_hash: string | null; deleted_at: string | null
     created_at: string; updated_at: string
+    /** Expiration transportée (absente chez un pair d'avant : alors aucune). */
+    expires_at?: string | null
   }): void {
     const exists = this.db.prepare('SELECT 1 FROM facts WHERE id = ?').get(f.id)
     // norm_hash est LOCAL (index de dédup) : recalculé ici, jamais synchronisé.
-    const params = { ...f, norm_hash: factNormHash(f.fact) }
+    // expires_at : toujours présent dans les paramètres (better-sqlite3 refuse
+    // un paramètre nommé manquant, et un pair d'avant ne l'envoie pas).
+    const params = { ...f, expires_at: f.expires_at ?? null, norm_hash: factNormHash(f.fact) }
     if (exists) {
       const update = this.db.prepare(
           `UPDATE facts SET fact=@fact, category=@category, fact_type=@fact_type, confidence=@confidence, source=@source,
              scope_id=@scope_id, sensitivity=@sensitivity, visibility=@visibility, tags=@tags, entity_ids=@entity_ids,
              lifecycle_state=@lifecycle_state, superseded=@superseded, superseded_by=@superseded_by,
              origin_machine_id=@origin_machine_id, origin_rev=@origin_rev, content_hash=@content_hash,
-             deleted_at=@deleted_at, updated_at=@updated_at, norm_hash=@norm_hash WHERE id=@id`,
+             deleted_at=@deleted_at, expires_at=@expires_at, updated_at=@updated_at, norm_hash=@norm_hash WHERE id=@id`,
       )
       // Le trigger facts_norm_hash_reset remet le hash à NULL quand le texte
       // change et que le hash reste le même : il ne distingue pas « hash
@@ -397,7 +401,7 @@ export class ContentStore {
             lifecycle_state, superseded, superseded_by,
             usefulness, recall_count, used_count, relevance_weight,
             created_at, updated_at, last_accessed_at,
-            origin_machine_id, origin_rev, content_hash, deleted_at, norm_hash
+            origin_machine_id, origin_rev, content_hash, deleted_at, expires_at, norm_hash
           ) VALUES (
             @id, @fact, @category, @fact_type, @confidence, @source,
             NULL, NULL, NULL, NULL, NULL, NULL, @scope_id,
@@ -405,7 +409,7 @@ export class ContentStore {
             @lifecycle_state, @superseded, @superseded_by,
             0, 0, 0, 1.0,
             @created_at, @updated_at, NULL,
-            @origin_machine_id, @origin_rev, @content_hash, @deleted_at, @norm_hash
+            @origin_machine_id, @origin_rev, @content_hash, @deleted_at, @expires_at, @norm_hash
           )`,
         )
         .run(params)

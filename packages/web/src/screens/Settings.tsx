@@ -855,7 +855,7 @@ function SyncPanel({ onError }: { onError: (m: string) => void }) {
                   disabled={busy}
                   onClick={() =>
                     void wrap(async () => {
-                      const r = await syncInitHub('0.0.0.0:47600')
+                      const r = await syncInitHub('lan:47600')
                       setNote(t('settings.sync.hubConfigured', { machine: r.machine_id }))
                       toast.success(t('settings.sync.toast.hub'))
                       refresh()

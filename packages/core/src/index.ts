@@ -71,9 +71,33 @@ export { signRequest, verifyRequest, newNonce, SYNC_TS_SKEW_MS, SYNC_NONCE_TTL_M
 export type { SigParts, VerifyResult } from './sync/peer-auth.js'
 export { sealValue, openEnvelope, sealGvk, openGvk } from './sync/secrets-sync.js'
 export type { Envelope } from './sync/secrets-sync.js'
-export { groupVaultKey, clusterPairingKey, setGroupVaultKey, setClusterPairingKey } from './secrets/index.js'
-export { SyncEngine, SyncAuthError } from './sync/engine.js'
-export type { SyncConfig, SyncDeps, SyncDelta, FetchLike } from './sync/engine.js'
+export { groupVaultKey, clusterPairingKey, setGroupVaultKey, setClusterPairingKey, freshGroupKeys, keyFingerprint } from './secrets/index.js'
+export { SyncEngine, SyncAuthError, SyncForbiddenError } from './sync/engine.js'
+export type {
+  SyncConfig,
+  SyncDeps,
+  SyncDelta,
+  FetchLike,
+  SyncHttpRequest,
+  SyncHttpResponse,
+  SyncRunReport,
+  SyncRunStatus,
+  SyncPeerView,
+  RefusedCounts,
+  IncomingReport,
+} from './sync/engine.js'
+export { SYNC_ALLOWED_TYPES, SYNC_DEFAULT_TYPES, SYNC_FORBIDDEN_TYPES, SyncScopeError, normalizeSyncTypes, effectiveSyncTypes } from './sync/scopes.js'
+export {
+  DEFAULT_LISTEN_LAN,
+  DEFAULT_SYNC_PORT,
+  LAN_AUTO_HOST,
+  hubAddressesFor,
+  isPrivateIPv4,
+  lanIPv4,
+  localHostName,
+  resolveListenHost,
+  splitHostPort,
+} from './sync/lan.js'
 export { importLegacyCognition } from './migration/import-cognition.js'
 export {
   estimateTokens,

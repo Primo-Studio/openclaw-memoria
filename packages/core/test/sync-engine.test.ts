@@ -11,46 +11,25 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { Memoria, type FetchLike } from '../src/index.js'
 
 /**
- * Route un FetchLike vers le SyncEngine du hub, en imitant exactement ce que
- * fera le daemon : pas d'auth sur /pairing/complete, auth (token+HMAC+nonce)
- * sur le reste. `path` (avec query) = ce qui a été signé côté spoke.
+ * Route un FetchLike vers le SyncEngine du hub par LE répartiteur du daemon
+ * (`handleHttp`) : appairage, auth (token+HMAC+nonce), contrôle par pair.
+ * `path` (avec query) = ce qui a été signé côté spoke.
  */
 function hubFetch(hub: Memoria): FetchLike {
   return async (url, init) => {
     const u = new URL(url)
-    const path = u.pathname + u.search
-    const body = init.body ?? ''
-    const json = (status: number, payload: unknown) => ({ ok: status < 400, status, json: async () => payload })
-    try {
-      if (u.pathname === '/v1/sync/pairing/complete' && init.method === 'POST') {
-        return json(200, hub.sync.completePairing(JSON.parse(body) as never))
-      }
-      // routes authentifiées
-      const h = init.headers ?? {}
-      const peer = hub.sync.authenticate(
-        (h['authorization'] ?? '').replace(/^Bearer\s+/, ''),
-        h['x-memoria-sig'],
-        { method: init.method, path, body, ts: h['x-memoria-ts'] ?? '', nonce: h['x-memoria-nonce'] ?? '' },
-      )
-      void peer
-      if (u.pathname === '/v1/sync/snapshot') {
-        return json(200, hub.sync.snapshot(u.searchParams.get('scope')!, u.searchParams.get('since') ?? undefined))
-      }
-      if (u.pathname === '/v1/sync/pull') {
-        return json(200, hub.sync.collectDelta(u.searchParams.get('scope')!, u.searchParams.get('since') ?? '1970-01-01T00:00:00.000Z'))
-      }
-      if (u.pathname === '/v1/sync/push') {
-        const b = JSON.parse(body) as { scope_id: string; facts: never[]; tombstones: never[] }
-        return json(200, hub.sync.applyIncoming(b.scope_id, b.facts, b.tombstones))
-      }
-      if (u.pathname === '/v1/sync/secrets') {
-        const secrets = hub.sync.serveSecrets(u.searchParams.get('scope')!).map(s => ({ name: s.name, env: s.env }))
-        return json(200, { secrets })
-      }
-      return json(404, { error: 'route inconnue' })
-    } catch (err) {
-      return json(401, { error: (err as Error).message })
-    }
+    const h = init.headers ?? {}
+    const r = hub.sync.handleHttp({
+      method: init.method,
+      pathWithQuery: u.pathname + u.search,
+      body: init.body ?? '',
+      bearer: (h['authorization'] ?? '').replace(/^Bearer\s+/, ''),
+      sig: h['x-memoria-sig'],
+      ts: h['x-memoria-ts'],
+      nonce: h['x-memoria-nonce'],
+      remoteHost: '192.168.1.30',
+    })
+    return { ok: r.status < 400, status: r.status, json: async () => r.body }
   }
 }
 
