@@ -35,15 +35,19 @@
  *        nombre, longueur médiane, parts de messages très courts, sans
  *        ponctuation finale, avec un point d'interrogation ;
  *     3. échantillon déterministe réparti sur le mois (STYLE_SAMPLE_MAX au
- *        plus, chacun coupé à STYLE_SAMPLE_CHARS), masqué par `host.redact`
- *        juste avant l'envoi ;
+ *        plus), masqué par `host.redact` juste avant l'envoi, PUIS coupé à
+ *        STYLE_SAMPLE_CHARS (coupé d'abord, une clé tronquée ne serait plus
+ *        reconnue et partirait en partie) ;
  *     4. un appel LLM (plafond vérifié au pire cas AVANT : TriageBudgetError,
  *        arrêt propre, le mois n'est pas marqué) ; sortie validée à la main ;
  *     5. 6 observations au plus, chacune appuyée par 3 messages de
- *        l'échantillon au moins (numéros vérifiés par le code) ; re-masquée,
- *        écartée si sensible, si elle touche la vie privée ou un contrat, ou si
- *        elle nomme une autre fiche Person ;
- *     6. doublon (`host.findSemanticDuplicate`, exact ou par le sens), sinon
+ *        l'échantillon au moins (numéros vérifiés par le code) ; texte ET titre
+ *        re-masqués, observation écartée si l'un des deux est sensible, touche
+ *        la vie privée ou un contrat, ou nomme une autre fiche Person (le titre
+ *        est stocké puis rendu aux agents, il passe les mêmes gardes) ;
+ *     6. doublon (`host.findSemanticDuplicate`, exact, proche ou par le sens ;
+ *        il ne compte que si son fait porte la même personne, ici aucune :
+ *        `host.factPersonOf`), sinon
  *        fait DORMANT par `host.storePendingTriaged` : genre `style`,
  *        person_id null, auteur `owner`, auteur_source `message`, portee
  *        `user`, conversation_at = date du dernier message du mois,
@@ -58,12 +62,13 @@
  *   Noms cherchés : premier mot du nom affiché, plus les alias (identifiants
  *   `handle` ou `other` ; jamais un numéro ni un e-mail). Mot entier, sans
  *   accents ni casse.
- *   Sources : faits TRIÉS des bases lisibles (`host.styleSourceFacts` : genre
- *   connu hors `ephemere`, ni faux, ni sensibles, sensibilité normale, ni
- *   oubliés, ni remplacés, ni archivés, ni tirés par cette passe), qui citent
- *   un de ces noms ; rubriques `rh`, `finance`, `juridique` écartées ; filtre
- *   sensible relancé sur chaque texte. Les 250 plus récents, coupés à 300
- *   caractères, masqués avant l'envoi.
+ *   Sources : faits TRIÉS des bases lisibles par l'instance où l'on écrit,
+ *   bornés à ses scopes lisibles (`host.styleSourceFacts` : genre connu hors
+ *   `ephemere`, ni faux, ni sensibles, sensibilité normale, ni oubliés, ni
+ *   remplacés, ni archivés, ni expirés, ni rattachés à un client, ni tirés par
+ *   cette passe), qui citent un de ces noms ; rubriques `rh`, `finance`,
+ *   `juridique` écartées ; filtre sensible relancé sur chaque texte. Les 250
+ *   plus récents, masqués avant l'envoi PUIS coupés à 300 caractères.
  *   Un appel (deux au-delà de STYLE_PERSON_CALL_CHARS de notes, 4 observations
  *   chacun) ; 8 observations au plus, chacune appuyée par 2 faits sources au
  *   moins ; aucun jugement sur le travail, la santé, la paie, le contrat, la
@@ -72,8 +77,10 @@
  *   Écriture : genre `style`, person_id de la fiche, auteur `ia:<agent de
  *   l'instance>` (convention des faits tirés par le LLM), auteur_source `llm`,
  *   approuve_par_owner faux, portee `user`, conversation_at = date du plus
- *   récent des faits qui l'appuient. Le texte nomme la personne (le doublon
- *   exact ou par le sens ignore person_id). Ces styles ne ressortent jamais
+ *   récent des faits qui l'appuient. Le texte nomme la personne ; une redite
+ *   (proche ou par le sens) ne compte que si son fait porte le même person_id
+ *   (le style d'une autre personne n'est pas une redite, et l'état écrit
+ *   ensuite empêcherait de le refaire). Ces styles ne ressortent jamais
  *   comme ceux du propriétaire : stylesForInstance sans person_id filtre
  *   `t.person_id IS NULL`.
  *   État : la personne n'est renvoyée que si ses faits sources ont augmenté
@@ -87,7 +94,8 @@
  *
  * DRY-RUN
  *   Aucun appel (ni LLM, ni vecteurs), aucune écriture (ni `redact`, qui écrit
- *   au coffre, ni état) : compte ce qui partirait et rend `estimate_usd`.
+ *   au coffre, ni état, ni ligne d'audit du service) : compte ce qui partirait
+ *   et rend `estimate_usd` (textes coupés sans masquage, rien ne part).
  *
  * Boucle d'événements (ticket #27) : transcriptions lues en flux (fonctions de
  * user-messages.ts), retour à la boucle toutes les 10 ms de calcul ; faits
@@ -215,10 +223,14 @@ function bump(counts: Record<string, number>, key: string, n = 1): void {
 
 // ---------------------------------------------------------------- mode owner : mois et statistiques
 
-/** Message du propriétaire gardé pour un mois (texte déjà coupé ; jamais sensible). */
+/** Message du propriétaire gardé pour un mois (jamais sensible). */
 export interface OwnerStyleMessage {
   ts: string
-  /** Texte nettoyé, coupé à STYLE_SAMPLE_CHARS. */
+  /**
+   * Texte nettoyé ENTIER (cleanHumanText le borne déjà à MESSAGE_MAX_CHARS) :
+   * il n'est coupé qu'après le masquage, sinon une clé tronquée échapperait
+   * au motif de `redact` et partirait en partie.
+   */
   text: string
   /** Longueur du texte nettoyé entier. */
   length: number
@@ -264,6 +276,11 @@ export function monthStats(messages: readonly Pick<OwnerStyleMessage, 'length' |
     part_sans_ponctuation_finale: pct(messages.filter(m => m.noFinalPunct).length),
     part_avec_question: pct(messages.filter(m => m.question).length),
   }
+}
+
+/** Coupe un texte à `max` caractères (marque « … »). Toujours APRÈS le masquage, jamais avant. */
+function cut(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max)}…` : text
 }
 
 /** Échantillon déterministe réparti sur toute la liste (déjà triée) : `max` éléments au plus, à intervalles réguliers. */
@@ -647,7 +664,7 @@ class Pass {
         const text = cleaned.text
         group.messages.push({
           ts: msg.ts,
-          text: text.length > STYLE_SAMPLE_CHARS ? `${text.slice(0, STYLE_SAMPLE_CHARS)}…` : text,
+          text,
           length: text.length,
           noFinalPunct: !FINAL_PUNCT.test(text),
           question: text.includes('?'),
@@ -688,16 +705,17 @@ class Pass {
     const last = all[all.length - 1]!
     const system = buildStylesOwnerSystem(this.host.owner)
     if (this.dryRun) {
-      this.estimate(system, renderOwnerMonth(group.month, stats, sample))
+      this.estimate(system, renderOwnerMonth(group.month, stats, sample.map(m => ({ ts: m.ts, text: cut(m.text, STYLE_SAMPLE_CHARS) }))))
       r.items_sent += sample.length
       r.periods_sent++
       return
     }
-    // Masquage juste avant l'envoi (la valeur d'un secret va au coffre).
+    // Masquage juste avant l'envoi (la valeur d'un secret va au coffre), sur le
+    // texte ENTIER, puis coupe : coupé d'abord, une clé tronquée passerait.
     const sent = sample.map(m => {
       const masked = this.host.redact(m.text)
       r.secrets_masked += masked.secrets
-      return { ts: m.ts, text: masked.text }
+      return { ts: m.ts, text: cut(masked.text, STYLE_SAMPLE_CHARS) }
     })
     const items = await this.ask(system, renderOwnerMonth(group.month, stats, sent), sent.length, STYLE_OWNER_MIN_SUPPORT)
     if (items === null) {
@@ -758,8 +776,9 @@ class Pass {
     }
     r.periods_found = 1
     this.periodsTotal = 1
+    // Sources bornées aux bases et aux scopes lisibles par l'instance où l'on écrit.
     const scan = await this.host.styleSourceFacts({
-      ...(this.opts.instance ? { instance: this.opts.instance } : {}),
+      instance,
       match,
       stop: () => this.host.shouldStop() !== null,
     })
@@ -798,16 +817,14 @@ class Pass {
       return
     }
     kept.sort((a, b) => b.at.localeCompare(a.at) || a.id.localeCompare(b.id))
-    const notes = kept.slice(0, STYLE_PERSON_MAX_SOURCES).map(f => ({
-      ...f,
-      text: f.text.length > STYLE_PERSON_SOURCE_CHARS ? `${f.text.slice(0, STYLE_PERSON_SOURCE_CHARS)}…` : f.text,
-    }))
-    const chars = notes.reduce((n, x) => n + x.text.length, 0)
+    // Textes entiers : coupés seulement après le masquage (voir l'envoi).
+    const notes = kept.slice(0, STYLE_PERSON_MAX_SOURCES)
+    const chars = notes.reduce((n, x) => n + cut(x.text, STYLE_PERSON_SOURCE_CHARS).length, 0)
     const chunks = chars > STYLE_PERSON_CALL_CHARS ? [notes.slice(0, Math.ceil(notes.length / 2)), notes.slice(Math.ceil(notes.length / 2))] : [notes]
     const perCall = Math.floor(STYLE_PERSON_MAX_OBSERVATIONS / chunks.length)
     const system = buildStylesPersonSystem(perCall)
     if (this.dryRun) {
-      for (const chunk of chunks) this.estimate(system, renderPersonNotes(display, chunk))
+      for (const chunk of chunks) this.estimate(system, renderPersonNotes(display, chunk.map(n => ({ ...n, text: cut(n.text, STYLE_PERSON_SOURCE_CHARS) }))))
       r.items_sent += notes.length
       r.periods_sent++
       return
@@ -816,10 +833,11 @@ class Pass {
     const proposed: Array<{ item: ProposedObservation; chunk: typeof notes }> = []
     for (const chunk of chunks) {
       this.checkStop()
+      // Masquage du texte entier, puis coupe (même raison que le mode owner).
       const sent = chunk.map(n => {
         const masked = this.host.redact(n.text)
         r.secrets_masked += masked.secrets
-        return { ...n, text: masked.text }
+        return { ...n, text: cut(masked.text, STYLE_PERSON_SOURCE_CHARS) }
       })
       const items = await this.ask(system, renderPersonNotes(display, sent), sent.length, STYLE_PERSON_MIN_SUPPORT)
       if (items === null) {
@@ -925,9 +943,11 @@ class Pass {
   }
 
   /**
-   * Gardes du code sur les observations proposées : re-masquées, écartées si
-   * sensibles, sur un thème interdit, ou si elles nomment une autre fiche
-   * Person ; en mode person, le texte nomme la personne. `max` au plus.
+   * Gardes du code sur les observations proposées : texte et titre re-masqués ;
+   * observation écartée si l'un des deux est sensible, sur un thème interdit,
+   * ou nomme une autre fiche Person (le titre est stocké puis rendu aux agents
+   * comme `exchange_styles[].title` : mêmes gardes que le texte) ; en mode
+   * person, le texte nomme la personne. `max` au plus.
    */
   private accept(
     items: readonly ProposedObservation[],
@@ -938,6 +958,9 @@ class Pass {
   ): Accepted[] {
     const r = this.report
     const tiers = nameMatcher(this.thirdParties)
+    /** Raison d'écarter un texte (déjà masqué), ou null. */
+    const guard = (t: string): string | null =>
+      this.host.isSensitive(t) ? 'sensible' : (forbiddenTheme(t, mode) ?? (tiers?.(t) ? 'tiers' : null))
     const out: Accepted[] = []
     for (const item of items) {
       if (out.length >= max) {
@@ -946,19 +969,18 @@ class Pass {
       }
       const masked = this.host.redact(item.texte)
       let text = masked.text
-      const theme = this.host.isSensitive(text) ? 'sensible' : forbiddenTheme(text, mode)
-      if (theme) {
-        bump(r.observations_rejected, theme)
+      // Le titre aussi : un secret y est masqué, un thème interdit y écarte l'observation entière.
+      const maskedTitre = item.titre ? this.host.redact(item.titre) : null
+      const titre = maskedTitre ? maskedTitre.text : null
+      const why = guard(text) ?? (titre !== null ? guard(titre) : null)
+      if (why) {
+        bump(r.observations_rejected, why)
         continue
       }
-      if (tiers?.(text)) {
-        bump(r.observations_rejected, 'tiers')
-        continue
-      }
-      // Le texte nomme la personne : le doublon (exact ou par le sens) ignore person_id.
+      // Le texte nomme la personne : il se lit seul, hors de la fiche.
       if (person && !person.match(text)) text = `Avec ${person.display} : ${text}`
       const m = meta(item)
-      out.push({ text, titre: item.titre, citation: m.citation, at: m.at, atSource: m.atSource, secrets: masked.secrets })
+      out.push({ text, titre, citation: m.citation, at: m.at, atSource: m.atSource, secrets: masked.secrets + (maskedTitre?.secrets ?? 0) })
     }
     return out
   }
@@ -988,7 +1010,13 @@ class Pass {
     let created = 0
     accepted.forEach((a, i) => {
       const vector = vectors.get(i)
-      if (this.host.findSemanticDuplicate(target.instance, a.text, vector)) {
+      // Une redite (même texte normalisé, texte proche ou même sens) ne compte
+      // que si son fait porte la même personne : le style de Bastien n'est pas
+      // une redite de celui de Léonie, même tourné pareil (`kind: 'exact'`
+      // couvre aussi le texte proche, à un prénom près). Un texte identique,
+      // lui, ne s'écrit de toute façon pas (storePendingTriaged : created faux).
+      const dup = this.host.findSemanticDuplicate(target.instance, a.text, vector)
+      if (dup && this.host.factPersonOf(target.instance, dup.fact_id) === target.personId) {
         r.facts_duplicate++
         return
       }

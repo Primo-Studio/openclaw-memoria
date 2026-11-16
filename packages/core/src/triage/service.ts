@@ -88,6 +88,8 @@ export interface TriageConfig {
 export interface TriageServiceHost {
   /** Bases de contenu (toutes, ou celles lisibles par une instance), existantes sur disque. */
   dbs(instanceId?: string): EngineDb[]
+  /** Bases lisibles par une instance, avec les scopes qu'elle y lit (mêmes cibles que le rappel). */
+  readTargets(instanceId: string): Array<EngineDb & { scopeIds: string[] }>
   /** Chemin d'une base relatif à la racine du stockage. */
   relativeDb(path: string): string
   profile(): Promise<{ extraction: LlmProvider | null; embeddings: EmbeddingProvider | null }>
@@ -669,7 +671,9 @@ export class TriageService implements TriageApi {
   /**
    * Hôte prêté à la passe styles : celui de la passe sur les messages, plus la
    * fiche Person, le parcours des faits triés (fenêtres de rowid, main rendue
-   * entre deux) et l'état par période (`style_pass_state`, base de l'instance).
+   * entre deux ; bases et scopes lisibles par l'instance seulement), la
+   * personne d'un fait (redites) et l'état par période (`style_pass_state`,
+   * base de l'instance).
    * Public pour les tests de ce module.
    */
   createStylesHost(opts: Parameters<TriageService['createHost']>[0]): StylesHost {
@@ -683,11 +687,15 @@ export class TriageService implements TriageApi {
       async styleSourceFacts(query) {
         const facts: StyleSourceFact[] = []
         let scanned = 0
-        for (const db of host.dbs(query.instance)) {
+        const now = Date.now()
+        // Bases ET scopes lisibles par l'instance où l'on écrit : jamais la base privée d'une autre instance.
+        for (const db of host.readTargets(query.instance)) {
           if (host.isClosed() || query.stop?.()) break
           const r = await scanStyleSourcesAsync(db.store.db, {
             match: query.match,
             excludePromptVersion: STYLES_PROMPT_VERSION,
+            scopeIds: db.scopeIds,
+            now,
             stop: () => host.isClosed() || query.stop?.() === true,
           })
           scanned += r.scanned
@@ -696,6 +704,15 @@ export class TriageService implements TriageApi {
           }
         }
         return { facts, scanned }
+      },
+      factPersonOf(instanceId, factId) {
+        for (const db of host.dbs(instanceId)) {
+          const row = db.store.db.prepare('SELECT person_id FROM fact_triage WHERE fact_id = ?').get(factId) as
+            | { person_id: string | null }
+            | undefined
+          if (row) return row.person_id ?? null
+        }
+        return null
       },
       stylesState(instanceId, stateKey) {
         const db = stateDb(instanceId)
@@ -744,7 +761,8 @@ export class TriageService implements TriageApi {
         },
       })
       const report = await pass(host, opts)
-      if (!this.host.isClosed()) {
+      // Dry-run : aucune écriture, pas même la ligne d'audit (contrat de la passe).
+      if (!opts.dryRun && !this.host.isClosed()) {
         this.host.audit('triage_styles', `mode=${report.mode} facts=${report.facts_created} spent_usd=${report.spent_usd.toFixed(4)}`)
       }
       return report

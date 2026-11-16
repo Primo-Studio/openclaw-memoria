@@ -4891,6 +4891,13 @@ export class Memoria {
   private triageHost(): TriageServiceHost {
     return {
       dbs: instanceId => this.contentDbPathsFor(instanceId).map(path => ({ path, store: this.openContent(path) })),
+      readTargets: instanceId => {
+        const instance = this.registry.getInstance(instanceId)
+        if (!instance || instance.revoked_at) return []
+        return this.resolveReadTargets(instance)
+          .filter(t => existsSync(t.dbPath))
+          .map(t => ({ path: t.dbPath, store: this.openContent(t.dbPath), scopeIds: t.scopeIds }))
+      },
       relativeDb: path => relative(this.paths.root, path),
       profile: async () => {
         const p = await this.ensureProfile()

@@ -620,18 +620,28 @@ export interface StylesHost extends TriageHost {
   /** Agent d'une instance (claude, codex, gpt…), pour `ia:<agent>`. */
   agentOf(instanceId: string): string
   /**
-   * Faits TRIÉS des bases lisibles par l'instance (toutes sans instance) :
-   * genre connu hors `ephemere`, ni faux, ni sensibles (marque ou
-   * `sensitivity`), ni oubliés, ni remplacés, ni tirés par la passe styles
-   * elle-même ; parcourus par fenêtres de rowid en rendant la main entre deux
-   * fenêtres. Seuls ceux dont le texte vérifie `match` sont rendus.
+   * Faits TRIÉS des bases lisibles par l'instance, bornés à ses scopes
+   * lisibles (comme le rappel) : genre connu hors `ephemere`, ni faux, ni
+   * sensibles (marque ou `sensitivity`), ni oubliés, ni remplacés, ni
+   * archivés, ni expirés, ni rattachés à un client (filtre dur du rappel :
+   * le style écrit n'a pas de client, il serait lisible partout), ni tirés
+   * par la passe styles elle-même ; parcourus par fenêtres de rowid en rendant
+   * la main entre deux fenêtres. Seuls ceux dont le texte vérifie `match` sont
+   * rendus.
    */
   styleSourceFacts(query: {
-    instance?: string
+    /** L'instance où la passe écrit : seules ses bases et ses scopes lisibles sont parcourus. */
+    instance: string
     match: (text: string) => boolean
     /** Arrêt demandé : le parcours s'interrompt à la fenêtre suivante. */
     stop?: () => boolean
   }): Promise<{ facts: StyleSourceFact[]; scanned: number }>
+  /**
+   * person_id de la ligne de tri d'un fait des bases lisibles par l'instance
+   * (null : aucune ligne, ou fait du propriétaire). Sert à ne compter une
+   * redite (proche ou par le sens) que pour la même personne.
+   */
+  factPersonOf(instanceId: string, factId: string): string | null
   stylesState(instanceId: string, stateKey: string): StylesPeriodState | null
   markStyles(
     instanceId: string,

@@ -542,10 +542,13 @@ export const STYLE_SOURCES_WINDOW = 2000
  * Faits triés candidats d'une fenêtre de rowid (alias f = facts, t =
  * fact_triage) : ni oubliés, ni remplacés, ni archivés, sensibilité normale,
  * genre connu hors `ephemere`, ni faux, ni sensibles, ni tirés par la passe
- * styles (`prompt_version` du 3e paramètre). Les rubriques et le nom cité se
- * vérifient ensuite en JS.
+ * styles (`prompt_version` du 3e paramètre), dans un scope lisible (liste JSON
+ * du 4e paramètre), sans client (filtre dur du rappel : le style écrit n'a pas
+ * de client, il serait lisible dans tous les contextes). L'expiration, les
+ * rubriques et le nom cité se vérifient ensuite en JS (l'expiration avec
+ * Date.parse, comme le rappel : en SQL, la date serait comparée comme du texte).
  */
-const STYLE_SOURCES_SQL = `SELECT f.id AS id, f.fact AS fact, f.created_at AS created_at,
+const STYLE_SOURCES_SQL = `SELECT f.id AS id, f.fact AS fact, f.created_at AS created_at, f.expires_at AS expires_at,
        t.conversation_at AS conversation_at, t.conversation_at_source AS at_source, t.rubriques AS rubriques
   FROM facts f JOIN fact_triage t ON t.fact_id = f.id
   WHERE f.rowid > ? AND f.rowid <= ?
@@ -553,7 +556,9 @@ const STYLE_SOURCES_SQL = `SELECT f.id AS id, f.fact AS fact, f.created_at AS cr
     AND f.sensitivity = 'normal'
     AND t.genre IS NOT NULL AND t.genre != 'ephemere'
     AND t.verdict IS NULL AND t.sensible = 0
-    AND (t.prompt_version IS NULL OR t.prompt_version != ?)`
+    AND (t.prompt_version IS NULL OR t.prompt_version != ?)
+    AND f.scope_id IN (SELECT value FROM json_each(?))
+    AND (f.client_org_id IS NULL OR f.client_org_id = '')`
 
 /**
  * Parcours des sources du mode person dans une base, par fenêtres de rowid
@@ -566,6 +571,10 @@ export async function scanStyleSourcesAsync(
   opts: {
     match: (text: string) => boolean
     excludePromptVersion: string
+    /** Scopes lisibles dans cette base (resolveReadTargets) : un fait hors de ces scopes n'est jamais lu. */
+    scopeIds: readonly string[]
+    /** Horloge de l'expiration (ms) ; défaut maintenant. */
+    now?: number
     stop?: () => boolean
     window?: number
     yieldFn?: () => Promise<void>
@@ -574,20 +583,25 @@ export async function scanStyleSourcesAsync(
   const size = Math.max(1, Math.floor(opts.window ?? STYLE_SOURCES_WINDOW))
   const pause = opts.yieldFn ?? ((): Promise<void> => new Promise(resolve => setImmediate(resolve)))
   const stmt = db.prepare(STYLE_SOURCES_SQL)
+  const scopes = JSON.stringify(opts.scopeIds)
+  const now = opts.now ?? Date.now()
   const out: Array<{ id: string; text: string; at: string; at_source: string; rubriques: string[] }> = []
   let scanned = 0
   for (let last = 0, top = maxRowid(db, 'facts'); last < top; top = maxRowid(db, 'facts')) {
     const hi = Math.min(last + size, top)
-    const rows = stmt.all(last, hi, opts.excludePromptVersion) as Array<{
+    const rows = stmt.all(last, hi, opts.excludePromptVersion, scopes) as Array<{
       id: string
       fact: string
       created_at: string
+      expires_at: string | null
       conversation_at: string | null
       at_source: string
       rubriques: string
     }>
     scanned += rows.length
     for (const r of rows) {
+      // Expiré : jamais envoyé (même règle que passesRecallHardFilters).
+      if (r.expires_at && Date.parse(r.expires_at) <= now) continue
       if (!opts.match(r.fact)) continue
       let rubriques: string[] = []
       try {
