@@ -842,15 +842,19 @@ export class Memoria {
     if (row.client_org_id || project?.client_org_id) return 'client'
     if (row.superseded) return 'redite'
     if (!triage || !triage.genre) return 'sans_tri'
-    // Portée : un fait sur une personne (le propriétaire, portée `user` ou
-    // `perso`, ou quelqu'un d'autre, `person_id`) ne part jamais. Depuis
-    // l'espace `user`, personnel au propriétaire, il faut en plus la portée
-    // `entite` CONFIRMÉE à la main : la proposition du tri ne suffit pas.
-    if (triage.person_id !== null || triage.portee === 'user' || triage.portee === 'perso') return 'portee'
-    if (sourceType === 'user' && !(triage.portee === 'entite' && triage.corrected_fields.includes('portee'))) return 'portee'
     if (triage.verdict === 'faux') return 'faux'
     if (triage.rubriques.some(r => TEAM_REFUSED_RUBRIQUES.includes(r))) return 'rubrique'
     if (!TEAM_SHARE_GENRES.includes(triage.genre)) return 'genre'
+    // Portée, vue en dernier (un genre ou une rubrique refusés se disent
+    // d'abord) : seul un fait de portée `entite` part. Un fait sur une personne
+    // (le propriétaire, portée `user` ou `perso`, ou quelqu'un d'autre,
+    // `person_id`) ne part jamais, une portée inconnue non plus : un partage
+    // groupé par filtre emporterait sinon les faits que le tri n'a pas su
+    // situer. Depuis l'espace `user`, personnel au propriétaire, il faut en
+    // plus la portée `entite` CONFIRMÉE à la main : la proposition du tri ne
+    // suffit pas.
+    if (triage.person_id !== null || triage.portee !== 'entite') return 'portee'
+    if (sourceType === 'user' && !(triage.portee === 'entite' && triage.corrected_fields.includes('portee'))) return 'portee'
     return null
   }
 

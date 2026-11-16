@@ -435,6 +435,38 @@ describe('Mac relié : un fait né ailleurs ne se modifie pas ici', () => {
   })
 })
 
+describe('hub : le propriétaire modère un fait né chez un collègue', () => {
+  it('corriger puis dater sur le hub un fait né sur le Mac relié : le Mac relié reçoit les deux, sans renvoi', async () => {
+    const { hub, agent } = makeHub()
+    const orgId = orgOf(hub).id
+    const spoke = mk('spoke')
+    await joinTo(spoke, hub)
+    const a = spoke.pairAssistant({ type: 'claude-code', display_name: 'Agent du collègue' })
+    spoke.setScopeAccess(a.assistant_id, orgId, { can_read: true, can_write: true })
+    const theirs = spoke.storeFact({ instance: a.assistant_instance_id, scope: orgId, content: 'Essai fictif : les rushes se rangent par date de tournage' })
+    await spoke.sync.syncAll(hubFetch(hub))
+    const hubStore = hub.sharedContentStore(orgId)!
+    expect(hubStore.db.prepare('SELECT superseded FROM facts WHERE id = ?').get(theirs.id)).toEqual({ superseded: 0 })
+
+    // sur le hub, l'agent du propriétaire corrige le fait du collègue, puis date la version corrigée
+    const fixed = hub.correctFact(agent.assistant_instance_id, theirs.id, 'Essai fictif : les rushes se rangent par projet puis par date').replacement!
+    expect(hub.setExpiry(agent.assistant_instance_id, fixed.id, '2034-01-01T00:00:00.000Z')).toBe(true)
+
+    const r = await spoke.sync.syncAll(hubFetch(hub))
+    expect(r.errors).toEqual([])
+    const spokeStore = spoke.sharedContentStore(orgId)!
+    const rows = spokeStore.db.prepare('SELECT id, superseded, expires_at FROM facts WHERE id IN (?, ?) ORDER BY superseded').all(fixed.id, theirs.id)
+    expect(rows).toEqual([
+      { id: fixed.id, superseded: 0, expires_at: '2034-01-01T00:00:00.000Z' },
+      { id: theirs.id, superseded: 1, expires_at: null },
+    ])
+    // une passe de plus : rien ne fait l'aller-retour, le hub garde sa version
+    const again = await spoke.sync.syncAll(hubFetch(hub))
+    expect(again).toMatchObject({ pulled: 0, refused: 0, errors: [] })
+    expect(hubStore.db.prepare('SELECT superseded FROM facts WHERE id = ?').get(theirs.id)).toEqual({ superseded: 1 })
+  })
+})
+
 describe('identité d’un Mac relié', () => {
   it('un Mac invité ne reprend pas l’identifiant d’un Mac déjà relié ; un Mac coupé peut revenir (journalisé)', async () => {
     const { hub } = makeHub()

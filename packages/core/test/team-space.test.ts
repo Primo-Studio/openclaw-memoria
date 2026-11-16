@@ -288,7 +288,8 @@ describe("partage vers l'espace d'équipe : garde-fous côté serveur", () => {
     await env.m.triage.run()
     rows.forEach((r, i) => {
       if (r.genre || r.rubriques) {
-        env!.m.triage.correct({ fact_id: ids[i]!, ...(r.genre ? { genre: r.genre } : {}), ...(r.rubriques ? { rubriques: r.rubriques as never } : {}) })
+        // Portée entité, comme un tri qui a situé le fait (le tri d'essai la laisse vide).
+        env!.m.triage.correct({ fact_id: ids[i]!, portee: 'entite', ...(r.genre ? { genre: r.genre } : {}), ...(r.rubriques ? { rubriques: r.rubriques as never } : {}) })
       }
     })
     return ids
@@ -363,6 +364,26 @@ describe("partage vers l'espace d'équipe : garde-fous côté serveur", () => {
     const r = env!.m.shareFacts(ids, 'org')
     expect(r).toMatchObject({ shared: 1, refused: { portee: 3 } })
     expect(env!.m.scopeFacts(orgScope(env!.m).id).map(f => f.id)).toEqual([entite])
+  })
+
+  it('portée inconnue : refusée, fait par fait comme par une promotion groupée', async () => {
+    env = setupTriage()
+    const a = seedPending(env, 'Le banc Lyra se règle en mode nuit')
+    const b = seedPending(env, 'Le banc Lyra garde ses presets dans le dossier commun')
+    await env.m.triage.run()
+    // Genre et rubrique posés, portée laissée vide : le tri n'a pas su situer ces faits.
+    env.m.triage.correct({ fact_id: a, genre: 'process', rubriques: ['outils'] })
+    env.m.triage.correct({ fact_id: b, genre: 'savoir', rubriques: ['outils'] })
+    const portee = env.db().prepare('SELECT portee FROM fact_triage WHERE fact_id = ?')
+    expect(portee.get(a)).toEqual({ portee: null })
+    expect(env.m.shareFacts([a], 'org')).toMatchObject({ shared: 0, refused: { portee: 1 } })
+    const r = env.m.triage.promote({ filter: { genre: 'savoir' }, share: 'org' })
+    expect(r.shared).toBe(0)
+    expect(r.share_refused).toMatchObject({ portee: 1 })
+    expect(env.m.scopeFacts(orgScope(env.m).id)).toEqual([])
+    // Une fois la portée entité posée au tri, le même fait part.
+    env.m.triage.correct({ fact_id: a, portee: 'entite' })
+    expect(env.m.shareFacts([a], 'org')).toMatchObject({ shared: 1 })
   })
 
   it('promotion par filtre `portee: user` vers l’équipe : rien ne part', async () => {

@@ -104,7 +104,7 @@ export const TEAM_CANDIDATE_RUBRIQUES: readonly Rubrique[] = ['app', 'outils', '
  *  - `rubrique` : rubrique refusée (rh, finance, juridique, clients, vente) ;
  *  - `genre` : genre hors de la liste d'autorisation.
  */
-export const TEAM_SHARE_REFUSALS = ['critical', 'sensible', 'secret', 'client', 'redite', 'sans_tri', 'portee', 'faux', 'rubrique', 'genre'] as const
+export const TEAM_SHARE_REFUSALS = ['critical', 'sensible', 'secret', 'client', 'redite', 'sans_tri', 'faux', 'rubrique', 'genre', 'portee'] as const
 export type TeamShareRefusal = (typeof TEAM_SHARE_REFUSALS)[number]
 
 /** Faits écartés d'un partage vers l'espace d'équipe, par raison (toutes les clés, 0 compris). */
