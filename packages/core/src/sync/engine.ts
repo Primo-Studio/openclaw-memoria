@@ -70,7 +70,12 @@ const INVITE_TTL_MS = 10 * 60_000
 const PAIRING_CONFIRM_TTL_MS = 15 * 60_000
 /** Codes faux tolérés avant d'annuler l'invitation (le code fait ~40 bits). */
 const MAX_PAIRING_ATTEMPTS = 5
-const PAGE = 500
+/**
+ * Faits par page (lecture et envoi). Mesuré sur données fictives : appliquer
+ * 500 faits bloque 100 à 130 ms ; 250 garde la marge de la règle n°27 sur un
+ * Mac plus lent (le réseau rend la main entre deux pages).
+ */
+const PAGE = 250
 /** Faits sans provenance marqués par passe (borne de temps, règle n°27). */
 const STAMP_BATCH = 500
 const PENDING_INVITE_KEY = 'sync.pending_invite'
@@ -629,7 +634,12 @@ export class SyncEngine {
     }
 
     let hubRegistered = false
+    // Un seul hub à la fois : un ancien hub encore actif (nouveau join sans
+    // « leave ») est coupé, sinon les requêtes partiraient signées avec son
+    // jeton. Rétabli si ce join échoue.
+    const previousHubs = this.registry.listPeers().filter(p => p.role === 'hub' && p.machine_id !== data.hub_machine_id)
     try {
+      for (const p of previousHubs) this.registry.revokePeer(p.machine_id)
       // installer les clés du groupe
       setClusterPairingKey(this.deps.secrets, Buffer.from(data.cpk, 'hex'))
       const gvk = openGvk(data.sealed_gvk, opts.code)
@@ -673,6 +683,7 @@ export class SyncEngine {
         }
       }
       this.undoJoin(data.hub_machine_id, opts.hub, keysBefore, configBefore)
+      for (const p of previousHubs) this.registry.restorePeer(p.machine_id)
       throw err
     }
   }

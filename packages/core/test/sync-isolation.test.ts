@@ -382,6 +382,22 @@ describe('join sur un Mac qui a déjà des agents et des souvenirs', () => {
     await expect(mk('autre').sync.join({ hub: HUB_ADDR, code: inv.code, fetchImpl: hubFetch(hub) })).rejects.toThrow(/pairing refusé/)
   })
 
+  it('relier le Mac à un nouveau hub sans « leave » : un seul hub actif, la synchro parle au nouveau', async () => {
+    const { hub: hub1 } = makeHub('hub1')
+    const { hub: hub2, agent: agent2 } = makeHub('hub2')
+    const spoke = mk('spoke')
+    await joinTo(spoke, hub1)
+    await joinTo(spoke, hub2, hubFetch(hub2))
+    const hubs = spoke.registry.listPeers().filter(p => p.role === 'hub')
+    expect(hubs).toHaveLength(1)
+    expect(orgOf(spoke).id).toBe(orgOf(hub2).id)
+    expect(spoke.registry.listScopes().filter(s => s.type === 'org')).toHaveLength(1)
+    hub2.storeFact({ instance: agent2.assistant_instance_id, scope: orgOf(hub2).id, content: 'Essai fictif : nouveauté du second hub' })
+    const r = await spoke.sync.syncAll(hubFetch(hub2))
+    expect(r.errors).toEqual([])
+    expect(hasFact(spoke, orgOf(hub2).id, 'Essai fictif : nouveauté du second hub')).toBe(true)
+  })
+
   it('un appairage jamais confirmé (hub injoignable pour l’abandon) expire côté hub', async () => {
     const { hub } = makeHub()
     const spoke = mk('spoke')

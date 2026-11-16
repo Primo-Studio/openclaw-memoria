@@ -699,6 +699,11 @@ export class RegistryStore {
     this.db.prepare('DELETE FROM sync_peers WHERE machine_id = ?').run(machineId)
   }
 
+  /** Rétablit un pair coupé le temps d'un join qui a échoué. */
+  restorePeer(machineId: string): void {
+    this.db.prepare('UPDATE sync_peers SET revoked_at = NULL WHERE machine_id = ?').run(machineId)
+  }
+
   /** Retire les curseurs d'un pair (join raté). */
   deleteCursors(peerMachineId: string): void {
     this.db.prepare('DELETE FROM sync_cursor WHERE peer_machine_id = ?').run(peerMachineId)
