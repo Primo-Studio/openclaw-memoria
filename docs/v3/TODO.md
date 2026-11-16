@@ -693,6 +693,27 @@ sujets), pas comme une liste plate ; l'agent doit pouvoir dire ce que ce format 
 **Effort** : M (1 jour pour l'enrichissement + l'arrêt sur décrochage + le rattachement ; 1 jour de plus
 pour les blocs et `memoria_brief`). **Ordre proposé** : daemon (#27) → T28 → T30.
 
+### T31. Veilleur : Memoria tombe en panne sans que personne le sache
+**Constat du 16/11** : sur deux Mac du bureau, le daemon relancé par launchd bouclait en échec (verrou d'un
+démarrage précédent, puis module natif compilé pour un autre Node). Les agents OpenClaw de ces Mac ont
+tourné sans mémoire pendant une semaine sur l'un et un mois sur l'autre, sans aucun signal. launchd relance
+un daemon qui plante, mais rien ne répare une panne qui revient à chaque démarrage, et rien ne prévient.
+Le verrou périmé est corrigé dans le code (bootId) ; le reste ne l'est pas.
+
+- [ ] Vérification périodique (toutes les heures) de chaque poste : service chargé, process vivant,
+      `/v1/health` qui répond, boucle d'échecs dans `memoria.err.log`, agents OpenClaw qui joignent le daemon.
+- [ ] Réparation automatique des pannes connues, chacune journalisée :
+      - verrou d'un ancien démarrage ;
+      - module natif dont l'ABI ne correspond pas au Node du service (`npm rebuild better-sqlite3` avec CE Node) ;
+      - plist disparu (`autostart on`) ;
+      - Node du service supprimé ou changé.
+- [ ] Alerte au propriétaire quand la réparation échoue, avec la cause en une phrase. Le canal reste à
+      choisir.
+- [ ] Vue de l'état de chaque poste depuis le hub, une fois la synchro en place.
+- [ ] Tests : chaque panne connue simulée, réparée ou signalée, jamais silencieuse.
+
+**Effort** : M. **Demandé le 16/11, à faire plus tard** (après le branchement des Mac).
+
 ## ⛔ Hors périmètre (Néto, 24/08 ; amendé le 08/11)
 ~~Carte 3D UMAP~~ (levée le 08/11 par le propriétaire du produit → **T28**, à faire après le chantier
 daemon), continuous-learning OpenClaw (`llm_output`), **et toute nouvelle feature avant la
