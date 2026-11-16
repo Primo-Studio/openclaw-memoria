@@ -1427,7 +1427,10 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
             )
           }
           if (message.startsWith('pairing refusé par le hub')) {
-            throw new HttpError(400, `${message} : code expiré, déjà utilisé ou erroné — génère-en un nouveau sur le hub (« memoria sync invite »)`)
+            throw new HttpError(
+              400,
+              `${message} : code expiré, déjà utilisé ou erroné — génère-en un nouveau sur le hub (« memoria sync invite »). Si ce Mac est déjà relié à ce hub, le couper d'abord sur le hub (« memoria sync revoke »)`,
+            )
           }
           if (message.startsWith('échec du descellement')) throw new HttpError(400, message)
           throw err

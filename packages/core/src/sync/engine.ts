@@ -685,13 +685,18 @@ export class SyncEngine {
     try {
       for (const p of previousHubs) this.registry.revokePeer(p.machine_id)
       // installer les clés du groupe
+      // Écrire au coffre et desceller (scrypt) coûtent chacun quelques dizaines
+      // de ms : la boucle d'événements reprend la main entre deux (règle n°27).
       const cpk = Buffer.from(data.cpk, 'hex')
       setClusterPairingKey(this.deps.secrets, cpk)
       this.keyCache = { cpk }
+      await yieldToLoop()
       const gvk = openGvk(data.sealed_gvk, opts.code)
       if (!gvk) throw new Error('échec du descellement de la clé de coffre (code invalide ?)')
+      await yieldToLoop()
       setGroupVaultKey(this.deps.secrets, gvk)
       this.keyCache = { cpk, gvk }
+      await yieldToLoop()
 
       // Espaces d'équipe seulement, même si un hub d'avant propose `user`.
       const allowed = (data.scopes ?? []).filter(s => SYNC_ALLOWED_TYPES.includes(s.type) && !SYNC_FORBIDDEN_TYPES.includes(s.type))
@@ -987,6 +992,11 @@ export type FetchLike = (
   url: string,
   init: { method: string; headers?: Record<string, string>; body?: string; signal?: AbortSignal },
 ) => Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }>
+
+/** Rend la main à la boucle d'événements entre deux étapes lourdes d'un join. */
+function yieldToLoop(): Promise<void> {
+  return new Promise(resolve => setImmediate(resolve))
+}
 
 function globalFetch(): FetchLike {
   return globalThis.fetch as unknown as FetchLike
