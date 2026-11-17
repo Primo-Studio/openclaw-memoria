@@ -102,6 +102,8 @@ non anonymisés, un fork existe), accès à Grok.
 3. **Écrans** : Tri et Partage (validation de la liste équipe sans passer par l'API), puis l'écran des
    idées regroupées une fois la maquette validée.
 4. **T31, le veilleur** : vérifier chaque poste, réparer les pannes connues, prévenir le propriétaire.
+   **T32, changement de compte ou d'organisation chez l'assistant** : essai réel à faire au branchement des
+   Mac (la mémoire doit suivre le poste, pas le compte), puis import de l'export claude.ai.
 5. **Vitesse, restes mesurés** :
    - `GET /v1/admin/triage` sans paramètre bloque 150 à 160 ms (index de `listPage`) ;
    - la passe sur les messages bloque encore environ 575 ms (lecture et hachage des grosses conversations) ;

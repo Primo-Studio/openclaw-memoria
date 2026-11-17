@@ -720,6 +720,33 @@ pas au propriétaire. T31 part de ce script.
 
 **Effort** : M. **Demandé le 16/11, à faire plus tard** (après le branchement des Mac).
 
+### T32. Changer de compte ou d'organisation chez l'assistant : rien ne doit se perdre
+**Demande du 17/11** : il arrive au propriétaire, et il peut arriver à l'équipe, de changer de compte ou
+d'organisation dans Claude (et dans les autres assistants). C'est une raison d'être de Memoria : la mémoire
+reste sur le poste, quel que soit le compte connecté. À vérifier au branchement des Mac.
+
+Lu dans la configuration, sans essai réel :
+- Claude Code : le serveur MCP `memoria` est déclaré au niveau global de `~/.claude.json` et lié à une
+  **instance** Memoria (`serve --instance <id>`), pas au compte. Le compte connecté est un autre champ du
+  même fichier.
+- Codex : `[mcp_servers.memoria]` est dans `config.toml`, et la connexion au compte dans `auth.json`.
+- Les conversations de Claude Code (`~/.claude/projects/*.jsonl`) restent sur le poste ; l'import
+  automatique les lit quel que soit le compte.
+
+À faire :
+- [ ] Essai réel sur un poste : changer de compte puis d'organisation dans Claude Code. Le serveur
+      `memoria` doit rester branché, le rappel marcher, et les conversations suivantes être importées dans
+      la **même** instance. Même essai avec Codex.
+- [ ] Les conversations tenues sur claude.ai (web, application de bureau) appartiennent au compte : Memoria
+      ne les capte pas. Écrire un import de l'export de données claude.ai, sur le modèle de
+      `import chatgpt` (`packages/core/src/migration/chatgpt-export.ts`).
+- [ ] Les pages et documents publiés sur claude.ai appartiennent aussi au compte : garder dans Memoria
+      ou en local l'essentiel de ce qui y est décidé, pas seulement le lien.
+- [ ] Les connecteurs de claude.ai (messagerie, documents…) dépendent de l'organisation connectée :
+      le dire dans la doc d'installation des postes d'équipe.
+
+**Effort** : S pour l'essai, M pour l'import claude.ai.
+
 ## ⛔ Hors périmètre (Néto, 24/08 ; amendé le 08/11)
 ~~Carte 3D UMAP~~ (levée le 08/11 par le propriétaire du produit → **T28**, à faire après le chantier
 daemon), continuous-learning OpenClaw (`llm_output`), **et toute nouvelle feature avant la
