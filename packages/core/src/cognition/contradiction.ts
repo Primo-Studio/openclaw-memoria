@@ -31,7 +31,7 @@
  * déjà trouvé par l'heuristique (coût borné, 1 appel max par candidat ambigu).
  */
 import type { ContentStore, FactRow } from '../storage/content.js'
-import type { LlmProvider } from '../llm/provider.js'
+import { isSensitiveContentError, type LlmProvider } from '../llm/provider.js'
 import { normalizeText } from '../storage/content.js'
 
 export interface Contradiction {
@@ -280,6 +280,9 @@ export async function detectContradiction(
             })
           }
         } catch (err) {
+          // Garde sensible (le nouveau fait ou ce candidat) : rien n'est parti,
+          // le refus est immédiat, la décision heuristique reste. Sans bruit.
+          if (isSensitiveContentError(err)) continue
           console.warn(`[memoria:contradiction] confirmation LLM en échec (fait ${row.id}) — ignoré :`, (err as Error).message)
         }
       }

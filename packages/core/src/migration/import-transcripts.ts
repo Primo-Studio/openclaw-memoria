@@ -86,7 +86,8 @@ import {
   type TurnSource,
 } from './transcript-parsers.js'
 import { addWindowToEstimate, emptyEstimate, type ExtractionEstimate } from './extraction-estimate.js'
-import type { LlmProvider } from '../llm/provider.js'
+import { isSensitiveContentError, type LlmProvider } from '../llm/provider.js'
+import { containsSensitive, isSensitiveGated } from '../llm/sensitive-gate.js'
 import type { DetectedSecret, Redactor } from '../secrets/types.js'
 import type { Fact, StoreFactInput } from '../types.js'
 
@@ -172,6 +173,17 @@ export interface ImportTranscriptsInput {
    */
   secretSink?: (secret: DetectedSecret) => void
   /**
+   * Garde sensible (`[llm] sensitive_gate = true`) : une fenêtre dont le texte
+   * parle de paie, d'impôts, de santé, d'identité… n'est JAMAIS envoyée au
+   * LLM. Elle est sautée, comptée (`windows_sensitive_skipped`, dry-run
+   * compris) et notée traitée, l'import continue. Absent : déduit du provider
+   * (gardé ou non) ; le moteur le passe depuis sa config, pour que le dry-run
+   * compte aussi sans LLM joignable. Une fonction est relue à CHAQUE fenêtre :
+   * une garde posée pendant un long import s'applique aux fenêtres suivantes,
+   * même si le provider de ce run a été pris sans garde.
+   */
+  sensitiveGate?: boolean | (() => boolean)
+  /**
    * Progression (job d'import du daemon, CLI) : appelé après CHAQUE fichier,
    * y compris ceux ignorés/en échec. Une exception du callback est loggée,
    * jamais avalée, et n'interrompt pas l'import.
@@ -200,6 +212,12 @@ export interface ImportTranscriptsReport {
    * qu'un vrai import enverrait.
    */
   windows_with_secrets: number
+  /**
+   * Garde sensible active seulement (champ absent sinon) : fenêtres au texte
+   * sensible, jamais envoyées au LLM, hors de `windows`. En dry-run : celles
+   * qu'un vrai import sauterait.
+   */
+  windows_sensitive_skipped?: number
   facts_extracted: number
   facts_quarantined: number
   facts_skipped_duplicates: number
@@ -250,7 +268,7 @@ interface ConversationWindow {
   turns: Turn[]
 }
 
-function emptyReport(dryRun: boolean): ImportTranscriptsReport {
+function emptyReport(dryRun: boolean, sensitiveGate = false): ImportTranscriptsReport {
   return {
     files_read: 0,
     files_skipped_already_imported: 0,
@@ -258,6 +276,7 @@ function emptyReport(dryRun: boolean): ImportTranscriptsReport {
     windows: 0,
     windows_skipped_known: 0,
     windows_with_secrets: 0,
+    ...(sensitiveGate ? { windows_sensitive_skipped: 0 } : {}),
     facts_extracted: 0,
     facts_quarantined: 0,
     facts_skipped_duplicates: 0,
@@ -438,7 +457,7 @@ function filterSince(turns: Turn[], sinceDate: string | undefined): Turn[] {
  * et l'import continue sur les autres.
  */
 export async function importTranscripts(input: ImportTranscriptsInput): Promise<ImportTranscriptsReport> {
-  const report = emptyReport(input.dryRun ?? false)
+  const report = emptyReport(input.dryRun ?? false, sensitiveGateOf(input))
   const maxWindows = input.maxWindowsPerFile ?? DEFAULT_MAX_WINDOWS
   const tailQuietMs = input.tailQuietMs ?? DEFAULT_TAIL_QUIET_MS
   const systemPrompt = input.systemPrompt ?? TRANSCRIPT_EXTRACTION_SYSTEM
@@ -531,6 +550,7 @@ async function runFiles(
     maxWindows,
     tailQuietMs,
     llmReady,
+    sensitiveGate: () => sensitiveGateOf(input),
     systemPrompt,
     alreadyStored,
     seenInRun,
@@ -586,6 +606,44 @@ async function runFiles(
         : `secrets : ${report.windows_with_secrets} fenêtre(s) contenaient un secret (clé, jeton, mot de passe), masqué ([secret:…]) avant l'envoi au modèle`,
     )
   }
+  const sensitiveSkipped = report.windows_sensitive_skipped ?? 0
+  if (sensitiveSkipped > 0) {
+    report.notes.unshift(
+      report.dry_run
+        ? `données sensibles : ${sensitiveSkipped} fenêtre(s) (paie, impôts, santé, identité…) seront sautées, jamais envoyées au modèle (garde sensible)`
+        : `données sensibles : ${sensitiveSkipped} fenêtre(s) (paie, impôts, santé, identité…) sautées, jamais envoyées au modèle (garde sensible)`,
+    )
+  }
+}
+
+/** Garde sensible de ce run, en ce moment : réglage passé par le moteur (relu s'il est une fonction), sinon déduit du provider. */
+function sensitiveGateOf(input: ImportTranscriptsInput): boolean {
+  const gate = input.sensitiveGate
+  if (typeof gate === 'function') return gate() || isSensitiveGated(input.extraction)
+  return gate ?? isSensitiveGated(input.extraction)
+}
+
+/**
+ * Fenêtre au texte sensible, garde active : comptée, jamais envoyée. Le test
+ * est synchrone ; sur un gros lot de fenêtres (dry-run d'un long historique),
+ * l'appelant rend la main par `slice`.
+ */
+async function windowIsSensitive(ctx: FileContext, text: string, slice: () => Promise<void>): Promise<boolean> {
+  if (!ctx.sensitiveGate()) return false
+  await slice()
+  if (!(await containsSensitive(text))) return false
+  ctx.report.windows_sensitive_skipped = (ctx.report.windows_sensitive_skipped ?? 0) + 1
+  return true
+}
+
+/** Rend la main dès que la tranche de calcul en cours dépasse `ms` (règle des 200 ms). */
+function slicer(ms = 20): () => Promise<void> {
+  let start = Date.now()
+  return async () => {
+    if (Date.now() - start < ms) return
+    await yieldToEventLoop()
+    start = Date.now()
+  }
 }
 
 interface FileContext {
@@ -597,6 +655,8 @@ interface FileContext {
   maxWindows: number
   tailQuietMs: number
   llmReady: boolean
+  /** Garde sensible (relue à chaque fenêtre) : une fenêtre au texte sensible est sautée et comptée, jamais envoyée. */
+  sensitiveGate: () => boolean
   systemPrompt: string
   /** Le fait (texte normalisé) existe-t-il déjà dans le scope privé, tous états ? */
   alreadyStored: (factText: string) => boolean
@@ -1080,10 +1140,16 @@ async function importLoaded(ctx: FileContext, u: LoadedUnit): Promise<void> {
   if (report.dry_run) {
     report.windows += todo.length
     report.windows_skipped_known += known
+    const slice = slicer()
     for (const [n, i] of todo.entries()) {
       // Un très gros fichier fait des milliers de fenêtres à masquer : on rend la main.
       if (n > 0 && n % 200 === 0) await yieldToEventLoop()
       const prompt = promptFor(i)
+      // Garde sensible : comptée à part, ni dans `windows` ni dans l'estimation.
+      if (await windowIsSensitive(ctx, prompt.text, slice)) {
+        report.windows--
+        continue
+      }
       if (prompt.secrets.length > 0) report.windows_with_secrets++
       if (report.estimate) addWindowToEstimate(report.estimate, ctx.systemPrompt.length + prompt.text.length, ctx.systemPrompt.length)
     }
@@ -1208,20 +1274,36 @@ async function importLoaded(ctx: FileContext, u: LoadedUnit): Promise<void> {
   let blamedOnWindow = 0
   let blamedOnOutage = 0
   let abandoned = 0
+  const slice = slicer()
   for (const index of todo) {
     const windowHash = hashes[index]!
     if (breaker.open) {
       keepForLater(windowHash)
       continue
     }
-    report.windows++
     const prompt = promptFor(index)
+    // GARDE SENSIBLE : fenêtre sautée AVANT tout envoi, comptée, notée traitée
+    // (son texte ne changera pas : la retenter donnerait le même refus). Ni
+    // échec ni réussite pour le coupe-circuit : rien n'est parti.
+    if (await windowIsSensitive(ctx, prompt.text, slice)) {
+      markDone.run(windowHash, nowISO())
+      continue
+    }
+    report.windows++
     if (prompt.secrets.length > 0) {
       report.windows_with_secrets++
       vaultSecrets(ctx, prompt.secrets, label)
     }
     const failure: { message?: string } = {}
     const facts = await extractWindow(input.extraction!, ctx.systemPrompt, prompt.text, report, label, failure)
+    if (facts === 'sensitive') {
+      // Refus du provider gardé alors que ce run ne se savait pas gardé : même
+      // traitement que ci-dessus, la fenêtre n'est pas partie.
+      report.windows--
+      report.windows_sensitive_skipped = (report.windows_sensitive_skipped ?? 0) + 1
+      markDone.run(windowHash, nowISO())
+      continue
+    }
     let kind: FailureKind
     if (facts === null) {
       // Appel en échec ou réponse illisible : la fenêtre, ou le LLM en général ?
@@ -1312,6 +1394,7 @@ function errorDetail(err: unknown): string {
 /**
  * 1 SEUL appel LLM par fenêtre. Échec (appel qui jette, réponse sans JSON
  * lisible) → erreur consignée, `null` (fenêtre à retenter), on continue.
+ * Refus de la garde sensible → `'sensitive'` : ni erreur ni échec, rien n'est parti.
  */
 async function extractWindow(
   extraction: LlmProvider,
@@ -1320,7 +1403,7 @@ async function extractWindow(
   report: ImportTranscriptsReport,
   label: string,
   failure?: { message?: string },
-): Promise<ExtractedFact[] | null> {
+): Promise<ExtractedFact[] | null | 'sensitive'> {
   try {
     const raw = await extraction.complete({
       system,
@@ -1331,6 +1414,7 @@ async function extractWindow(
     })
     return parseFactArray(raw)
   } catch (err) {
+    if (isSensitiveContentError(err)) return 'sensitive'
     const msg = `extraction de fenêtre en échec (${label}) : ${errorDetail(err)}`
     console.warn(`[memoria] import transcripts : ${msg}`)
     report.errors.push(msg)

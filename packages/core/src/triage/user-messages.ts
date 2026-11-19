@@ -89,7 +89,7 @@ import { createReadStream } from 'node:fs'
 import { readdir, readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { monitorEventLoopDelay } from 'node:perf_hooks'
-import { LlmTruncatedError, type CompleteOptions } from '../llm/provider.js'
+import { isSensitiveContentError, LlmTruncatedError, type CompleteOptions } from '../llm/provider.js'
 import { readChatGptExport, CHATGPT_KEY_PREFIX, type ChatGptConversation } from '../migration/chatgpt-export.js'
 import {
   blocksToText,
@@ -992,7 +992,8 @@ export async function completeWithRetries(
     try {
       text = (await host.complete(call)).text
     } catch (err) {
-      if (err instanceof TriageBudgetError) throw err
+      // Plafond, ou refus de la garde sensible : l'appel n'est pas parti, ni compté ni repris.
+      if (err instanceof TriageBudgetError || isSensitiveContentError(err)) throw err
       if (isNetworkError(err) && outage < NETWORK_DOWN_RETRIES && !host.shouldStop()) {
         if (!isNetworkDown(err)) opts.onCall()
         await pauseUnlessStopped(networkDownDelay(opts.retryDelayMs, outage++), () => host.shouldStop() !== null)
@@ -1214,11 +1215,23 @@ class Pass {
       text = await this.complete(prompt, maxTokens)
     } catch (err) {
       if (err instanceof StopPass) throw err
-      if (err instanceof LlmTruncatedError && batch.length > 1) {
+      // Refus de la garde sensible : message et contexte sont filtrés chacun
+      // seul, rendus ensemble ils peuvent encore se faire refuser. On isole.
+      const refused = isSensitiveContentError(err)
+      if ((err instanceof LlmTruncatedError || refused) && batch.length > 1) {
         const half = Math.ceil(batch.length / 2)
         await this.batch(instance, source, batch.slice(0, half), attempt)
         this.checkStop()
         await this.batch(instance, source, batch.slice(half), attempt)
+        return
+      }
+      if (refused) {
+        // Message seul refusé : traité comme un message sensible, jamais renvoyé.
+        for (const p of batch) {
+          r.messages_sensitive++
+          bump(r.sensitive_by_pattern, sensitiveLabel(`${p.msg.context} ${p.text}`) ?? 'autre')
+          this.host.markMessage(instance, p.key, { source_key: source.key, ts: p.msg.ts, status: 'sensitive', facts: 0 })
+        }
         return
       }
       if (err instanceof LlmTruncatedError) {

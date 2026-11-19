@@ -6,6 +6,7 @@
  */
 import type { ContentStore } from '../storage/content.js'
 import type { EmbeddingProvider } from '../llm/provider.js'
+import { containsSensitive } from '../llm/sensitive-gate.js'
 import { newId, nowISO, vectorToBuffer } from '../util.js'
 import {
   embeddingsMark,
@@ -28,15 +29,37 @@ export interface IndexerRunResult {
 /** Intervalle minimal entre deux réparations complètes de l'index par un même indexeur. */
 const REPAIR_INTERVAL_MS = 10 * 60_000
 
+/** Faits relus par page quand la garde sensible écarte des faits (voir `nextCleanBatch`). */
+const SENSITIVE_SCAN_PAGE = 200
+/** Tranche de calcul maximale avant de rendre la main (règle des 200 ms). */
+const SLICE_MS = 20
+
+function yieldToEventLoop(): Promise<void> {
+  return new Promise(resolve => setImmediate(resolve))
+}
+
 export class EmbeddingIndexer {
   private readonly store: ContentStore
   private readonly provider: EmbeddingProvider
   private readonly batchSize: number
+  /**
+   * Garde sensible active (`llm.sensitive_gate`) : les faits sensibles sont
+   * écartés AVANT l'envoi. Ils restent sans vecteur (trouvés par le plein
+   * texte seul) et n'empêchent pas le reste du lot de partir.
+   */
+  private readonly skipSensitive: boolean
+  /**
+   * Faits déjà reconnus sensibles par cet indexeur : sautés sans refaire le
+   * test à chaque passage. Clé = id + longueur du texte (un fait corrigé sur
+   * place est retesté).
+   */
+  private readonly sensitiveSeen = new Set<string>()
 
-  constructor(opts: { store: ContentStore; provider: EmbeddingProvider; batchSize?: number }) {
+  constructor(opts: { store: ContentStore; provider: EmbeddingProvider; batchSize?: number; skipSensitive?: boolean }) {
     this.store = opts.store
     this.provider = opts.provider
     this.batchSize = opts.batchSize ?? 16
+    this.skipSensitive = opts.skipSensitive ?? false
   }
 
   /** Dernière vérification COMPLÈTE de l'index par cet indexeur (0 = jamais). */
@@ -74,6 +97,55 @@ export class EmbeddingIndexer {
       .all(this.provider.model, limit) as Array<{ id: string; fact: string }>
   }
 
+  /**
+   * Prochain lot à envoyer quand la garde sensible est active : les faits en
+   * attente sont parcourus dans l'ordre de `pendingFacts`, page par page, en
+   * écartant les sensibles, jusqu'à un lot plein ou la fin de la file. Filtrer
+   * le seul lot de tête ne suffisait pas : 16 faits sensibles en tête de file
+   * rendaient un lot vide à chaque passage, et plus aucun fait ne recevait de
+   * vecteur. Le test est synchrone : la main est rendue entre deux tranches.
+   */
+  private async nextCleanBatch(): Promise<Array<{ id: string; fact: string }>> {
+    const page = this.store.db.prepare(
+      `SELECT f.id, f.fact, f.created_at FROM facts f
+       WHERE f.superseded = 0 AND f.lifecycle_state = 'active' AND f.sensitivity != 'critical'
+         AND NOT EXISTS (
+           SELECT 1 FROM embeddings e
+           WHERE e.owner_type = 'fact' AND e.owner_id = f.id AND e.model = @model
+         )
+         AND (@ca IS NULL OR f.created_at > @ca OR (f.created_at = @ca AND f.id > @id))
+       ORDER BY f.created_at, f.id
+       LIMIT @limit`,
+    )
+    const out: Array<{ id: string; fact: string }> = []
+    let cursor: { ca: string | null; id: string } = { ca: null, id: '' }
+    let started = Date.now()
+    for (;;) {
+      const rows = page.all({ model: this.provider.model, ca: cursor.ca, id: cursor.id, limit: SENSITIVE_SCAN_PAGE }) as Array<{
+        id: string
+        fact: string
+        created_at: string
+      }>
+      for (const r of rows) {
+        if (Date.now() - started >= SLICE_MS) {
+          await yieldToEventLoop()
+          started = Date.now()
+        }
+        const seenKey = `${r.id}:${r.fact.length}`
+        if (this.sensitiveSeen.has(seenKey)) continue
+        if (await containsSensitive(r.fact)) {
+          this.sensitiveSeen.add(seenKey)
+          continue
+        }
+        out.push({ id: r.id, fact: r.fact })
+        if (out.length >= this.batchSize) return out
+      }
+      if (rows.length < SENSITIVE_SCAN_PAGE || !this.store.db.open) return out
+      const last = rows[rows.length - 1]!
+      cursor = { ca: last.created_at, id: last.id }
+    }
+  }
+
   pendingCount(): number {
     const r = this.store.db
       .prepare(
@@ -93,7 +165,7 @@ export class EmbeddingIndexer {
    * (l'appelant décide : retry plus tard) — jamais d'avalement.
    */
   async runOnce(): Promise<IndexerRunResult> {
-    const batch = this.pendingFacts()
+    const batch = this.skipSensitive ? await this.nextCleanBatch() : this.pendingFacts()
     if (batch.length === 0) {
       return { indexed: 0, remaining: 0, vec_available: ensureVecTable(this.store.db, this.key) }
     }

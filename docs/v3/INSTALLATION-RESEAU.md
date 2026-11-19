@@ -66,6 +66,23 @@ rien ne sort. Pour vérifier : **Réglages → « Données envoyées au cloud »
 le début) — ou en terminal `memoria doctor` (mêmes sections). Les clés API sont testées à
 l'enregistrement et n'apparaissent jamais dans les logs.
 
+**Poste d'équipe : garde sensible AVANT la clé cloud.** Sur chaque Mac d'équipe, poser
+`sensitive_gate = true` dans `~/.memoria/config.toml`, et redémarrer Memoria
+(`memoria stop && memoria start`), avant d'y mettre une clé OpenAI (ou autre clé cloud) : plus aucun
+texte de paie, salaire, impôts, URSSAF, charges sociales, IBAN, santé ou pièce d'identité ne part à
+un modèle, ni en extraction ni en vecteurs (tours et fenêtres d'import sautés et comptés, faits
+sensibles sans vecteur, rappel en plein texte). Absent : rien ne change (poste du propriétaire).
+Où mettre la ligne :
+- le fichier a déjà une ligne `[llm]` : mettre `sensitive_gate = true` juste en dessous, avant tout
+  autre en-tête (`[llm.extraction]`, `[llm.embeddings]`…). Ne pas ajouter un second `[llm]` : le
+  fichier ne se lit plus ;
+- pas de ligne `[llm]` : ajouter à la fin `[llm]`, puis `sensitive_gate = true` à la ligne ;
+- jamais la ligne seule en fin de fichier : elle tombe dans la dernière table et n'active rien.
+
+Vérifier ensuite avec `memoria doctor` : la section « Moteur d'IA » doit afficher
+`garde sensible: active`. Une clé mal placée y est signalée par un avertissement (et dans
+llm_health, champ `sensitive_gate`).
+
 ## 1ter. Connecter les agents et importer leurs souvenirs
 
 **Agents → « Sur cette machine »** : Memoria détecte Claude Code, Codex, OpenClaw… → **Connecter**

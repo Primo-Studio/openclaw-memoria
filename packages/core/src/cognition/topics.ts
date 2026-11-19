@@ -17,7 +17,7 @@ import type { ContentStore, FactRow } from '../storage/content.js'
 import { runMigrations, type Migration } from '../storage/migrations.js'
 import { fromJsonArray, newId, nowISO, toJson } from '../util.js'
 import { normalizeText, isContentWord } from '../storage/content.js'
-import type { LlmProvider } from '../llm/provider.js'
+import { isSensitiveContentError, type LlmProvider } from '../llm/provider.js'
 
 export interface TopicSummary {
   id: string
@@ -563,7 +563,10 @@ export class TopicEngine {
           }
         }
       } catch (err) {
-        console.warn(`[memoria:topics] libellé LLM en échec (fait ${fact.id}) — heuristique :`, (err as Error).message)
+        // Fait sensible refusé par la garde : libellé heuristique, sans bruit (ce n'est pas une panne).
+        if (!isSensitiveContentError(err)) {
+          console.warn(`[memoria:topics] libellé LLM en échec (fait ${fact.id}) — heuristique :`, (err as Error).message)
+        }
       }
     }
     // Jamais deux thèmes du même nom : un libellé déjà pris désigne le thème

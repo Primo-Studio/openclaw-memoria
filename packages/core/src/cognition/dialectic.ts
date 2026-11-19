@@ -22,7 +22,7 @@
  * silencieuse).
  */
 import type { ContentStore, FactRow } from '../storage/content.js'
-import type { LlmProvider } from '../llm/provider.js'
+import { isSensitiveContentError, type LlmProvider } from '../llm/provider.js'
 import { normalizeText } from '../storage/content.js'
 import { hasNegation, subjectTokens } from './contradiction.js'
 
@@ -278,7 +278,8 @@ async function llmSynthesis(
     const trimmed = out.trim()
     return trimmed.length > 0 ? trimmed : null
   } catch (err) {
-    console.warn('[memoria:dialectic] synthèse LLM en échec — heuristique :', (err as Error).message)
+    // Garde sensible : synthèse heuristique, sans bruit (rien n'est parti, ce n'est pas une panne).
+    if (!isSensitiveContentError(err)) console.warn('[memoria:dialectic] synthèse LLM en échec — heuristique :', (err as Error).message)
     return null
   }
 }

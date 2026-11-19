@@ -599,6 +599,10 @@ export interface DoctorEngine {
   extraction_model: string | null
   embeddings_provider: string | null
   embeddings_model: string | null
+  /** Garde sensible (`[llm] sensitive_gate = true`) en service : rien de sensible ne part à un modèle. */
+  sensitive_gate?: boolean
+  /** Tables de config.toml où la clé `sensitive_gate` est mal placée (elle n'y active rien). */
+  sensitive_gate_misplaced?: string[]
 }
 
 export interface DoctorReport {

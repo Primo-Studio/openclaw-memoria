@@ -44,8 +44,22 @@ export const SENSITIVE_PATTERNS: readonly RegExp[] = [
   /\bfiches? de paye\b/,
   /\bnet a payer\b/,
   // Somme payée ou versée (à une personne, le plus souvent) : le verbe et un montant dans la même phrase.
-  /\b(paye|payee|payes|payees|payer|verse|versee|verses|versees|verser|touche|touchee|toucher|percoit|percu|percue|percevoir)\b[^.\n]{0,40}\d[\d\s.,]*\s?(k?€|euros?)/,
-  /\d[\d\s.,]*\s?(k?€|euros?)\b[^.\n]{0,40}\b(paye|payee|payes|payees|verse|versee|verses|versees)\b/,
+  // Le montant est BORNÉ (AMOUNT) : `[\d\s.,]*` coûtait un temps quadratique sur
+  // une longue suite de chiffres (tableau, CSV), 0,5 s pour 20 000 caractères.
+  /\b(paye|payee|payes|payees|payer|verse|versee|verses|versees|verser|touche|touchee|toucher|percoit|percu|percue|percevoir|gagne|gagnes|gagnent|gagner|gagnait|gagnera)\b[^.\n]{0,40}\d[\d\s.,]{0,20}\s?(k?€|euros?)/,
+  // `\b` après « € » exigeait une lettre collée : « 1 850 € versés » passait, seul « euros » comptait.
+  /\d[\d\s.,]{0,20}\s?(k?€|euros?\b)[^.\n]{0,40}\b(paye|payee|payes|payees|verse|versee|verses|versees)\b/,
+  // « Le net de Camille est de 1 850 € » : le net (d'une paie) suivi d'un montant.
+  /(^|[^.\w])(le|son|sa|mon|ma|ton|leur|notre|votre) net\b[^.\n]{0,40}\d[\d\s.,]{0,20}\s?(k?€|euros?)/,
+  // Virement d'un montant À QUELQU'UN (« à Camille ») ; « à la banque », « pour la facture » restent permis.
+  /\bvirements?\b[^.\n]{0,40}\d[\d\s.,]{0,20}\s?(k?€|euros?)\s+a\s+(?!(la|l'|le|les|un|une|des|notre|votre|nos|vos|leur|leurs|mon|ma|mes|ton|ta|tes|son|sa|ses|ce|cet|cette|ces)\b)[a-z]/,
+  // Anglais et portugais : les mêmes mots de la paie (un tour Codex ou Claude Code peut être en anglais).
+  /\bsalar(y|ies)\b/,
+  /\bpay ?(slips?|stubs?|checks?|cheques?)\b/,
+  /\bwages?\b/,
+  /\bsalarios?\b/,
+  /\bholerites?\b/,
+  /\bcontracheques?\b/,
   /\bsmic\b/,
   /\bprimes? (de fin d'annee|exceptionnelles?|d'anciennete|de rendement|de precarite|annuelles?|mensuelles?|de noel|d'objectifs?|macron|de partage|d'activite|de naissance)\b/,
   /\b(sa|ta|ma|leur|une|des|ses|mes|tes) primes?\b/,
@@ -65,6 +79,10 @@ export const SENSITIVE_PATTERNS: readonly RegExp[] = [
   /\bdsn\b/,
   /\bdeclarations? (de revenus|d'impots?|fiscales?)\b/,
   /\brevenus? (fiscal|imposable|du foyer|du menage)\b/,
+  // « tax » seul est trop courant (tax rate d'un panier) : seulement les impôts d'une personne.
+  /\btax (returns?|refunds?|bills?|ids?|numbers?|forms?)\b/,
+  /\bincome tax(es)?\b/,
+  /\bimpostos?\b/,
   // Aides et situation personnelle
   /\ballocations?\b/,
   /\bcaf\b/,
@@ -92,6 +110,15 @@ export const SENSITIVE_PATTERNS: readonly RegExp[] = [
   /\bpieces? d'identite\b/,
   /\bdates? de naissance\b/,
   /\bnee? le \d/,
+  // Année de naissance d'une personne (« née en 1990 ») ; « l'idée est née en 2024 » reste permis.
+  /\bnee?s? en (19\d{2}|20[01]\d)\b/,
+  /\bsocial security\b/,
+  // « Passport » seul est aussi une bibliothèque d'authentification (Passport.js) : seulement le document.
+  /\bpassports? (numbers?|no|copy|copies|scans?|photos?|expir\w*|details|renewal)\b/,
+  /\b(copy|scan|photo) of [^.\n]{0,20}\bpassports?\b/,
+  /\bpassaportes?\b/,
+  /\bdates? of birth\b/,
+  /\bborn (on|in) \d/,
   // Numéro de sécurité sociale (NIR) : sexe, année, mois, département, commune, ordre, clé.
   /\b[12]\s?\d{2}\s?(0[1-9]|1[0-2])\s?(\d{2}|2a|2b)\s?\d{3}\s?\d{3}(\s?\d{2})?\b/,
   // Santé
@@ -126,6 +153,17 @@ export const SENSITIVE_PATTERNS: readonly RegExp[] = [
   /\bdeces\b/,
   /\bobseques\b/,
   /\benterrement\b/,
+  /\bdentistes?\b/,
+  /\bkine(s|sitherapeutes?|sitherapie)?\b/,
+  /\bgrippe\b/,
+  // Anglais : « doctor » seul est une commande (« memoria doctor », « brew doctor »).
+  /\bdoctor'?s? (appointments?|visits?|notes?)\b/,
+  /\bsick (leave|days?|notes?|pay)\b/,
+  /\bhealth (insurance|conditions?|records?)\b/,
+  // Portugais.
+  /\bsaude\b/,
+  /\bmedicos?\b/,
+  /\batestados?\b/,
   // Accès. Les tirets ne sont pas retirés par la normalisation : « mot-de-passe », « motdepasse ».
   /\bmots?[\s_-]*de[\s_-]*passe\b/,
   /\bmotdepasse\b/,

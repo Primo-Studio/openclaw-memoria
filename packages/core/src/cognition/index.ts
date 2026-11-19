@@ -17,7 +17,7 @@
  */
 import type { Database } from 'better-sqlite3'
 import type { ContentStore } from '../storage/content.js'
-import type { LlmProvider } from '../llm/provider.js'
+import { isSensitiveContentError, type LlmProvider } from '../llm/provider.js'
 import { ensureCognitionSchema } from '../storage/cognition-schema.js'
 import {
   heuristicEntities,
@@ -59,6 +59,13 @@ export interface ProcessFactResult {
   via: 'llm' | 'heuristic'
   /** Mode `llmOnly` : l'extraction LLM a échoué et RIEN n'a été écrit (processed = false). */
   llm_failed?: boolean
+  /**
+   * Texte sensible refusé par la garde (`llm.sensitive_gate`) : rien n'est
+   * parti. Hors `llmOnly`, le fait est traité en heuristique (local) ; en
+   * `llmOnly`, rien n'est écrit. Ni une panne ni un échec : l'appelant ne le
+   * repropose plus au LLM.
+   */
+  sensitive?: boolean
 }
 
 /**
@@ -139,6 +146,7 @@ export class CognitionEngine {
     // 1. Extraction — LLM si dispo, sinon heuristique (jamais silencieux).
     let extraction: Extraction
     let via: 'llm' | 'heuristic' = 'heuristic'
+    let sensitive = false
     if (this.llm) {
       try {
         const result = await llmExtract(this.llm, fact.fact)
@@ -151,11 +159,18 @@ export class CognitionEngine {
           extraction = { entities: heuristicEntities(fact.fact), relations: [] }
         }
       } catch (err) {
-        if (opts.llmOnly) {
+        if (isSensitiveContentError(err)) {
+          // Garde sensible : le texte n'est pas parti. En llmOnly rien n'est
+          // écrit (les entités d'un essai précédent ne s'empilent pas) ;
+          // sinon l'heuristique, locale, relie le fait comme sans LLM.
+          if (opts.llmOnly) return { ...empty, sensitive: true }
+          sensitive = true
+        } else if (opts.llmOnly) {
           console.warn(`[memoria] extraction graphe LLM en échec (fait ${factId}), fait laissé intact :`, (err as Error).message)
           return { ...empty, llm_failed: true }
+        } else {
+          console.warn(`[memoria] extraction graphe LLM en échec (fait ${factId}) — heuristique :`, (err as Error).message)
         }
-        console.warn(`[memoria] extraction graphe LLM en échec (fait ${factId}) — heuristique :`, (err as Error).message)
         extraction = { entities: heuristicEntities(fact.fact), relations: [] }
       }
     } else if (opts.llmOnly) {
@@ -212,6 +227,7 @@ export class CognitionEngine {
       observation_created: obs.created,
       processed: true,
       via,
+      ...(sensitive ? { sensitive: true } : {}),
     }
   }
 

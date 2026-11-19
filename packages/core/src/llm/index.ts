@@ -25,6 +25,20 @@ export type {
   LlmProvider,
 } from './provider.js'
 export { LlmTimeoutError, LlmTruncatedError, NullLlmProvider } from './provider.js'
+export {
+  applySensitiveGate,
+  containsSensitive,
+  gateEmbeddings,
+  gateExtraction,
+  isSensitiveContentError,
+  isSensitiveGated,
+  rawConfigHasSensitiveGate,
+  SensitiveContentError,
+  sensitiveGateEnabled,
+  sensitiveGateState,
+  sensitiveIndexes,
+  type SensitiveGateState,
+} from './sensitive-gate.js'
 export { fetchWithTimeout } from './http.js'
 export {
   DEFAULT_LOCAL_EXTRACTION_MODEL,
@@ -257,6 +271,14 @@ async function buildExplicitEmbeddings(
  * `llm.extraction` et `llm.embeddings` priment chacun sur le profil pour leur
  * couche : le profil est un raccourci, pas une contrainte.
  * Chaque slot indisponible vaut null (et c'est dit dans les logs).
+ *
+ * Les providers rendus ici sont BRUTS. La garde sensible (`llm.sensitive_gate`,
+ * voir `applySensitiveGate`) est posée par le moteur (`Memoria.ensureProfile`),
+ * seul endroit d'où capture, import, cognition, tri, indexation et rappel
+ * tirent leurs providers, et en DERNIER, par-dessus le compteur et le journal
+ * cloud : posée ici, sous eux, un refus serait journalisé comme un envoi raté
+ * alors que rien n'est parti. Tout nouvel appelant qui enverrait du texte avec
+ * le résultat de cette fonction doit passer par `applySensitiveGate`.
  */
 export async function resolveLlmProfile(
   config: MemoriaConfig,

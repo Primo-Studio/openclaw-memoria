@@ -20,7 +20,7 @@ import { findDuplicate } from './selective.js'
 import { WalProcessor, type ProcessOutcome, type WalReplaySummary } from './wal.js'
 import type { ContentStore } from '../storage/content.js'
 import type { DetectedSecret, Redactor } from '../secrets/types.js'
-import type { LlmProvider } from '../llm/provider.js'
+import { isSensitiveContentError, type LlmProvider } from '../llm/provider.js'
 import type { ActiveContext, AuditEntry, Fact, StoreFactInput, WalEntry } from '../types.js'
 
 export interface CaptureMessage {
@@ -62,7 +62,7 @@ export interface CapturePipelineDeps {
   defaultScope: (instanceId: string) => string
   /** storeFact gouverné (Memoria.storeFact) — audite déjà 'store_fact'. */
   storeFact: (input: StoreFactInput) => Fact
-  /** Audit neutre (jamais de contenu) — utilisé pour 'wal_entry_abandoned'. */
+  /** Audit neutre (jamais de contenu) — utilisé pour 'wal_entry_abandoned' et 'sensitive_skipped'. */
   audit: (entry: Omit<AuditEntry, 'id' | 'ts'>) => void
   /** Gate dur secrets — null = pas de redaction (assumé par l'intégrateur). */
   redactor: Redactor | null
@@ -225,7 +225,7 @@ export class CapturePipeline {
         this.groups.delete(entry.id)
         return { status: 'done', facts_created: 0 }
       }
-      const outcome = await this.extractAndStore(instanceId, store, group.messages, group.context)
+      const outcome = await this.extractAndStore(instanceId, store, group.messages, group.context, entry.id)
       if (outcome.status === 'done') {
         group.extracted = true
         this.groups.delete(entry.id)
@@ -235,7 +235,7 @@ export class CapturePipeline {
     // Entrée orpheline (rejeu post-crash : le groupage mémoire est perdu) :
     // extraction individuelle, re-redaction par défense (entrées legacy importées).
     const message: CaptureMessage = { role: entry.role, content: this.redact(entry.content) }
-    return this.extractAndStore(instanceId, store, [message], undefined)
+    return this.extractAndStore(instanceId, store, [message], undefined, entry.id)
   }
 
   /** Gate dur : secrets détectés → secretSink (coffre), texte remplacé par [secret:…]. */
@@ -259,6 +259,8 @@ export class CapturePipeline {
     store: ContentStore,
     messages: CaptureMessage[],
     context: ActiveContext | undefined,
+    /** Entrée WAL qui porte l'extraction (audit neutre, jamais le contenu). */
+    entryId: number,
   ): Promise<ProcessOutcome> {
     const { extraction } = this.deps
     if (!extraction || !(await extraction.isAvailable())) {
@@ -267,13 +269,32 @@ export class CapturePipeline {
     }
 
     const prompt = buildExtractionPrompt(messages)
-    const raw = await extraction.complete({
-      system: EXTRACTION_SYSTEM,
-      prompt,
-      json: true,
-      maxTokens: 1024,
-      temperature: 0.1,
-    })
+    let raw: string
+    try {
+      raw = await extraction.complete({
+        system: EXTRACTION_SYSTEM,
+        prompt,
+        json: true,
+        maxTokens: 1024,
+        temperature: 0.1,
+      })
+    } catch (err) {
+      if (!isSensitiveContentError(err)) throw err
+      // GARDE SENSIBLE (`[llm] sensitive_gate`) : le tour parle de paie, de
+      // santé, d'identité… Rien n'est parti au modèle. L'entrée est TRAITÉE
+      // (0 fait) : la retenter enverrait la même chose au même refus, et
+      // l'abandonner la ferait passer pour une panne. Audit neutre : id hashé,
+      // jamais le contenu.
+      this.deps.audit({
+        actor_type: 'system',
+        actor_id: 'capture-pipeline',
+        action: 'sensitive_skipped',
+        target_id_hash: sha256Hex(`wal:${store.path}:${entryId}`),
+        scope_id: null,
+        reason: `messages=${messages.length}`,
+      })
+      return { status: 'done', facts_created: 0 }
+    }
     const extracted = parseFactArray(raw).slice(0, this.maxFactsPerEntry)
 
     const scopeId = this.deps.defaultScope(instanceId)

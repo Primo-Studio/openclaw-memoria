@@ -77,6 +77,19 @@ export interface MemoriaConfig {
      * une valeur fausse corrompt la base.
      */
     embeddings?: { provider?: string; model?: string; dimensions?: number; base_url?: string }
+    /**
+     * Garde sensible (défaut : désactivée). À `true`, aucun texte sensible
+     * (paie, salaire, impôts, URSSAF, charges sociales, IBAN, santé, pièces
+     * d'identité…, filtre `triage/sensitive.ts`) ne part à un modèle, LLM ou
+     * vecteurs, quel que soit le chemin : capture, import, cognition,
+     * indexation, rappel. À poser sur chaque poste d'équipe AVANT d'y mettre
+     * une clé cloud. Seule la valeur booléenne `true` l'active, et seulement
+     * sous l'en-tête `[llm]` (ailleurs, la clé est signalée par le doctor et
+     * llm_health, sans rien activer). Réglée à la main dans le fichier : prise
+     * en compte au démarrage du daemon, ou dès qu'il réécrit config.toml
+     * (réglage du moteur, pause et reprise, synchro), qui la conserve.
+     */
+    sensitive_gate?: boolean
   }
   /**
    * Tri des souvenirs. `budget_usd` : plafond de dépense par passage (défaut

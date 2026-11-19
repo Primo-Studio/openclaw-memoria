@@ -4,7 +4,7 @@
  * doctor/stats. Capture pipeline (WAL→redaction→extraction) arrive en P2,
  * MCP/UI en P3 — voir docs/v3/STATUS.md.
  */
-import { existsSync, readdirSync, rmSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { cpus, hostname, totalmem } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import DatabaseCtor from 'better-sqlite3'
@@ -55,6 +55,7 @@ import {
   type DialecticResult,
   type ExpandResult,
   cleanTopicLabel,
+  LLM_EXTRACTION_MAX_FAILURES,
   topicSlug,
 } from '../cognition/index.js'
 import { estimateTokens, factNormHash, newId, nowISO, sha256Hex } from '../util.js'
@@ -81,14 +82,22 @@ import {
 import { runProjection } from '../cognition/projection.js'
 import {
   resolveLlmProfile,
+  applySensitiveGate,
   auditExtraction,
   auditEmbeddings,
+  containsSensitive,
   formatCloudSend,
+  isSensitiveContentError,
+  isSensitiveGated,
   meterExtraction,
   meterEmbeddings,
   estimateCostUsd,
   priceFor,
   PRICING_AS_OF,
+  rawConfigHasSensitiveGate,
+  sensitiveGateEnabled,
+  sensitiveGateState,
+  type SensitiveGateState,
   type UsageSink,
 } from '../llm/index.js'
 import type { CloudAuditSink } from '../llm/index.js'
@@ -184,6 +193,12 @@ export interface LlmHealthReport {
   /** Entrées WAL en attente d'extraction, toutes instances confondues. */
   wal_pending: number
   options: LlmOptions
+  /**
+   * Garde sensible (`[llm] sensitive_gate`) EN SERVICE dans ce daemon, et les
+   * tables de config.toml où la clé est mal placée : un poste d'équipe se
+   * vérifie sans ouvrir le fichier.
+   */
+  sensitive_gate: SensitiveGateState
 }
 
 export interface PairAssistantInput {
@@ -512,6 +527,13 @@ export class Memoria {
   private profileSnapshot: { extraction: string | null; embeddings: string | null } | null = null
   private profileResolvedAt = 0
   /**
+   * Compteur des invalidations du profil (réglage du moteur, garde sensible
+   * posée). Une indexation le note au départ : s'il change en route, le
+   * provider qu'elle tient est périmé (peut-être sans garde) et elle s'arrête
+   * au lieu de le remettre dans le cache tout neuf des indexeurs.
+   */
+  private profileGeneration = 0
+  /**
    * Délai avant de RE-résoudre un profil INCOMPLET (extraction ou embeddings
    * à null). Le daemon est lancé par launchd avant l'app Ollama : sans cela,
    * un Ollama éteint au boot laissait la capture en « defer no-llm » pour
@@ -561,8 +583,9 @@ export class Memoria {
    */
   private mapAttempt: { model: string; vectors: number; placeable: number } | 'pending' | null = null
   private indexers = new WeakMap<ContentStore, EmbeddingIndexer>()
-  private readonly cognitionEngines = new WeakMap<ContentStore, CognitionEngine>()
-  private readonly topicEngines = new WeakMap<ContentStore, TopicEngine>()
+  // Vidés par invalidateProfile, comme les indexeurs : ils tiennent le provider d'extraction.
+  private cognitionEngines = new WeakMap<ContentStore, CognitionEngine>()
+  private topicEngines = new WeakMap<ContentStore, TopicEngine>()
   private readonly patternEngines = new WeakMap<ContentStore, PatternEngine>()
   private readonly proceduralEngines = new WeakMap<ContentStore, ProceduralEngine>()
   private readonly feedbackEngines = new WeakMap<ContentStore, FeedbackEngine>()
@@ -588,6 +611,14 @@ export class Memoria {
     this.registry.registerDb({ kind: 'registry', path: this.paths.registry, assistant_instance_id: null, scope_id: null })
     this.secretProvider = opts.secretProvider ?? createSecretProvider(this.paths.secretsDir, { force: opts.secretsVault })
     this.llmOverride = opts.llm
+    // Ligne ajoutée en fin de fichier, tombée dans la dernière table : la garde
+    // n'est pas active, et on le dit au démarrage (doctor et llm_health aussi).
+    const { enabled: gateOn, misplaced: misplacedGate } = sensitiveGateState(resolved.config)
+    if (misplacedGate.length > 0 && !gateOn) {
+      console.warn(
+        `[memoria] config.toml : sensitive_gate mal placée (sous ${misplacedGate.map(t => `[${t}]`).join(', ')}), garde sensible INACTIVE ; la mettre sous l’en-tête [llm]`,
+      )
+    }
     this.recoverInterruptedScopeMove()
     this.grantDefaultUserWrite()
     this.grantTeamWriteDefault()
@@ -678,14 +709,71 @@ export class Memoria {
   private saveConfig(): void {
     let next = this.resolved.config
     try {
-      const sharing = loadConfigFile(this.resolved.configPath).sharing
+      const disk = loadConfigFile(this.resolved.configPath)
+      const sharing = disk.sharing
       next = { ...this.resolved.config }
       if (sharing) next.sharing = sharing
       else delete next.sharing
+      // Même règle pour `[llm] sensitive_gate`, posé seulement à la main : la
+      // valeur du disque prime. Sans cela, la garde ajoutée au fichier pendant
+      // que le daemon tourne disparaissait au premier choix de modèle dans
+      // Réglages, et le poste redémarrait sans elle.
+      const diskGate = disk.llm?.sensitive_gate
+      if (next.llm !== undefined || diskGate !== undefined) {
+        const llm = { ...next.llm }
+        if (diskGate !== undefined) llm.sensitive_gate = diskGate
+        else delete llm.sensitive_gate
+        next.llm = llm
+      }
+      if (diskGate === true) this.adoptDiskSensitiveGate()
     } catch {
-      // fichier illisible : on l'écrase comme avant, avec la config en mémoire
+      // Fichier illisible : on l'écrase comme avant, avec la config en mémoire.
+      // Mais pas sans la garde qu'il porte : un second en-tête `[llm]` ajouté à
+      // la main pour la poser rend le fichier illisible, et la réécriture
+      // l'effaçait ; le poste redémarrait sans garde, clé cloud en place.
+      let raw = ''
+      try {
+        raw = readFileSync(this.resolved.configPath, 'utf8')
+      } catch {
+        // illisible au sens propre : rien à reprendre
+      }
+      if (rawConfigHasSensitiveGate(raw)) {
+        this.adoptDiskSensitiveGate()
+        next = this.resolved.config
+      }
     }
     saveConfigFile(next, this.resolved.configPath)
+  }
+
+  /**
+   * Garde sensible telle que ce daemon l'applique (config en mémoire), plus
+   * les clés mal placées lues dans config.toml : une ligne ajoutée après le
+   * démarrage, au mauvais endroit, se voit aussi. Lecture locale, best-effort.
+   */
+  private sensitiveGateStatus(): SensitiveGateState {
+    const live = sensitiveGateState(this.resolved.config)
+    let misplaced = live.misplaced
+    try {
+      misplaced = [...new Set([...misplaced, ...sensitiveGateState(loadConfigFile(this.resolved.configPath)).misplaced])]
+    } catch {
+      // fichier illisible : la config en mémoire suffit
+    }
+    return { enabled: live.enabled, misplaced }
+  }
+
+  /**
+   * Garde trouvée active dans config.toml alors que la config en mémoire ne
+   * l'a pas : elle s'applique TOUT DE SUITE, quel que soit l'enregistrement qui
+   * l'a lue (réglage du moteur, pause et reprise, synchro). Le profil est
+   * re-résolu et tout ce qui gardait un provider sans garde est jeté (pipeline,
+   * indexeurs, moteurs de cognition et de thèmes) ; un passage de cognition en
+   * cours s'arrête au fait suivant, un import en cours lit la garde à chaque fenêtre.
+   */
+  private adoptDiskSensitiveGate(): void {
+    if (this.resolved.config.llm?.sensitive_gate === true) return
+    this.resolved.config.llm = { ...this.resolved.config.llm, sensitive_gate: true }
+    this.invalidateProfile()
+    console.warn('[memoria] garde sensible trouvée dans config.toml : appliquée tout de suite')
   }
 
   /**
@@ -1548,11 +1636,15 @@ export class Memoria {
     this.assertOpen()
     const provider = await this.ensureEmbeddings()
     if (!provider) return this.recall(input)
+    // Garde sensible : une requête sensible n'est pas envoyée au moteur de
+    // vecteurs, le rappel répond par le plein texte seul (même repli qu'une
+    // panne, sans l'avertissement : ce n'en est pas une).
+    if (isSensitiveGated(provider) && (await containsSensitive(input.query))) return this.recall(input)
     let queryVector: Float32Array | undefined
     try {
       queryVector = (await provider.embed([input.query]))[0]
     } catch (err) {
-      console.warn('[memoria] embedding de requête en échec — recall FTS seul :', (err as Error).message)
+      if (!isSensitiveContentError(err)) console.warn('[memoria] embedding de requête en échec — recall FTS seul :', (err as Error).message)
     }
     if (!queryVector) return this.recall(input)
     const vec = queryVector
@@ -1974,8 +2066,25 @@ export class Memoria {
       throw new Error('Memoria est en pause : rattrapage en mode LLM refusé. Réactive Memoria, ou lance le rattrapage sans LLM.')
     }
     const heuristicOnly = request.includeBackfill && !request.llm
+    // Noté AVANT la résolution : une garde posée pendant celle-ci compte aussi.
+    const gateAtStart = sensitiveGateEnabled(this.resolved.config)
     // Heuristique seule : on ne résout même pas le profil LLM (aucune sonde réseau).
     const extraction = heuristicOnly ? null : (await this.ensureProfile()).extraction
+    // Garde sensible posée PENDANT le passage : `extraction` a été pris sans
+    // elle. Le passage s'arrête entre deux faits plutôt que de continuer avec,
+    // ou de le remettre dans le cache des moteurs ; la suite repart au prochain
+    // passage, par la garde. Un rattrapage LLM le dit, comme pour une pause.
+    // Seule la garde arrête un passage : sans elle (poste du propriétaire), un
+    // réglage changé en route ne coupe rien, comme avant.
+    const stale = (): boolean => !heuristicOnly && !gateAtStart && sensitiveGateEnabled(this.resolved.config)
+    const stopStale = (): CognitionPassResult => {
+      if (request.llm) {
+        throw new Error(
+          `Garde sensible posée pendant le rattrapage LLM : arrêté après ${result.processed} faits (${result.llm_facts} par le LLM). Relance-le : il repart par la garde.`,
+        )
+      }
+      return result
+    }
     const cancelled = (): boolean => {
       if (request.cancelled) result.cancelled = true
       return request.cancelled
@@ -2013,6 +2122,7 @@ export class Memoria {
 
     for (const path of paths) {
       if (this.closed) return result
+      if (stale()) return stopStale()
       const store = this.openContent(path)
       // Liens hérités des faits critical, reliés avant que la cognition ne les
       // écarte : purgés une fois par base et par processus, AVANT le rangement
@@ -2036,6 +2146,8 @@ export class Memoria {
       const remark = store.db.prepare("UPDATE fact_cognition SET via = 'backfill' WHERE fact_id = ?")
       // Compteur persistant : borne les nouveaux essais d'un redémarrage à l'autre (pendingFactIds).
       const countFailure = store.db.prepare('UPDATE fact_cognition SET llm_failures = llm_failures + 1 WHERE fact_id = ?')
+      // Fait refusé par la garde sensible : plus jamais repris pour le LLM (pendingFactIds), sans compter de panne.
+      const neverLlm = store.db.prepare('UPDATE fact_cognition SET llm_failures = MAX(llm_failures, ?) WHERE fact_id = ?')
       const markerOf = store.db.prepare('SELECT via FROM fact_cognition WHERE fact_id = ?')
       const seen = new Set<string>()
       // Faits traités par CE passage : seuls eux peuvent demander un libellé de thème au LLM.
@@ -2055,6 +2167,7 @@ export class Memoria {
         }
         for (const id of ids) {
           if (this.closed || cancelled()) return result
+          if (stale()) return stopStale()
           if (capReached()) break
           // Pause posée en cours de route : un passage qui peut appeler le LLM
           // s'arrête entre deux faits. La suite attend la reprise. Sans LLM,
@@ -2075,8 +2188,18 @@ export class Memoria {
           // rattrapage ultérieur le reprend, et ses entités ne s'empilent pas.
           const llmOnly = request.llm || (llmAvailable && markerOf.get(id) !== undefined)
           let llmFailed = false
+          let sensitiveSkip = false
           try {
             const r = await engine.processFact(id, { llmOnly })
+            if (r.sensitive) {
+              // Texte sensible refusé par la garde : rien n'est parti, ce n'est
+              // ni une panne ni un échec (le rattrapage LLM ne s'arrête pas sur
+              // une suite de faits de paie). Traité sur place s'il pouvait
+              // l'être, et plus jamais proposé au LLM.
+              sensitiveSkip = true
+              this.cognitionSkip.add(id)
+              neverLlm.run(LLM_EXTRACTION_MAX_FAILURES, id)
+            }
             if (r.processed) {
               result.processed++
               processedNow.add(id)
@@ -2084,8 +2207,9 @@ export class Memoria {
               // LLM disponible mais extraction ratée (erreur, délai, JSON
               // illisible) : le marqueur reste « heuristic », donc le fait
               // serait rejoué à chaque passage. Une seule tentative par vie
-              // du processus, et le compteur borne les redémarrages.
-              else if (llmAvailable) {
+              // du processus, et le compteur borne les redémarrages. (Un
+              // refus de la garde est déjà mis de côté ci-dessus.)
+              else if (llmAvailable && !sensitiveSkip) {
                 this.cognitionSkip.add(id)
                 countFailure.run(id)
               }
@@ -2111,7 +2235,8 @@ export class Memoria {
           }
           report()
           if (request.llm) {
-            consecutiveFailures = llmFailed ? consecutiveFailures + 1 : 0
+            // Un refus de la garde ne dit rien de l'état du LLM : la série en cours reste telle quelle.
+            consecutiveFailures = llmFailed ? consecutiveFailures + 1 : sensitiveSkip ? consecutiveFailures : 0
             // isAvailable() ne prouve rien chez un fournisseur cloud (clé
             // présente) : seuls les échecs répétés disent que l'API est en panne.
             if (consecutiveFailures >= COGNITION_LLM_MAX_CONSECUTIVE_FAILURES) {
@@ -2136,6 +2261,7 @@ export class Memoria {
         if (!request.includeBackfill || paused) break
       }
       if (this.closed || cancelled()) return result
+      if (stale()) return stopStale()
 
       // TOPICS : ranger les faits par thème APRÈS que les entités existent
       // (entité-first), par petites tranches pour la même raison.
@@ -2158,7 +2284,7 @@ export class Memoria {
           // LIMIT -1 = sans limite (rattrapage).
           .all(request.includeBackfill ? -1 : COGNITION_BATCH) as Array<{ id: string }>
         for (let i = 0; i < pending.length; i++) {
-          if (this.closed || request.cancelled) break
+          if (this.closed || request.cancelled || stale()) break
           const id = (pending[i] as { id: string }).id
           // Libellé LLM seulement pour un fait traité par CE passage, et jamais
           // en pause. Les autres (validés, partagés, hérités, thèmes supprimés
@@ -2570,9 +2696,10 @@ export class Memoria {
     if (!engine) {
       engine = new TopicEngine({ store, llm })
       this.topicEngines.set(store, engine)
-    } else if (llm && !engine.hasLlm) {
+    } else if (llm) {
       // Cache PAR STORE, pas par provider : un premier appel de lecture
       // (llm=null) ne doit pas priver le store des libellés LLM pour toujours.
+      // Un provider passé remplace celui du cache (voir cognitionFor).
       engine.setLlm(llm)
     }
     return engine
@@ -3256,6 +3383,10 @@ export class Memoria {
       // Même gate secrets que la capture : rien ne part au LLM en clair.
       redactor: this.redactor,
       secretSink: s => this.vaultSecret(s),
+      // Garde sensible : lue dans la config (le dry-run doit compter les
+      // fenêtres écartées même sans LLM joignable), et relue à chaque fenêtre :
+      // posée pendant un long import, elle vaut pour les fenêtres suivantes.
+      sensitiveGate: () => sensitiveGateEnabled(this.resolved.config),
       sinceDate: opts.sinceDate,
       maxWindowsPerFile: opts.maxWindowsPerFile,
       dryRun: opts.dryRun,
@@ -3344,6 +3475,7 @@ export class Memoria {
       extraction,
       redactor: this.redactor,
       secretSink: s => this.vaultSecret(s),
+      sensitiveGate: () => sensitiveGateEnabled(this.resolved.config),
       systemPrompt: CHATGPT_EXTRACTION_SYSTEM,
       maxWindowsPerFile: opts.maxWindowsPerFile ?? Number.POSITIVE_INFINITY,
       tailQuietMs: 0,
@@ -3382,10 +3514,13 @@ export class Memoria {
     if (!engine) {
       engine = new CognitionEngine({ store, llm })
       this.cognitionEngines.set(store, engine)
-    } else if (llm && !engine.hasLlm) {
+    } else if (llm) {
       // Même règle que topicFor : le LLM devient collant dès qu'on le connaît.
       // Avant : recall() avant la 1re capture → moteur figé en heuristique,
-      // extraction graphe LLM jamais utilisée, sans aucun signal.
+      // extraction graphe LLM jamais utilisée, sans aucun signal. Un provider
+      // passé REMPLACE celui du cache (seul le passage de cognition en passe
+      // un, celui du profil courant) : un profil re-résolu, garde sensible
+      // comprise, s'applique au moteur déjà en cache.
       engine.setLlm(llm)
     }
     return engine
@@ -3419,6 +3554,7 @@ export class Memoria {
    */
   async indexEmbeddings(instanceId?: string): Promise<{ indexed: number }> {
     this.assertOpen()
+    const generation = this.profileGeneration
     const provider = await this.ensureEmbeddings()
     if (!provider) return { indexed: 0 }
     let indexed = 0
@@ -3427,10 +3563,15 @@ export class Memoria {
       // Main rendue entre deux bases : au démarrage, les 8 bases se vérifiaient d'un bloc.
       if (i > 0) await new Promise(resolve => setImmediate(resolve))
       if (this.closed) break
+      // Profil re-résolu en route (garde sensible posée) : ce provider est
+      // périmé ; les bases restantes attendent la prochaine indexation.
+      if (this.profileGeneration !== generation) break
       const store = this.openContent(path)
       let indexer = this.indexers.get(store)
       if (!indexer) {
-        indexer = new EmbeddingIndexer({ store, provider })
+        // Garde sensible active : l'indexeur écarte les faits sensibles AVANT
+        // l'envoi (ils restent sans vecteur, trouvés par le plein texte seul).
+        indexer = new EmbeddingIndexer({ store, provider, skipSensitive: isSensitiveGated(provider) })
         this.indexers.set(store, indexer)
       }
       const run = await indexer.runAll()
@@ -3490,11 +3631,20 @@ export class Memoria {
       // Compteur de consommation : TOUS les providers (locaux compris, et
       // ceux injectés par les tests/daemon) — c'est une mesure, pas un audit.
       const usageSink: UsageSink = call => this.registry.recordLlmUsage(call)
+      // Garde sensible (`[llm] sensitive_gate = true`) : posée en DERNIER, sur
+      // les deux branches (providers injectés compris), pour que tout ce qui
+      // sort d'ici la traverse. Par-dessus compteur et journal cloud : un envoi
+      // refusé n'est ni compté ni journalisé, rien n'est parti. Réglage absent :
+      // mêmes objets qu'avant.
+      const gate = sensitiveGateEnabled(this.resolved.config)
       if (this.llmOverride !== undefined) {
-        return {
-          extraction: this.llmOverride.extraction ? meterExtraction(this.llmOverride.extraction, usageSink) : null,
-          embeddings: this.llmOverride.embeddings ? meterEmbeddings(this.llmOverride.embeddings, usageSink) : null,
-        }
+        return applySensitiveGate(
+          {
+            extraction: this.llmOverride.extraction ? meterExtraction(this.llmOverride.extraction, usageSink) : null,
+            embeddings: this.llmOverride.embeddings ? meterEmbeddings(this.llmOverride.embeddings, usageSink) : null,
+          },
+          gate,
+        )
       }
       // Passe les modèles déjà en base pour que l'avertissement cross-modèle
       // ne crie au loup que s'il y a vraiment un mélange (pas à chaque boot).
@@ -3514,12 +3664,15 @@ export class Memoria {
         })
       }
       this.adoptProfileSnapshot(profile)
-      // Ordre : compteur à l'extérieur, audit cloud à l'intérieur — l'audit
-      // expose aussi la variante détaillée, le compteur voit donc les tokens.
-      return {
-        extraction: profile.extraction ? meterExtraction(auditExtraction(profile.extraction, sink), usageSink) : null,
-        embeddings: profile.embeddings ? meterEmbeddings(auditEmbeddings(profile.embeddings, sink), usageSink) : null,
-      }
+      // Ordre : garde sensible, puis compteur, puis audit cloud à l'intérieur —
+      // l'audit expose aussi la variante détaillée, le compteur voit donc les tokens.
+      return applySensitiveGate(
+        {
+          extraction: profile.extraction ? meterExtraction(auditExtraction(profile.extraction, sink), usageSink) : null,
+          embeddings: profile.embeddings ? meterEmbeddings(auditEmbeddings(profile.embeddings, sink), usageSink) : null,
+        },
+        gate,
+      )
     })()
     return this.profilePromise
   }
@@ -3543,12 +3696,21 @@ export class Memoria {
     this.profileResolvedAt = Date.now()
   }
 
-  /** Oublie le profil mémoïsé (et tout ce qui en dépend) : re-résolu au prochain usage. */
+  /**
+   * Oublie le profil mémoïsé (et tout ce qui en dépend) : re-résolu au prochain
+   * usage. Tout ce qui garde un provider est jeté : pipeline de capture,
+   * indexeurs, ET moteurs de cognition et de thèmes. Sans ces deux derniers,
+   * une garde sensible posée pendant que le daemon tourne laissait la
+   * cognition envoyer le texte des faits par le provider d'avant, sans garde.
+   */
   private invalidateProfile(): void {
+    this.profileGeneration++
     this.profilePromise = null
     this.pipelinePromise = null
     this.profileSnapshot = null
     this.indexers = new WeakMap<ContentStore, EmbeddingIndexer>()
+    this.cognitionEngines = new WeakMap<ContentStore, CognitionEngine>()
+    this.topicEngines = new WeakMap<ContentStore, TopicEngine>()
   }
 
   /**
@@ -4570,7 +4732,7 @@ export class Memoria {
       }
     }
 
-    return { extraction, embeddings, wal_pending: this.walPendingTotal(), options }
+    return { extraction, embeddings, wal_pending: this.walPendingTotal(), options, sensitive_gate: this.sensitiveGateStatus() }
   }
 
   /** Profil LLM courant (config) + choix explicite d'extraction s'il existe. */
@@ -4932,6 +5094,7 @@ export class Memoria {
    */
   async refineTopicLabels(instanceId: string, limit = 40): Promise<{ refined: number }> {
     this.assertOpen()
+    const gateAtStart = sensitiveGateEnabled(this.resolved.config)
     const { extraction } = await this.ensureProfile()
     if (!extraction || !(await extraction.isAvailable())) return { refined: 0 }
     const db = this.registry.dbForInstance(instanceId)
@@ -4941,6 +5104,9 @@ export class Memoria {
     const topics = topicEngine.listTopics({ minFacts: 2 }).slice(0, limit)
     let refined = 0
     for (const t of topics) {
+      // Garde sensible posée en route : `extraction` a été pris sans elle, on
+      // s'arrête ; les thèmes restants gardent leur nom.
+      if (!gateAtStart && sensitiveGateEnabled(this.resolved.config)) break
       const sample = topicEngine.factsForTopic(t.id, { limit: 5 }).map(f => f.fact)
       if (sample.length === 0) continue
       try {
@@ -4974,7 +5140,8 @@ export class Memoria {
           refined++
         }
       } catch (err) {
-        console.warn(`[memoria:topics] affinage LLM échoué (${t.id}) :`, (err as Error).message)
+        // Échantillon sensible refusé par la garde : le thème garde son nom, sans bruit.
+        if (!isSensitiveContentError(err)) console.warn(`[memoria:topics] affinage LLM échoué (${t.id}) :`, (err as Error).message)
       }
     }
     return { refined }
@@ -5054,12 +5221,24 @@ export class Memoria {
     // (constaté sur une installation de test le 28/08). Lecture synchrone de
     // la config : le doctor ne fait aucun appel réseau.
     const llm = this.resolved.config.llm
+    const gate = this.sensitiveGateStatus()
     const engine: DoctorEngine = {
       configured: Boolean(llm?.extraction?.provider),
       extraction_provider: llm?.extraction?.provider ?? null,
       extraction_model: llm?.extraction?.model ?? null,
       embeddings_provider: llm?.embeddings?.provider ?? null,
       embeddings_model: llm?.embeddings?.model ?? null,
+      sensitive_gate: gate.enabled,
+      sensitive_gate_misplaced: gate.misplaced,
+    }
+    // Garde mal placée, et seulement elle : rien ne l'active, et le poste se
+    // croyait protégé. Garde simplement absente : aucun avertissement (poste
+    // du propriétaire). Une clé en trop à côté d'une garde active ne change rien.
+    if (gate.misplaced.length > 0 && !gate.enabled) {
+      warnings.push(
+        `Garde sensible mal placée dans config.toml (sous ${gate.misplaced.map(t => `[${t}]`).join(', ')}) : elle n’est PAS active. ` +
+          'Mettre « sensitive_gate = true » sous l’en-tête [llm] déjà présent (avant tout [llm.extraction] ou autre en-tête), puis redémarrer Memoria.',
+      )
     }
     if (!engine.configured) {
       warnings.push(

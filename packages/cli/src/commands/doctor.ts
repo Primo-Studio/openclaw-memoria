@@ -210,6 +210,17 @@ function renderDoctor(out: Writable, report: DoctorReport, note: string | null):
           : '  recherche sens : aucune — recherche par mots-clés seule\n',
       )
     }
+    // Garde sensible : visible sur chaque poste, active ou non (rien à régler ici).
+    if (engine.sensitive_gate !== undefined) {
+      out.write(
+        engine.sensitive_gate
+          ? '  garde sensible: active — paie, impôts, santé, identité ne partent à aucun modèle\n'
+          : '  garde sensible: inactive\n',
+      )
+    }
+    if (!engine.sensitive_gate && engine.sensitive_gate_misplaced && engine.sensitive_gate_misplaced.length > 0) {
+      out.write(`    ✗ clé sensitive_gate mal placée sous ${engine.sensitive_gate_misplaced.map(t => `[${t}]`).join(', ')} : à mettre sous [llm]\n`)
+    }
   }
 
   const cloud = report.cloud

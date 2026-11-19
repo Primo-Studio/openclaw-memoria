@@ -24,7 +24,15 @@
  * (les faits ne sont alors PAS marqués : ils restent à trier).
  */
 import type { Database, Statement } from 'better-sqlite3'
-import { completeDetailed, embedDetailed, LlmTimeoutError, LlmTruncatedError, type EmbeddingProvider, type LlmProvider } from '../llm/provider.js'
+import {
+  completeDetailed,
+  embedDetailed,
+  isSensitiveContentError,
+  LlmTimeoutError,
+  LlmTruncatedError,
+  type EmbeddingProvider,
+  type LlmProvider,
+} from '../llm/provider.js'
 import type { ContentStore } from '../storage/content.js'
 import { normalizeFact } from '../engine/selective.js'
 import { sha256Hex } from '../util.js'
@@ -561,9 +569,11 @@ class DbPass {
         vectors = res.vectors
         this.failures.consecutive = 0
       } catch (err) {
-        this.ctx.budget.fail(reservation)
+        // Refus de la garde sensible : rien n'est parti, ni payé ni compté comme échec.
+        const refused = isSensitiveContentError(err)
+        this.ctx.budget.fail(reservation, { notSent: refused })
         this.syncCounters()
-        this.countFailure(err)
+        if (!refused) this.countFailure(err)
         // Sans vecteurs, ces faits ne sont regroupés qu'à l'identique : le tri continue.
         continue
       }
@@ -734,7 +744,9 @@ class DbPass {
       this.failures.consecutive = 0
       if (outage > 0) this.ctx.status.error = null
     } catch (err) {
-      this.ctx.budget.fail(reservation, { outputBilled: err instanceof LlmTimeoutError, notSent: isNetworkDown(err) })
+      // Refus de la garde sensible (`llm.sensitive_gate`) : l'appel n'est pas parti.
+      const refused = isSensitiveContentError(err)
+      this.ctx.budget.fail(reservation, { outputBilled: err instanceof LlmTimeoutError, notSent: refused || isNetworkDown(err) })
       this.syncCounters()
       // Réseau coupé ou connexion perdue : on attend son retour, sans compter d'échec ; au-delà, échec ordinaire.
       if (isNetworkError(err) && outage < NETWORK_DOWN_RETRIES && !this.ctx.shouldStop()) {
@@ -743,14 +755,17 @@ class DbPass {
         this.checkStop()
         return this.classify(chunk, attempt, retried, outage + 1)
       }
-      if (err instanceof LlmTruncatedError && chunk.length > 1) {
-        // Sortie coupée : le lot est coupé en deux, chaque moitié repart.
+      if ((err instanceof LlmTruncatedError || refused) && chunk.length > 1) {
+        // Sortie coupée, ou lot refusé par la garde sensible (chaque fait est
+        // filtré seul, le lot rendu peut encore se faire refuser) : le lot est
+        // coupé en deux, chaque moitié repart, jusqu'à isoler le fait refusé.
         const half = Math.ceil(chunk.length / 2)
         const a = await this.classify(chunk.slice(0, half), attempt)
         const b = await this.classify(chunk.slice(half), attempt)
         return new Map([...a, ...b])
       }
-      if (err instanceof LlmTruncatedError) return new Map()
+      // Fait seul refusé : laissé sans classement, sans compter de panne pour le coupe-circuit.
+      if (err instanceof LlmTruncatedError || refused) return new Map()
       // Limite de débit, délai dépassé, serveur saturé : une seule reprise après
       // une pause, puis l'échec compte pour le coupe-circuit.
       if (!retried && isTransient(err) && !this.ctx.shouldStop()) {

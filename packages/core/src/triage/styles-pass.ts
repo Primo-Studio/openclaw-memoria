@@ -119,7 +119,7 @@
  * texte, sur une fenêtre bornée (`maskForCut`), avec cession entre deux.
  */
 import { monitorEventLoopDelay } from 'node:perf_hooks'
-import { LlmTruncatedError } from '../llm/provider.js'
+import { isSensitiveContentError, LlmTruncatedError } from '../llm/provider.js'
 import { normalizeText } from '../storage/content.js'
 import { sha256Hex } from '../util.js'
 import { CIRCUIT_BREAKER_FAILURES, describeError } from './engine.js'
@@ -1010,6 +1010,12 @@ class Pass {
         if (err instanceof TriageBudgetError) throw new StopPass('budget')
         if (err instanceof LlmTruncatedError) {
           r.errors.push('styles : sortie coupée (reprise au passage suivant)')
+          return null
+        }
+        // Refus de la garde sensible : rien n'est parti, ce n'est pas une panne
+        // (pas de coupe-circuit) ; la période reste sans observation.
+        if (isSensitiveContentError(err)) {
+          r.errors.push('styles : échantillon refusé par la garde sensible, rien envoyé')
           return null
         }
         this.consecutiveFailures++

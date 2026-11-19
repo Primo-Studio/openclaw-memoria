@@ -118,6 +118,32 @@ export class LlmTimeoutError extends Error {
   }
 }
 
+/**
+ * Envoi refusé par la garde sensible (`sensitive-gate.ts`) : le texte parle de
+ * paie, d'impôts, de santé, d'identité ou de banque, il ne part à aucun
+ * modèle. Le message ne cite jamais le contenu : il peut aller tel quel dans un
+ * journal ou un rapport. Rien n'a quitté la machine, ce n'est donc ni une
+ * panne ni un échec d'envoi : l'appelant saute l'élément, sans nouvel essai.
+ */
+export class SensitiveContentError extends Error {
+  readonly purpose: 'extraction' | 'embeddings'
+  readonly provider: string
+  readonly model: string
+  constructor(opts: { purpose: 'extraction' | 'embeddings'; provider: string; model: string }) {
+    const what = opts.purpose === 'extraction' ? 'au modèle' : 'au moteur de vecteurs'
+    super(`texte sensible (paie, impôts, santé, identité, banque…) : envoi ${what} ${opts.provider}/${opts.model} refusé par le filtre local`)
+    this.name = 'SensitiveContentError'
+    this.purpose = opts.purpose
+    this.provider = opts.provider
+    this.model = opts.model
+  }
+}
+
+/** Vrai pour un refus de la garde sensible (y compris d'une autre copie du module). */
+export function isSensitiveContentError(err: unknown): err is SensitiveContentError {
+  return err instanceof SensitiveContentError || (err instanceof Error && err.name === 'SensitiveContentError')
+}
+
 /** Appel détaillé si le provider le sait, sinon repli sur `complete` (usage absent). */
 export async function completeDetailed(provider: LlmProvider, opts: CompleteOptions): Promise<CompletionResult> {
   if (provider.completeDetailed) return provider.completeDetailed(opts)
