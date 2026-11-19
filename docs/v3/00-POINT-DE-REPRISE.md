@@ -10,10 +10,9 @@
 | | |
 |---|---|
 | Branche vivante | `memoria-v1`, tout est poussé sur GitHub |
-| Tests | **1 903 verts** (184 fichiers), `tsc -b` et build Vite verts |
-| Poste du propriétaire | daemon sous launchd sur ce build, écoute `127.0.0.1` seulement ; synchro **non activée** |
-| Deux autres postes du bureau | mis à jour sur `d46ef97` le 16/11 (voir §3), synchro **non activée** ; l'iMac est **en pause** (vu le 19/11) |
-| Troisième poste d'équipe | Memoria **installé le 19/11**, sans moteur d'IA (il ne retient rien tant qu'un moteur n'est pas choisi), synchro **non activée** |
+| Tests | **1 931 verts** (185 fichiers), `tsc -b` et build Vite verts ; un test de vitesse (`vector-repair`) peut échouer quand toute la suite tourne en parallèle, il passe seul |
+| Poste du propriétaire | daemon sous launchd, écoute `127.0.0.1` seulement ; synchro **non activée** ; garde sensible **non posée** (son choix) |
+| Trois postes d'équipe | sur `0465ec3` depuis le 19/11 (voir §3) : moteur OpenAI, **garde sensible active**, Claude Code et Codex branchés, import automatique ; synchro **non activée** (prévue vers mi-décembre) |
 | Dépôt | **PUBLIC** (Apache 2.0) : code, tests, démo et docs anonymisés |
 
 ## 2. Ce qui a été fait du 13 au 16 novembre
@@ -49,7 +48,7 @@
 - **Les deux autres postes du bureau** : leur daemon bouclait en échec depuis des semaines (verrou d'un
   démarrage précédent, module natif compilé pour un autre Node). Leurs agents OpenClaw tournaient sans
   mémoire, sans aucun signal. Ils sont réparés et mis à jour, voir §3, mais l'iMac est resté en pause
-  (vu le 19/11). La surveillance qui aurait dû le voir est la tâche **T31**.
+  jusqu'au 19/11. La surveillance qui aurait dû le voir est la tâche **T31**.
 
 ## 3. Ce qui tourne pendant la pause
 
@@ -60,35 +59,42 @@
   - le veilleur local (`fr.primo-studio.memoria.watchdog`, `scripts/watchdog.sh`) sonde `/v1/health`
     chaque minute et affiche une notification après 3 échecs, sans rien réparer ;
   - aucun tri ni aucune passe ne tourne : ils ne partent qu'à la main.
-- **Mac Studio du bureau** (toujours allumé, il héberge un agent OpenClaw et des runners CI) : daemon sur
-  `d46ef97`, Node nvm 24.18.0, plist d'origine gardé. Les deux jetons OpenClaw répondent.
-- **iMac du bureau** (8 Go, il héberge un agent OpenClaw) : daemon sur `d46ef97`, service recréé par
-  `autostart on` avec **Node nvm 22.22.0**, parce que better-sqlite3 y est compilé pour cette ABI.
-  Passé à `c46d1cd` le 18/11 par le bouton « Mise à jour » de l'interface. **Vu le 19/11 : Memoria y est en
-  pause** (`enabled = false` depuis le 12/10). Son agent n'a donc aucune mémoire. Le réactiver fait dépenser
-  la clé OpenAI de ce poste : accord du propriétaire requis.
-- **Vu le 19/11 vers 8 h** : le Mac Studio était éteint. Rallumé vers 8 h 50, Memoria est reparti seul.
-- **Troisième poste d'équipe** (installé le 19/11) :
-  - installation à la main par SSH, sans le script, qui ouvre le navigateur à la fin ;
+- **Les trois postes d'équipe, réglés le 19/11** (accord du propriétaire) :
+  - code `0465ec3`, service launchd sur le Node de chaque poste ;
+  - moteur OpenAI : `gpt-4o-mini` pour l'extraction (le modèle du poste du propriétaire, retenu par le
+    projet pour la qualité des faits) et `text-embedding-3-small` pour les vecteurs ;
+  - `[llm] sensitive_gate = true` : rien de paie, d'impôts, de santé ou d'identité ne part vers OpenAI ;
+    `memoria doctor` affiche « garde sensible: active » ;
+  - Claude Code (scope user) et Codex (`~/.codex/config.toml`) branchés sur Memoria ;
+  - import automatique toutes les 6 h (`fr.primo-studio.memoria.autoimport`, Node du poste passé par
+    `MEMORIA_NODE`) ;
+  - copies d'avant : `config.toml.avant-20261119`, `~/.claude.json.avant-memoria-20261119`,
+    `~/.codex/config.toml.avant-memoria-20261119`.
+- **Mac Studio** (il héberge un agent OpenClaw et des runners CI) : Node nvm 24.18.0. Il était éteint le
+  19/11 vers 8 h ; rallumé, Memoria est reparti seul.
+- **iMac** (8 Go, il héberge un agent OpenClaw) : Node nvm 22.22.0 (ABI de better-sqlite3). Il était
+  **en pause** depuis le 12/10 (`enabled = false`), sans que rien ne le signale. Réactivé le 19/11 : le rappel
+  de son agent répond de nouveau.
+- **Troisième poste** (installé le 19/11) :
+  - installé à la main par SSH, sans le script, qui ouvre le navigateur à la fin ;
   - Node 22 fixé dans `~/.memoria-runtime/`, et non le Node de Homebrew, qui change à chaque mise à jour ;
-  - pas de moteur d'IA, ni plugin OpenClaw, ni MCP dans les assistants : ces choix reviennent au
-    propriétaire ;
-  - un import sans moteur extrait zéro fait.
-- Sur les postes d'équipe, Claude Code efface ses conversations après 30 jours (réglage par défaut). Pour
-  les importer plus tard, il faut relever `cleanupPeriodDays`.
-- Sur ces deux postes : sauvegarde d'avant la mise à jour dans `~/.memoria-sauvegarde-avant-maj-20261116`.
+  - plugin OpenClaw laissé de côté : Memoria y avait été retiré exprès.
+- **Conversations** : Claude Code garde son réglage par défaut de 30 jours sur les postes d'équipe. C'est un
+  choix du propriétaire : Memoria retient ce qui touche la personne et l'entreprise, pas les conversations
+  entières. L'import automatique passe avant l'effacement.
+- Mac Studio et iMac : sauvegarde d'avant la mise à jour du 16/11 dans `~/.memoria-sauvegarde-avant-maj-20261116`.
   Un retour arrière demande l'ancien commit **et** cette sauvegarde, car les migrations ne reviennent pas
   en arrière. Aucun n'est relié à un hub ; rien n'écoute sur 47600.
 
 ## 4. Les décisions qui attendent le propriétaire
 
-Pour le branchement des Mac (prévu mercredi 18/11) :
+Pour relier les Mac entre eux (vers mi-décembre, quand le propriétaire aura le temps) :
 
 | # | Décision | Recommandé |
 |---|---|---|
-| 1 | Quel poste sert de hub | le Mac Studio : toujours allumé, c'était le plan d'origine |
+| 1 | Quel poste sert de hub | le Mac Studio : toujours allumé, c'était le plan d'origine (il était pourtant éteint le 19/11 au matin) |
 | 2 | L'agent OpenClaw joignable par des tiers lit-il encore `org` | non, retrait en une commande |
-| 3 | Moteur d'IA des postes d'équipe | clé d'équipe plafonnée (dépense) ou modèle local ; jamais la clé personnelle du propriétaire |
+| 3 | ~~Moteur d'IA des postes d'équipe~~ | **tranché le 19/11** : OpenAI, avec la garde sensible |
 | 4 | Remplissage de `org` | seulement ce que le propriétaire valide dans la liste « proposés pour l'équipe » |
 | 5 | Filtre des sujets sensibles vers `org` | le garder strict ; reformuler les phrases banales qu'il refuse (« clé RSA », « taux horaire du rendu ») |
 
