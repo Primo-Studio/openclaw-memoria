@@ -706,8 +706,18 @@ sans rien réparer. Il n'est installé que sur le poste du propriétaire, ni par
 `autostart on`. Sur un poste d'équipe, la notification s'afficherait d'ailleurs à l'utilisateur de ce poste,
 pas au propriétaire. T31 part de ce script.
 
+**Constat du 19/11** : sur l'un des deux postes, Memoria était **en pause** (`enabled = false` dans
+`config.toml`, depuis le 12/10). `/v1/health` et le rappel répondaient 200, mais le rappel renvoyait
+`disabled: true` et zéro résultat : l'agent n'avait aucune mémoire, et la vérification du 16/11, qui ne
+regardait que le code 200, ne l'a pas vu. Sur ce même poste, `responsiveness` affichait des blocages de
+plusieurs minutes alors que `/v1/health` répondait en quelques millisecondes : la mesure compte sans doute la
+veille de la machine ou la mise en sommeil du process, et ferait sonner un veilleur pour rien.
+
 - [ ] Vérification périodique (toutes les heures) de chaque poste : service chargé, process vivant,
       `/v1/health` qui répond, boucle d'échecs dans `memoria.err.log`, agents OpenClaw qui joignent le daemon.
+- [ ] Un vrai rappel avec le jeton de chaque agent : alerte si `disabled: true` (pause) ou si zéro résultat
+      sur une base qui a des faits. Un 200 ne prouve rien.
+- [ ] `responsiveness` : ne pas compter la veille de la machine comme un blocage de la boucle.
 - [ ] Réparation automatique des pannes connues, chacune journalisée :
       - verrou d'un ancien démarrage ;
       - module natif dont l'ABI ne correspond pas au Node du service (`npm rebuild better-sqlite3` avec CE Node) ;
