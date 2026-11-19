@@ -13,7 +13,7 @@
 | Tests | **1 903 verts** (184 fichiers), `tsc -b` et build Vite verts |
 | Poste du propriétaire | daemon sous launchd sur ce build, écoute `127.0.0.1` seulement ; synchro **non activée** |
 | Deux autres postes du bureau | mis à jour sur `d46ef97` le 16/11 (voir §3), synchro **non activée** ; l'iMac est **en pause** (vu le 19/11) |
-| Troisième poste d'équipe | Memoria **pas installé** |
+| Troisième poste d'équipe | Memoria **installé le 19/11**, sans moteur d'IA (il ne retient rien tant qu'un moteur n'est pas choisi), synchro **non activée** |
 | Dépôt | **PUBLIC** (Apache 2.0) : code, tests, démo et docs anonymisés |
 
 ## 2. Ce qui a été fait du 13 au 16 novembre
@@ -67,7 +67,15 @@
   Passé à `c46d1cd` le 18/11 par le bouton « Mise à jour » de l'interface. **Vu le 19/11 : Memoria y est en
   pause** (`enabled = false` depuis le 12/10). Son agent n'a donc aucune mémoire. Le réactiver fait dépenser
   la clé OpenAI de ce poste : accord du propriétaire requis.
-- **Vu le 19/11 vers 8 h** : le Mac Studio ne répondait pas sur le réseau (ni ping ni SSH).
+- **Vu le 19/11 vers 8 h** : le Mac Studio était éteint. Rallumé vers 8 h 50, Memoria est reparti seul.
+- **Troisième poste d'équipe** (installé le 19/11) :
+  - installation à la main par SSH, sans le script, qui ouvre le navigateur à la fin ;
+  - Node 22 fixé dans `~/.memoria-runtime/`, et non le Node de Homebrew, qui change à chaque mise à jour ;
+  - pas de moteur d'IA, ni plugin OpenClaw, ni MCP dans les assistants : ces choix reviennent au
+    propriétaire ;
+  - un import sans moteur extrait zéro fait.
+- Sur les postes d'équipe, Claude Code efface ses conversations après 30 jours (réglage par défaut). Pour
+  les importer plus tard, il faut relever `cleanupPeriodDays`.
 - Sur ces deux postes : sauvegarde d'avant la mise à jour dans `~/.memoria-sauvegarde-avant-maj-20261116`.
   Un retour arrière demande l'ancien commit **et** cette sauvegarde, car les migrations ne reviennent pas
   en arrière. Aucun n'est relié à un hub ; rien n'écoute sur 47600.
