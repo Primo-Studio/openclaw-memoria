@@ -1,7 +1,8 @@
 # Point de reprise : Memoria
 
-> **À lire en premier** après une pause. Mis à jour le **16 novembre 2026**, complété le **19 novembre**.
-> Ce qui reste à faire, classé : [`TODO.md`](TODO.md) (T15, T29, T30, T31).
+> **À lire en premier** après une pause. Mis à jour le **16 novembre 2026**, complété le **19 novembre**
+> (fin de session le 20 au matin : §3 premier import, §4 décisions 6 et 7, §5 point 0).
+> Ce qui reste à faire, classé : [`TODO.md`](TODO.md) (T15, T29, T30, T31, T32).
 > Partage entre Mac, pas à pas : [`INSTALLATION-RESEAU.md`](INSTALLATION-RESEAU.md).
 > Installer ou mettre à jour un poste : [`INSTALLER-ET-METTRE-A-JOUR.md`](INSTALLER-ET-METTRE-A-JOUR.md).
 
@@ -69,7 +70,17 @@
   - import automatique toutes les 6 h (`fr.primo-studio.memoria.autoimport`, Node du poste passé par
     `MEMORIA_NODE`) ;
   - copies d'avant : `config.toml.avant-20261119`, `~/.claude.json.avant-memoria-20261119`,
-    `~/.codex/config.toml.avant-memoria-20261119`.
+    `~/.codex/config.toml.avant-memoria-20261119` ;
+  - **premier import lancé le 19/11 en fin de matinée** : troisième poste 51 conversations Claude Code et
+    52 Codex, iMac 105 et 23, Mac Studio 48 et 1. Coût mesuré sur les premiers appels : environ 0,006 $
+    pour deux conversations, soit de l'ordre de 1 $ pour les trois postes (estimation), puis quelques
+    centimes par jour. **Résultat final pas encore relevé** (voir §5, point 0) ;
+  - les faits tirés des anciennes conversations arrivent **dormants**, comme sur le poste du propriétaire :
+    gardés pour l'analyse, mais pas servis au rappel tant qu'ils ne sont pas validés (voir §4, décision 7) ;
+  - Claude Code et Codex ne voient Memoria qu'après avoir été **relancés** sur chaque poste ;
+  - **facturation** : les clés des postes sont dans le même projet OpenAI que celle du propriétaire, donc une
+    seule facture et **aucun plafond par poste**. Le troisième poste utilise la clé du Mac Studio : changer
+    l'une coupe les deux. La clé personnelle du propriétaire n'est sur aucun poste d'équipe.
 - **Mac Studio** (il héberge un agent OpenClaw et des runners CI) : Node nvm 24.18.0. Il était éteint le
   19/11 vers 8 h ; rallumé, Memoria est reparti seul.
 - **iMac** (8 Go, il héberge un agent OpenClaw) : Node nvm 22.22.0 (ABI de better-sqlite3). Il était
@@ -98,8 +109,18 @@ Pour relier les Mac entre eux (vers mi-décembre, quand le propriétaire aura le
 | 4 | Remplissage de `org` | seulement ce que le propriétaire valide dans la liste « proposés pour l'équipe » |
 | 5 | Filtre des sujets sensibles vers `org` | le garder strict ; reformuler les phrases banales qu'il refuse (« clé RSA », « taux horaire du rendu ») |
 
-Aussi en attente : la validation des styles d'échange dans Tri, et l'avis sur la maquette de l'écran
-« idées regroupées », qui reste locale.
+Posées le 19/11, sans réponse à la fin de la session :
+
+| # | Décision | Recommandé |
+|---|---|---|
+| 6 | **Garde sensible sur le poste du propriétaire** : depuis août, son import envoie ses conversations à OpenAI avec les secrets masqués, mais **sans filtre des sujets** (paie, impôts, santé, identité). C'est un écart à la règle « filtrer avant tout envoi à une IA ». | l'activer (`[llm] sensitive_gate = true`, puis relance hors import) ; contrepartie : moins de souvenirs sur la paie et les RH. Ne pas l'activer sans son accord. |
+| 7 | **Faits dormants des postes d'équipe** : qui les valide, et faut-il un plafond de dépense | les laisser dormants jusqu'à l'analyse prévue ; pour un plafond, un projet OpenAI séparé avec budget, puis de nouvelles clés sur les postes |
+
+Aussi en attente :
+- prévenir les trois personnes de l'équipe que Memoria retient désormais ce qui sort de leurs conversations
+  avec l'IA (c'est au propriétaire de le faire) ;
+- la validation des styles d'échange dans Tri, et l'avis sur la maquette de l'écran « idées regroupées »,
+  qui reste locale.
 
 Décisions plus anciennes (état du 31/08, à revérifier) : versionnage incohérent (tag `v4.0.0`, paquets en
 `0.1.0`), notarisation de l'app macOS, organisation npm, réécriture de l'historique git (anciens commits
@@ -107,6 +128,13 @@ non anonymisés, un fork existe), accès à Grok.
 
 ## 5. À faire au retour, dans cet ordre
 
+0. **Relever le premier import des postes d'équipe**, au prochain passage au bureau. Le 20/11 à 8 h, aucun
+   poste du bureau n'était joignable depuis le poste du propriétaire (éteints ou hors réseau) :
+   - `GET /v1/admin/import_status` : état `done`, et `windows_sensitive_skipped` dans le résumé (fenêtres
+     écartées par la garde) ;
+   - `memoria doctor`, section « Données envoyées au cloud » : coût réel des dernières 24 h ;
+   - `~/.memoria/auto-import.log` : les passages de 6 h qui ont suivi ;
+   - lecture seule, et jamais de relance du daemon tant qu'un import tourne.
 1. **Branchement des Mac** (après les décisions 1 à 4), en suivant `INSTALLATION-RESEAU.md` :
    - ne jamais relier un poste dont le code est antérieur à `d46ef97` ;
    - avant `init-hub`, vérifier que l'`org` du hub est vide ou entièrement de portée `entite` : la synchro
